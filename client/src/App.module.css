@@ -1,0 +1,327 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  background: #0f1117;
+  color: #e2e8f0;
+  line-height: 1.5;
+}
+
+/* ── App container ─────────────────────────────────────────────── */
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0f1117;
+}
+
+/* ── Header ────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  background: #1a1d23;
+  border-bottom: 1px solid #2a2d35;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  gap: 12px;
+}
+
+/* ── Logo ──────────────────────────────────────────────────────── */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logoIcon {
+  font-size: 1.4rem;
+  color: #6366f1;
+}
+
+.logoText {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+/* ── Nav horizontal (desktop) ──────────────────────────────────── */
+.modeNav {
+  display: flex;
+  gap: 4px;
+  background: #0f1117;
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.modeBtn {
+  padding: 7px 18px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.modeBtnActive {
+  background: #1a1d23;
+  color: #6366f1;
+}
+
+.modeHedgeActive {
+  background: #1a1d23;
+  color: #ef4444;
+}
+
+/* ── Header right ──────────────────────────────────────────────── */
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ── WS status badge ───────────────────────────────────────────── */
+.wsStatus {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.wsOn {
+  color: #22c55e;
+  background: #0d2b1a;
+  border: 1px solid #166534;
+}
+
+.wsOff {
+  color: #64748b;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+}
+
+.wsStale {
+  color: #f59e0b;
+  background: #1c1400;
+  border: 1px solid #78350f;
+}
+
+/* ── Version badge ─────────────────────────────────────────────── */
+.version {
+  font-size: 0.75rem;
+  color: #475569;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  padding: 3px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+/* ── Hamburger (oculto en desktop) ─────────────────────────────── */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid #2a2d35;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 7px 8px;
+  flex-shrink: 0;
+}
+
+.hamburger span {
+  display: block;
+  width: 100%;
+  height: 2px;
+  background: #e2e8f0;
+  border-radius: 2px;
+}
+
+/* ── Off-canvas overlay ────────────────────────────────────────── */
+.offCanvasOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 199;
+  animation: fadeIn 0.2s ease;
+}
+
+/* ── Off-canvas sidebar ────────────────────────────────────────── */
+.offCanvas {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  height: 100vh;
+  background: #1a1d23;
+  border-right: 1px solid #2a2d35;
+  z-index: 200;
+  flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+}
+
+.offCanvasOpen {
+  transform: translateX(0);
+}
+
+.offCanvasHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2a2d35;
+}
+
+.offCanvasHeader .logoText {
+  flex: 1;
+}
+
+.closeBtn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.closeBtn:hover {
+  color: #e2e8f0;
+}
+
+.offCanvasNav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  gap: 4px;
+}
+
+.offCanvasBtn {
+  display: block;
+  width: 100%;
+  padding: 12px 16px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.offCanvasBtn:hover {
+  background: #0f1117;
+  color: #e2e8f0;
+}
+
+.offCanvasBtn.modeBtnActive {
+  background: #0f1117;
+  color: #6366f1;
+}
+
+.offCanvasBtn.modeHedgeActive {
+  background: #0f1117;
+  color: #ef4444;
+}
+
+.offCanvasFooter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid #2a2d35;
+}
+
+/* ── Main layout ───────────────────────────────────────────────── */
+.main {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  padding: 16px 24px;
+  flex: 1;
+  height: calc(100vh - 61px);
+  overflow: hidden;
+}
+
+.sidebar {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.content {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* ── Animaciones ───────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Responsive: tablet ────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .modeBtn {
+    padding: 7px 12px;
+    font-size: 0.8rem;
+  }
+}
+
+/* ── Responsive: mobile ────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .header {
+    padding: 12px 16px;
+  }
+
+  /* Ocultar nav horizontal y version en mobile */
+  .modeNav { display: none; }
+  .version { display: none; }
+
+  /* Mostrar hamburger */
+  .hamburger { display: flex; }
+
+  /* Activar overlay y sidebar */
+  .offCanvasOverlay { display: block; }
+  .offCanvas        { display: flex;  }
+
+  /* Layout de una sola columna */
+  .main {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+    padding: 12px 16px;
+  }
+
+  .sidebar,
+  .content {
+    overflow-y: visible;
+    min-height: 0;
+  }
+}

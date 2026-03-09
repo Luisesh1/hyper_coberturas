@@ -1,0 +1,446 @@
+/* ── Contenedor principal ──────────────────────────────────────── */
+.container {
+  background: #1a1d23;
+  border: 1px solid #2a2d35;
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ── Barra superior ────────────────────────────────────────────── */
+.topBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.assetPrice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.assetTag {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.livePrice {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #6366f1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Account strip ─────────────────────────────────────────────── */
+.accountStrip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+
+.accountItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+}
+
+.accountDivider {
+  width: 1px;
+  height: 28px;
+  background: #2a2d35;
+  margin: 0 12px;
+  flex-shrink: 0;
+}
+
+.accountLabel {
+  font-size: 0.65rem;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.accountValue {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+}
+
+.withdrawable { color: #22c55e; }
+
+.refreshBtn {
+  background: none;
+  border: 1px solid #2a2d35;
+  color: #475569;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.95rem;
+  transition: color 0.15s;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.refreshBtn:hover { color: #6366f1; }
+
+/* ── Cuerpo 2 columnas ─────────────────────────────────────────── */
+.body {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Columna formulario ────────────────────────────────────────── */
+.formCol {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.colLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #2a2d35;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sideRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sideBtn {
+  padding: 11px;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  background: #0f1117;
+  color: #64748b;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.longActive  { border-color: #22c55e; background: #0d2b1a; color: #22c55e; }
+.shortActive { border-color: #ef4444; background: #2b0d0d; color: #ef4444; }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.label {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.labelRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.leverageValue {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #6366f1;
+}
+
+.slider {
+  width: 100%;
+  accent-color: #6366f1;
+  cursor: pointer;
+  height: 4px;
+}
+
+.leveragePresets {
+  display: flex;
+  gap: 5px;
+}
+
+.preset {
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  color: #64748b;
+  font-size: 0.72rem;
+  padding: 3px 9px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.presetActive { border-color: #6366f1; color: #6366f1; background: #1e2040; }
+
+.segmented {
+  display: flex;
+  gap: 4px;
+  background: #0f1117;
+  border-radius: 7px;
+  padding: 3px;
+}
+
+.segBtn {
+  flex: 1;
+  padding: 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.15s;
+}
+
+.segActive { background: #1a1d23; color: #e2e8f0; }
+
+/* Denomination toggle */
+.denomToggle {
+  display: flex;
+  gap: 2px;
+}
+
+.denomBtn {
+  background: transparent;
+  border: 1px solid #2a2d35;
+  color: #475569;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.denomActive { border-color: #6366f1; color: #6366f1; background: #1e2040; }
+
+.input {
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+}
+
+.input:focus { border-color: #6366f1; }
+
+/* Resumen compacto */
+.summary {
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 7px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.summaryRow span:last-child {
+  color: #e2e8f0;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.danger { color: #ef4444; }
+.danger span:last-child { color: #ef4444; }
+
+.submitBtn {
+  padding: 11px;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  letter-spacing: 0.3px;
+}
+
+.submitBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.longBtn  { background: #16a34a; color: #fff; }
+.longBtn:not(:disabled):hover  { background: #15803d; }
+.shortBtn { background: #dc2626; color: #fff; }
+.shortBtn:not(:disabled):hover { background: #b91c1c; }
+
+.warn {
+  font-size: 0.75rem;
+  color: #f59e0b;
+  text-align: center;
+}
+
+/* ── Columna posiciones ────────────────────────────────────────── */
+.positionsCol {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.posColHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #2a2d35;
+}
+
+.badge {
+  background: #6366f1;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.empty {
+  color: #475569;
+  text-align: center;
+  padding: 32px 0;
+  font-size: 0.875rem;
+}
+
+/* ── Tarjeta de posicion ───────────────────────────────────────── */
+.posCard {
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 9px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.posHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.posLeft {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.posAsset {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+}
+
+.posBadge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.longBadge  { background: #0d2b1a; color: #22c55e; }
+.shortBadge { background: #2b0d0d; color: #ef4444; }
+
+.pnlInline {
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.closeBtn {
+  background: transparent;
+  border: 1px solid #475569;
+  color: #94a3b8;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.closeBtn:hover { border-color: #ef4444; color: #ef4444; background: #2b0d0d; }
+
+.posGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.posDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detailLabel {
+  font-size: 0.65rem;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.detailVal {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+}
+
+.positive  { color: #22c55e !important; }
+.negative  { color: #ef4444 !important; }
+.liqPrice  { color: #f97316 !important; }
+
+/* ── Responsive ────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .body {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .positionsCol {
+    overflow-y: visible;
+  }
+}
