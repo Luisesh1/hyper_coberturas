@@ -1,92 +1,118 @@
 /**
  * wsServer.js
  *
- * Servidor WebSocket propio para los clientes del frontend.
- * Actua como proxy inteligente entre Hyperliquid y el navegador:
- *   - Los clientes se conectan aqui y piden suscripciones
- *   - Este servidor se suscribe a Hyperliquid y retransmite los datos
- *   - Maneja mensajes de control (subscribe, unsubscribe, ping)
- *
- * Protocolo de mensajes cliente -> servidor:
- *   { type: 'subscribe',   feed: 'allMids' }
- *   { type: 'subscribe',   feed: 'trades',  coin: 'BTC' }
- *   { type: 'unsubscribe', feed: 'allMids' }
- *   { type: 'ping' }
- *
- * Protocolo de mensajes servidor -> cliente:
- *   { type: 'pong' }
- *   { type: 'hl_message', data: <mensaje de Hyperliquid> }
- *   { type: 'error', message: '...' }
+ * Servidor WebSocket con autenticación JWT por usuario.
+ * - Autentica la conexión por query param ?token=...
+ * - Asocia cada socket con su userId
+ * - Retransmite hedge_event solo al usuario propietario
+ * - Suscribe userEvents de Hyperliquid por wallet de cada usuario activo
  */
 
 const WebSocket = require('ws');
-const hlWsClient = require('./hyperliquidWs');
-const hedgeService = require('../services/hedge.service');
-const telegram = require('../services/telegram.service');
-const config = require('../config');
+const jwt       = require('jsonwebtoken');
+const url       = require('url');
+const hlWsClient   = require('./hyperliquidWs');
+const hedgeRegistry = require('../services/hedge.registry');
+const hlRegistry    = require('../services/hyperliquid.registry');
+const db            = require('../db');
+const config        = require('../config');
 
 const CLIENT_PING_INTERVAL_MS = 20_000;
 
-/** Envia un mensaje JSON a todos los clientes WS conectados */
-function broadcast(wss, payload) {
+/** Envía un mensaje JSON a todos los sockets del usuario indicado */
+function broadcastToUser(wss, userId, payload) {
   const data = JSON.stringify(payload);
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
+    if (client.readyState === WebSocket.OPEN && client.userId === userId) {
       client.send(data);
     }
   });
 }
 
+/** Adjunta los eventos de un HedgeService al WS server */
+function attachHedgeEvents(wss, hedgeSvc) {
+  const userId = hedgeSvc.userId;
+  hedgeSvc.on('created',      (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'created',      hedge: h }));
+  hedgeSvc.on('updated',      (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'updated',      hedge: h }));
+  hedgeSvc.on('opened',       (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'opened',       hedge: h }));
+  hedgeSvc.on('cycleComplete',(h, cycle)  => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'cycleComplete', hedge: h, cycle }));
+  hedgeSvc.on('cancelled',    (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'cancelled',    hedge: h }));
+  hedgeSvc.on('error',        (h, err)    => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'error',        hedge: h, message: err.message }));
+}
+
+/**
+ * Carga todos los usuarios activos, inicializa sus registries y suscribe userEvents.
+ * Llamado desde index.js al arrancar.
+ */
+async function loadActiveUsers(wss) {
+  const { rows } = await db.query(
+    "SELECT id FROM users WHERE active = true"
+  );
+
+  for (const { id: userId } of rows) {
+    try {
+      // Inicializa HL y Telegram registry (carga config desde DB)
+      await hlRegistry.getOrCreate(userId);
+
+      // Inicializa HedgeService (carga coberturas desde DB)
+      const hedgeSvc = await hedgeRegistry.getOrCreate(userId);
+      attachHedgeEvents(wss, hedgeSvc);
+
+      // Suscribir userEvents si el usuario tiene wallet configurada
+      const hl = hlRegistry.get(userId);
+      if (hl?.address) {
+        hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
+        console.log(`[WS] userEvents suscrito para user ${userId} (${hl.address})`);
+      }
+    } catch (err) {
+      console.error(`[WS] Error al inicializar user ${userId}:`, err.message);
+    }
+  }
+}
+
 function createWsServer(httpServer) {
   const wss = new WebSocket.Server({ server: httpServer, path: '/ws' });
 
-  // Suscribirse al feed de precios globales y a los eventos del usuario
+  // Suscribir feed global de precios
   hlWsClient.subscribe({ type: 'allMids' });
-  if (config.wallet.address) {
-    hlWsClient.subscribe({ type: 'userEvents', user: config.wallet.address });
-    console.log(`[WS Server] Suscrito a userEvents para ${config.wallet.address}`);
-  }
 
-  // Distribuir todos los mensajes de HL a los clientes y al motor de coberturas
+  // Distribuir mensajes HL: precios a todos, fills al hedge service correcto
   hlWsClient.addSubscriber((hlMessage) => {
-    // Retransmitir al frontend
-    broadcast(wss, { type: 'hl_message', data: hlMessage });
+    // Retransmitir precios a todos los clientes autenticados
+    if (hlMessage?.channel === 'allMids') {
+      const data = JSON.stringify({ type: 'hl_message', data: hlMessage });
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN && client.userId) {
+          client.send(data);
+        }
+      });
+    }
 
-    // Enrutar fills de userEvents al motor de coberturas
+    // Enrutar fills de userEvents al HedgeService del usuario correspondiente
     if (hlMessage?.channel === 'userEvents') {
       const fills = hlMessage?.data?.fills || [];
-      fills.forEach((fill) => {
-        hedgeService.onFill(fill);
+      if (fills.length === 0) return;
+
+      // Buscar qué usuario tiene esa wallet address
+      const addresses = hlRegistry.getAllAddresses();
+      const fillUser  = addresses.find((a) => {
+        // Los fills de HL incluyen el address del usuario
+        return hlMessage?.data?.user?.toLowerCase() === a.address?.toLowerCase();
       });
+
+      if (fillUser) {
+        const hedgeSvc = hedgeRegistry.get(fillUser.userId);
+        if (hedgeSvc) fills.forEach((fill) => hedgeSvc.onFill(fill));
+      } else {
+        // Fallback: notificar a todos los hedge services activos
+        for (const svc of hedgeRegistry.getAll()) {
+          fills.forEach((fill) => svc.onFill(fill));
+        }
+      }
     }
   });
 
-  // Propagar eventos del motor de coberturas al frontend y a Telegram
-  hedgeService.on('created',   (h) => {
-    broadcast(wss, { type: 'hedge_event', event: 'created',   hedge: h });
-    telegram.notifyHedgeCreated(h);
-  });
-  hedgeService.on('updated',   (h) => {
-    broadcast(wss, { type: 'hedge_event', event: 'updated',   hedge: h });
-  });
-  hedgeService.on('opened',    (h) => {
-    broadcast(wss, { type: 'hedge_event', event: 'opened',    hedge: h });
-    telegram.notifyHedgeOpened(h);
-  });
-  hedgeService.on('cycleComplete', (h, cycle) => {
-    broadcast(wss, { type: 'hedge_event', event: 'cycleComplete', hedge: h, cycle });
-    telegram.notifyHedgeClosed({ ...h, ...cycle });
-  });
-  hedgeService.on('cancelled', (h) => {
-    broadcast(wss, { type: 'hedge_event', event: 'cancelled', hedge: h });
-    telegram.notifyHedgeCancelled(h);
-  });
-  hedgeService.on('error',     (h, err) => {
-    broadcast(wss, { type: 'hedge_event', event: 'error', hedge: h, message: err.message });
-    telegram.notifyHedgeError(h, err);
-  });
-
-  // Heartbeat: detectar clientes muertos con ping nativo cada 20s
+  // Heartbeat
   const heartbeat = setInterval(() => {
     wss.clients.forEach((client) => {
       if (client.isAlive === false) { client.terminate(); return; }
@@ -98,18 +124,36 @@ function createWsServer(httpServer) {
   wss.on('close', () => clearInterval(heartbeat));
 
   wss.on('connection', (ws, req) => {
-    const clientIp = req.socket.remoteAddress;
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
-    console.log(`[WS Server] Cliente conectado: ${clientIp}`);
 
-    ws.send(
-      JSON.stringify({
-        type: 'connected',
-        message: 'Conectado al bot de Hyperliquid',
-        timestamp: Date.now(),
-      })
-    );
+    // Autenticar por query param ?token=...
+    const { query } = url.parse(req.url, true);
+    const token = query.token;
+
+    if (!token) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Token requerido' }));
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+
+    try {
+      const decoded = jwt.verify(token, config.jwt.secret);
+      ws.userId   = decoded.userId;
+      ws.userRole = decoded.role;
+    } catch {
+      ws.send(JSON.stringify({ type: 'error', message: 'Token inválido' }));
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+
+    console.log(`[WS] Cliente conectado: user ${ws.userId}`);
+
+    ws.send(JSON.stringify({
+      type: 'connected',
+      message: 'Conectado al bot de Hyperliquid',
+      timestamp: Date.now(),
+    }));
 
     ws.on('message', (rawData) => {
       try {
@@ -121,11 +165,11 @@ function createWsServer(httpServer) {
     });
 
     ws.on('close', () => {
-      console.log(`[WS Server] Cliente desconectado: ${clientIp}`);
+      console.log(`[WS] Cliente desconectado: user ${ws.userId}`);
     });
 
     ws.on('error', (err) => {
-      console.error(`[WS Server] Error de cliente (${clientIp}):`, err.message);
+      console.error(`[WS] Error cliente user ${ws.userId}:`, err.message);
     });
   });
 
@@ -133,9 +177,6 @@ function createWsServer(httpServer) {
   return wss;
 }
 
-/**
- * Procesa los mensajes de control enviados por los clientes.
- */
 function handleClientMessage(ws, msg) {
   switch (msg.type) {
     case 'ping':
@@ -146,9 +187,7 @@ function handleClientMessage(ws, msg) {
       const subscription = buildSubscription(msg);
       if (subscription) {
         hlWsClient.subscribe(subscription);
-        ws.send(
-          JSON.stringify({ type: 'subscribed', feed: msg.feed, coin: msg.coin })
-        );
+        ws.send(JSON.stringify({ type: 'subscribed', feed: msg.feed, coin: msg.coin }));
       } else {
         ws.send(JSON.stringify({ type: 'error', message: `Feed desconocido: ${msg.feed}` }));
       }
@@ -159,9 +198,7 @@ function handleClientMessage(ws, msg) {
       const subscription = buildSubscription(msg);
       if (subscription) {
         hlWsClient.unsubscribe(subscription);
-        ws.send(
-          JSON.stringify({ type: 'unsubscribed', feed: msg.feed, coin: msg.coin })
-        );
+        ws.send(JSON.stringify({ type: 'unsubscribed', feed: msg.feed, coin: msg.coin }));
       }
       break;
     }
@@ -171,24 +208,14 @@ function handleClientMessage(ws, msg) {
   }
 }
 
-/**
- * Convierte un mensaje de cliente al formato de suscripcion de Hyperliquid.
- */
 function buildSubscription(msg) {
   switch (msg.feed) {
-    case 'allMids':
-      return { type: 'allMids' };
-    case 'trades':
-      if (!msg.coin) return null;
-      return { type: 'trades', coin: msg.coin };
-    case 'l2Book':
-      if (!msg.coin) return null;
-      return { type: 'l2Book', coin: msg.coin };
-    case 'userEvents':
-      return { type: 'userEvents', user: msg.user };
-    default:
-      return null;
+    case 'allMids':    return { type: 'allMids' };
+    case 'trades':     return msg.coin ? { type: 'trades', coin: msg.coin } : null;
+    case 'l2Book':     return msg.coin ? { type: 'l2Book', coin: msg.coin } : null;
+    case 'userEvents': return { type: 'userEvents', user: msg.user };
+    default:           return null;
   }
 }
 
-module.exports = { createWsServer };
+module.exports = { createWsServer, loadActiveUsers, attachHedgeEvents };

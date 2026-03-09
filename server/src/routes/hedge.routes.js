@@ -1,27 +1,33 @@
 /**
  * hedge.routes.js
  *
- * Rutas REST para gestionar coberturas automaticas.
- *
- * GET    /api/hedge          -> Lista todas las coberturas
- * GET    /api/hedge/:id      -> Detalle de una cobertura
- * POST   /api/hedge          -> Crear nueva cobertura
- * DELETE /api/hedge/:id      -> Cancelar cobertura (solo si esta en 'waiting')
+ * GET    /api/hedge       → Lista coberturas del usuario autenticado
+ * GET    /api/hedge/:id   → Detalle de una cobertura
+ * POST   /api/hedge       → Crear cobertura
+ * DELETE /api/hedge/:id   → Cancelar cobertura
  */
 
 const { Router } = require('express');
-const hedgeService = require('../services/hedge.service');
+const hedgeRegistry    = require('../services/hedge.registry');
+const { authenticate } = require('../middleware/auth.middleware');
 
 const router = Router();
+router.use(authenticate);
 
-router.get('/', (req, res) => {
-  const hedges = hedgeService.getAll();
-  res.json({ success: true, data: hedges });
+router.get('/', async (req, res, next) => {
+  try {
+    const svc    = await hedgeRegistry.getOrCreate(req.user.userId);
+    const hedges = svc.getAll();
+    res.json({ success: true, data: hedges });
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.get('/:id', (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const hedge = hedgeService.getById(parseInt(req.params.id, 10));
+    const svc   = await hedgeRegistry.getOrCreate(req.user.userId);
+    const hedge = svc.getById(parseInt(req.params.id, 10));
     res.json({ success: true, data: hedge });
   } catch (err) {
     next(err);
@@ -31,24 +37,14 @@ router.get('/:id', (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const { asset, entryPrice, exitPrice, size, leverage, label } = req.body;
-
     if (!asset || !entryPrice || !exitPrice || !size || !leverage) {
-      const err = new Error(
-        'Parametros requeridos: asset, entryPrice, exitPrice, size, leverage'
-      );
-      err.status = 400;
-      throw err;
+      return res.status(400).json({
+        success: false,
+        error: 'Parametros requeridos: asset, entryPrice, exitPrice, size, leverage',
+      });
     }
-
-    const hedge = await hedgeService.createHedge({
-      asset,
-      entryPrice,
-      exitPrice,
-      size,
-      leverage,
-      label,
-    });
-
+    const svc   = await hedgeRegistry.getOrCreate(req.user.userId);
+    const hedge = await svc.createHedge({ asset, entryPrice, exitPrice, size, leverage, label });
     res.status(201).json({ success: true, data: hedge });
   } catch (err) {
     next(err);
@@ -58,12 +54,9 @@ router.post('/', async (req, res, next) => {
 router.delete('/:id', async (req, res, next) => {
   try {
     const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-      const err = new Error('ID invalido');
-      err.status = 400;
-      throw err;
-    }
-    const hedge = await hedgeService.cancelHedge(id);
+    if (isNaN(id)) return res.status(400).json({ success: false, error: 'ID invalido' });
+    const svc   = await hedgeRegistry.getOrCreate(req.user.userId);
+    const hedge = await svc.cancelHedge(id);
     res.json({ success: true, data: hedge });
   } catch (err) {
     next(err);

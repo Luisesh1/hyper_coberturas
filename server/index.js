@@ -3,21 +3,24 @@ const http = require('http');
 const app  = require('./src/app');
 const config = require('./src/config');
 const db   = require('./src/db');
-const { createWsServer } = require('./src/websocket/wsServer');
-const hlWsClient   = require('./src/websocket/hyperliquidWs');
-const hedgeService = require('./src/services/hedge.service');
-const settingsRouter = require('./src/routes/settings.routes');
+const { createWsServer, loadActiveUsers } = require('./src/websocket/wsServer');
+const hlWsClient = require('./src/websocket/hyperliquidWs');
 
 async function start() {
-  // Inicializar base de datos (migraciones) y restaurar estado del hedge service
+  // 1. Inicializar DB: migraciones + seed admin
   await db.init();
-  await hedgeService.init();
-  await settingsRouter.loadSettings();
 
+  // 2. Crear servidor HTTP y WS
   const server = http.createServer(app);
-  createWsServer(server);
+  const wss    = createWsServer(server);
+
+  // 3. Conectar al WS de Hyperliquid
   hlWsClient.connect();
 
+  // 4. Cargar usuarios activos, sus services y suscribir userEvents
+  await loadActiveUsers(wss);
+
+  // 5. Arrancar el servidor HTTP
   server.listen(config.server.port, () => {
     console.log(`
 ╔══════════════════════════════════════════════╗
@@ -30,7 +33,6 @@ async function start() {
     `);
   });
 
-  // Apagado elegante
   function shutdown() {
     console.log('[Server] Apagando...');
     hlWsClient.disconnect();

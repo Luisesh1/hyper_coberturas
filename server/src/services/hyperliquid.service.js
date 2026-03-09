@@ -36,16 +36,16 @@ const AGENT_TYPES = {
 };
 
 class HyperliquidService {
-  constructor() {
-    this.wallet = null;
-    this._initWallet();
-  }
-
-  _initWallet() {
-    if (config.wallet.privateKey) {
+  /**
+   * @param {{ privateKey: string, address: string }} walletConfig
+   */
+  constructor({ privateKey, address } = {}) {
+    this.wallet  = null;
+    this.address = address || null;
+    if (privateKey) {
       try {
-        this.wallet = new ethers.Wallet(config.wallet.privateKey);
-        console.log(`[HL] Wallet inicializada: ${this.wallet.address}`);
+        this.wallet  = new ethers.Wallet(privateKey);
+        this.address = this.wallet.address;
       } catch (err) {
         console.error('[HL] Error al inicializar wallet:', err.message);
       }
@@ -151,14 +151,14 @@ class HyperliquidService {
 
   /** Obtiene el estado completo de la cuenta (balances, posiciones) */
   async getClearinghouseState(address) {
-    const userAddress = address || config.wallet.address;
+    const userAddress = address || this.address;
     if (!userAddress) throw new Error('Direccion de wallet no configurada');
     return this._post(INFO_URL, { type: 'clearinghouseState', user: userAddress });
   }
 
   /** Obtiene las ordenes abiertas del usuario */
   async getOpenOrders(address) {
-    const userAddress = address || config.wallet.address;
+    const userAddress = address || this.address;
     if (!userAddress) throw new Error('Direccion de wallet no configurada');
     return this._post(INFO_URL, { type: 'openOrders', user: userAddress });
   }
@@ -170,7 +170,7 @@ class HyperliquidService {
 
   /** Historial de trades de un usuario */
   async getUserFills(address) {
-    const userAddress = address || config.wallet.address;
+    const userAddress = address || this.address;
     if (!userAddress) throw new Error('Direccion de wallet no configurada');
     return this._post(INFO_URL, { type: 'userFills', user: userAddress });
   }
@@ -327,7 +327,7 @@ class HyperliquidService {
    * @returns {object|null} posicion o null si no hay posicion abierta
    */
   async getPosition(assetName) {
-    const state = await this.getClearinghouseState(config.wallet.address);
+    const state = await this.getClearinghouseState(this.address);
     const positions = state?.assetPositions || [];
     const entry = positions.find(
       (p) => p.position?.coin?.toUpperCase() === assetName.toUpperCase()
@@ -387,5 +387,4 @@ class HyperliquidService {
   }
 }
 
-// Singleton — una sola instancia en toda la app
-module.exports = new HyperliquidService();
+module.exports = HyperliquidService;

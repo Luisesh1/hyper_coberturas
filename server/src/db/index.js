@@ -3,6 +3,7 @@
  */
 
 const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -18,9 +19,26 @@ function query(text, params) {
 }
 
 async function init() {
+  // ── Tabla de usuarios ──────────────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      username      VARCHAR(100) UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      name          VARCHAR(255) NOT NULL,
+      role          VARCHAR(20) NOT NULL DEFAULT 'user'
+                    CHECK (role IN ('user', 'superuser')),
+      active        BOOLEAN NOT NULL DEFAULT true,
+      created_at    BIGINT NOT NULL,
+      updated_at    BIGINT NOT NULL
+    )
+  `);
+
+  // ── Tabla de coberturas ────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hedges (
       id             SERIAL PRIMARY KEY,
+      user_id        INTEGER REFERENCES users(id),
       asset          VARCHAR(20)  NOT NULL,
       entry_price    NUMERIC      NOT NULL,
       exit_price     NUMERIC      NOT NULL,
@@ -44,6 +62,12 @@ async function init() {
     )
   `);
 
+  // user_id en hedges (migración additive para tablas existentes)
+  await pool.query(`
+    ALTER TABLE hedges ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)
+  `);
+
+  // ── Tabla de ciclos ────────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cycles (
       id          SERIAL  PRIMARY KEY,
@@ -56,15 +80,61 @@ async function init() {
     )
   `);
 
+  // ── Tabla de configuración ─────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS settings (
-      key        VARCHAR(100) PRIMARY KEY,
+      key        VARCHAR(100) NOT NULL,
+      user_id    INTEGER REFERENCES users(id),
       value      TEXT         NOT NULL,
       updated_at BIGINT       NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT * 1000)
     )
   `);
 
+  // user_id en settings (migración additive)
+  await pool.query(`
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)
+  `);
+
+  // Índice único compuesto (user_id, key)
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS settings_user_key ON settings(user_id, key)
+  `);
+
   console.log('[DB] Esquema inicializado');
+
+  // ── Seed: admin por defecto ────────────────────────────────────────
+  await seedDefaultAdmin();
+}
+
+async function seedDefaultAdmin() {
+  const { rows } = await pool.query('SELECT id FROM users LIMIT 1');
+  if (rows.length > 0) return; // ya hay usuarios
+
+  const now = Date.now();
+  const hash = await bcrypt.hash('admin123', 12);
+  const { rows: [admin] } = await pool.query(
+    `INSERT INTO users (username, password_hash, name, role, active, created_at, updated_at)
+     VALUES ($1, $2, $3, 'superuser', true, $4, $4) RETURNING id`,
+    ['admin', hash, 'Administrador', now]
+  );
+
+  console.log('[DB] Usuario admin creado (admin / admin123)');
+
+  // Migrar datos existentes al admin
+  await pool.query('UPDATE hedges SET user_id = $1 WHERE user_id IS NULL', [admin.id]);
+  await pool.query('UPDATE settings SET user_id = $1 WHERE user_id IS NULL', [admin.id]);
+
+  // Si hay wallet en env vars, guardarla en settings del admin
+  const { PRIVATE_KEY, WALLET_ADDRESS } = process.env;
+  if (PRIVATE_KEY && WALLET_ADDRESS) {
+    await pool.query(
+      `INSERT INTO settings (key, user_id, value, updated_at)
+       VALUES ('wallet', $1, $2, $3)
+       ON CONFLICT (user_id, key) DO NOTHING`,
+      [admin.id, JSON.stringify({ privateKey: PRIVATE_KEY, address: WALLET_ADDRESS }), now]
+    );
+    console.log('[DB] Wallet de env vars migrada al usuario admin');
+  }
 }
 
 module.exports = { query, init, pool };

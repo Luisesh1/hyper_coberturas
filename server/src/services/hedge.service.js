@@ -2,25 +2,17 @@
  * hedge.service.js
  *
  * Gestiona coberturas automáticas con persistencia en PostgreSQL.
+ * Ahora es una clase instanciada por usuario (via hedge.registry.js).
  *
  * Flujo (ciclo continuo):
  *   1. createHedge  → LIMIT SHORT GTC @ entryPrice (entryOid)
  *   2. Fill entryOid (WS userEvents) → posicion abierta → SL nativo @ exitPrice (slOid)
  *   3. Fill slOid → ciclo registrado en BD → nueva LIMIT SHORT GTC
  *   4. Monitor cada 15s: verifica posicion, actualiza PnL, re-coloca SL si falto
- *
- * Estados:
- *   entry_pending → LIMIT GTC pendiente
- *   open          → posicion abierta, SL activo
- *   closing       → SL en ejecucion
- *   cancelled     → cancelado por el usuario
- *   error         → fallo inesperado
  */
 
 const EventEmitter = require('events');
-const hlService = require('./hyperliquid.service');
-const db        = require('../db');
-const config    = require('../config');
+const db = require('../db');
 
 const MONITOR_INTERVAL_MS = 15_000;
 
@@ -38,10 +30,10 @@ function formatPrice(price) {
   return power > 0 ? rounded.toFixed(power) : rounded.toString();
 }
 
-/** Convierte una fila de DB al objeto hedge en memoria. */
 function rowToHedge(row, cycles = []) {
   return {
     id:            row.id,
+    userId:        row.user_id,
     asset:         row.asset,
     entryPrice:    parseFloat(row.entry_price),
     exitPrice:     parseFloat(row.exit_price),
@@ -73,14 +65,22 @@ function rowToHedge(row, cycles = []) {
 }
 
 class HedgeService extends EventEmitter {
-  constructor() {
+  /**
+   * @param {number} userId
+   * @param {import('./hyperliquid.service')} hlService
+   * @param {import('./telegram.service')} tgService
+   */
+  constructor(userId, hlService, tgService) {
     super();
+    this.userId  = userId;
+    this.hl      = hlService;
+    this.tg      = tgService;
     this.hedges  = new Map(); // id -> hedge
     this._monitorInterval = null;
   }
 
   // ------------------------------------------------------------------
-  // Inicializacion: cargar estado desde DB
+  // Inicializacion: cargar estado desde DB (filtrado por user_id)
   // ------------------------------------------------------------------
 
   async init() {
@@ -89,22 +89,26 @@ class HedgeService extends EventEmitter {
               COALESCE(json_agg(c ORDER BY c.cycle_id) FILTER (WHERE c.id IS NOT NULL), '[]') AS cycles_json
        FROM hedges h
        LEFT JOIN cycles c ON c.hedge_id = h.id
+       WHERE h.user_id = $1
        GROUP BY h.id
-       ORDER BY h.id`
+       ORDER BY h.id`,
+      [this.userId]
     );
 
     for (const row of rows) {
-      const cycles = Array.isArray(row.cycles_json) ? row.cycles_json : JSON.parse(row.cycles_json || '[]');
-      const hedge  = rowToHedge(row, cycles);
+      const cycles = Array.isArray(row.cycles_json)
+        ? row.cycles_json
+        : JSON.parse(row.cycles_json || '[]');
+      const hedge = rowToHedge(row, cycles);
       this.hedges.set(hedge.id, hedge);
     }
 
-    console.log(`[Hedge] Restauradas ${this.hedges.size} coberturas de la base de datos`);
+    console.log(`[Hedge] User ${this.userId}: ${this.hedges.size} coberturas restauradas`);
     this._startMonitor();
   }
 
   // ------------------------------------------------------------------
-  // Persistencia: guardar hedge en DB (UPSERT)
+  // Persistencia
   // ------------------------------------------------------------------
 
   async _save(hedge) {
@@ -124,19 +128,12 @@ class HedgeService extends EventEmitter {
          closed_at      = $13
        WHERE id = $1`,
       [
-        hedge.id,
-        hedge.status,
-        hedge.entryOid,
-        hedge.slOid,
-        hedge.assetIndex,
-        hedge.szDecimals,
-        hedge.openPrice,
-        hedge.closePrice,
-        hedge.unrealizedPnl,
-        hedge.error,
-        hedge.cycleCount,
-        hedge.openedAt,
-        hedge.closedAt,
+        hedge.id, hedge.status,
+        hedge.entryOid, hedge.slOid,
+        hedge.assetIndex, hedge.szDecimals,
+        hedge.openPrice, hedge.closePrice,
+        hedge.unrealizedPnl, hedge.error,
+        hedge.cycleCount, hedge.openedAt, hedge.closedAt,
       ]
     );
   }
@@ -150,7 +147,7 @@ class HedgeService extends EventEmitter {
   }
 
   // ------------------------------------------------------------------
-  // CRUD de coberturas
+  // CRUD
   // ------------------------------------------------------------------
 
   async createHedge({ asset, entryPrice, exitPrice, size, leverage, label }) {
@@ -162,21 +159,21 @@ class HedgeService extends EventEmitter {
     if (isNaN(entry) || entry <= 0) throw new Error('entryPrice invalido');
     if (isNaN(exit)  || exit  <= 0) throw new Error('exitPrice invalido');
     if (isNaN(sz)    || sz    <= 0) throw new Error('size invalido');
-    if (isNaN(lev)   || lev   < 1 || lev > 100) throw new Error('leverage debe estar entre 1 y 100');
+    if (isNaN(lev)   || lev < 1 || lev > 100) throw new Error('leverage debe estar entre 1 y 100');
 
-    const assetUp = asset.toUpperCase();
+    const assetUp    = asset.toUpperCase();
     const hedgeLabel = label || `${assetUp} Cobertura`;
 
-    // Insertar en DB primero para obtener el ID
     const { rows } = await db.query(
-      `INSERT INTO hedges (asset, entry_price, exit_price, size, leverage, label, margin_mode, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'isolated', 'entry_pending', $7)
+      `INSERT INTO hedges (user_id, asset, entry_price, exit_price, size, leverage, label, margin_mode, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'isolated', 'entry_pending', $8)
        RETURNING id`,
-      [assetUp, entry, exit, sz, lev, hedgeLabel, Date.now()]
+      [this.userId, assetUp, entry, exit, sz, lev, hedgeLabel, Date.now()]
     );
 
     const hedge = {
       id:            rows[0].id,
+      userId:        this.userId,
       asset:         assetUp,
       entryPrice:    entry,
       exitPrice:     exit,
@@ -201,6 +198,7 @@ class HedgeService extends EventEmitter {
 
     this.hedges.set(hedge.id, hedge);
     this.emit('created', hedge);
+    this.tg.notifyHedgeCreated(hedge);
 
     this._placeEntryOrder(hedge).catch(async (err) => {
       hedge.status = 'error';
@@ -223,37 +221,36 @@ class HedgeService extends EventEmitter {
 
     try {
       if (hedge.entryOid && prevStatus === 'entry_pending') {
-        await hlService.cancelOrder(hedge.assetIndex, hedge.entryOid).catch((err) => {
-          console.warn(`[Hedge] #${id} no se pudo cancelar entryOid ${hedge.entryOid}:`, err.message);
+        await this.hl.cancelOrder(hedge.assetIndex, hedge.entryOid).catch((err) => {
+          console.warn(`[Hedge] #${id} no se pudo cancelar entryOid:`, err.message);
         });
       }
 
       if (prevStatus === 'open' || prevStatus === 'closing') {
         if (hedge.slOid) {
-          await hlService.cancelOrder(hedge.assetIndex, hedge.slOid).catch((err) => {
-            console.warn(`[Hedge] #${id} no se pudo cancelar slOid ${hedge.slOid}:`, err.message);
+          await this.hl.cancelOrder(hedge.assetIndex, hedge.slOid).catch((err) => {
+            console.warn(`[Hedge] #${id} no se pudo cancelar slOid:`, err.message);
           });
         }
 
-        const pos = await hlService.getPosition(hedge.asset).catch(() => null);
+        const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
         if (pos && parseFloat(pos.szi) !== 0) {
-          const szi      = parseFloat(pos.szi);
-          const mids     = await hlService.getAllMids();
-          const midPrice = parseFloat(mids[hedge.asset]);
-          const slip     = 0.002;
-          const isBuy    = szi < 0;
-          const px       = isBuy ? formatPrice(midPrice * (1 + slip)) : formatPrice(midPrice * (1 - slip));
-          const closeSize = formatSize(Math.abs(szi), hedge.szDecimals || 4);
+          const szi   = parseFloat(pos.szi);
+          const mids  = await this.hl.getAllMids();
+          const mid   = parseFloat(mids[hedge.asset]);
+          const slip  = 0.002;
+          const isBuy = szi < 0;
+          const px    = isBuy ? formatPrice(mid * (1 + slip)) : formatPrice(mid * (1 - slip));
 
-          await hlService.placeOrder({
+          await this.hl.placeOrder({
             assetIndex: hedge.assetIndex,
             isBuy,
-            size: closeSize,
+            size: formatSize(Math.abs(szi), hedge.szDecimals || 4),
             price: px,
             reduceOnly: true,
             tif: 'Ioc',
           }).catch((err) => {
-            console.warn(`[Hedge] #${id} no se pudo cerrar posicion al cancelar:`, err.message);
+            console.warn(`[Hedge] #${id} no se pudo cerrar posicion:`, err.message);
           });
         }
       }
@@ -262,8 +259,8 @@ class HedgeService extends EventEmitter {
     }
 
     await this._save(hedge).catch(() => {});
+    this.tg.notifyHedgeCancelled(hedge);
     this.emit('cancelled', hedge);
-    console.log(`[Hedge] Cobertura #${id} cancelada`);
     return hedge;
   }
 
@@ -278,7 +275,7 @@ class HedgeService extends EventEmitter {
   }
 
   // ------------------------------------------------------------------
-  // Fill handler
+  // Fill handler (llamado desde wsServer)
   // ------------------------------------------------------------------
 
   onFill(fill) {
@@ -291,18 +288,15 @@ class HedgeService extends EventEmitter {
           hedge.status = 'error';
           hedge.error  = err.message;
           await this._save(hedge).catch(() => {});
-          console.error(`[Hedge] #${hedge.id} error en _onEntryFill:`, err.message);
           this.emit('error', hedge, err);
         });
         return;
       }
-
       if (hedge.slOid === oid && (hedge.status === 'open' || hedge.status === 'closing')) {
         this._onSlFill(hedge, fill).catch(async (err) => {
           hedge.status = 'error';
           hedge.error  = err.message;
           await this._save(hedge).catch(() => {});
-          console.error(`[Hedge] #${hedge.id} error en _onSlFill:`, err.message);
           this.emit('error', hedge, err);
         });
         return;
@@ -311,21 +305,19 @@ class HedgeService extends EventEmitter {
   }
 
   // ------------------------------------------------------------------
-  // Ciclo de vida del hedge
+  // Ciclo de vida
   // ------------------------------------------------------------------
 
   async _placeEntryOrder(hedge) {
-    console.log(`[Hedge] #${hedge.id} colocando LIMIT SHORT GTC @ ${hedge.entryPrice}...`);
-
     if (!hedge.assetIndex) {
-      const meta = await hlService.getAssetMeta(hedge.asset);
-      hedge.assetIndex  = meta.index;
-      hedge.szDecimals  = meta.szDecimals;
+      const meta       = await this.hl.getAssetMeta(hedge.asset);
+      hedge.assetIndex = meta.index;
+      hedge.szDecimals = meta.szDecimals;
     }
 
-    await hlService.updateLeverage(hedge.assetIndex, false, hedge.leverage);
+    await this.hl.updateLeverage(hedge.assetIndex, false, hedge.leverage);
 
-    const oid = await hlService.placeLimit({
+    const oid = await this.hl.placeLimit({
       assetIndex: hedge.assetIndex,
       isBuy:      false,
       size:       formatSize(hedge.size, hedge.szDecimals),
@@ -344,15 +336,14 @@ class HedgeService extends EventEmitter {
 
   async _onEntryFill(hedge, fill) {
     const fillPrice = parseFloat(fill.px);
-    console.log(`[Hedge] #${hedge.id} entry fill @ $${fillPrice}. Colocando SL @ ${hedge.exitPrice}...`);
-
     hedge.status    = 'open';
     hedge.openedAt  = fill.time || Date.now();
     hedge.openPrice = fillPrice;
     hedge.entryOid  = null;
     this.emit('opened', hedge);
+    this.tg.notifyHedgeOpened(hedge);
 
-    const slOid = await hlService.placeSL({
+    const slOid = await this.hl.placeSL({
       assetIndex: hedge.assetIndex,
       isBuy:      true,
       size:       formatSize(hedge.size, hedge.szDecimals),
@@ -362,15 +353,12 @@ class HedgeService extends EventEmitter {
 
     hedge.slOid = slOid;
     await this._save(hedge).catch(() => {});
-    console.log(`[Hedge] #${hedge.id} SL nativo colocado (oid=${slOid}) @ ${hedge.exitPrice}`);
     this.emit('updated', hedge);
   }
 
   async _onSlFill(hedge, fill) {
     const closePrice = parseFloat(fill.px);
-    console.log(`[Hedge] #${hedge.id} SL ejecutado @ $${closePrice}. Registrando ciclo...`);
-
-    hedge.status = 'closing';
+    hedge.status     = 'closing';
 
     const cycle = {
       cycleId:    hedge.cycles.length + 1,
@@ -381,15 +369,16 @@ class HedgeService extends EventEmitter {
     };
     hedge.cycles.push(cycle);
     hedge.cycleCount    = hedge.cycles.length;
+    hedge.closePrice    = closePrice;
     hedge.openedAt      = null;
     hedge.openPrice     = null;
-    hedge.closePrice    = null;
     hedge.unrealizedPnl = null;
     hedge.slOid         = null;
     hedge.error         = null;
 
     await this._saveCycle(hedge.id, cycle).catch(() => {});
     await this._save(hedge).catch(() => {});
+    this.tg.notifyHedgeClosed({ ...hedge, closePrice });
     this.emit('cycleComplete', hedge, cycle);
 
     await this._placeEntryOrder(hedge);
@@ -402,9 +391,16 @@ class HedgeService extends EventEmitter {
   _startMonitor() {
     this._monitorInterval = setInterval(() => {
       this._monitorPositions().catch((err) => {
-        console.error('[Hedge] Error en monitor:', err.message);
+        console.error(`[Hedge] User ${this.userId} monitor error:`, err.message);
       });
     }, MONITOR_INTERVAL_MS);
+  }
+
+  stopMonitor() {
+    if (this._monitorInterval) {
+      clearInterval(this._monitorInterval);
+      this._monitorInterval = null;
+    }
   }
 
   async _monitorPositions() {
@@ -413,11 +409,10 @@ class HedgeService extends EventEmitter {
 
     for (const hedge of openHedges) {
       try {
-        const pos = await hlService.getPosition(hedge.asset);
+        const pos = await this.hl.getPosition(hedge.asset);
 
         if (!pos || parseFloat(pos.szi) === 0) {
-          console.warn(`[Hedge] #${hedge.id} posicion no encontrada en exchange (liquidacion o SL sin WS)`);
-
+          console.warn(`[Hedge] #${hedge.id} posicion no encontrada (liquidacion o SL sin WS)`);
           const cycle = {
             cycleId:    hedge.cycles.length + 1,
             openedAt:   hedge.openedAt,
@@ -445,7 +440,7 @@ class HedgeService extends EventEmitter {
           continue;
         }
 
-        const prevPnl     = hedge.unrealizedPnl;
+        const prevPnl       = hedge.unrealizedPnl;
         hedge.unrealizedPnl = parseFloat(pos.unrealizedPnl || 0);
 
         if (prevPnl !== hedge.unrealizedPnl) {
@@ -453,14 +448,13 @@ class HedgeService extends EventEmitter {
           this.emit('updated', hedge);
         }
 
-        // Re-colocar SL si desaparecio
         if (hedge.slOid) {
-          const openOrders   = await hlService.getOpenOrders(config.wallet.address);
+          const openOrders    = await this.hl.getOpenOrders();
           const slStillActive = openOrders.some((o) => o.oid === hedge.slOid);
           if (!slStillActive) {
-            console.warn(`[Hedge] #${hedge.id} SL (oid=${hedge.slOid}) desaparecio. Re-colocando...`);
-            hedge.slOid = null;
-            const newSlOid = await hlService.placeSL({
+            console.warn(`[Hedge] #${hedge.id} SL desaparecio. Re-colocando...`);
+            hedge.slOid   = null;
+            const newSlOid = await this.hl.placeSL({
               assetIndex: hedge.assetIndex,
               isBuy:      true,
               size:       formatSize(hedge.size, hedge.szDecimals),
@@ -469,7 +463,6 @@ class HedgeService extends EventEmitter {
             });
             hedge.slOid = newSlOid;
             await this._save(hedge).catch(() => {});
-            console.log(`[Hedge] #${hedge.id} SL re-colocado (oid=${newSlOid})`);
             this.emit('updated', hedge);
           }
         }
@@ -480,4 +473,4 @@ class HedgeService extends EventEmitter {
   }
 }
 
-module.exports = new HedgeService();
+module.exports = HedgeService;

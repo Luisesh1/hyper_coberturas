@@ -1,37 +1,43 @@
 /**
  * settings.routes.js
  *
- * Configuración persistente — almacenada en PostgreSQL (tabla settings).
- * Mantiene compatibilidad con settings.json como fallback en primera carga.
+ * Configuración persistente por usuario — almacenada en PostgreSQL.
  *
- * GET  /api/settings              -> lee configuración actual
- * PUT  /api/settings/telegram     -> guarda token/chatId
- * POST /api/settings/telegram/test-> envía mensaje de prueba
+ * GET  /api/settings              → config actual del usuario autenticado
+ * PUT  /api/settings/telegram     → guarda token/chatId del usuario
+ * POST /api/settings/telegram/test→ envía mensaje de prueba
+ * GET  /api/settings/wallet       → address del usuario (privateKey no se devuelve)
+ * PUT  /api/settings/wallet       → guarda privateKey + address del usuario
  */
 
 const { Router } = require('express');
-const fs       = require('fs').promises;
-const path     = require('path');
-const db       = require('../db');
-const telegram = require('../services/telegram.service');
+const db              = require('../db');
+const tgRegistry      = require('../services/telegram.registry');
+const hlRegistry      = require('../services/hyperliquid.registry');
+const hedgeRegistry   = require('../services/hedge.registry');
+const { authenticate } = require('../middleware/auth.middleware');
 
 const router = Router();
+router.use(authenticate);
 
 // ------------------------------------------------------------------
-// Helpers DB
+// Helpers DB (scoped por user_id)
 // ------------------------------------------------------------------
 
-async function getSetting(key) {
-  const { rows } = await db.query('SELECT value FROM settings WHERE key = $1', [key]);
+async function getSetting(userId, key) {
+  const { rows } = await db.query(
+    'SELECT value FROM settings WHERE user_id = $1 AND key = $2',
+    [userId, key]
+  );
   return rows.length ? JSON.parse(rows[0].value) : null;
 }
 
-async function setSetting(key, value) {
+async function setSetting(userId, key, value) {
   await db.query(
-    `INSERT INTO settings (key, value, updated_at)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-    [key, JSON.stringify(value), Date.now()]
+    `INSERT INTO settings (user_id, key, value, updated_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [userId, key, JSON.stringify(value), Date.now()]
   );
 }
 
@@ -46,7 +52,9 @@ function maskToken(token) {
 
 router.get('/', async (req, res) => {
   try {
-    const tg = (await getSetting('telegram')) || { token: '', chatId: '' };
+    const userId = req.user.userId;
+    const tg     = (await getSetting(userId, 'telegram')) || { token: '', chatId: '' };
+    const wallet = (await getSetting(userId, 'wallet'))   || { address: '' };
     res.json({
       success: true,
       data: {
@@ -54,6 +62,10 @@ router.get('/', async (req, res) => {
           token:   maskToken(tg.token),
           chatId:  tg.chatId || '',
           enabled: !!(tg.token && tg.chatId),
+        },
+        wallet: {
+          address:       wallet.address || '',
+          hasPrivateKey: !!wallet.privateKey,
         },
       },
     });
@@ -64,13 +76,14 @@ router.get('/', async (req, res) => {
 
 router.put('/telegram', async (req, res) => {
   try {
+    const userId = req.user.userId;
     const { token, chatId } = req.body;
     if (!token || !chatId) {
       return res.status(400).json({ success: false, error: 'token y chatId son requeridos' });
     }
     const tg = { token: token.trim(), chatId: String(chatId).trim() };
-    await setSetting('telegram', tg);
-    telegram.configure(tg.token, tg.chatId);
+    await setSetting(userId, 'telegram', tg);
+    await tgRegistry.reload(userId);
     res.json({ success: true, data: { enabled: true } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -79,43 +92,47 @@ router.put('/telegram', async (req, res) => {
 
 router.post('/telegram/test', async (req, res) => {
   try {
-    if (!telegram.enabled) {
+    const tg = tgRegistry.get(req.user.userId);
+    if (!tg?.enabled) {
       return res.status(400).json({ success: false, error: 'Telegram no está configurado' });
     }
-    await telegram.send('🔔 <b>Mensaje de prueba</b>\nHyperliquid Bot está configurado correctamente.');
+    await tg.send('🔔 <b>Mensaje de prueba</b>\nHyperliquid Bot configurado correctamente.');
     res.json({ success: true, data: { sent: true } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-module.exports = router;
-
-// Llamado desde index.js al arrancar para restaurar config de Telegram
-module.exports.loadSettings = async () => {
+router.get('/wallet', async (req, res) => {
   try {
-    // Intentar cargar desde DB primero
-    let tg = await getSetting('telegram');
-
-    // Fallback: settings.json (migracion automatica en primer arranque)
-    if (!tg) {
-      const file = path.join(__dirname, '../../data/settings.json');
-      try {
-        const raw = await fs.readFile(file, 'utf8');
-        const data = JSON.parse(raw);
-        if (data?.telegram?.token && data?.telegram?.chatId) {
-          tg = data.telegram;
-          await setSetting('telegram', tg);
-          console.log('[Settings] Configuracion migrada de settings.json a DB');
-        }
-      } catch { /* no hay archivo, es normal */ }
-    }
-
-    if (tg?.token && tg?.chatId) {
-      telegram.configure(tg.token, tg.chatId);
-      console.log('[Settings] Telegram configurado desde DB');
-    }
+    const userId = req.user.userId;
+    const wallet = (await getSetting(userId, 'wallet')) || {};
+    res.json({
+      success: true,
+      data: { address: wallet.address || '', hasPrivateKey: !!wallet.privateKey },
+    });
   } catch (err) {
-    console.error('[Settings] Error al cargar configuracion:', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
-};
+});
+
+router.put('/wallet', async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { privateKey, address } = req.body;
+    if (!privateKey || !address) {
+      return res.status(400).json({ success: false, error: 'privateKey y address son requeridos' });
+    }
+    await setSetting(userId, 'wallet', { privateKey: privateKey.trim(), address: address.trim() });
+    await hlRegistry.reload(userId);
+    const existingHedge = hedgeRegistry.get(userId);
+    if (existingHedge) existingHedge.stopMonitor();
+    res.json({ success: true, data: { address: address.trim() } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+module.exports = router;
+module.exports.getSetting = getSetting;
+module.exports.setSetting = setSetting;

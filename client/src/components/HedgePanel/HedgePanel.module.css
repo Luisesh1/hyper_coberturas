@@ -60,19 +60,22 @@
 .formCol {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   overflow-y: auto;
   min-height: 0;
-  padding-right: 4px;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 10px;
+  padding: 16px;
 }
 
 .formTitle {
   font-size: 0.78rem;
-  font-weight: 600;
+  font-weight: 700;
   color: #ef4444;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding-bottom: 4px;
+  padding-bottom: 10px;
   border-bottom: 1px solid #2a2d35;
   flex-shrink: 0;
 }
@@ -81,9 +84,13 @@
 .listCol {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   min-height: 0;
   overflow: hidden;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 10px;
+  padding: 16px;
 }
 
 /* ── Form ── */
@@ -661,6 +668,7 @@
   .listCol {
     overflow-y: visible;
     min-height: unset;
+    padding: 14px;
   }
   .hedgeList {
     overflow-y: visible;

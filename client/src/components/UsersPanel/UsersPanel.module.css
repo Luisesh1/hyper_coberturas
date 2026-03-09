@@ -1,0 +1,258 @@
+.container {
+  background: #1a1d23;
+  border: 1px solid #2a2d35;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin: 0 0 2px;
+}
+
+.subtitle {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin: 0;
+}
+
+.refreshBtn {
+  background: none;
+  border: 1px solid #2a2d35;
+  color: #64748b;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.refreshBtn:hover { color: #6366f1; }
+
+/* ── Create section ─── */
+.createSection {
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sectionTitle {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #2a2d35;
+}
+
+.createForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.formRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+  flex: 1;
+}
+
+.label {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.input {
+  background: #1a1d23;
+  border: 1px solid #2a2d35;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #e2e8f0;
+  font-size: 0.83rem;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+  box-sizing: border-box;
+}
+.input:focus { border-color: #6366f1; }
+.input:disabled { opacity: 0.5; }
+
+.createBtn {
+  padding: 8px 18px;
+  background: #6366f1;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.83rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+  height: fit-content;
+}
+.createBtn:hover:not(:disabled) { background: #4f46e5; }
+.createBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.error {
+  font-size: 0.78rem;
+  color: #ef4444;
+  background: #2b0d0d;
+  border: 1px solid #7f1d1d;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+/* ── Table section ─── */
+.tableSection {
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.th {
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #2a2d35;
+}
+
+.row { transition: background 0.1s; }
+.row:hover td { background: #1a1d23; }
+.rowInactive { opacity: 0.55; }
+
+.cell {
+  padding: 10px 12px;
+  border-bottom: 1px solid #1e2535;
+  vertical-align: middle;
+}
+
+.name {
+  display: block;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.username {
+  display: block;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.selfBadge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #1e2a4a;
+  color: #6366f1;
+  margin-left: 5px;
+}
+
+.roleSu {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #1e2a4a;
+  color: #6366f1;
+}
+
+.roleUser {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #1a2535;
+  color: #94a3b8;
+}
+
+.statusOn {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #22c55e;
+}
+
+.statusOff {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.date {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.actionBtn {
+  background: transparent;
+  border: 1px solid #2a2d35;
+  color: #94a3b8;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.actionBtn:hover { border-color: #6366f1; color: #6366f1; }
+.actionBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.deactivateBtn:hover { border-color: #ef4444; color: #ef4444; }
+.activateBtn:hover   { border-color: #22c55e; color: #22c55e; }
+
+.empty { color: #64748b; font-size: 0.82rem; padding: 16px 0; }
+.errorMsg { color: #ef4444; font-size: 0.82rem; }

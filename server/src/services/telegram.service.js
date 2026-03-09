@@ -12,21 +12,15 @@
 const axios = require('axios');
 
 class TelegramService {
-  constructor() {
-    this.token   = process.env.TELEGRAM_BOT_TOKEN;
-    this.chatId  = process.env.TELEGRAM_CHAT_ID;
-    this.enabled = !!(this.token && this.chatId);
-
-    if (this.enabled) {
-      console.log('[Telegram] Notificaciones activadas.');
-    } else {
-      console.warn('[Telegram] No configurado. Agrega TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en .env para habilitar notificaciones.');
-    }
+  /**
+   * @param {string} token  - Bot token de Telegram
+   * @param {string} chatId - Chat ID destino
+   */
+  constructor(token = '', chatId = '') {
+    this.token   = token;
+    this.chatId  = chatId;
+    this.enabled = !!(token && chatId);
   }
-
-  // ------------------------------------------------------------------
-  // Configuración en caliente
-  // ------------------------------------------------------------------
 
   /**
    * Actualiza token y chatId en tiempo de ejecución (sin reiniciar el servidor).
@@ -35,7 +29,6 @@ class TelegramService {
     this.token   = token  || '';
     this.chatId  = chatId || '';
     this.enabled = !!(this.token && this.chatId);
-    console.log(`[Telegram] Reconfigurado. ${this.enabled ? 'Activo.' : 'Inactivo.'}`);
   }
 
   // ------------------------------------------------------------------
@@ -167,4 +160,4 @@ class TelegramService {
   }
 }
 
-module.exports = new TelegramService();
+module.exports = TelegramService;

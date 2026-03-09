@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(curl -s --max-time 5 http://localhost:3001/)",
+      "Bash(ss -tlnp)",
+      "Bash(netstat -tlnp)",
+      "Bash(lsof -i :3001)",
+      "Bash(fuser 3001/tcp)",
+      "Bash(curl -v --max-time 10 http://localhost:3001/)",
+      "Bash(curl -v --max-time 15 \"http://localhost:3001/api/market/contexts\" -H \"Origin: http://localhost:5174\")",
+      "Bash(curl -v --max-time 5 http://[::1]:3001/)",
+      "Read(//proc/sys/net/ipv6/**)",
+      "Bash(ip -6 addr show lo)",
+      "Bash(pkill -f \"node.*server/index.js\")",
+      "Bash(pkill -f \"nodemon.*index.js\")",
+      "Bash(curl -s http://127.0.0.1:3001/api/trading/account)",
+      "Bash(python3 -m json.tool)",
+      "Bash(command -v nvm)",
+      "Read(//home/luis/.nvm/versions/**)",
+      "Bash(node --version)",
+      "Bash(bash -c 'source ~/.nvm/nvm.sh 2>/dev/null && nvm ls 2>/dev/null')",
+      "Read(//usr/local/lib/**)",
+      "Bash(snap list node)",
+      "Bash(docker restart testbot-frontend)",
+      "Bash(node -e \"require\\(''./src/services/hedge.service''\\)\")",
+      "Bash(node -e \"require\\(''./src/services/hedge.service''\\); console.log\\(''OK''\\)\")",
+      "Bash(docker-compose down)",
+      "Bash(git init)",
+      "Bash(git add client/package.json client/package-lock.json client/index.html client/vite.config.js client/.dockerignore client/.env.example client/src/main.jsx client/src/context/TradingContext.jsx client/src/hooks/useWebSocket.js client/src/services/api.js client/src/components/Layout/Notifications.jsx client/src/components/Layout/Notifications.module.css client/src/components/PricePanel/PricePanel.jsx client/src/components/PricePanel/PricePanel.module.css client/src/components/SettingsPanel/SettingsPanel.jsx client/src/components/SettingsPanel/SettingsPanel.module.css)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

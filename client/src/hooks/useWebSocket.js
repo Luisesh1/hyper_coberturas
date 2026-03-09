@@ -11,11 +11,11 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-// Construir URL WS relativa al host actual (funciona con el proxy de Vite)
+// Construir URL WS relativa al host actual, incluyendo el token JWT
 function getWsUrl() {
-  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${window.location.host}/ws`;
+  const base  = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+  const token = localStorage.getItem('hl_token') || '';
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 const PING_INTERVAL_MS      = 25_000;  // enviar ping cada 25s

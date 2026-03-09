@@ -4,21 +4,15 @@
  * Logica de negocio para operaciones de trading:
  * abrir posiciones apalancadas, cerrar posiciones, consultar estado.
  *
- * Abstrae la complejidad de los indices de activos y el calculo de
- * precios para ordenes de mercado.
+ * Ahora es una clase que recibe instancias de HyperliquidService y TelegramService
+ * para soportar múltiples usuarios con configuraciones independientes.
  */
 
-const hlService = require('./hyperliquid.service');
-const telegram = require('./telegram.service');
 const config = require('../config');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
 const MARKET_ORDER_SLIPPAGE = 0.002; // 0.2%
 
-/**
- * Formatea un precio a max 5 cifras significativas (requerido por Hyperliquid).
- * Ejemplo: 63736.93 -> "63737", 1847.42 -> "1847.4", 0.35740 -> "0.36100"
- */
 function formatPrice(price) {
   if (!price || price <= 0) return '0';
   const d = Math.ceil(Math.log10(Math.abs(price)));
@@ -28,12 +22,6 @@ function formatPrice(price) {
   return power > 0 ? rounded.toFixed(power) : rounded.toString();
 }
 
-/**
- * Formatea el tamano de una orden al numero de decimales del activo (szDecimals).
- * Ejemplo: BTC szDecimals=5 -> 0.0014912... -> "0.00149"
- * @param {number} size
- * @param {number} szDecimals - Obtenido de hlService.getAssetMeta()
- */
 function formatSize(size, szDecimals) {
   const factor = Math.pow(10, szDecimals);
   return (Math.floor(parseFloat(size) * factor) / factor).toFixed(szDecimals);
@@ -41,31 +29,27 @@ function formatSize(size, szDecimals) {
 
 class TradingService {
   /**
-   * Abre una posicion apalancada (long o short).
-   *
-   * @param {object} params
-   * @param {string} params.asset        - Simbolo del activo (ej: "BTC")
-   * @param {'long'|'short'} params.side - Direccion de la posicion
-   * @param {number} params.size         - Tamano en unidades del activo
-   * @param {number} [params.leverage]   - Apalancamiento (default: config)
-   * @param {'cross'|'isolated'} [params.marginMode] - Tipo de margen
-   * @param {number} [params.limitPrice] - Si se especifica, usa orden limite
+   * @param {import('./hyperliquid.service')} hlService
+   * @param {import('./telegram.service')} tgService
    */
+  constructor(hlService, tgService) {
+    this.hl = hlService;
+    this.tg = tgService;
+  }
+
   async openPosition({ asset, side, size, leverage, marginMode, limitPrice }) {
     const assetName = asset.toUpperCase();
     const isBuy = side === 'long';
     const lev = leverage || config.trading.defaultLeverage;
     const isCross = (marginMode || config.trading.marginMode) === 'cross';
 
-    // 1. Obtener metadata del activo, precio actual y estado de cuenta en paralelo
     const [assetMeta, mids, accountState] = await Promise.all([
-      hlService.getAssetMeta(assetName),
-      hlService.getAllMids(),
-      hlService.getClearinghouseState(),
+      this.hl.getAssetMeta(assetName),
+      this.hl.getAllMids(),
+      this.hl.getClearinghouseState(),
     ]);
     const { index: assetIndex, szDecimals } = assetMeta;
 
-    // 2. Validar margen disponible antes de operar
     const midPrice = parseFloat(mids[assetName]);
     if (!midPrice) throw new Error(`Precio no disponible para ${assetName}`);
 
@@ -79,34 +63,26 @@ class TradingService {
       );
     }
 
-    // 3. Actualizar apalancamiento antes de operar
-    await hlService.updateLeverage(assetIndex, isCross, lev);
-    console.log(
-      `[Trading] Apalancamiento actualizado: ${assetName} x${lev} (${isCross ? 'cross' : 'isolated'})`
-    );
+    await this.hl.updateLeverage(assetIndex, isCross, lev);
 
-    // 4. Calcular precio para la orden (max 5 cifras significativas requerido por Hyperliquid)
     let orderPrice;
     if (limitPrice) {
       orderPrice = formatPrice(limitPrice);
     } else {
-      // Orden de mercado simulada: precio muy favorable con slippage
       orderPrice = isBuy
-        ? formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE))  // compra: precio alto
-        : formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE)); // venta: precio bajo
+        ? formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE))
+        : formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE));
     }
 
-    // 5. Colocar la orden (size formateado a szDecimals decimales del activo)
-    const result = await hlService.placeOrder({
+    const result = await this.hl.placeOrder({
       assetIndex,
       isBuy,
       size: formatSize(size, szDecimals),
       price: orderPrice,
       reduceOnly: false,
-      tif: limitPrice ? 'Gtc' : 'Ioc', // market = Ioc (immediate or cancel)
+      tif: limitPrice ? 'Gtc' : 'Ioc',
     });
 
-    console.log(`[Trading] Posicion ${side} abierta en ${assetName}:`, result);
     const openResult = {
       success: true,
       action: 'open',
@@ -118,25 +94,16 @@ class TradingService {
       orderPrice,
       result,
     };
-    telegram.notifyTradeOpen(openResult);
+    this.tg.notifyTradeOpen(openResult);
     return openResult;
   }
 
-  /**
-   * Cierra una posicion existente (total o parcialmente).
-   *
-   * @param {object} params
-   * @param {string} params.asset  - Simbolo del activo (ej: "BTC")
-   * @param {number} [params.size] - Tamano a cerrar (si no se especifica, cierra todo)
-   */
   async closePosition({ asset, size }) {
     const assetName = asset.toUpperCase();
 
-    // 1. Obtener estado de la cuenta
-    const state = await hlService.getClearinghouseState();
+    const state = await this.hl.getClearinghouseState();
     const positions = state.assetPositions || [];
 
-    // 2. Encontrar la posicion del activo
     const positionEntry = positions.find(
       (p) => p.position?.coin?.toUpperCase() === assetName
     );
@@ -146,30 +113,26 @@ class TradingService {
     }
 
     const position = positionEntry.position;
-    const szi = parseFloat(position.szi); // szi > 0 = long, szi < 0 = short
+    const szi = parseFloat(position.szi);
     const isLong = szi > 0;
 
     if (szi === 0) throw new Error(`La posicion en ${assetName} es cero`);
 
-    // 3. Determinar tamano a cerrar
     const closeSize = size ? Math.min(Math.abs(size), Math.abs(szi)) : Math.abs(szi);
 
-    // 4. Obtener metadata del activo y precio en paralelo
     const [{ index: assetIndex, szDecimals }, mids] = await Promise.all([
-      hlService.getAssetMeta(assetName),
-      hlService.getAllMids(),
+      this.hl.getAssetMeta(assetName),
+      this.hl.getAllMids(),
     ]);
 
     const midPrice = parseFloat(mids[assetName]);
     if (!midPrice) throw new Error(`Precio no disponible para ${assetName}`);
 
-    // 5. Calcular precio para cierre (opuesto a la posicion, max 5 sig figs)
     const closePrice = isLong
       ? formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE))
       : formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE));
 
-    // 6. Colocar orden de cierre con reduceOnly = true
-    const result = await hlService.placeOrder({
+    const result = await this.hl.placeOrder({
       assetIndex,
       isBuy: !isLong,
       size: formatSize(closeSize, szDecimals),
@@ -178,7 +141,6 @@ class TradingService {
       tif: 'Ioc',
     });
 
-    console.log(`[Trading] Posicion cerrada en ${assetName}:`, result);
     const closeResult = {
       success: true,
       action: 'close',
@@ -188,16 +150,12 @@ class TradingService {
       closePrice,
       result,
     };
-    telegram.notifyTradeClose(closeResult);
+    this.tg.notifyTradeClose(closeResult);
     return closeResult;
   }
 
-  /**
-   * Retorna el estado completo de la cuenta:
-   * balance, margen disponible, posiciones abiertas con PnL.
-   */
   async getAccountState() {
-    const state = await hlService.getClearinghouseState();
+    const state = await this.hl.getClearinghouseState();
     const marginSummary = state.marginSummary || {};
     const positions = (state.assetPositions || [])
       .filter((p) => parseFloat(p.position?.szi || 0) !== 0)
@@ -222,23 +180,15 @@ class TradingService {
     };
   }
 
-  /**
-   * Retorna las ordenes abiertas del usuario.
-   */
   async getOpenOrders() {
-    return hlService.getOpenOrders();
+    return this.hl.getOpenOrders();
   }
 
-  /**
-   * Cancela una orden abierta.
-   * @param {string} asset   - Simbolo del activo
-   * @param {number} orderId - ID de la orden (oid)
-   */
   async cancelOrder(asset, orderId) {
-    const assetIndex = await hlService.getAssetIndex(asset);
-    const result = await hlService.cancelOrder(assetIndex, orderId);
+    const assetIndex = await this.hl.getAssetIndex(asset);
+    const result = await this.hl.cancelOrder(assetIndex, orderId);
     return { success: true, result };
   }
 }
 
-module.exports = new TradingService();
+module.exports = TradingService;

@@ -1,24 +1,34 @@
 import { useState } from 'react';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { TradingProvider } from './context/TradingContext';
 import { PricePanel } from './components/PricePanel/PricePanel';
 import { TradingPanel } from './components/TradingPanel/TradingPanel';
 import { HedgePanel } from './components/HedgePanel/HedgePanel';
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
+import UsersPanel from './components/UsersPanel/UsersPanel';
 import { Notifications } from './components/Layout/Notifications';
 import { useTradingContext } from './context/TradingContext';
+import LoginPage from './pages/LoginPage';
 import styles from './App.module.css';
 
-const NAV_ITEMS = [
+const BASE_NAV = [
   { id: 'manual',   label: 'Trading Manual', activeClass: 'modeBtnActive'  },
   { id: 'hedge',    label: 'Coberturas',      activeClass: 'modeHedgeActive' },
   { id: 'settings', label: '⚙ Config',        activeClass: 'modeBtnActive'  },
 ];
 
+const SUPER_NAV = [
+  { id: 'users', label: '👥 Usuarios', activeClass: 'modeBtnActive' },
+];
+
 function AppContent() {
+  const { user, isSuperuser, logout } = useAuth();
   const [selectedAsset, setSelectedAsset] = useState('BTC');
   const [activeMode, setActiveMode]   = useState('manual');
   const [menuOpen,   setMenuOpen]     = useState(false);
   const { isConnected, isPriceStale } = useTradingContext();
+
+  const navItems = isSuperuser ? [...BASE_NAV, ...SUPER_NAV] : BASE_NAV;
 
   const navigate = (id) => {
     setActiveMode(id);
@@ -28,31 +38,19 @@ function AppContent() {
   return (
     <div className={styles.app}>
 
-      {/* ── Off-canvas overlay (solo mobile) ── */}
       {menuOpen && (
-        <div
-          className={styles.offCanvasOverlay}
-          onClick={() => setMenuOpen(false)}
-          aria-hidden="true"
-        />
+        <div className={styles.offCanvasOverlay} onClick={() => setMenuOpen(false)} aria-hidden="true" />
       )}
 
-      {/* ── Off-canvas sidebar (solo mobile) ── */}
       <nav className={`${styles.offCanvas} ${menuOpen ? styles.offCanvasOpen : ''}`}>
         <div className={styles.offCanvasHeader}>
           <span className={styles.logoIcon}>◈</span>
           <span className={styles.logoText}>Hyperliquid Bot</span>
-          <button
-            className={styles.closeBtn}
-            onClick={() => setMenuOpen(false)}
-            aria-label="Cerrar menú"
-          >
-            ✕
-          </button>
+          <button className={styles.closeBtn} onClick={() => setMenuOpen(false)} aria-label="Cerrar menú">✕</button>
         </div>
 
         <div className={styles.offCanvasNav}>
-          {NAV_ITEMS.map(({ id, label, activeClass }) => (
+          {navItems.map(({ id, label, activeClass }) => (
             <button
               key={id}
               className={`${styles.offCanvasBtn} ${activeMode === id ? styles[activeClass] : ''}`}
@@ -69,14 +67,8 @@ function AppContent() {
         </div>
       </nav>
 
-      {/* ── Header principal ── */}
       <header className={styles.header}>
-        {/* Hamburger (solo mobile) */}
-        <button
-          className={styles.hamburger}
-          onClick={() => setMenuOpen(true)}
-          aria-label="Abrir menú"
-        >
+        <button className={styles.hamburger} onClick={() => setMenuOpen(true)} aria-label="Abrir menú">
           <span /><span /><span />
         </button>
 
@@ -85,9 +77,8 @@ function AppContent() {
           <span className={styles.logoText}>Hyperliquid Bot</span>
         </div>
 
-        {/* Nav horizontal (solo desktop) */}
         <nav className={styles.modeNav}>
-          {NAV_ITEMS.map(({ id, label, activeClass }) => (
+          {navItems.map(({ id, label, activeClass }) => (
             <button
               key={id}
               className={`${styles.modeBtn} ${activeMode === id ? styles[activeClass] : ''}`}
@@ -100,11 +91,15 @@ function AppContent() {
 
         <div className={styles.headerRight}>
           <StatusBadge isConnected={isConnected} isPriceStale={isPriceStale} />
-          <span className={styles.version}>MVP v1.0</span>
+          <span className={styles.userBadge} title={`Rol: ${user?.role}`}>
+            {user?.name || user?.username}
+            {isSuperuser && <span className={styles.roleBadge}>SU</span>}
+          </span>
+          <button className={styles.logoutBtn} onClick={logout} title="Cerrar sesión">↩</button>
+          <span className={styles.version}>v1.0</span>
         </div>
       </header>
 
-      {/* ── Contenido principal ── */}
       <main className={styles.main}>
         <aside className={styles.sidebar}>
           <PricePanel selectedAsset={selectedAsset} onSelectAsset={setSelectedAsset} />
@@ -114,6 +109,7 @@ function AppContent() {
           {activeMode === 'manual'   && <TradingPanel selectedAsset={selectedAsset} />}
           {activeMode === 'hedge'    && <HedgePanel   selectedAsset={selectedAsset} />}
           {activeMode === 'settings' && <SettingsPanel />}
+          {activeMode === 'users'    && isSuperuser && <UsersPanel />}
         </section>
       </main>
 
@@ -128,10 +124,20 @@ function StatusBadge({ isConnected, isPriceStale }) {
   return <span className={`${styles.wsStatus} ${cls}`}>{txt}</span>;
 }
 
-export default function App() {
+function AuthGate() {
+  const { isAuthenticated } = useAuth();
+  if (!isAuthenticated) return <LoginPage />;
   return (
     <TradingProvider>
       <AppContent />
     </TradingProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }
