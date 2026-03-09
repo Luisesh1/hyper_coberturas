@@ -3,10 +3,10 @@
   background: #1a1d23;
   border: 1px solid #2a2d35;
   border-radius: 12px;
-  padding: 16px 20px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   height: 100%;
   min-height: 0;
 }
@@ -104,8 +104,8 @@
 /* ── Cuerpo 2 columnas ─────────────────────────────────────────── */
 .body {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 16px;
+  grid-template-columns: 380px 1fr;
+  gap: 20px;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -115,18 +115,21 @@
 .formCol {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   overflow-y: auto;
-  padding-right: 4px;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 10px;
+  padding: 16px;
 }
 
 .colLabel {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #94a3b8;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
-  padding-bottom: 6px;
+  letter-spacing: 0.5px;
+  padding-bottom: 10px;
   border-bottom: 1px solid #2a2d35;
   display: flex;
   align-items: center;
@@ -136,17 +139,17 @@
 .sideRow {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 10px;
 }
 
 .sideBtn {
-  padding: 11px;
+  padding: 13px;
   border: 1px solid #2a2d35;
   border-radius: 8px;
-  background: #0f1117;
+  background: #1a1d23;
   color: #64748b;
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -157,13 +160,13 @@
 .field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 7px;
 }
 
 .label {
-  font-size: 0.75rem;
+  font-size: 0.76rem;
   color: #64748b;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .labelRow {
@@ -187,15 +190,15 @@
 
 .leveragePresets {
   display: flex;
-  gap: 5px;
+  gap: 6px;
 }
 
 .preset {
-  background: #0f1117;
+  background: #1a1d23;
   border: 1px solid #2a2d35;
   color: #64748b;
-  font-size: 0.72rem;
-  padding: 3px 9px;
+  font-size: 0.74rem;
+  padding: 4px 11px;
   border-radius: 5px;
   cursor: pointer;
   transition: all 0.15s;
@@ -206,20 +209,22 @@
 .segmented {
   display: flex;
   gap: 4px;
-  background: #0f1117;
+  background: #0a0c10;
+  border: 1px solid #2a2d35;
   border-radius: 7px;
   padding: 3px;
 }
 
 .segBtn {
   flex: 1;
-  padding: 6px;
+  padding: 7px;
   border: none;
   border-radius: 5px;
   background: transparent;
   color: #64748b;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 600;
   transition: all 0.15s;
 }
 
@@ -246,10 +251,10 @@
 .denomActive { border-color: #6366f1; color: #6366f1; background: #1e2040; }
 
 .input {
-  background: #0f1117;
+  background: #1a1d23;
   border: 1px solid #2a2d35;
   border-radius: 8px;
-  padding: 9px 12px;
+  padding: 10px 14px;
   color: #e2e8f0;
   font-size: 0.9rem;
   outline: none;
@@ -261,13 +266,13 @@
 
 /* Resumen compacto */
 .summary {
-  background: #0f1117;
+  background: #1a1d23;
   border: 1px solid #2a2d35;
-  border-radius: 7px;
-  padding: 9px 12px;
+  border-radius: 8px;
+  padding: 11px 14px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .summaryRow {
@@ -287,14 +292,15 @@
 .danger span:last-child { color: #ef4444; }
 
 .submitBtn {
-  padding: 11px;
+  padding: 13px;
   border: none;
   border-radius: 8px;
-  font-size: 0.9rem;
+  font-size: 0.92rem;
   font-weight: 700;
   cursor: pointer;
   transition: opacity 0.15s;
   letter-spacing: 0.3px;
+  margin-top: 4px;
 }
 
 .submitBtn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -316,15 +322,19 @@
   gap: 10px;
   overflow-y: auto;
   min-height: 0;
-  padding-right: 4px;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 10px;
+  padding: 16px;
 }
 
 .posColHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-bottom: 6px;
+  padding-bottom: 10px;
   border-bottom: 1px solid #2a2d35;
+  flex-shrink: 0;
 }
 
 .badge {
@@ -434,13 +444,16 @@
 .liqPrice  { color: #f97316 !important; }
 
 /* ── Responsive ────────────────────────────────────────────────── */
-@media (max-width: 1100px) {
+@media (max-width: 1150px) {
   .body {
     grid-template-columns: 1fr;
     overflow: visible;
+    height: auto;
   }
 
+  .formCol,
   .positionsCol {
     overflow-y: visible;
+    min-height: unset;
   }
 }
