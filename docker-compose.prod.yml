@@ -1,0 +1,50 @@
+# ══════════════════════════════════════════════
+# Hyperliquid Bot — Docker Compose (PRODUCCION)
+# ══════════════════════════════════════════════
+#
+# Arquitectura:
+#   nginx:80  ←→  browser
+#     ├── /api/*  → server:3001  (REST API)
+#     ├── /ws     → server:3001  (WebSocket del bot)
+#     └── /*      → archivos estaticos del build de React (servidos por nginx)
+#
+# Uso:
+#   docker-compose -f docker-compose.prod.yml up --build -d
+#   docker-compose -f docker-compose.prod.yml down
+#   docker-compose -f docker-compose.prod.yml logs -f
+#
+# Variables requeridas en server/.env:
+#   PRIVATE_KEY, WALLET_ADDRESS (y el resto del .env)
+# ══════════════════════════════════════════════
+
+services:
+
+  # ── Reverse proxy + archivos estaticos del frontend ────────────────
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile.prod
+    container_name: testbot-nginx-prod
+    ports:
+      - "80:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  # ── Backend Node.js (produccion, sin nodemon) ──────────────────────
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: production
+    container_name: testbot-server-prod
+    env_file:
+      - ./server/.env
+    environment:
+      NODE_ENV: production
+      CLIENT_URL: "http://localhost"
+    volumes:
+      # Solo persistir datos, no montar codigo fuente
+      - ./server/data:/app/data
+    restart: unless-stopped
+    # Sin 'ports': solo nginx accede al backend internamente

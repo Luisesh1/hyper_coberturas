@@ -1,0 +1,74 @@
+# ══════════════════════════════════════════════
+# Hyperliquid Bot — Docker Compose (DESARROLLO)
+# ══════════════════════════════════════════════
+#
+# Arquitectura:
+#   nginx:80  ←→  browser
+#     ├── /api/*  → server:3001  (REST API)
+#     ├── /ws     → server:3001  (WebSocket del bot)
+#     └── /*      → frontend:5174 (Vite dev + HMR)
+#
+# Uso:
+#   docker-compose up --build          # primer arranque
+#   docker-compose up                  # arranques siguientes
+#   docker-compose down                # detener y eliminar contenedores
+#   docker-compose logs -f server      # ver logs del backend
+#
+# Produccion: ver docker-compose.prod.yml
+# ══════════════════════════════════════════════
+
+services:
+
+  # ── Reverse proxy: unico punto de entrada ──────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: testbot-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - server
+      - frontend
+    restart: unless-stopped
+
+  # ── Backend Node.js (nodemon para hot reload) ──────────────────────
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: development
+    container_name: testbot-server
+    env_file:
+      - ./server/.env
+    environment:
+      NODE_ENV: development
+      # CLIENT_URL: permite CORS desde nginx en dev
+      CLIENT_URL: "http://localhost"
+    volumes:
+      - ./server:/app
+      - server_node_modules:/app/node_modules
+      # Persistir datos (settings.json, etc.)
+      - ./server/data:/app/data
+    restart: unless-stopped
+    # Sin 'ports': solo nginx accede al backend internamente
+
+  # ── Frontend Vite dev server (HMR incluido) ────────────────────────
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      target: development
+    container_name: testbot-frontend
+    environment:
+      VITE_PORT: "5174"
+      # Sin VITE_PROXY_*: nginx maneja el routing, Vite no necesita proxy
+    volumes:
+      - ./client:/app
+      - frontend_node_modules:/app/node_modules
+    restart: unless-stopped
+    # Sin 'ports': solo nginx accede al frontend internamente
+
+volumes:
+  server_node_modules:
+  frontend_node_modules:
