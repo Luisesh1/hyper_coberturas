@@ -1,38 +1,38 @@
 /**
  * settings.routes.js
  *
- * API de configuración persistente del bot.
- * Guarda los settings en server/data/settings.json.
+ * Configuración persistente — almacenada en PostgreSQL (tabla settings).
+ * Mantiene compatibilidad con settings.json como fallback en primera carga.
  *
- * GET  /api/settings              -> lee configuración actual (token enmascarado)
- * PUT  /api/settings/telegram     -> guarda token/chatId y reconfigura Telegram en caliente
- * POST /api/settings/telegram/test-> envía mensaje de prueba al chat configurado
+ * GET  /api/settings              -> lee configuración actual
+ * PUT  /api/settings/telegram     -> guarda token/chatId
+ * POST /api/settings/telegram/test-> envía mensaje de prueba
  */
 
 const { Router } = require('express');
-const fs   = require('fs').promises;
-const path = require('path');
+const fs       = require('fs').promises;
+const path     = require('path');
+const db       = require('../db');
 const telegram = require('../services/telegram.service');
 
 const router = Router();
-const SETTINGS_FILE = path.join(__dirname, '../../data/settings.json');
 
 // ------------------------------------------------------------------
-// Helpers
+// Helpers DB
 // ------------------------------------------------------------------
 
-async function readSettings() {
-  try {
-    const raw = await fs.readFile(SETTINGS_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return { telegram: { token: '', chatId: '' } };
-  }
+async function getSetting(key) {
+  const { rows } = await db.query('SELECT value FROM settings WHERE key = $1', [key]);
+  return rows.length ? JSON.parse(rows[0].value) : null;
 }
 
-async function writeSettings(data) {
-  await fs.mkdir(path.dirname(SETTINGS_FILE), { recursive: true });
-  await fs.writeFile(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
+async function setSetting(key, value) {
+  await db.query(
+    `INSERT INTO settings (key, value, updated_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+    [key, JSON.stringify(value), Date.now()]
+  );
 }
 
 function maskToken(token) {
@@ -44,11 +44,9 @@ function maskToken(token) {
 // Rutas
 // ------------------------------------------------------------------
 
-/** GET /api/settings */
 router.get('/', async (req, res) => {
   try {
-    const settings = await readSettings();
-    const tg = settings.telegram || {};
+    const tg = (await getSetting('telegram')) || { token: '', chatId: '' };
     res.json({
       success: true,
       data: {
@@ -64,28 +62,21 @@ router.get('/', async (req, res) => {
   }
 });
 
-/** PUT /api/settings/telegram */
 router.put('/telegram', async (req, res) => {
   try {
     const { token, chatId } = req.body;
     if (!token || !chatId) {
       return res.status(400).json({ success: false, error: 'token y chatId son requeridos' });
     }
-
-    const settings = await readSettings();
-    settings.telegram = { token: token.trim(), chatId: String(chatId).trim() };
-    await writeSettings(settings);
-
-    // Aplicar en caliente sin reiniciar
-    telegram.configure(settings.telegram.token, settings.telegram.chatId);
-
+    const tg = { token: token.trim(), chatId: String(chatId).trim() };
+    await setSetting('telegram', tg);
+    telegram.configure(tg.token, tg.chatId);
     res.json({ success: true, data: { enabled: true } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-/** POST /api/settings/telegram/test */
 router.post('/telegram/test', async (req, res) => {
   try {
     if (!telegram.enabled) {
@@ -99,10 +90,32 @@ router.post('/telegram/test', async (req, res) => {
 });
 
 module.exports = router;
+
+// Llamado desde index.js al arrancar para restaurar config de Telegram
 module.exports.loadSettings = async () => {
-  const settings = await readSettings();
-  const tg = settings.telegram;
-  if (tg?.token && tg?.chatId) {
-    telegram.configure(tg.token, tg.chatId);
+  try {
+    // Intentar cargar desde DB primero
+    let tg = await getSetting('telegram');
+
+    // Fallback: settings.json (migracion automatica en primer arranque)
+    if (!tg) {
+      const file = path.join(__dirname, '../../data/settings.json');
+      try {
+        const raw = await fs.readFile(file, 'utf8');
+        const data = JSON.parse(raw);
+        if (data?.telegram?.token && data?.telegram?.chatId) {
+          tg = data.telegram;
+          await setSetting('telegram', tg);
+          console.log('[Settings] Configuracion migrada de settings.json a DB');
+        }
+      } catch { /* no hay archivo, es normal */ }
+    }
+
+    if (tg?.token && tg?.chatId) {
+      telegram.configure(tg.token, tg.chatId);
+      console.log('[Settings] Telegram configurado desde DB');
+    }
+  } catch (err) {
+    console.error('[Settings] Error al cargar configuracion:', err.message);
   }
 };
