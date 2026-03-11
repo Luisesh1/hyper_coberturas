@@ -125,8 +125,9 @@ router.put('/wallet', async (req, res) => {
     }
     await setSetting(userId, 'wallet', { privateKey: privateKey.trim(), address: address.trim() });
     await hlRegistry.reload(userId);
-    const existingHedge = hedgeRegistry.get(userId);
-    if (existingHedge) existingHedge.stopMonitor();
+    if (hedgeRegistry.get(userId)) {
+      await hedgeRegistry.reload(userId);
+    }
     res.json({ success: true, data: { address: address.trim() } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

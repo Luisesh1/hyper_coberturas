@@ -36,7 +36,7 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const { asset, entryPrice, exitPrice, size, leverage, label } = req.body;
+    const { asset, entryPrice, exitPrice, size, leverage, label, direction } = req.body;
     if (!asset || !entryPrice || !exitPrice || !size || !leverage) {
       return res.status(400).json({
         success: false,
@@ -44,7 +44,7 @@ router.post('/', async (req, res, next) => {
       });
     }
     const svc   = await hedgeRegistry.getOrCreate(req.user.userId);
-    const hedge = await svc.createHedge({ asset, entryPrice, exitPrice, size, leverage, label });
+    const hedge = await svc.createHedge({ asset, entryPrice, exitPrice, size, leverage, label, direction });
     res.status(201).json({ success: true, data: hedge });
   } catch (err) {
     next(err);

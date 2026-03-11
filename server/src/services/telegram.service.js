@@ -58,7 +58,9 @@ class TelegramService {
   // ------------------------------------------------------------------
 
   _fmtPrice(price) {
-    return parseFloat(price).toLocaleString('en-US', {
+    const value = parseFloat(price);
+    if (!Number.isFinite(value)) return 'N/A';
+    return value.toLocaleString('en-US', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
@@ -77,11 +79,14 @@ class TelegramService {
   // ------------------------------------------------------------------
 
   notifyHedgeCreated(hedge) {
+    const side = (hedge.direction || 'short').toUpperCase();
+    const entryRule = side === 'LONG' ? 'Entrada si precio ≥' : 'Entrada si precio ≤';
+    const exitRule = side === 'LONG' ? 'SL si precio ≤' : 'SL si precio ≥';
     const lines = [
       `🟡 <b>Cobertura creada</b>`,
-      `Activo: <b>${hedge.asset}</b> | SHORT | ${hedge.leverage}x`,
-      `Entrada si precio ≤ $${this._fmtPrice(hedge.entryPrice)}`,
-      `Salida si precio ≥ $${this._fmtPrice(hedge.exitPrice)}`,
+      `Activo: <b>${hedge.asset}</b> | ${side} | ${hedge.leverage}x`,
+      `${entryRule} $${this._fmtPrice(hedge.entryPrice)}`,
+      `${exitRule} $${this._fmtPrice(hedge.exitPrice)}`,
       `Tamaño: ${hedge.size} ${hedge.asset}`,
       hedge.label ? `Etiqueta: ${hedge.label}` : null,
     ];
@@ -89,9 +94,11 @@ class TelegramService {
   }
 
   notifyHedgeOpened(hedge) {
+    const side = (hedge.direction || 'short').toUpperCase();
+    const emoji = side === 'LONG' ? '🟢' : '🔴';
     const notional = (parseFloat(hedge.size) * parseFloat(hedge.openPrice)).toFixed(2);
     const lines = [
-      `🔴 <b>SHORT activado</b>`,
+      `${emoji} <b>${side} activado</b>`,
       `Activo: <b>${hedge.asset}</b> | ${hedge.leverage}x isolated`,
       `Precio entrada: $${this._fmtPrice(hedge.openPrice)}`,
       `Tamaño: ${hedge.size} ${hedge.asset} (~$${notional})`,
@@ -101,7 +108,8 @@ class TelegramService {
   }
 
   notifyHedgeClosed(hedge) {
-    const pnl = this._fmtPnl(hedge.openPrice, hedge.closePrice, hedge.size, true);
+    const isShort = (hedge.direction || 'short') !== 'long';
+    const pnl = this._fmtPnl(hedge.openPrice, hedge.closePrice, hedge.size, isShort);
     const lines = [
       `✅ <b>Cobertura completada</b>`,
       `Activo: <b>${hedge.asset}</b>`,

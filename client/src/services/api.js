@@ -86,6 +86,9 @@ export const tradingApi = {
 
   cancelOrder: (asset, oid) =>
     request('DELETE', `/trading/orders/${asset}/${oid}`),
+
+  setSLTP: ({ asset, side, size, slPrice, tpPrice }) =>
+    request('POST', '/trading/sltp', { asset, side, size, slPrice, tpPrice }),
 };
 
 // ------------------------------------------------------------------
@@ -95,8 +98,8 @@ export const hedgeApi = {
   getAll:  () => request('GET', '/hedge'),
   getById: (id) => request('GET', `/hedge/${id}`),
 
-  create: ({ asset, entryPrice, exitPrice, size, leverage, label }) =>
-    request('POST', '/hedge', { asset, entryPrice, exitPrice, size, leverage, label }),
+  create: ({ asset, entryPrice, exitPrice, size, leverage, label, direction }) =>
+    request('POST', '/hedge', { asset, entryPrice, exitPrice, size, leverage, label, direction }),
 
   cancel: (id) => request('DELETE', `/hedge/${id}`),
 };

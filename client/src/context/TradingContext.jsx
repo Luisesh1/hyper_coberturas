@@ -29,10 +29,10 @@ export function TradingProvider({ children }) {
   // ------------------------------------------------------------------
   // Notificaciones toast
   // ------------------------------------------------------------------
-  const addNotification = useCallback((type, message) => {
+  const addNotification = useCallback((type, message, duration = 5000) => {
     const id = ++notifIdRef.current;
     setNotifications((prev) => [...prev, { id, type, message }]);
-    setTimeout(() => setNotifications((prev) => prev.filter((n) => n.id !== id)), 5000);
+    setTimeout(() => setNotifications((prev) => prev.filter((n) => n.id !== id)), duration);
   }, []);
 
   // ------------------------------------------------------------------
@@ -56,16 +56,19 @@ export function TradingProvider({ children }) {
         return [hedge, ...prev];
       });
 
+      const dir = (hedge.direction || 'short').toUpperCase();
       const notifMap = {
-        created:       ['info',    `Cobertura creada: ${hedge.asset} entrada ≤ $${hedge.entryPrice}`],
-        opened:        ['success', `Cobertura activada: SHORT ${hedge.asset} abierto a $${hedge.openPrice}`],
-        cycleComplete: ['success', `Ciclo #${msg.cycle?.cycleId} completado: SHORT ${hedge.asset} cerrado a $${msg.cycle?.closePrice}`],
-        cancelled:     ['info',    `Cobertura #${hedge.id} cancelada`],
-        error:         ['error',   `Error en cobertura #${hedge.id}: ${msg.message}`],
+        created:       ['info',    5000,  `Cobertura creada: ${hedge.asset} entrada ≤ $${hedge.entryPrice}`],
+        opened:        ['alert',   12000, `POSICION ${dir} ABIERTA\n${hedge.asset} · $${Number(hedge.openPrice).toLocaleString()} · ${hedge.leverage}x Isolated`],
+        reconciled:    ['info',    4000,  `Cobertura #${hedge.id} reconciliada con el exchange`],
+        protection_missing: ['error', 8000, `Cobertura #${hedge.id} sin proteccion confirmada. Reintentando SL...`],
+        cycleComplete: ['success', 6000,  `Ciclo #${msg.cycle?.cycleId} completado: ${dir} ${hedge.asset} cerrado a $${msg.cycle?.closePrice}`],
+        cancelled:     ['info',    5000,  `Cobertura #${hedge.id} cancelada`],
+        error:         ['error',   8000,  `Error en cobertura #${hedge.id}: ${msg.message}`],
       };
 
-      const [type, message] = notifMap[event] || [];
-      if (type) addNotification(type, message);
+      const [type, duration, message] = notifMap[event] || [];
+      if (type) addNotification(type, message, duration);
     }
   }, [addNotification]);
 

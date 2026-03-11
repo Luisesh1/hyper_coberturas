@@ -1,6 +1,7 @@
 /**
  * HedgePanel.jsx  —  Coberturas Automaticas (2-column layout)
  * Left: form always visible | Right: hedge list always visible
+ * Soporta SHORT y LONG con switch de tipo.
  */
 
 import { useState, useEffect } from 'react';
@@ -9,8 +10,11 @@ import styles from './HedgePanel.module.css';
 
 const STATUS_LABEL = {
   entry_pending:   { text: 'Orden GTC activa', color: '#f59e0b' },
+  entry_filled_pending_sl: { text: 'Proteccion pendiente', color: '#f97316' },
+  open_protected:  { text: 'Posicion protegida', color: '#22c55e' },
   open:            { text: 'Posicion abierta', color: '#22c55e' },
   closing:         { text: 'Cerrando SL...',   color: '#818cf8' },
+  cancel_pending:  { text: 'Cancelando...',    color: '#94a3b8' },
   cancelled:       { text: 'Cancelada',        color: '#64748b' },
   error:           { text: 'Error',            color: '#ef4444' },
   // legacy
@@ -23,20 +27,37 @@ export function HedgePanel({ selectedAsset }) {
   const { prices, hedges, createHedge, cancelHedge, refreshHedges } = useTradingContext();
 
   const [asset, setAsset]           = useState(selectedAsset || 'BTC');
+  const [direction, setDirection]   = useState('short'); // 'short' | 'long'
   const [entryPrice, setEntryPrice] = useState('');
   const [exitPrice, setExitPrice]   = useState('');
   const [size, setSize]             = useState('');
   const [denomination, setDenomination] = useState('USDC');
   const [leverage, setLeverage]     = useState(10);
   const [label, setLabel]           = useState('');
+  const [autoExit, setAutoExit]     = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [historyTab, setHistoryTab] = useState(false);
+
+  const isLong = direction === 'long';
 
   useEffect(() => {
     if (selectedAsset) setAsset(selectedAsset);
   }, [selectedAsset]);
 
   useEffect(() => { refreshHedges(); }, []);
+
+  // Cuando autoExit está activo, recalcula exitPrice como ±0.05% del entryPrice
+  useEffect(() => {
+    if (!autoExit) return;
+    const entry = parseFloat(entryPrice);
+    if (!entry || entry <= 0) return;
+    // SHORT: exitPrice = entry + 0.05% (SL arriba de la entrada)
+    // LONG:  exitPrice = entry - 0.05% (SL abajo de la entrada)
+    const auto = isLong
+      ? (entry * (1 - 0.0005)).toFixed(2)
+      : (entry * (1 + 0.0005)).toFixed(2);
+    setExitPrice(auto);
+  }, [autoExit, entryPrice, isLong]);
 
   const currentPrice = prices[asset] ? parseFloat(prices[asset]) : null;
 
@@ -49,13 +70,17 @@ export function HedgePanel({ selectedAsset }) {
   const notional  = sizeInAsset && entryNum ? sizeInAsset * entryNum : null;
   const margin    = notional ? notional / leverage : null;
   const priceValid = entryNum > 0 && exitNum > 0;
-  const logicValid = priceValid && exitNum > entryNum;
+
+  // SHORT: exit > entry (SL arriba); LONG: exit < entry (SL abajo)
+  const logicValid = isLong
+    ? priceValid && exitNum < entryNum
+    : priceValid && exitNum > entryNum;
 
   const handleCreate = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      await createHedge({ asset, entryPrice, exitPrice, size: sizeInAsset, leverage, label });
+      await createHedge({ asset, entryPrice, exitPrice, size: sizeInAsset, leverage, label, direction });
       setEntryPrice('');
       setExitPrice('');
       setSize('');
@@ -70,10 +95,10 @@ export function HedgePanel({ selectedAsset }) {
 
   const handleCancel = async (id) => { await cancelHedge(id); };
 
-  const activeHedges    = hedges.filter((h) => ['waiting', 'entry_pending', 'open', 'closing', 'executing_open', 'executing_close'].includes(h.status));
+  const activeHedges    = hedges.filter((h) => ['waiting', 'entry_pending', 'entry_filled_pending_sl', 'open', 'open_protected', 'closing', 'cancel_pending', 'executing_open', 'executing_close'].includes(h.status));
   const cancelledHedges = hedges.filter((h) => ['cancelled', 'error'].includes(h.status));
   const completedCycles = hedges
-    .flatMap(h => (h.cycles || []).map(c => ({ ...c, asset: h.asset, label: h.label, leverage: h.leverage, hedgeId: h.id })))
+    .flatMap(h => (h.cycles || []).map(c => ({ ...c, asset: h.asset, label: h.label, leverage: h.leverage, direction: h.direction, hedgeId: h.id })))
     .sort((a, b) => b.closedAt - a.closedAt);
 
   return (
@@ -83,7 +108,7 @@ export function HedgePanel({ selectedAsset }) {
         <div>
           <h2 className={styles.title}>Coberturas Automaticas</h2>
           <p className={styles.subtitle}>
-            SHORT GTC nativo + SL nativo · siempre Isolated · ciclos automaticos
+            GTC nativo + SL nativo · Isolated · ciclos automaticos
           </p>
         </div>
         <button className={styles.refreshBtn} onClick={refreshHedges} title="Refrescar">↻</button>
@@ -94,7 +119,27 @@ export function HedgePanel({ selectedAsset }) {
 
         {/* ── LEFT: Formulario ── */}
         <div className={styles.formCol}>
-          <div className={styles.formTitle}>Nueva cobertura SHORT</div>
+          {/* Direction selector */}
+          <div className={styles.directionBar}>
+            <button
+              type="button"
+              className={`${styles.dirBtn} ${isLong ? styles.dirBtnLongActive : styles.dirBtnInactive}`}
+              onClick={() => { setDirection('long'); setExitPrice(''); }}
+            >
+              ▲ Long
+            </button>
+            <button
+              type="button"
+              className={`${styles.dirBtn} ${!isLong ? styles.dirBtnShortActive : styles.dirBtnInactive}`}
+              onClick={() => { setDirection('short'); setExitPrice(''); }}
+            >
+              ▼ Short
+            </button>
+          </div>
+
+          <div className={isLong ? styles.formTitleLong : styles.formTitle}>
+            Nueva cobertura {isLong ? 'LONG' : 'SHORT'}
+          </div>
 
           <form className={styles.form} onSubmit={handleCreate}>
             {/* Par y precio actual */}
@@ -121,15 +166,18 @@ export function HedgePanel({ selectedAsset }) {
             </div>
 
             {/* Precios trigger */}
-            <div className={styles.triggerBox}>
+            <div className={isLong ? styles.triggerBoxLong : styles.triggerBox}>
               <div className={styles.triggerHeader}>
-                <span className={styles.triggerIcon}>▼</span>
+                <span className={isLong ? styles.triggerIconLong : styles.triggerIcon}>
+                  {isLong ? '▲' : '▼'}
+                </span>
                 <span className={styles.triggerTitle}>Condiciones de activacion</span>
               </div>
               <div className={styles.row2}>
+                {/* Entry */}
                 <div className={styles.field}>
                   <label className={styles.label}>
-                    Entrada&nbsp;<span className={styles.hint}>(&le; este precio)</span>
+                    Entrada&nbsp;<span className={styles.hint}>{isLong ? '(precio \u2265 este valor)' : '(precio \u2264 este valor)'}</span>
                   </label>
                   <div className={styles.inputGroup}>
                     <span className={styles.inputPrefix}>$</span>
@@ -147,33 +195,59 @@ export function HedgePanel({ selectedAsset }) {
                   </div>
                   {currentPrice && entryNum > 0 && (
                     <span className={styles.fieldHint}>
-                      {entryNum < currentPrice
-                        ? `${((1 - entryNum / currentPrice) * 100).toFixed(2)}% bajo precio actual`
-                        : 'Activaria inmediatamente'}
+                      {isLong
+                        ? (entryNum > currentPrice
+                            ? `${((entryNum / currentPrice - 1) * 100).toFixed(2)}% sobre precio actual`
+                            : 'Activaria inmediatamente')
+                        : (entryNum < currentPrice
+                            ? `${((1 - entryNum / currentPrice) * 100).toFixed(2)}% bajo precio actual`
+                            : 'Activaria inmediatamente')}
                     </span>
                   )}
                 </div>
 
+                {/* Exit / SL */}
                 <div className={styles.field}>
                   <label className={styles.label}>
-                    Salida&nbsp;<span className={styles.hint}>(&ge; este precio)</span>
+                    {isLong
+                      ? <>Salida SL&nbsp;<span className={styles.hint}>(&le; este precio)</span></>
+                      : <>Salida&nbsp;<span className={styles.hint}>(&ge; este precio)</span></>
+                    }
+                    <label className={styles.autoExitLabel}>
+                      <input
+                        type="checkbox"
+                        checked={autoExit}
+                        onChange={(e) => setAutoExit(e.target.checked)}
+                        className={styles.autoExitCheck}
+                      />
+                      Auto 0.05%
+                    </label>
                   </label>
                   <div className={styles.inputGroup}>
                     <span className={styles.inputPrefix}>$</span>
                     <input
                       className={`${styles.input} ${styles.inputInner}`}
-                      type="number" step="0.01" min="0" placeholder="ej: 100000"
+                      type="number" step="0.01" min="0"
+                      placeholder={isLong ? 'ej: 90000' : 'ej: 100000'}
                       value={exitPrice}
-                      onChange={(e) => setExitPrice(e.target.value)}
+                      onChange={(e) => { if (!autoExit) setExitPrice(e.target.value); }}
+                      disabled={autoExit}
                       required
                     />
-                    {currentPrice && (
+                    {currentPrice && !autoExit && (
                       <button type="button" className={styles.priceBtn}
                         onClick={() => setExitPrice(currentPrice.toFixed(2))}>Actual</button>
                     )}
                   </div>
                   {priceValid && !logicValid && (
-                    <span className={styles.fieldError}>Salida debe ser mayor a entrada</span>
+                    <span className={styles.fieldError}>
+                      {isLong ? 'SL debe ser menor a entrada' : 'Salida debe ser mayor a entrada'}
+                    </span>
+                  )}
+                  {isLong && entryNum > 0 && exitNum > 0 && exitNum < entryNum && (
+                    <span className={styles.fieldHint}>
+                      SL a {((entryNum - exitNum) / entryNum * 100).toFixed(2)}% bajo entrada
+                    </span>
                   )}
                 </div>
               </div>
@@ -210,15 +284,15 @@ export function HedgePanel({ selectedAsset }) {
               <div className={styles.field}>
                 <div className={styles.labelRow}>
                   <label className={styles.label}>Apalancamiento</label>
-                  <span className={styles.leverageVal}>{leverage}x Isolated</span>
+                  <span className={isLong ? styles.leverageValLong : styles.leverageVal}>{leverage}x Isolated</span>
                 </div>
                 <input type="range" min="1" max="50" value={leverage}
                   onChange={(e) => setLeverage(Number(e.target.value))}
-                  className={styles.slider} />
+                  className={isLong ? styles.sliderLong : styles.slider} />
                 <div className={styles.presets}>
                   {[1, 2, 5, 10, 20, 50].map((v) => (
                     <button key={v} type="button"
-                      className={`${styles.preset} ${leverage === v ? styles.presetActive : ''}`}
+                      className={`${styles.preset} ${leverage === v ? (isLong ? styles.presetActiveLong : styles.presetActive) : ''}`}
                       onClick={() => setLeverage(v)}>{v}x</button>
                   ))}
                 </div>
@@ -229,29 +303,29 @@ export function HedgePanel({ selectedAsset }) {
             <div className={styles.field}>
               <label className={styles.label}>Etiqueta (opcional)</label>
               <input className={styles.input} type="text"
-                placeholder="ej: Cobertura BTC bajista Q3"
+                placeholder={`ej: Cobertura ${asset} ${isLong ? 'alcista' : 'bajista'} Q3`}
                 value={label} onChange={(e) => setLabel(e.target.value)} />
             </div>
 
             {/* Resumen */}
             {notional !== null && logicValid && (
-              <div className={styles.summary}>
+              <div className={isLong ? styles.summaryLong : styles.summary}>
                 <div className={styles.summaryTitle}>Resumen</div>
                 <div className={styles.summaryGrid}>
                   <div className={styles.summaryItem}>
                     <span className={styles.summaryLabel}>Tipo</span>
-                    <span className={styles.summaryVal}>SHORT Isolated {leverage}x</span>
+                    <span className={styles.summaryVal}>{isLong ? 'LONG' : 'SHORT'} Isolated {leverage}x</span>
                   </div>
                   <div className={styles.summaryItem}>
                     <span className={styles.summaryLabel}>Activa cuando</span>
-                    <span className={`${styles.summaryVal} ${styles.triggerDown}`}>
-                      &le; ${Number(entryPrice).toLocaleString()}
+                    <span className={`${styles.summaryVal} ${isLong ? styles.triggerUp : styles.triggerDown}`}>
+                      {isLong ? '≥' : '≤'} ${Number(entryPrice).toLocaleString()}
                     </span>
                   </div>
                   <div className={styles.summaryItem}>
-                    <span className={styles.summaryLabel}>Cierra cuando</span>
-                    <span className={`${styles.summaryVal} ${styles.triggerUp}`}>
-                      &ge; ${Number(exitPrice).toLocaleString()}
+                    <span className={styles.summaryLabel}>Cierra SL cuando</span>
+                    <span className={`${styles.summaryVal} ${isLong ? styles.triggerDown : styles.triggerUp}`}>
+                      {isLong ? '≤' : '≥'} ${Number(exitPrice).toLocaleString()}
                     </span>
                   </div>
                   <div className={styles.summaryItem}>
@@ -265,16 +339,19 @@ export function HedgePanel({ selectedAsset }) {
                   <div className={styles.summaryItem}>
                     <span className={styles.summaryLabel}>Rango</span>
                     <span className={styles.summaryVal}>
-                      ${Number(entryPrice).toLocaleString()} — ${Number(exitPrice).toLocaleString()}
+                      ${Number(isLong ? exitPrice : entryPrice).toLocaleString()} — ${Number(isLong ? entryPrice : exitPrice).toLocaleString()}
                     </span>
                   </div>
                 </div>
               </div>
             )}
 
-            <button type="submit" className={styles.submitBtn}
-              disabled={isSubmitting || !logicValid || !sizeInAsset || sizeInAsset <= 0}>
-              {isSubmitting ? 'Creando...' : '▼ Activar cobertura SHORT'}
+            <button
+              type="submit"
+              className={isLong ? styles.submitBtnLong : styles.submitBtn}
+              disabled={isSubmitting || !logicValid || !sizeInAsset || sizeInAsset <= 0}
+            >
+              {isSubmitting ? 'Creando...' : (isLong ? '▲ Activar cobertura LONG' : '▼ Activar cobertura SHORT')}
             </button>
           </form>
         </div>
@@ -334,31 +411,60 @@ export function HedgePanel({ selectedAsset }) {
   );
 }
 
+/** Calcula PnL bruto, fees, funding y neto de un ciclo */
+function calcCyclePnl(c, hedgeSize, direction) {
+  // Preferir closedPnl del exchange (ya incluye slippage real)
+  const gross = c.closedPnl != null
+    ? c.closedPnl
+    : (c.openPrice && c.closePrice
+        ? (direction === 'long'
+            ? (parseFloat(c.closePrice) - parseFloat(c.openPrice)) * parseFloat(hedgeSize)
+            : (parseFloat(c.openPrice)  - parseFloat(c.closePrice)) * parseFloat(hedgeSize))
+        : null);
+  const fees    = (c.entryFee || 0) + (c.exitFee || 0);
+  const funding = c.fundingPaid || 0;                // positivo = recibido
+  // Usar netPnl precalculado del backend si está disponible (incluye datos reales del exchange)
+  const net = c.netPnl != null ? c.netPnl : (gross != null ? gross - fees + funding : null);
+  return { gross, fees, funding, net };
+}
+
+function fmt(n, decimals = 4) {
+  return (n >= 0 ? '+' : '') + n.toFixed(decimals);
+}
+
 /* ── Tarjeta individual de cobertura ── */
 function HedgeCard({ hedge, currentPrice, onCancel }) {
   const [showHistory, setShowHistory] = useState(false);
 
-  const st = STATUS_LABEL[hedge.status] || { text: hedge.status, color: '#64748b' };
-  const pct = currentPrice && hedge.entryPrice
+  const isLong  = hedge.direction === 'long';
+  const st      = STATUS_LABEL[hedge.status] || { text: hedge.status, color: '#64748b' };
+  const pct     = currentPrice && hedge.entryPrice
     ? ((currentPrice - hedge.entryPrice) / hedge.entryPrice * 100).toFixed(2)
     : null;
-  const isActive = hedge.status === 'open';
-  const cycles = hedge.cycles || [];
+  const isActive = ['open', 'open_protected', 'entry_filled_pending_sl'].includes(hedge.status);
+  const cycles   = hedge.cycles || [];
 
-  const totalPnl = cycles.reduce((acc, c) => {
-    if (c.openPrice && c.closePrice) {
-      return acc + (parseFloat(c.openPrice) - parseFloat(c.closePrice)) * parseFloat(hedge.size);
-    }
-    return acc;
-  }, 0);
+  // Acumulados de todos los ciclos
+  const totals = cycles.reduce((acc, c) => {
+    const { gross, fees, funding, net } = calcCyclePnl(c, hedge.size, hedge.direction);
+    return {
+      net:     acc.net     + (net     ?? 0),
+      gross:   acc.gross   + (gross   ?? 0),
+      fees:    acc.fees    + fees,
+      funding: acc.funding + funding,
+      hasData: acc.hasData || net != null,
+    };
+  }, { net: 0, gross: 0, fees: 0, funding: 0, hasData: false });
 
   return (
-    <div className={`${styles.card} ${isActive ? styles.cardActive : ''}`}>
+    <div className={`${styles.card} ${isActive ? (isLong ? styles.cardActiveLong : styles.cardActive) : ''}`}>
       {/* Cabecera */}
       <div className={styles.cardHeader}>
         <div className={styles.cardLeft}>
           <span className={styles.cardAsset}>{hedge.asset}</span>
-          <span className={styles.shortTag}>SHORT {hedge.leverage}x</span>
+          <span className={isLong ? styles.longTag : styles.shortTag}>
+            {isLong ? 'LONG' : 'SHORT'} {hedge.leverage}x
+          </span>
           <span className={styles.statusDot} style={{ color: st.color }}>● {st.text}</span>
           {cycles.length > 0 && (
             <span className={styles.cycleCountBadge}>{cycles.length} ciclo{cycles.length !== 1 ? 's' : ''}</span>
@@ -371,7 +477,7 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
               {showHistory ? '▲' : '▼'} Historial
             </button>
           )}
-          {onCancel && ['waiting', 'entry_pending', 'open'].includes(hedge.status) && (
+          {onCancel && ['waiting', 'entry_pending', 'entry_filled_pending_sl', 'open', 'open_protected', 'cancel_pending'].includes(hedge.status) && (
             <button className={styles.cancelBtn} onClick={() => onCancel(hedge.id)}>Cancelar</button>
           )}
         </div>
@@ -383,14 +489,14 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
       <div className={styles.cardGrid}>
         <div className={styles.cardItem}>
           <span className={styles.cardItemLabel}>Entrada</span>
-          <span className={`${styles.cardItemVal} ${styles.triggerDown}`}>
-            &le; ${Number(hedge.entryPrice).toLocaleString()}
+          <span className={`${styles.cardItemVal} ${isLong ? styles.triggerUp : styles.triggerDown}`}>
+            {isLong ? '≥' : '≤'} ${Number(hedge.entryPrice).toLocaleString()}
           </span>
         </div>
         <div className={styles.cardItem}>
-          <span className={styles.cardItemLabel}>Salida</span>
-          <span className={`${styles.cardItemVal} ${styles.triggerUp}`}>
-            &ge; ${Number(hedge.exitPrice).toLocaleString()}
+          <span className={styles.cardItemLabel}>Salida SL</span>
+          <span className={`${styles.cardItemVal} ${isLong ? styles.triggerDown : styles.triggerUp}`}>
+            {isLong ? '≤' : '≥'} ${Number(hedge.exitPrice).toLocaleString()}
           </span>
         </div>
         <div className={styles.cardItem}>
@@ -427,19 +533,22 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
             <span className={styles.cardItemVal}>${Number(hedge.openPrice).toLocaleString()}</span>
           </div>
         )}
-        {hedge.unrealizedPnl != null && hedge.status === 'open' && (
+        {hedge.unrealizedPnl != null && ['open', 'open_protected'].includes(hedge.status) && (
           <div className={styles.cardItem}>
             <span className={styles.cardItemLabel}>PnL no realizado</span>
             <span className={hedge.unrealizedPnl >= 0 ? styles.pnlPositive : styles.pnlNegative}>
-              {hedge.unrealizedPnl >= 0 ? '+' : ''}{Number(hedge.unrealizedPnl).toFixed(4)} USDC
+              {fmt(Number(hedge.unrealizedPnl))} USDC
             </span>
           </div>
         )}
         {cycles.length > 0 && (
-          <div className={styles.cardItem}>
-            <span className={styles.cardItemLabel}>PnL acumulado</span>
-            <span className={totalPnl >= 0 ? styles.pnlPositive : styles.pnlNegative}>
-              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(4)} USDC
+          <div className={`${styles.cardItem} ${styles.pnlSummaryItem}`}>
+            <span className={styles.cardItemLabel}>PnL neto acum.</span>
+            <span className={totals.net >= 0 ? styles.pnlPositive : styles.pnlNegative}>
+              {fmt(totals.net)} USDC
+            </span>
+            <span className={styles.cardItemSub}>
+              bruto {fmt(totals.gross, 2)} · fees -{totals.fees.toFixed(4)} · fund {fmt(totals.funding, 4)}
             </span>
           </div>
         )}
@@ -457,11 +566,12 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
 
       {showHistory && cycles.length > 0 && (
         <div className={styles.cycleHistory}>
-          <div className={styles.cycleHistoryTitle}>Historial de ciclos</div>
+          <div className={styles.cycleHistoryTitle}>Historial de ciclos ({cycles.length})</div>
           {[...cycles].reverse().map((c) => (
             <CycleRow
               key={c.cycleId}
-              cycle={{ ...c, asset: hedge.asset, label: hedge.label, leverage: hedge.leverage }}
+              cycle={{ ...c, asset: hedge.asset, label: hedge.label, leverage: hedge.leverage, direction: hedge.direction }}
+              hedgeSize={hedge.size}
             />
           ))}
         </div>
@@ -471,35 +581,56 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
 }
 
 /* ── Fila de ciclo completado ── */
-function CycleRow({ cycle }) {
-  const pnl = cycle.openPrice && cycle.closePrice
-    ? ((parseFloat(cycle.closePrice) - parseFloat(cycle.openPrice)) * -1).toFixed(2)
-    : null;
-  const pnlNum = pnl ? parseFloat(pnl) : 0;
-  const durationMs = cycle.closedAt - cycle.openedAt;
+function CycleRow({ cycle, hedgeSize }) {
+  const isLong = cycle.direction === 'long';
+  const sz     = hedgeSize ?? cycle.size ?? 0;
+  const { gross, fees, funding, net } = calcCyclePnl(cycle, sz, cycle.direction);
+
+  const durationMs = (cycle.closedAt || 0) - (cycle.openedAt || 0);
   const mins  = Math.floor(durationMs / 60000);
   const hours = Math.floor(mins / 60);
   const duration = hours > 0 ? `${hours}h ${mins % 60}m` : `${mins}m`;
 
+  const hasFeeData = (cycle.entryFee || 0) + (cycle.exitFee || 0) > 0 || cycle.closedPnl != null;
+
   return (
     <div className={styles.cycleRow}>
+      {/* Izquierda: identificación */}
       <div className={styles.cycleLeft}>
         <span className={styles.cycleAsset}>{cycle.asset}</span>
-        <span className={styles.cycleBadge}>SHORT {cycle.leverage}x · #{cycle.cycleId}</span>
+        <span className={`${styles.cycleBadge} ${isLong ? styles.cycleBadgeLong : ''}`}>
+          {isLong ? 'LONG' : 'SHORT'} {cycle.leverage}x · #{cycle.cycleId}
+        </span>
         {cycle.label && <span className={styles.cycleLabel}>{cycle.label}</span>}
+        <span className={styles.cycleDuration}>{duration}</span>
       </div>
+
+      {/* Derecha: PnL detallado */}
       <div className={styles.cycleRight}>
+        {net != null && (
+          <span className={net >= 0 ? styles.cycleProfit : styles.cycleLoss}>
+            {fmt(net, 4)} USDC
+          </span>
+        )}
         <span className={styles.cyclePrices}>
           ${parseFloat(cycle.openPrice).toLocaleString('en-US', { minimumFractionDigits: 2 })}
           {' → '}
           ${parseFloat(cycle.closePrice).toLocaleString('en-US', { minimumFractionDigits: 2 })}
         </span>
-        {pnl && (
-          <span className={pnlNum >= 0 ? styles.cycleProfit : styles.cycleLoss}>
-            {pnlNum >= 0 ? '+' : ''}{pnl} USDC
+        {hasFeeData && (
+          <span className={styles.cycleBreakdown}>
+            {gross != null && `bruto ${fmt(gross, 2)}`}
+            {fees > 0 && ` · fees -${fees.toFixed(4)}`}
+            {funding !== 0 && ` · fund ${fmt(funding, 4)}`}
           </span>
         )}
-        <span className={styles.cycleDuration}>{duration} · {new Date(cycle.closedAt).toLocaleString()}</span>
+        {cycle.totalSlippage > 0 && (
+          <span className={styles.cycleBreakdown}>
+            slip -{cycle.totalSlippage.toFixed(4)} USDC
+            {' '}(E:±{(cycle.entrySlippage || 0).toFixed(4)} / S:±{(cycle.exitSlippage || 0).toFixed(4)})
+          </span>
+        )}
+        <span className={styles.cycleDuration}>{new Date(cycle.closedAt).toLocaleString()}</span>
       </div>
     </div>
   );

@@ -46,10 +46,10 @@
 }
 .refreshBtn:hover { color: #6366f1; }
 
-/* ── 2-column body ── */
+/* ── 2-column body: form wider, list narrower ── */
 .body {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 460px 1fr;
   gap: 16px;
   flex: 1;
   min-height: 0;
@@ -60,7 +60,7 @@
 .formCol {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   overflow-y: auto;
   min-height: 0;
   background: #0f1117;
@@ -69,14 +69,65 @@
   padding: 16px;
 }
 
+/* ── Direction selector ── */
+.directionBar {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #2a2d35;
+  flex-shrink: 0;
+}
+
+.dirBtn {
+  flex: 1;
+  padding: 9px 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  letter-spacing: 0.3px;
+}
+
+.dirBtnLongActive {
+  background: #166534;
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+.dirBtnShortActive {
+  background: #7f1d1d;
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.dirBtnInactive {
+  background: #0f1117;
+  border-color: #2a2d35;
+  color: #475569;
+}
+.dirBtnInactive:hover {
+  border-color: #475569;
+  color: #94a3b8;
+}
+
+/* ── Form titles ── */
 .formTitle {
   font-size: 0.78rem;
   font-weight: 700;
   color: #ef4444;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #2a2d35;
+  flex-shrink: 0;
+}
+
+.formTitleLong {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #22c55e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
   flex-shrink: 0;
 }
 
@@ -90,7 +141,7 @@
   background: #0f1117;
   border: 1px solid #2a2d35;
   border-radius: 10px;
-  padding: 16px;
+  padding: 12px;
 }
 
 /* ── Form ── */
@@ -116,6 +167,29 @@
   font-size: 0.72rem;
   color: #64748b;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.autoExitLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  color: #6366f1;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.autoExitCheck {
+  width: 12px;
+  height: 12px;
+  accent-color: #6366f1;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .hint {
@@ -171,10 +245,26 @@
   color: #ef4444;
 }
 
-/* Trigger box */
+.leverageValLong {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #22c55e;
+}
+
+/* Trigger boxes */
 .triggerBox {
   background: #0f1117;
   border: 1px solid #3b2a0a;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.triggerBoxLong {
+  background: #0f1117;
+  border: 1px solid #14532d;
   border-radius: 8px;
   padding: 10px;
   display: flex;
@@ -191,6 +281,11 @@
 .triggerIcon {
   font-size: 0.8rem;
   color: #ef4444;
+}
+
+.triggerIconLong {
+  font-size: 0.8rem;
+  color: #22c55e;
 }
 
 .triggerTitle {
@@ -269,10 +364,17 @@
   box-sizing: border-box;
 }
 .input:focus { border-color: #6366f1; }
+.input:disabled { opacity: 0.5; cursor: not-allowed; color: #94a3b8; }
 
 .slider {
   width: 100%;
   accent-color: #ef4444;
+  cursor: pointer;
+}
+
+.sliderLong {
+  width: 100%;
+  accent-color: #22c55e;
   cursor: pointer;
 }
 
@@ -299,10 +401,26 @@
   background: #2b0d0d;
 }
 
+.presetActiveLong {
+  border-color: #22c55e;
+  color: #22c55e;
+  background: #052e16;
+}
+
 /* Resumen */
 .summary {
   background: #0f1117;
   border: 1px solid #2a2d35;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.summaryLong {
+  background: #030d07;
+  border: 1px solid #14532d;
   border-radius: 8px;
   padding: 10px;
   display: flex;
@@ -360,6 +478,21 @@
 .submitBtn:not(:disabled):hover { background: #b91c1c; }
 .submitBtn:disabled { opacity: 0.45; cursor: not-allowed; }
 
+.submitBtnLong {
+  padding: 11px;
+  background: #16a34a;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+  letter-spacing: 0.3px;
+}
+.submitBtnLong:not(:disabled):hover { background: #15803d; }
+.submitBtnLong:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* ── Tabs Activas / Historial ── */
 .tabBar {
   display: flex;
@@ -413,16 +546,21 @@
   background: #0f1117;
   border: 1px solid #2a2d35;
   border-radius: 8px;
-  padding: 12px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   flex-shrink: 0;
 }
 
 .cardActive {
   border-color: #166534;
   background: #0a1a10;
+}
+
+.cardActiveLong {
+  border-color: #1d4ed8;
+  background: #0a0f1a;
 }
 
 .cardHeader {
@@ -442,17 +580,26 @@
 
 .cardAsset {
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   color: #e2e8f0;
 }
 
 .shortTag {
-  font-size: 0.65rem;
+  font-size: 0.63rem;
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
   background: #2b0d0d;
   color: #ef4444;
+}
+
+.longTag {
+  font-size: 0.63rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #052e16;
+  color: #22c55e;
 }
 
 .statusDot {
@@ -471,9 +618,9 @@
   background: transparent;
   border: 1px solid #475569;
   color: #94a3b8;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 5px;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
@@ -484,9 +631,9 @@
   background: transparent;
   border: 1px solid #2a2d35;
   color: #6366f1;
-  padding: 3px 8px;
+  padding: 2px 7px;
   border-radius: 5px;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
@@ -495,7 +642,7 @@
 .historyBtn:hover { border-color: #6366f1; background: #1a1d30; }
 
 .cardLabel {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: #94a3b8;
   font-style: italic;
 }
@@ -504,7 +651,7 @@
 .cardGrid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 6px;
+  gap: 5px;
 }
 
 .cardItem {
@@ -514,19 +661,19 @@
 }
 
 .cardItemLabel {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   color: #475569;
 }
 
 .cardItemVal {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: #e2e8f0;
   font-variant-numeric: tabular-nums;
 }
 
 .cardItemSub {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   color: #475569;
   font-variant-numeric: tabular-nums;
 }
@@ -538,8 +685,8 @@
   background: #2b0d0d;
   border: 1px solid #7f1d1d;
   border-radius: 5px;
-  padding: 6px 10px;
-  font-size: 0.75rem;
+  padding: 5px 8px;
+  font-size: 0.72rem;
   color: #ef4444;
 }
 
@@ -547,14 +694,20 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   color: #475569;
   border-top: 1px solid #1e2535;
-  padding-top: 6px;
+  padding-top: 5px;
 }
 
 .pnlPositive { color: #22c55e; font-weight: 600; }
 .pnlNegative { color: #ef4444; font-weight: 600; }
+
+.pnlSummaryItem .cardItemSub {
+  font-size: 0.6rem;
+  color: #64748b;
+  margin-top: 1px;
+}
 
 .cycleCountBadge {
   font-size: 0.62rem;
@@ -569,14 +722,14 @@
 /* ── Historial de ciclos desplegable ── */
 .cycleHistory {
   border-top: 1px solid #1e2535;
-  padding-top: 8px;
+  padding-top: 7px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
 .cycleHistoryTitle {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 600;
   color: #475569;
   text-transform: uppercase;
@@ -589,10 +742,10 @@
   background: #0f1117;
   border: 1px solid #1e2535;
   border-radius: 6px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
 }
 
@@ -614,48 +767,59 @@
 
 .cycleAsset {
   font-weight: 700;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   color: #e2e8f0;
 }
 
 .cycleBadge {
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   font-weight: 700;
   padding: 1px 5px;
   border-radius: 4px;
-  background: #1a2535;
-  color: #6366f1;
+  background: #2b0d0d;
+  color: #ef4444;
+}
+
+.cycleBadgeLong {
+  background: #052e16;
+  color: #22c55e;
 }
 
 .cycleLabel {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   color: #475569;
   font-style: italic;
 }
 
 .cyclePrices {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: #64748b;
   font-variant-numeric: tabular-nums;
 }
 
 .cycleProfit {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 700;
   color: #22c55e;
   font-variant-numeric: tabular-nums;
 }
 
 .cycleLoss {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 700;
   color: #ef4444;
   font-variant-numeric: tabular-nums;
 }
 
 .cycleDuration {
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   color: #475569;
+}
+
+.cycleBreakdown {
+  font-size: 0.6rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Responsive: single column on narrow ── */
@@ -671,9 +835,8 @@
     padding: 14px;
   }
   .hedgeList {
-    overflow-y: visible;
-    max-height: 600px;
     overflow-y: auto;
+    max-height: 600px;
   }
   .cardGrid {
     grid-template-columns: 1fr 1fr;

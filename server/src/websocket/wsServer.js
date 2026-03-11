@@ -18,6 +18,7 @@ const db            = require('../db');
 const config        = require('../config');
 
 const CLIENT_PING_INTERVAL_MS = 20_000;
+const attachedHedgeServices = new WeakSet();
 
 /** Envía un mensaje JSON a todos los sockets del usuario indicado */
 function broadcastToUser(wss, userId, payload) {
@@ -31,13 +32,31 @@ function broadcastToUser(wss, userId, payload) {
 
 /** Adjunta los eventos de un HedgeService al WS server */
 function attachHedgeEvents(wss, hedgeSvc) {
+  if (attachedHedgeServices.has(hedgeSvc)) return;
+  attachedHedgeServices.add(hedgeSvc);
   const userId = hedgeSvc.userId;
   hedgeSvc.on('created',      (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'created',      hedge: h }));
   hedgeSvc.on('updated',      (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'updated',      hedge: h }));
   hedgeSvc.on('opened',       (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'opened',       hedge: h }));
+  hedgeSvc.on('reconciled',   (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'reconciled',   hedge: h }));
+  hedgeSvc.on('protection_missing', (h)   => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'protection_missing', hedge: h }));
   hedgeSvc.on('cycleComplete',(h, cycle)  => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'cycleComplete', hedge: h, cycle }));
   hedgeSvc.on('cancelled',    (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'cancelled',    hedge: h }));
   hedgeSvc.on('error',        (h, err)    => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'error',        hedge: h, message: err.message }));
+}
+
+async function bootstrapUserRuntime(wss, userId) {
+  await hlRegistry.getOrCreate(userId);
+  const hedgeSvc = await hedgeRegistry.getOrCreate(userId);
+  attachHedgeEvents(wss, hedgeSvc);
+
+  const hl = hlRegistry.get(userId);
+  if (hl?.address) {
+    hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
+    console.log(`[WS] userEvents suscrito para user ${userId} (${hl.address})`);
+  }
+
+  return hedgeSvc;
 }
 
 /**
@@ -51,19 +70,7 @@ async function loadActiveUsers(wss) {
 
   for (const { id: userId } of rows) {
     try {
-      // Inicializa HL y Telegram registry (carga config desde DB)
-      await hlRegistry.getOrCreate(userId);
-
-      // Inicializa HedgeService (carga coberturas desde DB)
-      const hedgeSvc = await hedgeRegistry.getOrCreate(userId);
-      attachHedgeEvents(wss, hedgeSvc);
-
-      // Suscribir userEvents si el usuario tiene wallet configurada
-      const hl = hlRegistry.get(userId);
-      if (hl?.address) {
-        hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
-        console.log(`[WS] userEvents suscrito para user ${userId} (${hl.address})`);
-      }
+      await bootstrapUserRuntime(wss, userId);
     } catch (err) {
       console.error(`[WS] Error al inicializar user ${userId}:`, err.message);
     }
@@ -73,13 +80,31 @@ async function loadActiveUsers(wss) {
 function createWsServer(httpServer) {
   const wss = new WebSocket.Server({ server: httpServer, path: '/ws' });
 
+  hedgeRegistry.onCreate(async (hedgeSvc) => {
+    attachHedgeEvents(wss, hedgeSvc);
+    const hl = hlRegistry.get(hedgeSvc.userId);
+    if (hl?.address) {
+      hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
+    }
+  });
+
   // Suscribir feed global de precios
   hlWsClient.subscribe({ type: 'allMids' });
 
   // Distribuir mensajes HL: precios a todos, fills al hedge service correcto
   hlWsClient.addSubscriber((hlMessage) => {
-    // Retransmitir precios a todos los clientes autenticados
+    // Retransmitir precios a todos los clientes autenticados + reacción en tiempo real
     if (hlMessage?.channel === 'allMids') {
+      // Notificar a cada HedgeService para que revise condiciones de entrada/salida
+      const mids = hlMessage?.data?.mids || {};
+      for (const svc of hedgeRegistry.getAll()) {
+        for (const [asset, priceStr] of Object.entries(mids)) {
+          const price = parseFloat(priceStr);
+          if (price > 0) svc.onPriceUpdate(asset, price);
+        }
+      }
+
+      // Retransmitir al frontend
       const data = JSON.stringify({ type: 'hl_message', data: hlMessage });
       wss.clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN && client.userId) {

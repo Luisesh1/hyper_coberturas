@@ -5,7 +5,8 @@
  * precios, contexto de activos (funding, OI, mark price), etc.
  */
 
-const hlService = require('./hyperliquid.service');
+const HyperliquidService = require('./hyperliquid.service');
+const hlService = new HyperliquidService({});
 
 class MarketService {
   /**
