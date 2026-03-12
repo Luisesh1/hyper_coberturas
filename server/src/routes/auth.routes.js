@@ -8,19 +8,20 @@
 const { Router } = require('express');
 const authService  = require('../services/auth.service');
 const { authenticate } = require('../middleware/auth.middleware');
+const { ValidationError } = require('../errors/app-error');
 
 const router = Router();
 
-router.post('/login', async (req, res) => {
+router.post('/login', async (req, res, next) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
-      return res.status(400).json({ success: false, error: 'username y password requeridos' });
+      throw new ValidationError('username y password requeridos');
     }
     const result = await authService.login(username, password);
     res.json({ success: true, data: result });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 

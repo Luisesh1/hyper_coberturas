@@ -10,6 +10,7 @@
 
 const jwt    = require('jsonwebtoken');
 const config = require('../config');
+const { AuthError, ForbiddenError } = require('../errors/app-error');
 
 function extractToken(req) {
   const auth = req.headers.authorization || '';
@@ -20,20 +21,20 @@ function extractToken(req) {
 function authenticate(req, res, next) {
   const token = extractToken(req);
   if (!token) {
-    return res.status(401).json({ success: false, error: 'Token requerido' });
+    return next(new AuthError('Token requerido'));
   }
 
   try {
     req.user = jwt.verify(token, config.jwt.secret);
     next();
   } catch {
-    return res.status(401).json({ success: false, error: 'Token inválido o expirado' });
+    return next(new AuthError('Token inválido o expirado'));
   }
 }
 
 function requireSuperuser(req, res, next) {
   if (req.user?.role !== 'superuser') {
-    return res.status(403).json({ success: false, error: 'Acceso restringido a superusuarios' });
+    return next(new ForbiddenError('Acceso restringido a superusuarios'));
   }
   next();
 }
@@ -44,7 +45,7 @@ function requireSelfOrSuper(req, res, next) {
   if (req.user?.role === 'superuser' || req.user?.userId === targetId) {
     return next();
   }
-  return res.status(403).json({ success: false, error: 'Sin permisos para esta operación' });
+  return next(new ForbiddenError('Sin permisos para esta operación'));
 }
 
 module.exports = { authenticate, requireSuperuser, requireSelfOrSuper };

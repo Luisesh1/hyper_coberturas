@@ -1,19 +1,28 @@
+const logger = require('../services/logger.service');
+
 /**
  * Middleware global de manejo de errores para Express.
  * Captura errores lanzados desde rutas y middlewares.
  */
-function errorHandler(err, req, res, next) {
+function errorHandler(err, req, res, _next) {
   const status = err.status || err.statusCode || 500;
   const message = err.message || 'Error interno del servidor';
 
-  console.error(`[Error] ${req.method} ${req.path} -> ${status}: ${message}`);
-  if (err.stack && process.env.NODE_ENV === 'development') {
-    console.error(err.stack);
-  }
+  logger.error('http_error', {
+    requestId: req.requestId,
+    method: req.method,
+    path: req.path,
+    status,
+    code: err.code || 'UNHANDLED_ERROR',
+    message,
+  });
 
   res.status(status).json({
     success: false,
     error: message,
+    code: err.code || 'UNHANDLED_ERROR',
+    requestId: req.requestId,
+    ...(err.details ? { details: err.details } : {}),
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 }

@@ -50,6 +50,13 @@ cp server/.env.example server/.env
 
 Editar `server/.env` con al menos un `JWT_SECRET` seguro. La wallet y el bot de Telegram se configuran desde la UI una vez iniciado.
 
+Inicializar esquema y superusuario de desarrollo:
+
+```bash
+npm run migrate
+npm run seed:dev
+```
+
 ### 2. Levantar en desarrollo
 
 ```bash
@@ -58,7 +65,7 @@ docker compose up --build
 
 Abrir [http://localhost:5174](http://localhost:5174).
 
-El primer usuario en registrarse queda como **superuser** y puede crear usuarios adicionales desde el panel de administración.
+El usuario de desarrollo se crea con `npm run seed:dev` y puede crear usuarios adicionales desde el panel de administración.
 
 ### 3. Producción
 
@@ -105,6 +112,10 @@ El ciclo se repite automáticamente hasta que el usuario cancela la cobertura.
 ```bash
 # Ver logs del backend
 docker compose logs -f server
+
+# Inicializar DB y superusuario dev
+npm run migrate
+npm run seed:dev
 
 # Reiniciar solo el backend (sin reconstruir)
 docker compose restart server

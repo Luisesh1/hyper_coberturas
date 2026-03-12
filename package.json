@@ -1,0 +1,11 @@
+{
+  "name": "hyperliquid-bot-workspace",
+  "private": true,
+  "scripts": {
+    "migrate": "npm --prefix server run migrate",
+    "seed:dev": "npm --prefix server run seed:dev",
+    "lint": "npm --prefix server run lint",
+    "test": "npm --prefix server run test",
+    "check": "npm run lint && npm run test && npm --prefix client run build"
+  }
+}

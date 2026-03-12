@@ -1,28 +1,37 @@
 require('dotenv').config();
 const http = require('http');
 const app  = require('./src/app');
+const { bootstrapConfig } = require('./src/bootstrap/config');
+const { startHttpServer } = require('./src/bootstrap/server');
+const { bootstrapInfra } = require('./src/bootstrap/infra');
 const config = require('./src/config');
 const db   = require('./src/db');
-const { createWsServer, loadActiveUsers } = require('./src/websocket/wsServer');
 const hlWsClient = require('./src/websocket/hyperliquidWs');
+const logger = require('./src/services/logger.service');
 
 async function start() {
-  // 1. Inicializar DB: migraciones + seed admin
-  await db.init();
-
-  // 2. Crear servidor HTTP y WS
+  bootstrapConfig();
   const server = http.createServer(app);
-  const wss    = createWsServer(server);
+  await bootstrapInfra(server);
 
-  // 3. Conectar al WS de Hyperliquid
-  hlWsClient.connect();
+  await startHttpServer({
+    server,
+    port: config.server.port,
+    async onShutdown() {
+      logger.info('server_shutdown_started');
+      hlWsClient.disconnect();
+      await db.pool.end().catch((err) => {
+        logger.warn('db_pool_end_failed', { error: err.message });
+      });
+    },
+  });
 
-  // 4. Cargar usuarios activos, sus services y suscribir userEvents
-  await loadActiveUsers(wss);
-
-  // 5. Arrancar el servidor HTTP
-  server.listen(config.server.port, () => {
-    console.log(`
+  logger.info('server_started', {
+    nodeEnv: config.server.nodeEnv,
+    port: config.server.port,
+    clientUrl: config.server.clientUrl,
+  });
+  console.log(`
 ╔══════════════════════════════════════════════╗
 ║     Hyperliquid Trading Bot - Backend        ║
 ╠══════════════════════════════════════════════╣
@@ -31,21 +40,9 @@ async function start() {
 ║  WS      : ws://localhost:${String(config.server.port).padEnd(18)}║
 ╚══════════════════════════════════════════════╝
     `);
-  });
-
-  function shutdown() {
-    console.log('[Server] Apagando...');
-    hlWsClient.disconnect();
-    server.close(() => {
-      db.pool.end();
-      process.exit(0);
-    });
-  }
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT',  shutdown);
 }
 
 start().catch((err) => {
-  console.error('[Server] Error fatal al iniciar:', err);
+  logger.error('server_start_failed', { error: err.message, stack: err.stack });
   process.exit(1);
 });

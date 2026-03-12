@@ -10,11 +10,12 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { getToken } from '../services/sessionStore';
 
 // Construir URL WS relativa al host actual, incluyendo el token JWT
 function getWsUrl() {
   const base  = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
-  const token = localStorage.getItem('hl_token') || '';
+  const token = getToken();
   return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 

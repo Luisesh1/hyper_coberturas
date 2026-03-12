@@ -11,35 +11,15 @@
  */
 
 const { Router } = require('express');
-const db              = require('../db');
 const tgRegistry      = require('../services/telegram.registry');
 const hlRegistry      = require('../services/hyperliquid.registry');
 const hedgeRegistry   = require('../services/hedge.registry');
+const settingsService = require('../services/settings.service');
 const { authenticate } = require('../middleware/auth.middleware');
+const { ValidationError } = require('../errors/app-error');
 
 const router = Router();
 router.use(authenticate);
-
-// ------------------------------------------------------------------
-// Helpers DB (scoped por user_id)
-// ------------------------------------------------------------------
-
-async function getSetting(userId, key) {
-  const { rows } = await db.query(
-    'SELECT value FROM settings WHERE user_id = $1 AND key = $2',
-    [userId, key]
-  );
-  return rows.length ? JSON.parse(rows[0].value) : null;
-}
-
-async function setSetting(userId, key, value) {
-  await db.query(
-    `INSERT INTO settings (user_id, key, value, updated_at)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
-    [userId, key, JSON.stringify(value), Date.now()]
-  );
-}
 
 function maskToken(token) {
   if (!token || token.length < 8) return token ? '***' : '';
@@ -50,11 +30,11 @@ function maskToken(token) {
 // Rutas
 // ------------------------------------------------------------------
 
-router.get('/', async (req, res) => {
+router.get('/', async (req, res, next) => {
   try {
     const userId = req.user.userId;
-    const tg     = (await getSetting(userId, 'telegram')) || { token: '', chatId: '' };
-    const wallet = (await getSetting(userId, 'wallet'))   || { address: '' };
+    const tg     = await settingsService.getTelegram(userId);
+    const wallet = await settingsService.getWallet(userId);
     res.json({
       success: true,
       data: {
@@ -70,70 +50,71 @@ router.get('/', async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
-router.put('/telegram', async (req, res) => {
+router.put('/telegram', async (req, res, next) => {
   try {
     const userId = req.user.userId;
     const { token, chatId } = req.body;
     if (!token || !chatId) {
-      return res.status(400).json({ success: false, error: 'token y chatId son requeridos' });
+      throw new ValidationError('token y chatId son requeridos');
     }
     const tg = { token: token.trim(), chatId: String(chatId).trim() };
-    await setSetting(userId, 'telegram', tg);
+    await settingsService.setTelegram(userId, tg);
     await tgRegistry.reload(userId);
     res.json({ success: true, data: { enabled: true } });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
-router.post('/telegram/test', async (req, res) => {
+router.post('/telegram/test', async (req, res, next) => {
   try {
     const tg = tgRegistry.get(req.user.userId);
     if (!tg?.enabled) {
-      return res.status(400).json({ success: false, error: 'Telegram no está configurado' });
+      throw new ValidationError('Telegram no está configurado');
     }
     await tg.send('🔔 <b>Mensaje de prueba</b>\nHyperliquid Bot configurado correctamente.');
     res.json({ success: true, data: { sent: true } });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
-router.get('/wallet', async (req, res) => {
+router.get('/wallet', async (req, res, next) => {
   try {
     const userId = req.user.userId;
-    const wallet = (await getSetting(userId, 'wallet')) || {};
+    const wallet = await settingsService.getWallet(userId);
     res.json({
       success: true,
       data: { address: wallet.address || '', hasPrivateKey: !!wallet.privateKey },
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
-router.put('/wallet', async (req, res) => {
+router.put('/wallet', async (req, res, next) => {
   try {
     const userId = req.user.userId;
     const { privateKey, address } = req.body;
     if (!privateKey || !address) {
-      return res.status(400).json({ success: false, error: 'privateKey y address son requeridos' });
+      throw new ValidationError('privateKey y address son requeridos');
     }
-    await setSetting(userId, 'wallet', { privateKey: privateKey.trim(), address: address.trim() });
+    await settingsService.setWallet(userId, {
+      privateKey: privateKey.trim(),
+      address: address.trim(),
+    });
     await hlRegistry.reload(userId);
     if (hedgeRegistry.get(userId)) {
       await hedgeRegistry.reload(userId);
     }
     res.json({ success: true, data: { address: address.trim() } });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 module.exports = router;
-module.exports.getSetting = getSetting;
-module.exports.setSetting = setSetting;

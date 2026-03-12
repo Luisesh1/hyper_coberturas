@@ -5,6 +5,7 @@ const marketRoutes   = require('./market.routes');
 const tradingRoutes  = require('./trading.routes');
 const hedgeRoutes    = require('./hedge.routes');
 const settingsRoutes = require('./settings.routes');
+const healthRoutes   = require('./health.routes');
 
 const router = Router();
 
@@ -14,9 +15,6 @@ router.use('/market',   marketRoutes);
 router.use('/trading',  tradingRoutes);
 router.use('/hedge',    hedgeRoutes);
 router.use('/settings', settingsRoutes);
-
-router.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+router.use('/health',   healthRoutes);
 
 module.exports = router;

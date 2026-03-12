@@ -1,9 +1,10 @@
 /**
- * db/index.js — Pool PostgreSQL + migraciones automáticas
+ * db/index.js — Pool PostgreSQL + helpers de conexión / migración
  */
 
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
+const logger = require('../services/logger.service');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -12,13 +13,17 @@ const pool = new Pool({
   connectionTimeoutMillis: 5_000,
 });
 
-pool.on('error', (err) => console.error('[DB] Error en pool:', err.message));
+pool.on('error', (err) => logger.error('db_pool_error', { error: err.message }));
 
 function query(text, params) {
   return pool.query(text, params);
 }
 
-async function init() {
+async function ensureConnection() {
+  await pool.query('SELECT 1');
+}
+
+async function initSchema() {
   // ── Tabla de usuarios ──────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -160,41 +165,45 @@ async function init() {
     CREATE UNIQUE INDEX IF NOT EXISTS settings_user_key ON settings(user_id, key)
   `);
 
-  console.log('[DB] Esquema inicializado');
-
-  // ── Seed: admin por defecto ────────────────────────────────────────
-  await seedDefaultAdmin();
+  await migrateLegacyData();
+  logger.info('db_schema_initialized');
 }
 
-async function seedDefaultAdmin() {
+async function migrateLegacyData() {
+  const { rows } = await pool.query('SELECT id FROM users ORDER BY id ASC LIMIT 1');
+  const admin = rows[0];
+  if (!admin) return;
+
+  await pool.query('UPDATE hedges SET user_id = $1 WHERE user_id IS NULL', [admin.id]);
+  await pool.query('UPDATE settings SET user_id = $1 WHERE user_id IS NULL', [admin.id]);
+}
+
+async function seedDevAdmin({
+  username = 'admin',
+  password = 'admin123',
+  name = 'Administrador',
+} = {}) {
   const { rows } = await pool.query('SELECT id FROM users LIMIT 1');
   if (rows.length > 0) return; // ya hay usuarios
 
   const now = Date.now();
-  const hash = await bcrypt.hash('admin123', 12);
+  const hash = await bcrypt.hash(password, 12);
   const { rows: [admin] } = await pool.query(
     `INSERT INTO users (username, password_hash, name, role, active, created_at, updated_at)
      VALUES ($1, $2, $3, 'superuser', true, $4, $4) RETURNING id`,
-    ['admin', hash, 'Administrador', now]
+    [username, hash, name, now]
   );
 
-  console.log('[DB] Usuario admin creado (admin / admin123)');
-
-  // Migrar datos existentes al admin
-  await pool.query('UPDATE hedges SET user_id = $1 WHERE user_id IS NULL', [admin.id]);
-  await pool.query('UPDATE settings SET user_id = $1 WHERE user_id IS NULL', [admin.id]);
-
-  // Si hay wallet en env vars, guardarla en settings del admin
-  const { PRIVATE_KEY, WALLET_ADDRESS } = process.env;
-  if (PRIVATE_KEY && WALLET_ADDRESS) {
-    await pool.query(
-      `INSERT INTO settings (key, user_id, value, updated_at)
-       VALUES ('wallet', $1, $2, $3)
-       ON CONFLICT (user_id, key) DO NOTHING`,
-      [admin.id, JSON.stringify({ privateKey: PRIVATE_KEY, address: WALLET_ADDRESS }), now]
-    );
-    console.log('[DB] Wallet de env vars migrada al usuario admin');
-  }
+  await migrateLegacyData();
+  logger.info('dev_admin_seeded', { userId: admin.id, username });
+  return admin;
 }
 
-module.exports = { query, init, pool };
+module.exports = {
+  query,
+  ensureConnection,
+  initSchema,
+  migrateLegacyData,
+  seedDevAdmin,
+  pool,
+};

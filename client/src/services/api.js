@@ -6,11 +6,9 @@
  * Si el servidor responde 401, limpia el storage y recarga la página (→ login).
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+import { clearSession, getToken } from './sessionStore';
 
-function getToken() {
-  return localStorage.getItem('hl_token') || '';
-}
+const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 async function request(method, path, body) {
   const options = {
@@ -28,9 +26,7 @@ async function request(method, path, body) {
   const data = await res.json();
 
   if (res.status === 401) {
-    localStorage.removeItem('hl_token');
-    localStorage.removeItem('hl_user');
-    window.location.reload();
+    clearSession();
     throw new Error('Sesión expirada');
   }
 

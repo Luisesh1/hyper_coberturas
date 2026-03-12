@@ -14,6 +14,11 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const db     = require('../db');
 const config = require('../config');
+const {
+  AuthError,
+  NotFoundError,
+  ValidationError,
+} = require('../errors/app-error');
 
 const SALT_ROUNDS = 12;
 
@@ -45,12 +50,12 @@ async function login(username, password) {
   const user = rows[0];
 
   if (!user || !user.active) {
-    throw Object.assign(new Error('Credenciales inválidas'), { status: 401 });
+    throw new AuthError('Credenciales inválidas');
   }
 
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
-    throw Object.assign(new Error('Credenciales inválidas'), { status: 401 });
+    throw new AuthError('Credenciales inválidas');
   }
 
   const token = signToken(user);
@@ -59,10 +64,10 @@ async function login(username, password) {
 
 async function createUser({ username, password, name, role = 'user' }) {
   if (!username || !password || !name) {
-    throw Object.assign(new Error('username, password y name son requeridos'), { status: 400 });
+    throw new ValidationError('username, password y name son requeridos');
   }
   if (!['user', 'superuser'].includes(role)) {
-    throw Object.assign(new Error('role debe ser user o superuser'), { status: 400 });
+    throw new ValidationError('role debe ser user o superuser');
   }
 
   const now  = Date.now();
@@ -77,7 +82,7 @@ async function createUser({ username, password, name, role = 'user' }) {
     return rowToUser(rows[0]);
   } catch (err) {
     if (err.code === '23505') { // unique violation
-      throw Object.assign(new Error('El nombre de usuario ya existe'), { status: 409 });
+      throw new ValidationError('El nombre de usuario ya existe');
     }
     throw err;
   }
@@ -103,7 +108,7 @@ async function updateUser(id, { name, password, username }) {
   }
 
   if (updates.length === 0) {
-    throw Object.assign(new Error('No hay campos para actualizar'), { status: 400 });
+    throw new ValidationError('No hay campos para actualizar');
   }
 
   values.push(now);
@@ -115,7 +120,7 @@ async function updateUser(id, { name, password, username }) {
     values
   );
 
-  if (!rows[0]) throw Object.assign(new Error('Usuario no encontrado'), { status: 404 });
+  if (!rows[0]) throw new NotFoundError('Usuario no encontrado');
   return rowToUser(rows[0]);
 }
 
@@ -124,19 +129,19 @@ async function setActive(id, active) {
     `UPDATE users SET active = $1, updated_at = $2 WHERE id = $3 RETURNING *`,
     [active, Date.now(), id]
   );
-  if (!rows[0]) throw Object.assign(new Error('Usuario no encontrado'), { status: 404 });
+  if (!rows[0]) throw new NotFoundError('Usuario no encontrado');
   return rowToUser(rows[0]);
 }
 
 async function setRole(id, role) {
   if (!['user', 'superuser'].includes(role)) {
-    throw Object.assign(new Error('role debe ser user o superuser'), { status: 400 });
+    throw new ValidationError('role debe ser user o superuser');
   }
   const { rows } = await db.query(
     `UPDATE users SET role = $1, updated_at = $2 WHERE id = $3 RETURNING *`,
     [role, Date.now(), id]
   );
-  if (!rows[0]) throw Object.assign(new Error('Usuario no encontrado'), { status: 404 });
+  if (!rows[0]) throw new NotFoundError('Usuario no encontrado');
   return rowToUser(rows[0]);
 }
 
@@ -149,7 +154,7 @@ async function listUsers() {
 
 async function getUserById(id) {
   const { rows } = await db.query('SELECT * FROM users WHERE id = $1', [id]);
-  if (!rows[0]) throw Object.assign(new Error('Usuario no encontrado'), { status: 404 });
+  if (!rows[0]) throw new NotFoundError('Usuario no encontrado');
   return rowToUser(rows[0]);
 }
 

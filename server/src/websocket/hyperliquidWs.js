@@ -58,7 +58,7 @@ class HyperliquidWsClient {
       }
     });
 
-    this.ws.on('close', (code, reason) => {
+    this.ws.on('close', (code, _reason) => {
       this.isConnected = false;
       this._stopPing();
       console.warn(`[HL WS] Conexion cerrada (${code}). Reconectando en ${RECONNECT_DELAY_MS}ms...`);
