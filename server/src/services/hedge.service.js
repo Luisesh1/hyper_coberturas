@@ -141,13 +141,16 @@ class HedgeService extends EventEmitter {
 
     const assetUp = asset.toUpperCase();
 
-    // Regla: solo una cobertura activa por activo
+    // Regla: solo una cobertura activa por activo y direccion
     const TERMINAL = ['cancelled', 'error'];
     const duplicate = [...this.hedges.values()].find(
-      (h) => h.asset === assetUp && !TERMINAL.includes(h.status)
+      (h) => h.asset === assetUp && h.direction === dir && !TERMINAL.includes(h.status)
     );
     if (duplicate) {
-      throw new ValidationError(`Ya existe una cobertura activa para ${assetUp} (#${duplicate.id} — ${duplicate.status}). Cancélala antes de crear una nueva.`);
+      throw new ValidationError(
+        `Ya existe una cobertura ${dir.toUpperCase()} activa para ${assetUp} ` +
+        `(#${duplicate.id} — ${duplicate.status}). Cancélala antes de crear una nueva.`
+      );
     }
     const hedgeLabel = label || `${assetUp} Cobertura`;
     const createdAt = Date.now();
