@@ -23,8 +23,16 @@ function formatPrice(price) {
 }
 
 function formatSize(size, szDecimals) {
-  const factor = Math.pow(10, szDecimals);
-  return (Math.floor(parseFloat(size) * factor) / factor).toFixed(szDecimals);
+  const numericSize = parseFloat(size);
+  if (!Number.isFinite(numericSize) || numericSize <= 0) {
+    return (0).toFixed(szDecimals);
+  }
+
+  const [integerPart, fractionalPart = ''] = numericSize
+    .toFixed(szDecimals + 8)
+    .split('.');
+
+  return `${integerPart}.${fractionalPart.slice(0, szDecimals).padEnd(szDecimals, '0')}`;
 }
 
 class TradingService {

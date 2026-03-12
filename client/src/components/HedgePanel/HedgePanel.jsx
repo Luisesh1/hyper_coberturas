@@ -585,6 +585,8 @@ function CycleRow({ cycle, hedgeSize }) {
   const isLong = cycle.direction === 'long';
   const sz     = hedgeSize ?? cycle.size ?? 0;
   const { gross, fees, funding, net } = calcCyclePnl(cycle, sz, cycle.direction);
+  const openPrice = Number.isFinite(parseFloat(cycle.openPrice)) ? parseFloat(cycle.openPrice) : null;
+  const closePrice = Number.isFinite(parseFloat(cycle.closePrice)) ? parseFloat(cycle.closePrice) : null;
 
   const durationMs = (cycle.closedAt || 0) - (cycle.openedAt || 0);
   const mins  = Math.floor(durationMs / 60000);
@@ -613,9 +615,13 @@ function CycleRow({ cycle, hedgeSize }) {
           </span>
         )}
         <span className={styles.cyclePrices}>
-          ${parseFloat(cycle.openPrice).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          {openPrice != null
+            ? `$${openPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+            : 'N/A'}
           {' → '}
-          ${parseFloat(cycle.closePrice).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          {closePrice != null
+            ? `$${closePrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+            : 'N/A'}
         </span>
         {hasFeeData && (
           <span className={styles.cycleBreakdown}>
