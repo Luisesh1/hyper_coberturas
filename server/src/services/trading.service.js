@@ -9,6 +9,7 @@
  */
 
 const config = require('../config');
+const { placePositionProtection } = require('./protection.service');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
 const MARKET_ORDER_SLIPPAGE = 0.002; // 0.2%
@@ -190,6 +191,17 @@ class TradingService {
 
   async getOpenOrders() {
     return this.hl.getOpenOrders();
+  }
+
+  async setSLTP({ asset, side, size, slPrice, tpPrice }) {
+    return placePositionProtection({
+      hl: this.hl,
+      asset,
+      side,
+      size,
+      slPrice,
+      tpPrice,
+    });
   }
 
   async cancelOrder(asset, orderId) {

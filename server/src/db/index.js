@@ -52,6 +52,7 @@ async function init() {
       sl_oid         BIGINT,
       asset_index    INTEGER,
       sz_decimals    INTEGER,
+      position_size  NUMERIC,
       open_price     NUMERIC,
       close_price    NUMERIC,
       unrealized_pnl NUMERIC,
@@ -83,6 +84,9 @@ async function init() {
   `);
   await pool.query(`
     ALTER TABLE hedges ADD COLUMN IF NOT EXISTS position_key TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE hedges ADD COLUMN IF NOT EXISTS position_size NUMERIC
   `);
   await pool.query(`
     ALTER TABLE hedges ADD COLUMN IF NOT EXISTS entry_fill_oid BIGINT

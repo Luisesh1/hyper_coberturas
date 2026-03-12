@@ -83,34 +83,8 @@ router.post('/sltp', async (req, res, next) => {
     if (!asset || !side || !size) {
       return res.status(400).json({ success: false, error: 'Requeridos: asset, side, size' });
     }
-    const hl = await hlRegistry.getOrCreate(req.user.userId);
-    const meta = await hl.getMeta();
-    const assetInfo = meta.universe.find((u) => u.name === asset.toUpperCase());
-    if (!assetInfo) return res.status(400).json({ success: false, error: `Asset no encontrado: ${asset}` });
-    const assetIndex = meta.universe.indexOf(assetInfo);
-    const isLong = side === 'long';
-    const results = {};
-
-    if (slPrice) {
-      const slOid = await hl.placeSL({
-        assetIndex,
-        isBuy: !isLong,       // SL de LONG es SELL, SL de SHORT es BUY
-        // El frontend oficial de Hyperliquid usa size=0 para positionTpsl,
-        // dejando el trigger asociado a la posicion completa del asset.
-        size: 0,
-        triggerPx: parseFloat(slPrice),
-      });
-      results.slOid = slOid;
-    }
-    if (tpPrice) {
-      const tpOid = await hl.placeTP({
-        assetIndex,
-        isBuy: !isLong,       // TP de LONG es SELL, TP de SHORT es BUY
-        size: 0,
-        triggerPx: parseFloat(tpPrice),
-      });
-      results.tpOid = tpOid;
-    }
+    const trading = await getTrading(req.user.userId);
+    const results = await trading.setSLTP({ asset, side, size, slPrice, tpPrice });
     res.json({ success: true, data: results });
   } catch (err) {
     next(err);
