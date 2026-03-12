@@ -411,36 +411,49 @@ class HedgeService extends EventEmitter {
     if (hedge.status === 'cancel_pending' || hedge.status === 'cancelled') {
       return { placed: false, transitioned: false };
     }
-    if (!hedge.assetIndex || hedge.szDecimals == null) {
-      const meta = await this.hl.getAssetMeta(hedge.asset);
-      hedge.assetIndex = meta.index;
-      hedge.szDecimals = meta.szDecimals;
+
+    // Guard contra race condition: fill handler + monitor pueden llamar esto en paralelo.
+    // Sin este flag, ambos pasan el check de slOid=null y colocan dos SL simultáneos.
+    if (hedge._slPlacementInProgress) {
+      console.log(`[Hedge] #${hedge.id} _ensureStopLoss ya en progreso, omitiendo llamada duplicada`);
+      return { placed: false, transitioned: false };
     }
+    hedge._slPlacementInProgress = true;
 
-    // Verificar que la posición esté realmente abierta antes de asignar SL.
-    // placeSL con positionTpsl falla si no hay posición ("Cannot update margin for empty position").
-    const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
-    if (!pos || parseFloat(pos.szi) === 0) {
-      throw new Error(`Posición vacía en HL — no se puede asignar SL todavía`);
+    try {
+      if (!hedge.assetIndex || hedge.szDecimals == null) {
+        const meta = await this.hl.getAssetMeta(hedge.asset);
+        hedge.assetIndex = meta.index;
+        hedge.szDecimals = meta.szDecimals;
+      }
+
+      // Verificar que la posición esté realmente abierta antes de asignar SL.
+      // placeSL con positionTpsl falla si no hay posición ("Cannot update margin for empty position").
+      const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
+      if (!pos || parseFloat(pos.szi) === 0) {
+        throw new Error(`Posición vacía en HL — no se puede asignar SL todavía`);
+      }
+
+      hedge.positionSize = Math.abs(parseFloat(pos.szi));
+      const prevStatus = hedge.status;
+      const protection = await placePositionProtection({
+        hl: this.hl,
+        asset: hedge.asset,
+        side: hedge.direction,
+        size: hedge.positionSize,
+        slPrice: hedge.exitPrice,
+      });
+      const slOid = protection.slOid;
+
+      hedge.slOid = slOid;
+      hedge.slPlacedAt = Date.now();
+      hedge.status = 'open_protected';
+      hedge.error = null;
+      await this._emitUpdated(hedge);
+      return { placed: true, transitioned: prevStatus !== 'open_protected' };
+    } finally {
+      hedge._slPlacementInProgress = false;
     }
-
-    hedge.positionSize = Math.abs(parseFloat(pos.szi));
-    const prevStatus = hedge.status;
-    const protection = await placePositionProtection({
-      hl: this.hl,
-      asset: hedge.asset,
-      side: hedge.direction,
-      size: hedge.positionSize,
-      slPrice: hedge.exitPrice,
-    });
-    const slOid = protection.slOid;
-
-    hedge.slOid = slOid;
-    hedge.slPlacedAt = Date.now();
-    hedge.status = 'open_protected';
-    hedge.error = null;
-    await this._emitUpdated(hedge);
-    return { placed: true, transitioned: prevStatus !== 'open_protected' };
   }
 
   async _onEntryFill(hedge, fill) {
@@ -975,6 +988,14 @@ class HedgeService extends EventEmitter {
 
           if (!openOrdersAvailable && hedge.slOid) {
             await this._save(hedge).catch(() => {});
+            continue;
+          }
+
+          // Si el SL fue colocado recientemente (< 30s) pero aún no aparece en open orders,
+          // puede ser lag del exchange. Esperar antes de re-intentar para evitar duplicados.
+          const SL_GRACE_MS = 30_000;
+          if (hedge.slOid && hedge.slPlacedAt && (Date.now() - hedge.slPlacedAt) < SL_GRACE_MS) {
+            console.log(`[Hedge] #${hedge.id} slOid=${hedge.slOid} colocado hace ${Math.round((Date.now() - hedge.slPlacedAt) / 1000)}s, esperando confirmación del exchange`);
             continue;
           }
 

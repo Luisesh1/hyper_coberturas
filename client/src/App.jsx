@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate, useLocation, Navigate, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { TradingProvider } from './context/TradingContext';
 import { PricePanel } from './components/PricePanel/PricePanel';
@@ -12,28 +13,31 @@ import LoginPage from './pages/LoginPage';
 import styles from './App.module.css';
 
 const BASE_NAV = [
-  { id: 'manual',   label: 'Trading Manual', activeClass: 'modeBtnActive'  },
-  { id: 'hedge',    label: 'Coberturas',      activeClass: 'modeHedgeActive' },
-  { id: 'settings', label: '⚙ Config',        activeClass: 'modeBtnActive'  },
+  { id: 'manual',   path: '/trade',      label: 'Trading Manual', activeClass: 'modeBtnActive'  },
+  { id: 'hedge',    path: '/coberturas', label: 'Coberturas',     activeClass: 'modeHedgeActive' },
+  { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive'  },
 ];
 
 const SUPER_NAV = [
-  { id: 'users', label: '👥 Usuarios', activeClass: 'modeBtnActive' },
+  { id: 'users', path: '/usuarios', label: '👥 Usuarios', activeClass: 'modeBtnActive' },
 ];
 
 function AppContent() {
   const { user, isSuperuser, logout } = useAuth();
   const [selectedAsset, setSelectedAsset] = useState('BTC');
-  const [activeMode, setActiveMode]   = useState('manual');
-  const [menuOpen,   setMenuOpen]     = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const { isConnected, isPriceStale } = useTradingContext();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const navItems = isSuperuser ? [...BASE_NAV, ...SUPER_NAV] : BASE_NAV;
 
-  const navigate = (id) => {
-    setActiveMode(id);
+  const goTo = (path) => {
+    navigate(path);
     setMenuOpen(false);
   };
+
+  const isActive = (path) => location.pathname === path || (path === '/trade' && location.pathname === '/');
 
   return (
     <div className={styles.app}>
@@ -50,11 +54,11 @@ function AppContent() {
         </div>
 
         <div className={styles.offCanvasNav}>
-          {navItems.map(({ id, label, activeClass }) => (
+          {navItems.map(({ path, label, activeClass }) => (
             <button
-              key={id}
-              className={`${styles.offCanvasBtn} ${activeMode === id ? styles[activeClass] : ''}`}
-              onClick={() => navigate(id)}
+              key={path}
+              className={`${styles.offCanvasBtn} ${isActive(path) ? styles[activeClass] : ''}`}
+              onClick={() => goTo(path)}
             >
               {label}
             </button>
@@ -78,11 +82,11 @@ function AppContent() {
         </div>
 
         <nav className={styles.modeNav}>
-          {navItems.map(({ id, label, activeClass }) => (
+          {navItems.map(({ path, label, activeClass }) => (
             <button
-              key={id}
-              className={`${styles.modeBtn} ${activeMode === id ? styles[activeClass] : ''}`}
-              onClick={() => navigate(id)}
+              key={path}
+              className={`${styles.modeBtn} ${isActive(path) ? styles[activeClass] : ''}`}
+              onClick={() => goTo(path)}
             >
               {label}
             </button>
@@ -106,10 +110,14 @@ function AppContent() {
         </aside>
 
         <section className={styles.content}>
-          {activeMode === 'manual'   && <TradingPanel selectedAsset={selectedAsset} />}
-          {activeMode === 'hedge'    && <HedgePanel   selectedAsset={selectedAsset} />}
-          {activeMode === 'settings' && <SettingsPanel />}
-          {activeMode === 'users'    && isSuperuser && <UsersPanel />}
+          <Routes>
+            <Route path="/"           element={<Navigate to="/trade" replace />} />
+            <Route path="/trade"      element={<TradingPanel selectedAsset={selectedAsset} />} />
+            <Route path="/coberturas" element={<HedgePanel selectedAsset={selectedAsset} />} />
+            <Route path="/config"     element={<SettingsPanel />} />
+            {isSuperuser && <Route path="/usuarios" element={<UsersPanel />} />}
+            <Route path="*"           element={<Navigate to="/trade" replace />} />
+          </Routes>
         </section>
       </main>
 

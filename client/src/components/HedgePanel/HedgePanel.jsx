@@ -4,8 +4,9 @@
  * Soporta SHORT y LONG con switch de tipo.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTradingContext } from '../../context/TradingContext';
+import { useAuth } from '../../context/AuthContext';
 import styles from './HedgePanel.module.css';
 
 const STATUS_LABEL = {
@@ -23,8 +24,15 @@ const STATUS_LABEL = {
   executing_close: { text: 'Cerrando...',      color: '#818cf8' },
 };
 
+function loadPct(username)  {
+  const raw = localStorage.getItem(`hedge_autoexit_pct_${username}`);
+  const n   = parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : 0.05;
+}
+
 export function HedgePanel({ selectedAsset }) {
   const { prices, hedges, createHedge, cancelHedge, refreshHedges } = useTradingContext();
+  const { user } = useAuth();
 
   const [asset, setAsset]           = useState(selectedAsset || 'BTC');
   const [direction, setDirection]   = useState('short'); // 'short' | 'long'
@@ -34,7 +42,11 @@ export function HedgePanel({ selectedAsset }) {
   const [denomination, setDenomination] = useState('USDC');
   const [leverage, setLeverage]     = useState(10);
   const [label, setLabel]           = useState('');
-  const [autoExit, setAutoExit]     = useState(false);
+  const [autoExit, setAutoExit]     = useState(true);
+  const [autoExitPct, setAutoExitPct] = useState(() => loadPct(user?.username));
+  const [showPctModal, setShowPctModal] = useState(false);
+  const [pctInput, setPctInput]     = useState('');
+  const pctInputRef                 = useRef(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [historyTab, setHistoryTab] = useState(false);
 
@@ -46,18 +58,38 @@ export function HedgePanel({ selectedAsset }) {
 
   useEffect(() => { refreshHedges(); }, []);
 
-  // Cuando autoExit está activo, recalcula exitPrice como ±0.05% del entryPrice
+  // Reload pct from localStorage when user changes
+  useEffect(() => {
+    setAutoExitPct(loadPct(user?.username));
+  }, [user?.username]);
+
+  // Focus input when modal opens
+  useEffect(() => {
+    if (showPctModal) {
+      setPctInput(autoExitPct.toString());
+      setTimeout(() => pctInputRef.current?.select(), 50);
+    }
+  }, [showPctModal, autoExitPct]);
+
+  // Cuando autoExit está activo, recalcula exitPrice como ±X% del entryPrice
   useEffect(() => {
     if (!autoExit) return;
     const entry = parseFloat(entryPrice);
     if (!entry || entry <= 0) return;
-    // SHORT: exitPrice = entry + 0.05% (SL arriba de la entrada)
-    // LONG:  exitPrice = entry - 0.05% (SL abajo de la entrada)
+    const factor = autoExitPct / 100;
     const auto = isLong
-      ? (entry * (1 - 0.0005)).toFixed(2)
-      : (entry * (1 + 0.0005)).toFixed(2);
+      ? (entry * (1 - factor)).toFixed(2)
+      : (entry * (1 + factor)).toFixed(2);
     setExitPrice(auto);
-  }, [autoExit, entryPrice, isLong]);
+  }, [autoExit, entryPrice, isLong, autoExitPct]);
+
+  const savePct = () => {
+    const n = parseFloat(pctInput);
+    if (!Number.isFinite(n) || n <= 0 || n > 100) return;
+    setAutoExitPct(n);
+    localStorage.setItem(`hedge_autoexit_pct_${user?.username}`, n.toString());
+    setShowPctModal(false);
+  };
 
   const currentPrice = prices[asset] ? parseFloat(prices[asset]) : null;
 
@@ -119,6 +151,9 @@ export function HedgePanel({ selectedAsset }) {
 
         {/* ── LEFT: Formulario ── */}
         <div className={styles.formCol}>
+          {/* Section header */}
+          <div className={styles.colLabel}>Abrir Cobertura</div>
+
           {/* Direction selector */}
           <div className={styles.directionBar}>
             <button
@@ -135,10 +170,6 @@ export function HedgePanel({ selectedAsset }) {
             >
               ▼ Short
             </button>
-          </div>
-
-          <div className={isLong ? styles.formTitleLong : styles.formTitle}>
-            Nueva cobertura {isLong ? 'LONG' : 'SHORT'}
           </div>
 
           <form className={styles.form} onSubmit={handleCreate}>
@@ -165,54 +196,52 @@ export function HedgePanel({ selectedAsset }) {
               </div>
             </div>
 
-            {/* Precios trigger */}
-            <div className={isLong ? styles.triggerBoxLong : styles.triggerBox}>
-              <div className={styles.triggerHeader}>
-                <span className={isLong ? styles.triggerIconLong : styles.triggerIcon}>
-                  {isLong ? '▲' : '▼'}
-                </span>
-                <span className={styles.triggerTitle}>Condiciones de activacion</span>
-              </div>
-              <div className={styles.row2}>
-                {/* Entry */}
-                <div className={styles.field}>
-                  <label className={styles.label}>
-                    Entrada&nbsp;<span className={styles.hint}>{isLong ? '(precio \u2265 este valor)' : '(precio \u2264 este valor)'}</span>
-                  </label>
-                  <div className={styles.inputGroup}>
-                    <span className={styles.inputPrefix}>$</span>
-                    <input
-                      className={`${styles.input} ${styles.inputInner}`}
-                      type="number" step="0.01" min="0" placeholder="ej: 95000"
-                      value={entryPrice}
-                      onChange={(e) => setEntryPrice(e.target.value)}
-                      required
-                    />
-                    {currentPrice && (
-                      <button type="button" className={styles.priceBtn}
-                        onClick={() => setEntryPrice(currentPrice.toFixed(2))}>Actual</button>
-                    )}
-                  </div>
-                  {currentPrice && entryNum > 0 && (
-                    <span className={styles.fieldHint}>
-                      {isLong
-                        ? (entryNum > currentPrice
-                            ? `${((entryNum / currentPrice - 1) * 100).toFixed(2)}% sobre precio actual`
-                            : 'Activaria inmediatamente')
-                        : (entryNum < currentPrice
-                            ? `${((1 - entryNum / currentPrice) * 100).toFixed(2)}% bajo precio actual`
-                            : 'Activaria inmediatamente')}
-                    </span>
+            {/* Separador: Condiciones de activación */}
+            <div className={isLong ? styles.sectionDividerLong : styles.sectionDivider}>
+              <span>{isLong ? '▲' : '▼'}</span>
+              <span className={styles.sectionTitle}>Condiciones de activación</span>
+            </div>
+
+            {/* Entry + Exit en horizontal */}
+            <div className={styles.row2}>
+              {/* Entry */}
+              <div className={styles.field}>
+                <div className={styles.labelRow}>
+                  <label className={styles.label}>Entrada</label>
+                  <span className={styles.hint}>{isLong ? 'precio ≥' : 'precio ≤'}</span>
+                </div>
+                <div className={styles.inputGroup}>
+                  <span className={styles.inputPrefix}>$</span>
+                  <input
+                    className={`${styles.input} ${styles.inputInner}`}
+                    type="number" step="0.01" min="0" placeholder="ej: 95000"
+                    value={entryPrice}
+                    onChange={(e) => setEntryPrice(e.target.value)}
+                    required
+                  />
+                  {currentPrice && (
+                    <button type="button" className={styles.priceBtn}
+                      onClick={() => setEntryPrice(currentPrice.toFixed(2))}>Actual</button>
                   )}
                 </div>
-
-                {/* Exit / SL */}
-                <div className={styles.field}>
-                  <label className={styles.label}>
+                {currentPrice && entryNum > 0 && (
+                  <span className={styles.fieldHint}>
                     {isLong
-                      ? <>Salida SL&nbsp;<span className={styles.hint}>(&le; este precio)</span></>
-                      : <>Salida&nbsp;<span className={styles.hint}>(&ge; este precio)</span></>
-                    }
+                      ? (entryNum > currentPrice
+                          ? `+${((entryNum / currentPrice - 1) * 100).toFixed(2)}% del precio actual`
+                          : '⚡ Activaría inmediatamente')
+                      : (entryNum < currentPrice
+                          ? `-${((1 - entryNum / currentPrice) * 100).toFixed(2)}% del precio actual`
+                          : '⚡ Activaría inmediatamente')}
+                  </span>
+                )}
+              </div>
+
+              {/* Exit / SL */}
+              <div className={styles.field}>
+                <div className={styles.labelRow}>
+                  <label className={styles.label}>{isLong ? 'Salida SL' : 'Salida'}</label>
+                  <span className={styles.autoExitGroup}>
                     <label className={styles.autoExitLabel}>
                       <input
                         type="checkbox"
@@ -220,36 +249,42 @@ export function HedgePanel({ selectedAsset }) {
                         onChange={(e) => setAutoExit(e.target.checked)}
                         className={styles.autoExitCheck}
                       />
-                      Auto 0.05%
+                      Auto {autoExitPct}%
                     </label>
-                  </label>
-                  <div className={styles.inputGroup}>
-                    <span className={styles.inputPrefix}>$</span>
-                    <input
-                      className={`${styles.input} ${styles.inputInner}`}
-                      type="number" step="0.01" min="0"
-                      placeholder={isLong ? 'ej: 90000' : 'ej: 100000'}
-                      value={exitPrice}
-                      onChange={(e) => { if (!autoExit) setExitPrice(e.target.value); }}
-                      disabled={autoExit}
-                      required
-                    />
-                    {currentPrice && !autoExit && (
-                      <button type="button" className={styles.priceBtn}
-                        onClick={() => setExitPrice(currentPrice.toFixed(2))}>Actual</button>
-                    )}
-                  </div>
-                  {priceValid && !logicValid && (
-                    <span className={styles.fieldError}>
-                      {isLong ? 'SL debe ser menor a entrada' : 'Salida debe ser mayor a entrada'}
-                    </span>
-                  )}
-                  {isLong && entryNum > 0 && exitNum > 0 && exitNum < entryNum && (
-                    <span className={styles.fieldHint}>
-                      SL a {((entryNum - exitNum) / entryNum * 100).toFixed(2)}% bajo entrada
-                    </span>
+                    <button
+                      type="button"
+                      className={styles.pctEditBtn}
+                      onClick={() => setShowPctModal(true)}
+                      title="Editar porcentaje"
+                    >✎</button>
+                  </span>
+                </div>
+                <div className={styles.inputGroup}>
+                  <span className={styles.inputPrefix}>$</span>
+                  <input
+                    className={`${styles.input} ${styles.inputInner}`}
+                    type="number" step="0.01" min="0"
+                    placeholder={isLong ? 'ej: 90000' : 'ej: 100000'}
+                    value={exitPrice}
+                    onChange={(e) => { if (!autoExit) setExitPrice(e.target.value); }}
+                    disabled={autoExit}
+                    required
+                  />
+                  {currentPrice && !autoExit && (
+                    <button type="button" className={styles.priceBtn}
+                      onClick={() => setExitPrice(currentPrice.toFixed(2))}>Actual</button>
                   )}
                 </div>
+                {priceValid && !logicValid && (
+                  <span className={styles.fieldError}>
+                    {isLong ? 'SL debe ser < entrada' : 'Salida debe ser > entrada'}
+                  </span>
+                )}
+                {isLong && entryNum > 0 && exitNum > 0 && exitNum < entryNum && (
+                  <span className={styles.fieldHint}>
+                    SL a {((entryNum - exitNum) / entryNum * 100).toFixed(2)}% bajo entrada
+                  </span>
+                )}
               </div>
             </div>
 
@@ -299,9 +334,9 @@ export function HedgePanel({ selectedAsset }) {
               </div>
             </div>
 
-            {/* Etiqueta opcional */}
+            {/* Etiqueta opcional (inline con monto convertido) */}
             <div className={styles.field}>
-              <label className={styles.label}>Etiqueta (opcional)</label>
+              <label className={styles.label}>Etiqueta <span className={styles.hint}>(opcional)</span></label>
               <input className={styles.input} type="text"
                 placeholder={`ej: Cobertura ${asset} ${isLong ? 'alcista' : 'bajista'} Q3`}
                 value={label} onChange={(e) => setLabel(e.target.value)} />
@@ -354,21 +389,72 @@ export function HedgePanel({ selectedAsset }) {
               {isSubmitting ? 'Creando...' : (isLong ? '▲ Activar cobertura LONG' : '▼ Activar cobertura SHORT')}
             </button>
           </form>
+
+          {/* ── Modal editar porcentaje ── */}
+          {showPctModal && (
+            <div className={styles.modalOverlay} onClick={() => setShowPctModal(false)}>
+              <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.modalHeader}>
+                  <span className={styles.modalTitle}>Diferencial automático</span>
+                  <button className={styles.modalClose} onClick={() => setShowPctModal(false)}>✕</button>
+                </div>
+                <p className={styles.modalDesc}>
+                  Porcentaje de separación entre precio de entrada y SL automático.
+                </p>
+                <div className={styles.modalField}>
+                  <label className={styles.modalLabel}>Porcentaje (%)</label>
+                  <div className={styles.modalInputGroup}>
+                    <input
+                      ref={pctInputRef}
+                      className={styles.modalInput}
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      max="100"
+                      value={pctInput}
+                      onChange={(e) => setPctInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') savePct(); if (e.key === 'Escape') setShowPctModal(false); }}
+                    />
+                    <span className={styles.modalInputSuffix}>%</span>
+                  </div>
+                  <span className={styles.modalHint}>
+                    Valor actual: {autoExitPct}% · {autoExitPct === 0.05 ? 'valor por defecto' : 'personalizado'}
+                  </span>
+                </div>
+                <div className={styles.modalActions}>
+                  <button className={styles.modalCancel} onClick={() => setShowPctModal(false)}>Cancelar</button>
+                  <button className={styles.modalSave} onClick={savePct}>Guardar</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── RIGHT: Lista de coberturas ── */}
         <div className={styles.listCol}>
           {/* Tab bar */}
-          <div className={styles.tabBar}>
+          <div className={styles.tabBar} role="tablist" aria-label="Filtro de coberturas">
             <button
-              className={!historyTab ? styles.tabActive : styles.tab}
+              type="button"
+              role="tab"
+              aria-selected={!historyTab}
+              className={`${styles.tabPill} ${!historyTab ? styles.tabPillActive : ''}`}
               onClick={() => setHistoryTab(false)}>
-              Activas ({activeHedges.length})
+              <span className={styles.tabLabel}>Activas</span>
+              <span className={`${styles.tabBadge} ${!historyTab ? styles.tabBadgeActive : ''}`}>
+                {activeHedges.length}
+              </span>
             </button>
             <button
-              className={historyTab ? styles.tabActive : styles.tab}
+              type="button"
+              role="tab"
+              aria-selected={historyTab}
+              className={`${styles.tabPill} ${historyTab ? styles.tabPillActive : ''}`}
               onClick={() => setHistoryTab(true)}>
-              Historial ({completedCycles.length + cancelledHedges.length})
+              <span className={styles.tabLabel}>Historial</span>
+              <span className={`${styles.tabBadge} ${historyTab ? styles.tabBadgeActive : ''}`}>
+                {completedCycles.length + cancelledHedges.length}
+              </span>
             </button>
           </div>
 
