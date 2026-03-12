@@ -102,6 +102,18 @@ class HedgeService extends EventEmitter {
     await this.repo.saveCycle(hedgeId, cycle);
   }
 
+  async _ensureEntryConfig(hedge) {
+    if (!hedge.assetIndex || hedge.szDecimals == null) {
+      const meta = await this.hl.getAssetMeta(hedge.asset);
+      hedge.assetIndex = meta.index;
+      hedge.szDecimals = meta.szDecimals;
+    }
+
+    const lev = parseInt(hedge.leverage, 10);
+    const isCross = hedge.marginMode === 'cross';
+    await this.hl.updateLeverage(hedge.assetIndex, isCross, Number.isFinite(lev) ? lev : 1);
+  }
+
   _nextPositionKey(hedge) {
     const nextCycle = hedge.cycleCount + 1;
     return `${this.userId}:${hedge.id}:${nextCycle}:${Date.now()}`;
@@ -314,11 +326,7 @@ class HedgeService extends EventEmitter {
 
     hedge._entryPlacementInProgress = true;
     try {
-      if (!hedge.assetIndex || hedge.szDecimals == null) {
-        const meta = await this.hl.getAssetMeta(hedge.asset);
-        hedge.assetIndex = meta.index;
-        hedge.szDecimals = meta.szDecimals;
-      }
+      await this._ensureEntryConfig(hedge);
 
       const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
       if (pos && parseFloat(pos.szi) !== 0) {
@@ -899,11 +907,7 @@ class HedgeService extends EventEmitter {
                   : formatPrice(midEntry * (1 - slip));
 
                 try {
-                  if (!hedge.assetIndex || hedge.szDecimals == null) {
-                    const meta = await this.hl.getAssetMeta(hedge.asset);
-                    hedge.assetIndex = meta.index;
-                    hedge.szDecimals = meta.szDecimals;
-                  }
+                  await this._ensureEntryConfig(hedge);
                   const { oid } = await this.hl.placeOrder({
                     assetIndex: hedge.assetIndex,
                     isBuy,
@@ -1190,11 +1194,7 @@ class HedgeService extends EventEmitter {
     const slip = 0.002;
     const isBuy = hedge.direction === 'long';
     try {
-      if (!hedge.assetIndex || hedge.szDecimals == null) {
-        const meta = await this.hl.getAssetMeta(hedge.asset);
-        hedge.assetIndex = meta.index;
-        hedge.szDecimals = meta.szDecimals;
-      }
+      await this._ensureEntryConfig(hedge);
       const { oid } = await this.hl.placeOrder({
         assetIndex: hedge.assetIndex,
         isBuy,
