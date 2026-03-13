@@ -9,7 +9,7 @@ const ICONS = {
 };
 
 export function Notifications() {
-  const { notifications } = useTradingContext();
+  const { notifications, removeNotification } = useTradingContext();
 
   if (notifications.length === 0) return null;
 
@@ -25,6 +25,13 @@ export function Notifications() {
               </span>
             ))}
           </span>
+          <button
+            className={styles.dismiss}
+            onClick={() => removeNotification(n.id)}
+            aria-label="Cerrar notificacion"
+          >
+            ✕
+          </button>
         </div>
       ))}
     </div>

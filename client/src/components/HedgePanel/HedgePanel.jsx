@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTradingContext } from '../../context/TradingContext';
 import { useAuth } from '../../context/AuthContext';
+import { ConfirmDialog } from '../shared/ConfirmDialog';
 import styles from './HedgePanel.module.css';
 
 const STATUS_LABEL = {
@@ -31,7 +32,7 @@ function loadPct(username)  {
 }
 
 export function HedgePanel({ selectedAsset }) {
-  const { prices, hedges, createHedge, cancelHedge, refreshHedges } = useTradingContext();
+  const { prices, hedges, createHedge, cancelHedge, refreshHedges, isPriceStale, isConnected, addNotification } = useTradingContext();
   const { user } = useAuth();
 
   const [asset, setAsset]           = useState(selectedAsset || 'BTC');
@@ -50,7 +51,11 @@ export function HedgePanel({ selectedAsset }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [historyTab, setHistoryTab] = useState(false);
 
+  // Confirm dialog state
+  const [confirm, setConfirm] = useState(null);
+
   const isLong = direction === 'long';
+  const priceUnavailable = !isConnected || isPriceStale;
 
   useEffect(() => {
     if (selectedAsset) setAsset(selectedAsset);
@@ -71,7 +76,7 @@ export function HedgePanel({ selectedAsset }) {
     }
   }, [showPctModal, autoExitPct]);
 
-  // Cuando autoExit está activo, recalcula exitPrice como ±X% del entryPrice
+  // Cuando autoExit esta activo, recalcula exitPrice como ±X% del entryPrice
   useEffect(() => {
     if (!autoExit) return;
     const entry = parseFloat(entryPrice);
@@ -125,7 +130,17 @@ export function HedgePanel({ selectedAsset }) {
     }
   };
 
-  const handleCancel = async (id) => { await cancelHedge(id); };
+  const handleCancel = async (id, hedgeAsset) => {
+    setConfirm({
+      title: 'Cancelar cobertura',
+      message: `¿Cancelar la cobertura de ${hedgeAsset}? Si tiene una posicion abierta, quedara sin proteccion automatica.`,
+      confirmLabel: 'Cancelar cobertura',
+      onConfirm: async () => {
+        setConfirm(null);
+        await cancelHedge(id);
+      },
+    });
+  };
 
   const activeHedges    = hedges.filter((h) => ['waiting', 'entry_pending', 'entry_filled_pending_sl', 'open', 'open_protected', 'closing', 'cancel_pending', 'executing_open', 'executing_close'].includes(h.status));
   const cancelledHedges = hedges.filter((h) => ['cancelled', 'error'].includes(h.status));
@@ -143,8 +158,15 @@ export function HedgePanel({ selectedAsset }) {
             GTC nativo + SL nativo · Isolated · ciclos automaticos
           </p>
         </div>
-        <button className={styles.refreshBtn} onClick={refreshHedges} title="Refrescar">↻</button>
+        <button className={styles.refreshBtn} onClick={refreshHedges} title="Refrescar" aria-label="Refrescar coberturas">↻</button>
       </div>
+
+      {/* Stale price warning */}
+      {priceUnavailable && (
+        <div className={styles.staleBanner}>
+          ⚠ {!isConnected ? 'Sin conexion al servidor' : 'Precios desactualizados'} — la creacion de coberturas podria usar datos obsoletos
+        </div>
+      )}
 
       {/* ── 2-column body ── */}
       <div className={styles.body}>
@@ -196,10 +218,10 @@ export function HedgePanel({ selectedAsset }) {
               </div>
             </div>
 
-            {/* Separador: Condiciones de activación */}
+            {/* Separador: Condiciones de activacion */}
             <div className={isLong ? styles.sectionDividerLong : styles.sectionDivider}>
               <span>{isLong ? '▲' : '▼'}</span>
-              <span className={styles.sectionTitle}>Condiciones de activación</span>
+              <span className={styles.sectionTitle}>Condiciones de activacion</span>
             </div>
 
             {/* Entry + Exit en horizontal */}
@@ -229,10 +251,10 @@ export function HedgePanel({ selectedAsset }) {
                     {isLong
                       ? (entryNum > currentPrice
                           ? `+${((entryNum / currentPrice - 1) * 100).toFixed(2)}% del precio actual`
-                          : '⚡ Activaría inmediatamente')
+                          : '⚡ Activaria inmediatamente')
                       : (entryNum < currentPrice
                           ? `-${((1 - entryNum / currentPrice) * 100).toFixed(2)}% del precio actual`
-                          : '⚡ Activaría inmediatamente')}
+                          : '⚡ Activaria inmediatamente')}
                   </span>
                 )}
               </div>
@@ -256,6 +278,7 @@ export function HedgePanel({ selectedAsset }) {
                       className={styles.pctEditBtn}
                       onClick={() => setShowPctModal(true)}
                       title="Editar porcentaje"
+                      aria-label="Editar porcentaje de auto-exit"
                     >✎</button>
                   </span>
                 </div>
@@ -393,13 +416,13 @@ export function HedgePanel({ selectedAsset }) {
           {/* ── Modal editar porcentaje ── */}
           {showPctModal && (
             <div className={styles.modalOverlay} onClick={() => setShowPctModal(false)}>
-              <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+              <div className={styles.modal} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Editar diferencial automatico">
                 <div className={styles.modalHeader}>
-                  <span className={styles.modalTitle}>Diferencial automático</span>
-                  <button className={styles.modalClose} onClick={() => setShowPctModal(false)}>✕</button>
+                  <span className={styles.modalTitle}>Diferencial automatico</span>
+                  <button className={styles.modalClose} onClick={() => setShowPctModal(false)} aria-label="Cerrar">✕</button>
                 </div>
                 <p className={styles.modalDesc}>
-                  Porcentaje de separación entre precio de entrada y SL automático.
+                  Porcentaje de separacion entre precio de entrada y SL automatico.
                 </p>
                 <div className={styles.modalField}>
                   <label className={styles.modalLabel}>Porcentaje (%)</label>
@@ -463,7 +486,10 @@ export function HedgePanel({ selectedAsset }) {
             {!historyTab && (
               <>
                 {activeHedges.length === 0 && (
-                  <div className={styles.empty}>No hay coberturas activas.</div>
+                  <div className={styles.empty}>
+                    <span>No hay coberturas activas</span>
+                    <span className={styles.emptyHint}>Usa el formulario de la izquierda para crear tu primera cobertura</span>
+                  </div>
                 )}
                 {activeHedges.map((h) => (
                   <HedgeCard
@@ -480,7 +506,10 @@ export function HedgePanel({ selectedAsset }) {
             {historyTab && (
               <>
                 {completedCycles.length === 0 && cancelledHedges.length === 0 && (
-                  <div className={styles.empty}>No hay historial aun.</div>
+                  <div className={styles.empty}>
+                    <span>No hay historial aun</span>
+                    <span className={styles.emptyHint}>Los ciclos completados y coberturas canceladas apareceran aqui</span>
+                  </div>
                 )}
                 {completedCycles.map((c, i) => (
                   <CycleRow key={`${c.hedgeId}-${c.cycleId}-${i}`} cycle={c} />
@@ -493,6 +522,16 @@ export function HedgePanel({ selectedAsset }) {
           </div>
         </div>
       </div>
+
+      {/* Confirm dialog */}
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title}
+        message={confirm?.message}
+        confirmLabel={confirm?.confirmLabel}
+        onConfirm={confirm?.onConfirm}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }
@@ -509,7 +548,7 @@ function calcCyclePnl(c, hedgeSize, direction) {
         : null);
   const fees    = (c.entryFee || 0) + (c.exitFee || 0);
   const funding = c.fundingPaid || 0;                // positivo = recibido
-  // Usar netPnl precalculado del backend si está disponible (incluye datos reales del exchange)
+  // Usar netPnl precalculado del backend si esta disponible (incluye datos reales del exchange)
   const net = c.netPnl != null ? c.netPnl : (gross != null ? gross - fees + funding : null);
   return { gross, fees, funding, net };
 }
@@ -564,7 +603,7 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
             </button>
           )}
           {onCancel && ['waiting', 'entry_pending', 'entry_filled_pending_sl', 'open', 'open_protected', 'cancel_pending'].includes(hedge.status) && (
-            <button className={styles.cancelBtn} onClick={() => onCancel(hedge.id)}>Cancelar</button>
+            <button className={styles.cancelBtn} onClick={() => onCancel(hedge.id, hedge.asset)}>Cancelar</button>
           )}
         </div>
       </div>
@@ -683,7 +722,7 @@ function CycleRow({ cycle, hedgeSize }) {
 
   return (
     <div className={styles.cycleRow}>
-      {/* Izquierda: identificación */}
+      {/* Izquierda: identificacion */}
       <div className={styles.cycleLeft}>
         <span className={styles.cycleAsset}>{cycle.asset}</span>
         <span className={`${styles.cycleBadge} ${isLong ? styles.cycleBadgeLong : ''}`}>

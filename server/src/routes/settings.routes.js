@@ -15,6 +15,7 @@ const tgRegistry      = require('../services/telegram.registry');
 const hlRegistry      = require('../services/hyperliquid.registry');
 const hedgeRegistry   = require('../services/hedge.registry');
 const settingsService = require('../services/settings.service');
+const uniswapService  = require('../services/uniswap.service');
 const { authenticate } = require('../middleware/auth.middleware');
 const { ValidationError } = require('../errors/app-error');
 
@@ -46,6 +47,9 @@ router.get('/', async (req, res, next) => {
         wallet: {
           address:       wallet.address || '',
           hasPrivateKey: !!wallet.privateKey,
+        },
+        etherscan: {
+          hasApiKey: !!(await settingsService.getEtherscan(userId)).apiKey,
         },
       },
     });
@@ -112,6 +116,45 @@ router.put('/wallet', async (req, res, next) => {
       await hedgeRegistry.reload(userId);
     }
     res.json({ success: true, data: { address: address.trim() } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/etherscan', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const etherscan = await settingsService.getEtherscan(userId);
+    res.json({
+      success: true,
+      data: { hasApiKey: !!etherscan.apiKey },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/etherscan', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const { apiKey } = req.body;
+    if (!apiKey) {
+      throw new ValidationError('apiKey es requerida');
+    }
+    await settingsService.setEtherscan(userId, {
+      apiKey: String(apiKey).trim(),
+    });
+    res.json({ success: true, data: { hasApiKey: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/etherscan/test', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const result = await uniswapService.testUserEtherscanKey(userId);
+    res.json({ success: true, data: result });
   } catch (err) {
     next(err);
   }

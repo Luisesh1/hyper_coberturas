@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Navigate, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { TradingProvider } from './context/TradingContext';
@@ -10,16 +10,18 @@ import UsersPanel from './components/UsersPanel/UsersPanel';
 import { Notifications } from './components/Layout/Notifications';
 import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
+import UniswapPoolsPage from './pages/UniswapPoolsPage';
 import styles from './App.module.css';
 
 const BASE_NAV = [
-  { id: 'manual',   path: '/trade',      label: 'Trading Manual', activeClass: 'modeBtnActive'  },
-  { id: 'hedge',    path: '/coberturas', label: 'Coberturas',     activeClass: 'modeHedgeActive' },
-  { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive'  },
+  { id: 'manual',   path: '/trade',      label: 'Trading Manual', activeClass: 'modeBtnActive',  title: 'Trading' },
+  { id: 'hedge',    path: '/coberturas', label: 'Coberturas',     activeClass: 'modeHedgeActive', title: 'Coberturas' },
+  { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
+  { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
 
 const SUPER_NAV = [
-  { id: 'users', path: '/usuarios', label: '👥 Usuarios', activeClass: 'modeBtnActive' },
+  { id: 'users', path: '/usuarios', label: '👥 Usuarios', activeClass: 'modeBtnActive', title: 'Usuarios' },
 ];
 
 function AppContent() {
@@ -38,6 +40,13 @@ function AppContent() {
   };
 
   const isActive = (path) => location.pathname === path || (path === '/trade' && location.pathname === '/');
+
+  // Dynamic page title
+  useEffect(() => {
+    const allNav = [...BASE_NAV, ...SUPER_NAV];
+    const current = allNav.find(n => isActive(n.path));
+    document.title = current ? `${current.title} | HLBot` : 'HLBot';
+  }, [location.pathname]);
 
   return (
     <div className={styles.app}>
@@ -114,6 +123,7 @@ function AppContent() {
             <Route path="/"           element={<Navigate to="/trade" replace />} />
             <Route path="/trade"      element={<TradingPanel selectedAsset={selectedAsset} />} />
             <Route path="/coberturas" element={<HedgePanel selectedAsset={selectedAsset} />} />
+            <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
             <Route path="/config"     element={<SettingsPanel />} />
             {isSuperuser && <Route path="/usuarios" element={<UsersPanel />} />}
             <Route path="*"           element={<Navigate to="/trade" replace />} />

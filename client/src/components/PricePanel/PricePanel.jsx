@@ -5,7 +5,7 @@
  * Los precios llegan via WebSocket desde el backend.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTradingContext } from '../../context/TradingContext';
 import { marketApi } from '../../services/api';
 import styles from './PricePanel.module.css';
@@ -17,20 +17,42 @@ export function PricePanel({ onSelectAsset, selectedAsset }) {
   const [contexts, setContexts] = useState([]);
   const [search, setSearch] = useState('');
   const [prevPrices, setPrevPrices] = useState({});
+  const [flashMap, setFlashMap] = useState({});
+  const flashTimers = useRef({});
 
   useEffect(() => {
     marketApi.getContexts().then(setContexts).catch(console.error);
   }, []);
 
-  // Detectar cambio de precio para animacion
+  // Detect price changes and flash
   useEffect(() => {
-    setPrevPrices((prev) => {
-      const updated = { ...prev };
-      Object.keys(prices).forEach((asset) => {
-        updated[asset] = prev[asset] !== prices[asset] ? prices[asset] : prev[asset];
-      });
-      return updated;
+    const newFlashes = {};
+    Object.keys(prices).forEach((asset) => {
+      const prev = prevPrices[asset];
+      const curr = prices[asset];
+      if (prev && curr && prev !== curr) {
+        const direction = parseFloat(curr) > parseFloat(prev) ? 'up' : 'down';
+        newFlashes[asset] = direction;
+      }
     });
+
+    if (Object.keys(newFlashes).length > 0) {
+      setFlashMap((prev) => ({ ...prev, ...newFlashes }));
+
+      // Clear flashes after animation
+      Object.keys(newFlashes).forEach((asset) => {
+        if (flashTimers.current[asset]) clearTimeout(flashTimers.current[asset]);
+        flashTimers.current[asset] = setTimeout(() => {
+          setFlashMap((prev) => {
+            const next = { ...prev };
+            delete next[asset];
+            return next;
+          });
+        }, 600);
+      });
+    }
+
+    setPrevPrices(prices);
   }, [prices]);
 
   const contextMap = contexts.reduce((acc, ctx) => {
@@ -57,11 +79,14 @@ export function PricePanel({ onSelectAsset, selectedAsset }) {
         placeholder="Buscar activo (BTC, ETH...)"
         value={search}
         onChange={(e) => setSearch(e.target.value.toUpperCase())}
+        aria-label="Buscar activo"
       />
 
       <div className={styles.list}>
         {displayAssets.length === 0 && (
-          <p className={styles.empty}>No se encontraron activos</p>
+          <p className={styles.empty}>
+            {search ? 'No se encontraron activos' : 'Cargando precios...'}
+          </p>
         )}
         {displayAssets.map((asset) => {
           const price = prices[asset];
@@ -69,11 +94,12 @@ export function PricePanel({ onSelectAsset, selectedAsset }) {
           const change = ctx?.priceChange24h;
           const isPositive = parseFloat(change) >= 0;
           const isSelected = asset === selectedAsset;
+          const flash = flashMap[asset];
 
           return (
             <button
               key={asset}
-              className={`${styles.row} ${isSelected ? styles.selected : ''}`}
+              className={`${styles.row} ${isSelected ? styles.selected : ''} ${flash === 'up' ? styles.flashUp : ''} ${flash === 'down' ? styles.flashDown : ''}`}
               onClick={() => onSelectAsset?.(asset)}
             >
               <div className={styles.assetInfo}>

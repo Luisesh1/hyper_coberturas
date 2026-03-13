@@ -41,10 +41,15 @@ function NotificationsProvider({ children }) {
     }, duration);
   }, []);
 
+  const removeNotification = useCallback((id) => {
+    setNotifications((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
   const value = useMemo(() => ({
     notifications,
     addNotification,
-  }), [notifications, addNotification]);
+    removeNotification,
+  }), [notifications, addNotification, removeNotification]);
 
   return (
     <NotificationsContext.Provider value={value}>
@@ -272,5 +277,6 @@ export function useTradingContext() {
     ...hedges,
     notifications: notifications.notifications,
     addNotification: notifications.addNotification,
+    removeNotification: notifications.removeNotification,
   };
 }

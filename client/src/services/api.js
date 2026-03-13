@@ -23,7 +23,17 @@ async function request(method, path, body) {
   }
 
   const res  = await fetch(`${BASE_URL}${path}`, options);
-  const data = await res.json();
+  const text = await res.text();
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    throw new Error('Respuesta invalida del servidor');
+  }
 
   if (res.status === 401) {
     clearSession();
@@ -108,6 +118,18 @@ export const settingsApi = {
   saveTelegram: ({ token, chatId }) => request('PUT',  '/settings/telegram', { token, chatId }),
   testTelegram: ()                  => request('POST', '/settings/telegram/test'),
   getWallet:    ()                  => request('GET',  '/settings/wallet'),
+  getEtherscan: ()                  => request('GET',  '/settings/etherscan'),
   saveWallet:   ({ privateKey, address }) =>
     request('PUT', '/settings/wallet', { privateKey, address }),
+  saveEtherscan: ({ apiKey })       => request('PUT', '/settings/etherscan', { apiKey }),
+  testEtherscan: ()                 => request('POST', '/settings/etherscan/test'),
+};
+
+// ------------------------------------------------------------------
+// Uniswap
+// ------------------------------------------------------------------
+export const uniswapApi = {
+  getMeta: () => request('GET', '/uniswap/meta'),
+  scanPools: ({ wallet, network, version }) =>
+    request('POST', '/uniswap/pools/scan', { wallet, network, version }),
 };

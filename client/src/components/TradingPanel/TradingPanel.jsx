@@ -1,15 +1,16 @@
 /**
  * TradingPanel.jsx — Operativa Manual
- * Layout 2 columnas: formulario izquierda | posiciones + órdenes derecha
+ * Layout 2 columnas: formulario izquierda | posiciones + ordenes derecha
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useTradingContext } from '../../context/TradingContext';
 import { tradingApi } from '../../services/api';
+import { ConfirmDialog } from '../shared/ConfirmDialog';
 import styles from './TradingPanel.module.css';
 
 export function TradingPanel({ selectedAsset }) {
-  const { prices, account, isLoadingAccount, openPosition, closePosition, refreshAccount } = useTradingContext();
+  const { prices, account, isLoadingAccount, isPriceStale, isConnected, openPosition, closePosition, refreshAccount, addNotification } = useTradingContext();
 
   const [side,           setSide]           = useState('long');
   const [size,           setSize]           = useState('');
@@ -19,22 +20,30 @@ export function TradingPanel({ selectedAsset }) {
   const [isSubmitting,   setIsSubmitting]   = useState(false);
   const [openOrders,     setOpenOrders]     = useState([]);
   const [cancellingOid,  setCancellingOid]  = useState(null);
-  const [sltpPos,        setSltpPos]        = useState(null);   // pos object for SL/TP modal
+  const [sltpPos,        setSltpPos]        = useState(null);
   const [slPrice,        setSlPrice]        = useState('');
   const [tpPrice,        setTpPrice]        = useState('');
   const [sltpSubmitting, setSltpSubmitting] = useState(false);
   const [sltpError,      setSltpError]      = useState('');
+  const [closingAsset,   setClosingAsset]   = useState(null);
+
+  // Confirm dialog state
+  const [confirm, setConfirm] = useState(null);
 
   const asset         = selectedAsset || 'BTC';
   const currentPrice  = prices[asset] ? parseFloat(prices[asset]) : null;
   const positionCount = account?.positions?.length ?? 0;
+  const priceUnavailable = !isConnected || isPriceStale;
 
   const refreshOrders = useCallback(async () => {
     try {
       const orders = await tradingApi.getOpenOrders();
       setOpenOrders(Array.isArray(orders) ? orders : []);
-    } catch { setOpenOrders([]); }
-  }, []);
+    } catch (err) {
+      addNotification('error', `Error al cargar ordenes: ${err.message}`);
+      setOpenOrders([]);
+    }
+  }, [addNotification]);
 
   // Initial load + auto-refresh every 30s
   useEffect(() => {
@@ -54,12 +63,25 @@ export function TradingPanel({ selectedAsset }) {
     try {
       await openPosition({ asset, side, size: sizeInAsset, leverage, marginMode });
       setSize('');
-    } catch { } finally { setIsSubmitting(false); }
+    } catch { /* notified by context */ } finally { setIsSubmitting(false); }
   };
 
   const handleClose = async (posAsset) => {
-    await closePosition({ asset: posAsset });
-    setTimeout(refreshAccount, 800);
+    setConfirm({
+      title: 'Cerrar posicion',
+      message: `¿Cerrar toda la posicion de ${posAsset} a mercado? Esta accion no se puede deshacer.`,
+      confirmLabel: 'Cerrar posicion',
+      onConfirm: async () => {
+        setConfirm(null);
+        setClosingAsset(posAsset);
+        try {
+          await closePosition({ asset: posAsset });
+          setTimeout(refreshAccount, 800);
+        } catch { /* notified by context */ } finally {
+          setClosingAsset(null);
+        }
+      },
+    });
   };
 
   const openSltpModal = (pos) => {
@@ -84,6 +106,7 @@ export function TradingPanel({ selectedAsset }) {
         tpPrice: tpPrice ? parseFloat(tpPrice) : undefined,
       });
       setSltpPos(null);
+      addNotification('success', `SL/TP configurado para ${sltpPos.asset}`);
     } catch (err) {
       setSltpError(err.message);
     } finally {
@@ -92,11 +115,22 @@ export function TradingPanel({ selectedAsset }) {
   };
 
   const handleCancelOrder = async (orderAsset, oid) => {
-    setCancellingOid(oid);
-    try {
-      await tradingApi.cancelOrder(orderAsset, oid);
-      await refreshOrders();
-    } catch { } finally { setCancellingOid(null); }
+    setConfirm({
+      title: 'Cancelar orden',
+      message: `¿Cancelar la orden de ${orderAsset}?`,
+      confirmLabel: 'Cancelar orden',
+      onConfirm: async () => {
+        setConfirm(null);
+        setCancellingOid(oid);
+        try {
+          await tradingApi.cancelOrder(orderAsset, oid);
+          await refreshOrders();
+          addNotification('success', `Orden ${orderAsset} cancelada`);
+        } catch (err) {
+          addNotification('error', `Error al cancelar orden: ${err.message}`);
+        } finally { setCancellingOid(null); }
+      },
+    });
   };
 
   const sizeInAsset = size && currentPrice
@@ -110,6 +144,13 @@ export function TradingPanel({ selectedAsset }) {
 
   return (
     <div className={styles.container}>
+
+      {/* Stale price warning banner */}
+      {priceUnavailable && (
+        <div className={styles.staleBanner}>
+          <span>⚠ {!isConnected ? 'Sin conexion al servidor' : 'Precios desactualizados'} — operaciones deshabilitadas</span>
+        </div>
+      )}
 
       {/* Barra superior */}
       <div className={styles.topBar}>
@@ -141,7 +182,7 @@ export function TradingPanel({ selectedAsset }) {
             <span className={styles.accountLabel}>Retirable</span>
             <span className={`${styles.accountValue} ${styles.withdrawable}`}>${parseFloat(account.withdrawable || 0).toFixed(2)}</span>
           </div>
-          <button className={styles.refreshBtn} onClick={refreshAccount} title="Refrescar">↻</button>
+          <button className={styles.refreshBtn} onClick={refreshAccount} title="Refrescar" aria-label="Refrescar cuenta">↻</button>
         </div>
       )}
 
@@ -222,7 +263,7 @@ export function TradingPanel({ selectedAsset }) {
           )}
 
           <button type="submit" className={`${styles.submitBtn} ${side === 'long' ? styles.longBtn : styles.shortBtn}`}
-            disabled={isSubmitting || !size || !currentPrice || hasInsufficientMargin}>
+            disabled={isSubmitting || !size || !currentPrice || hasInsufficientMargin || priceUnavailable}>
             {isSubmitting ? 'Enviando...' : `${side === 'long' ? '▲ Long' : '▼ Short'} ${asset} a mercado`}
           </button>
 
@@ -239,11 +280,17 @@ export function TradingPanel({ selectedAsset }) {
               Posiciones abiertas
               {positionCount > 0 && <span className={styles.badge}>{positionCount}</span>}
             </span>
-            <button className={styles.refreshBtn} onClick={refreshAccount} title="Refrescar">↻</button>
+            <button className={styles.refreshBtn} onClick={refreshAccount} title="Refrescar" aria-label="Refrescar posiciones">↻</button>
           </div>
 
           {isLoadingAccount && <p className={styles.empty}>Cargando posiciones...</p>}
-          {!isLoadingAccount && positionCount === 0 && <p className={styles.empty}>Sin posiciones abiertas</p>}
+          {!isLoadingAccount && positionCount === 0 && (
+            <div className={styles.emptyState}>
+              <span className={styles.emptyIcon}>◈</span>
+              <span>Sin posiciones abiertas</span>
+              <span className={styles.emptyHint}>Usa el formulario para abrir tu primera posicion</span>
+            </div>
+          )}
 
           {account?.positions?.map((pos) => {
             const entryPx    = parseFloat(pos.entryPrice || 0);
@@ -272,7 +319,13 @@ export function TradingPanel({ selectedAsset }) {
                   </div>
                   <div className={styles.posBtns}>
                     <button className={styles.sltpBtn} onClick={() => openSltpModal(pos)}>SL/TP</button>
-                    <button className={styles.closeBtn} onClick={() => handleClose(pos.asset)}>Cerrar todo</button>
+                    <button
+                      className={styles.closeBtn}
+                      onClick={() => handleClose(pos.asset)}
+                      disabled={closingAsset === pos.asset}
+                    >
+                      {closingAsset === pos.asset ? 'Cerrando...' : 'Cerrar todo'}
+                    </button>
                   </div>
                 </div>
 
@@ -337,6 +390,7 @@ export function TradingPanel({ selectedAsset }) {
                       className={styles.cancelBtn}
                       onClick={() => handleCancelOrder(order.coin, order.oid)}
                       disabled={cancellingOid === order.oid}
+                      aria-label={`Cancelar orden ${order.coin}`}
                     >
                       {cancellingOid === order.oid ? '...' : '✕'}
                     </button>
@@ -347,13 +401,14 @@ export function TradingPanel({ selectedAsset }) {
           )}
         </div>
       </div>
+
       {/* Modal SL/TP */}
       {sltpPos && (
         <div className={styles.modalOverlay} onClick={() => setSltpPos(null)}>
-          <form className={styles.modalBox} onClick={(e) => e.stopPropagation()} onSubmit={handleSetSLTP}>
+          <form className={styles.modalBox} onClick={(e) => e.stopPropagation()} onSubmit={handleSetSLTP} role="dialog" aria-modal="true" aria-label="Configurar SL/TP">
             <div className={styles.modalHeader}>
               <span>SL / TP — {sltpPos.asset} {sltpPos.side === 'long' ? '▲ Long' : '▼ Short'}</span>
-              <button type="button" className={styles.modalClose} onClick={() => setSltpPos(null)}>✕</button>
+              <button type="button" className={styles.modalClose} onClick={() => setSltpPos(null)} aria-label="Cerrar">✕</button>
             </div>
             <div className={styles.field}>
               <span className={styles.label}>Stop Loss (precio trigger)</span>
@@ -390,6 +445,16 @@ export function TradingPanel({ selectedAsset }) {
           </form>
         </div>
       )}
+
+      {/* Confirm dialog */}
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title}
+        message={confirm?.message}
+        confirmLabel={confirm?.confirmLabel}
+        onConfirm={confirm?.onConfirm}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }

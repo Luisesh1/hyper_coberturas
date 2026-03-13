@@ -14,6 +14,16 @@ const config = {
     apiUrl: process.env.HL_API_URL || 'https://api.hyperliquid.xyz',
     wsUrl: process.env.HL_WS_URL || 'wss://api.hyperliquid.xyz/ws',
   },
+  uniswap: {
+    rpcUrls: {
+      ethereum: process.env.UNI_RPC_ETHEREUM || 'https://ethereum-rpc.publicnode.com',
+      arbitrum: process.env.UNI_RPC_ARBITRUM || 'https://arbitrum-one-rpc.publicnode.com',
+      optimism: process.env.UNI_RPC_OPTIMISM || 'https://optimism-rpc.publicnode.com',
+      base: process.env.UNI_RPC_BASE || 'https://base-rpc.publicnode.com',
+      polygon: process.env.UNI_RPC_POLYGON || 'https://polygon-bor-rpc.publicnode.com',
+    },
+    scanTimeoutMs: parseInt(process.env.UNI_SCAN_TIMEOUT_MS, 10) || 20_000,
+  },
   jwt: {
     secret: process.env.JWT_SECRET || 'changeme-use-a-strong-secret-in-production',
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',

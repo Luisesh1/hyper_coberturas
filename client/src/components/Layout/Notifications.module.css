@@ -2,7 +2,7 @@
   position: fixed;
   top: 20px;
   right: 20px;
-  z-index: 1000;
+  z-index: 1200;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -30,6 +30,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
+  min-width: 0;
 }
 
 .title {
@@ -42,6 +44,21 @@
   font-size: 0.78rem;
   opacity: 0.8;
 }
+
+.dismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.4;
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+.dismiss:hover { opacity: 0.8; }
 
 /* ── Types ── */
 .success {
@@ -62,7 +79,7 @@
   color: #60a5fa;
 }
 
-/* ── Alert: posición abierta ── */
+/* ── Alert: posicion abierta ── */
 .alert {
   background: #0d1f0d;
   border: 2px solid #22c55e;
@@ -86,4 +103,12 @@
 @keyframes pulse {
   0%, 100% { box-shadow: 0 0 16px rgba(34, 197, 94, 0.35); }
   50%       { box-shadow: 0 0 28px rgba(34, 197, 94, 0.7);  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    right: 8px;
+    left: 8px;
+    max-width: none;
+  }
 }

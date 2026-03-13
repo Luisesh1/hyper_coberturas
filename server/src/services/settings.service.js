@@ -4,7 +4,7 @@ const settingsRepository = require('../repositories/settings.repository');
 const { ValidationError } = require('../errors/app-error');
 
 const ENCRYPTED_PREFIX = 'enc:v1:';
-const SENSITIVE_KEYS = new Set(['wallet', 'telegram']);
+const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan']);
 
 function getEncryptionKey() {
   return config.security.settingsEncryptionKey;
@@ -86,6 +86,14 @@ async function setWallet(userId, wallet) {
   await setSetting(userId, 'wallet', wallet);
 }
 
+async function getEtherscan(userId) {
+  return (await getSetting(userId, 'etherscan')) || { apiKey: '' };
+}
+
+async function setEtherscan(userId, etherscan) {
+  await setSetting(userId, 'etherscan', etherscan);
+}
+
 module.exports = {
   ENCRYPTED_PREFIX,
   decryptValue,
@@ -96,4 +104,6 @@ module.exports = {
   setTelegram,
   getWallet,
   setWallet,
+  getEtherscan,
+  setEtherscan,
 };
