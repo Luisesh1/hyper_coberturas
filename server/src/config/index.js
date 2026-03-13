@@ -34,7 +34,6 @@ const config = {
       (process.env.NODE_ENV === 'production' ? '' : getDefaultDevEncryptionKey()),
   },
   trading: {
-    defaultAsset: process.env.DEFAULT_ASSET || 'BTC',
     defaultLeverage: parseInt(process.env.DEFAULT_LEVERAGE, 10) || 10,
     marginMode: process.env.MARGIN_MODE || 'cross',
   },

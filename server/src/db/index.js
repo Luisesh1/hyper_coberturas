@@ -165,9 +165,6 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS settings_user_key ON settings(user_id, key)
   `);
 
-  await pool.query('DROP TABLE IF EXISTS uniswap_index_entries');
-  await pool.query('DROP TABLE IF EXISTS uniswap_index_state');
-
   await migrateLegacyData();
   logger.info('db_schema_initialized');
 }

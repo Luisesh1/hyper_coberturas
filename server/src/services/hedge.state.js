@@ -1,7 +1,3 @@
-function numericEqual(a, b, epsilon = 1e-8) {
-  return Math.abs(parseFloat(a) - parseFloat(b)) <= epsilon;
-}
-
 function normalizeStatus(row) {
   if (row.status === 'open') {
     return row.sl_oid ? 'open_protected' : 'entry_filled_pending_sl';
@@ -74,7 +70,6 @@ function getTrackedPositionSize(hedge) {
 }
 
 module.exports = {
-  numericEqual,
   normalizeStatus,
   rowToHedge,
   getTrackedPositionSize,

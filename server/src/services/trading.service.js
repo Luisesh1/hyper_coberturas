@@ -10,31 +10,10 @@
 
 const config = require('../config');
 const { placePositionProtection } = require('./protection.service');
+const { formatPrice, formatSize } = require('../utils/format');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
 const MARKET_ORDER_SLIPPAGE = 0.002; // 0.2%
-
-function formatPrice(price) {
-  if (!price || price <= 0) return '0';
-  const d = Math.ceil(Math.log10(Math.abs(price)));
-  const power = 5 - d;
-  const magnitude = Math.pow(10, power);
-  const rounded = Math.round(price * magnitude) / magnitude;
-  return power > 0 ? rounded.toFixed(power) : rounded.toString();
-}
-
-function formatSize(size, szDecimals) {
-  const numericSize = parseFloat(size);
-  if (!Number.isFinite(numericSize) || numericSize <= 0) {
-    return (0).toFixed(szDecimals);
-  }
-
-  const [integerPart, fractionalPart = ''] = numericSize
-    .toFixed(szDecimals + 8)
-    .split('.');
-
-  return `${integerPart}.${fractionalPart.slice(0, szDecimals).padEnd(szDecimals, '0')}`;
-}
 
 class TradingService {
   /**

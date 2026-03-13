@@ -15,6 +15,7 @@ const axios = require('axios');
 const { ethers } = require('ethers');
 const { encode: msgpackEncode } = require('@msgpack/msgpack');
 const config = require('../config');
+const { numericEqual } = require('../utils/format');
 
 const INFO_URL = `${config.hyperliquid.apiUrl}/info`;
 const EXCHANGE_URL = `${config.hyperliquid.apiUrl}/exchange`;
@@ -48,10 +49,6 @@ function floatToWire(x) {
   const rounded = Math.round(n * 1e8) / 1e8;
   if (rounded === Math.floor(rounded)) return String(Math.floor(rounded));
   return rounded.toFixed(8).replace(/0+$/, '');
-}
-
-function numericEqual(a, b, epsilon = 1e-8) {
-  return Math.abs(parseFloat(a) - parseFloat(b)) <= epsilon;
 }
 
 function sleep(ms) {

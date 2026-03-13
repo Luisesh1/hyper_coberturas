@@ -13,6 +13,7 @@ client/.env
 
 # ── Builds ────────────────────────────────────────────────────────────────────
 client/dist/
+client/dist-temp/
 client/build/
 server/dist/
 

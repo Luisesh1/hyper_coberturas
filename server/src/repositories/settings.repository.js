@@ -18,16 +18,7 @@ async function upsert(userId, key, value) {
   );
 }
 
-async function getAllByUser(userId) {
-  const { rows } = await db.query(
-    'SELECT key, value, updated_at FROM settings WHERE user_id = $1 ORDER BY key ASC',
-    [userId]
-  );
-  return rows;
-}
-
 module.exports = {
   getByKey,
   upsert,
-  getAllByUser,
 };

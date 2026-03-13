@@ -24,6 +24,14 @@ function formatNumber(value, digits = 2) {
   }).format(numeric);
 }
 
+function formatCompactUsd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'No disponible';
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${formatNumber(n, 2)}`;
+}
+
 function formatDuration(ms) {
   const numeric = Number(ms);
   if (!Number.isFinite(numeric) || numeric <= 0) return '—';
@@ -45,6 +53,19 @@ function getExplorerLink(baseUrl, kind, value) {
   if (kind === 'tx') return `${baseUrl}/tx/${value}`;
   if (kind === 'address') return `${baseUrl}/address/${value}`;
   return null;
+}
+
+function getStatusInfo(pool) {
+  if (pool.currentOutOfRangeSide === 'below') {
+    return { label: 'Fuera por abajo', cls: styles.badgeOor };
+  }
+  if (pool.currentOutOfRangeSide === 'above') {
+    return { label: 'Fuera por arriba', cls: styles.badgeOor };
+  }
+  if (pool.status === 'active') {
+    return { label: 'Activa', cls: styles.badgeActive };
+  }
+  return { label: 'Inactiva', cls: styles.badgeInactive };
 }
 
 function getRangeBarData(pool) {
@@ -86,6 +107,7 @@ function PoolCard({ pool }) {
     : pool.priceAtOpenAccuracy === 'exact'
       ? 'Exacto'
       : null;
+  const status = getStatusInfo(pool);
 
   return (
     <article className={styles.card}>
@@ -105,15 +127,7 @@ function PoolCard({ pool }) {
             {isV4 && <span className={styles.v4Tag}>PoolManager</span>}
           </div>
         </div>
-        <div className={styles.blockBadge}>
-          {pool.currentOutOfRangeSide === 'below'
-            ? 'Fuera por abajo'
-            : pool.currentOutOfRangeSide === 'above'
-              ? 'Fuera por arriba'
-              : pool.status === 'active'
-                ? 'Activa'
-                : 'Inactiva'}
-        </div>
+        <span className={`${styles.blockBadge} ${status.cls}`}>{status.label}</span>
       </div>
 
       <div className={styles.infoGrid}>
@@ -148,7 +162,7 @@ function PoolCard({ pool }) {
         )}
 
         <div className={styles.infoItem}>
-          <span className={styles.infoLabel}>{isLpPosition ? 'Posición' : isV4 ? 'Pool ID' : 'Identificador'}</span>
+          <span className={styles.infoLabel}>{isLpPosition ? 'Posicion' : isV4 ? 'Pool ID' : 'Identificador'}</span>
           <span className={styles.hashValue}>
             {isV4 ? shortAddress(pool.identifier) : shortAddress(pool.poolAddress || pool.identifier)}
           </span>
@@ -212,7 +226,7 @@ function PoolCard({ pool }) {
         <div className={styles.infoItem}>
           <span className={styles.infoLabel}>TVL aprox.</span>
           <span className={styles.infoValue}>
-            {pool.tvlApproxUsd != null ? `$${formatNumber(pool.tvlApproxUsd, 2)}` : 'No disponible'}
+            {pool.tvlApproxUsd != null ? formatCompactUsd(pool.tvlApproxUsd) : 'No disponible'}
           </span>
         </div>
 
@@ -232,7 +246,7 @@ function PoolCard({ pool }) {
                   Min. {formatPrice(pool.rangeLowerPrice, pool.priceBaseSymbol, pool.priceQuoteSymbol)}
                 </span>
                 <span className={styles.rangeMetric}>
-                  Máx. {formatPrice(pool.rangeUpperPrice, pool.priceBaseSymbol, pool.priceQuoteSymbol)}
+                  Max. {formatPrice(pool.rangeUpperPrice, pool.priceBaseSymbol, pool.priceQuoteSymbol)}
                 </span>
               </div>
 
@@ -274,6 +288,16 @@ function PoolCard({ pool }) {
         )}
       </div>
     </article>
+  );
+}
+
+function ScanSpinner() {
+  return (
+    <div className={styles.spinnerWrap}>
+      <div className={styles.spinner} />
+      <span className={styles.spinnerText}>Escaneando blockchain...</span>
+      <span className={styles.spinnerHint}>Esto puede tomar unos segundos dependiendo de la red</span>
+    </div>
   );
 }
 
@@ -341,13 +365,13 @@ export default function UniswapPoolsPage() {
       <section className={styles.hero}>
         <div>
           <p className={styles.eyebrow}>Uniswap Pool Scanner</p>
-          <h1 className={styles.title}>Pools y posiciones LP en Uniswap</h1>
+          <h1 className={styles.title}>Pools y posiciones LP</h1>
           <p className={styles.subtitle}>
-            Para V3 y V4 leemos las posiciones LP reales de la wallet. Para V1 y V2 mantenemos el escaneo de pools creados.
+            V3/V4 lee posiciones LP reales de la wallet. V1/V2 escanea pools creados.
           </p>
         </div>
         <div className={styles.heroStat}>
-          <span className={styles.heroStatLabel}>Cobertura</span>
+          <span className={styles.heroStatLabel}>Redes soportadas</span>
           <span className={styles.heroStatValue}>ETH, ARB, OP, BASE, POL</span>
         </div>
       </section>
@@ -355,20 +379,23 @@ export default function UniswapPoolsPage() {
       <section className={styles.panel}>
         <form className={styles.form} onSubmit={handleSubmit}>
           <div className={styles.field}>
-            <label className={styles.label}>Wallet creadora</label>
+            <label className={styles.label} htmlFor="uni-wallet">Wallet</label>
             <input
+              id="uni-wallet"
               className={styles.input}
               type="text"
               placeholder="0x..."
               value={wallet}
               onChange={(event) => setWallet(event.target.value)}
               required
+              aria-label="Direccion de wallet"
             />
           </div>
 
           <div className={styles.field}>
-            <label className={styles.label}>Red</label>
+            <label className={styles.label} htmlFor="uni-network">Red</label>
             <select
+              id="uni-network"
               className={styles.select}
               value={network}
               onChange={(event) => setNetwork(event.target.value)}
@@ -380,8 +407,9 @@ export default function UniswapPoolsPage() {
           </div>
 
           <div className={styles.field}>
-            <label className={styles.label}>Version</label>
+            <label className={styles.label} htmlFor="uni-version">Version</label>
             <select
+              id="uni-version"
               className={styles.select}
               value={version}
               onChange={(event) => setVersion(event.target.value)}
@@ -393,7 +421,7 @@ export default function UniswapPoolsPage() {
           </div>
 
           <button className={styles.scanButton} type="submit" disabled={isScanning || !meta || !hasApiKey}>
-            {isScanning ? 'Escaneando...' : 'Escanear pools'}
+            {isScanning ? 'Escaneando...' : 'Escanear'}
           </button>
         </form>
 
@@ -407,16 +435,23 @@ export default function UniswapPoolsPage() {
         )}
 
         {!hasApiKey && (
-          <div className={styles.error}>
-            Configura tu API key de Etherscan en Config antes de usar el scanner de Uniswap.
+          <div className={styles.warning}>
+            Configura tu API key de Etherscan en Config antes de usar el scanner.
           </div>
         )}
       </section>
 
-      {error && <div className={styles.error}>{error}</div>}
+      {error && (
+        <div className={styles.error}>
+          <span>{error}</span>
+          <button className={styles.dismissBtn} onClick={() => setError('')} aria-label="Cerrar error">x</button>
+        </div>
+      )}
+
+      {isScanning && <ScanSpinner />}
 
       {result?.warnings?.length > 0 && (
-        <div className={styles.error}>
+        <div className={styles.warning}>
           {result.warnings.join(' · ')}
         </div>
       )}
@@ -438,30 +473,41 @@ export default function UniswapPoolsPage() {
               <span className={styles.summaryLabel}>
                 {result.mode === 'lp_positions' ? 'Posiciones activas' : 'Pools encontrados'}
               </span>
-              <span className={styles.summaryValue}>{result.count}</span>
+              <span className={`${styles.summaryValue} ${styles.summaryHighlight}`}>{result.count}</span>
             </div>
             <div className={styles.summaryCard}>
               <span className={styles.summaryLabel}>
-                {result.mode === 'lp_positions' ? 'Posiciones inspeccionadas' : 'Inspeccion'}
+                {result.mode === 'lp_positions' ? 'Inspeccionadas' : 'Inspeccion'}
               </span>
               <span className={styles.summaryValue}>
-                {result.inspectedTxCount}/{result.totalTxCount} {result.mode === 'lp_positions' ? 'posiciones' : 'tx'} · {result.completeness}
+                {result.inspectedTxCount}/{result.totalTxCount} {result.mode === 'lp_positions' ? 'pos.' : 'tx'} · {result.completeness}
               </span>
             </div>
           </section>
 
           {result.count === 0 ? (
             <div className={styles.empty}>
-              {isLpModeSelection
-                ? 'No se encontraron posiciones LP activas para esa wallet en la combinacion seleccionada.'
-                : 'No se encontraron pools creados con liquidez relevante para esa wallet en la combinacion seleccionada.'}
+              <span className={styles.emptyIcon}>O</span>
+              <span>
+                {isLpModeSelection
+                  ? 'No se encontraron posiciones LP activas para esa wallet.'
+                  : 'No se encontraron pools creados con liquidez relevante.'}
+              </span>
+              <span className={styles.emptyHint}>Prueba con otra red o version de Uniswap</span>
             </div>
           ) : (
-            <section className={styles.results}>
-              {result.pools.map((pool) => (
-                <PoolCard key={pool.id} pool={pool} />
-              ))}
-            </section>
+            <>
+              <div className={styles.resultsHeader}>
+                <span className={styles.resultsCount}>
+                  {result.count} {result.mode === 'lp_positions' ? 'posiciones' : 'pools'}
+                </span>
+              </div>
+              <section className={styles.results}>
+                {result.pools.map((pool) => (
+                  <PoolCard key={pool.id} pool={pool} />
+                ))}
+              </section>
+            </>
           )}
         </>
       )}

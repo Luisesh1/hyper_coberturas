@@ -125,18 +125,5 @@ export function useWebSocket(onMessage) {
     };
   }, [connect]);
 
-  // ── API pública ────────────────────────────────────────────────────
-  const subscribe = useCallback((feed, coin) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'subscribe', feed, coin }));
-    }
-  }, []);
-
-  const unsubscribe = useCallback((feed, coin) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'unsubscribe', feed, coin }));
-    }
-  }, []);
-
-  return { isConnected, subscribe, unsubscribe };
+  return { isConnected };
 }
