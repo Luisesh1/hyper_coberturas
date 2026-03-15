@@ -81,31 +81,48 @@ export const marketApi = {
 // Trading
 // ------------------------------------------------------------------
 export const tradingApi = {
-  getAccount:    () => request('GET', '/trading/account'),
-  getOpenOrders: () => request('GET', '/trading/orders'),
+  getAccount:    ({ accountId, refresh } = {}) => {
+    const params = new URLSearchParams();
+    if (accountId != null) params.set('accountId', String(accountId));
+    if (refresh) params.set('refresh', '1');
+    return request('GET', `/trading/account${params.size ? `?${params.toString()}` : ''}`);
+  },
+  getOpenOrders: ({ accountId, refresh } = {}) => {
+    const params = new URLSearchParams();
+    if (accountId != null) params.set('accountId', String(accountId));
+    if (refresh) params.set('refresh', '1');
+    return request('GET', `/trading/orders${params.size ? `?${params.toString()}` : ''}`);
+  },
 
-  openPosition: ({ asset, side, size, leverage, marginMode, limitPrice }) =>
-    request('POST', '/trading/open', { asset, side, size, leverage, marginMode, limitPrice }),
+  openPosition: ({ accountId, asset, side, size, leverage, marginMode, limitPrice }) =>
+    request('POST', '/trading/open', { accountId, asset, side, size, leverage, marginMode, limitPrice }),
 
-  closePosition: ({ asset, size }) =>
-    request('POST', '/trading/close', { asset, size }),
+  closePosition: ({ accountId, asset, size }) =>
+    request('POST', '/trading/close', { accountId, asset, size }),
 
-  cancelOrder: (asset, oid) =>
-    request('DELETE', `/trading/orders/${asset}/${oid}`),
+  cancelOrder: (asset, oid, { accountId } = {}) => {
+    const params = new URLSearchParams();
+    if (accountId != null) params.set('accountId', String(accountId));
+    return request('DELETE', `/trading/orders/${asset}/${oid}${params.size ? `?${params.toString()}` : ''}`);
+  },
 
-  setSLTP: ({ asset, side, size, slPrice, tpPrice }) =>
-    request('POST', '/trading/sltp', { asset, side, size, slPrice, tpPrice }),
+  setSLTP: ({ accountId, asset, side, size, slPrice, tpPrice }) =>
+    request('POST', '/trading/sltp', { accountId, asset, side, size, slPrice, tpPrice }),
 };
 
 // ------------------------------------------------------------------
 // Hedge
 // ------------------------------------------------------------------
 export const hedgeApi = {
-  getAll:  () => request('GET', '/hedge'),
+  getAll:  ({ accountId } = {}) => {
+    const params = new URLSearchParams();
+    if (accountId != null) params.set('accountId', String(accountId));
+    return request('GET', `/hedge${params.size ? `?${params.toString()}` : ''}`);
+  },
   getById: (id) => request('GET', `/hedge/${id}`),
 
-  create: ({ asset, entryPrice, exitPrice, size, leverage, label, direction }) =>
-    request('POST', '/hedge', { asset, entryPrice, exitPrice, size, leverage, label, direction }),
+  create: ({ accountId, asset, entryPrice, exitPrice, size, leverage, label, direction }) =>
+    request('POST', '/hedge', { accountId, asset, entryPrice, exitPrice, size, leverage, label, direction }),
 
   cancel: (id) => request('DELETE', `/hedge/${id}`),
 };
@@ -121,6 +138,24 @@ export const settingsApi = {
   getEtherscan: ()                  => request('GET',  '/settings/etherscan'),
   saveWallet:   ({ privateKey, address }) =>
     request('PUT', '/settings/wallet', { privateKey, address }),
+  getHyperliquidAccounts: (refreshAccountId) => {
+    const params = new URLSearchParams();
+    if (refreshAccountId != null) params.set('refreshAccountId', String(refreshAccountId));
+    return request('GET', `/settings/hyperliquid-accounts${params.size ? `?${params.toString()}` : ''}`);
+  },
+  getHyperliquidAccountSummary: (accountId, { refresh = false } = {}) => {
+    const params = new URLSearchParams();
+    if (refresh) params.set('refresh', '1');
+    return request('GET', `/settings/hyperliquid-accounts/${accountId}/summary${params.size ? `?${params.toString()}` : ''}`);
+  },
+  createHyperliquidAccount: ({ alias, address, privateKey, isDefault }) =>
+    request('POST', '/settings/hyperliquid-accounts', { alias, address, privateKey, isDefault }),
+  updateHyperliquidAccount: (id, { alias, address, privateKey, isDefault }) =>
+    request('PUT', `/settings/hyperliquid-accounts/${id}`, { alias, address, privateKey, isDefault }),
+  setDefaultHyperliquidAccount: (id) =>
+    request('PUT', `/settings/hyperliquid-accounts/${id}/default`, {}),
+  deleteHyperliquidAccount: (id) =>
+    request('DELETE', `/settings/hyperliquid-accounts/${id}`),
   saveEtherscan: ({ apiKey })       => request('PUT', '/settings/etherscan', { apiKey }),
   testEtherscan: ()                 => request('POST', '/settings/etherscan/test'),
 };

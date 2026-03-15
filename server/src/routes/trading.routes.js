@@ -12,23 +12,25 @@ const { Router } = require('express');
 const TradingService   = require('../services/trading.service');
 const hlRegistry       = require('../services/hyperliquid.registry');
 const tgRegistry       = require('../services/telegram.registry');
+const hyperliquidAccountsService = require('../services/hyperliquid-accounts.service');
 const { authenticate } = require('../middleware/auth.middleware');
 
 const router = Router();
 router.use(authenticate);
 
-async function getTrading(userId) {
-  const [hl, tg] = await Promise.all([
-    hlRegistry.getOrCreate(userId),
+async function getTrading(userId, accountId) {
+  const [account, hl, tg] = await Promise.all([
+    hyperliquidAccountsService.resolveAccount(userId, accountId),
+    hlRegistry.getOrCreate(userId, accountId),
     tgRegistry.getOrCreate(userId),
   ]);
-  return new TradingService(hl, tg);
+  return new TradingService(userId, account, hl, tg);
 }
 
 router.get('/account', async (req, res, next) => {
   try {
-    const trading = await getTrading(req.user.userId);
-    const data    = await trading.getAccountState();
+    const trading = await getTrading(req.user.userId, req.query.accountId);
+    const data    = await trading.getAccountState({ force: req.query.refresh === '1' });
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -37,8 +39,8 @@ router.get('/account', async (req, res, next) => {
 
 router.get('/orders', async (req, res, next) => {
   try {
-    const trading = await getTrading(req.user.userId);
-    const data    = await trading.getOpenOrders();
+    const trading = await getTrading(req.user.userId, req.query.accountId);
+    const data    = await trading.getOpenOrders({ force: req.query.refresh === '1' });
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -47,7 +49,7 @@ router.get('/orders', async (req, res, next) => {
 
 router.post('/open', async (req, res, next) => {
   try {
-    const { asset, side, size, leverage, marginMode, limitPrice } = req.body;
+    const { asset, side, size, leverage, marginMode, limitPrice, accountId } = req.body;
     if (!asset || !side || !size) {
       return res.status(400).json({ success: false, error: 'Parametros requeridos: asset, side, size' });
     }
@@ -57,7 +59,7 @@ router.post('/open', async (req, res, next) => {
     if (typeof size !== 'number' || size <= 0) {
       return res.status(400).json({ success: false, error: 'size debe ser un numero positivo' });
     }
-    const trading = await getTrading(req.user.userId);
+    const trading = await getTrading(req.user.userId, accountId);
     const data    = await trading.openPosition({ asset, side, size, leverage, marginMode, limitPrice });
     res.json({ success: true, data });
   } catch (err) {
@@ -67,9 +69,9 @@ router.post('/open', async (req, res, next) => {
 
 router.post('/close', async (req, res, next) => {
   try {
-    const { asset, size } = req.body;
+    const { asset, size, accountId } = req.body;
     if (!asset) return res.status(400).json({ success: false, error: "Requerido: 'asset'" });
-    const trading = await getTrading(req.user.userId);
+    const trading = await getTrading(req.user.userId, accountId);
     const data    = await trading.closePosition({ asset, size });
     res.json({ success: true, data });
   } catch (err) {
@@ -79,11 +81,11 @@ router.post('/close', async (req, res, next) => {
 
 router.post('/sltp', async (req, res, next) => {
   try {
-    const { asset, side, size, slPrice, tpPrice } = req.body;
+    const { asset, side, size, slPrice, tpPrice, accountId } = req.body;
     if (!asset || !side || !size) {
       return res.status(400).json({ success: false, error: 'Requeridos: asset, side, size' });
     }
-    const trading = await getTrading(req.user.userId);
+    const trading = await getTrading(req.user.userId, accountId);
     const results = await trading.setSLTP({ asset, side, size, slPrice, tpPrice });
     res.json({ success: true, data: results });
   } catch (err) {
@@ -96,7 +98,7 @@ router.delete('/orders/:asset/:oid', async (req, res, next) => {
     const { asset } = req.params;
     const oid = parseInt(req.params.oid, 10);
     if (isNaN(oid)) return res.status(400).json({ success: false, error: 'oid debe ser un numero' });
-    const trading = await getTrading(req.user.userId);
+    const trading = await getTrading(req.user.userId, req.query.accountId);
     const data    = await trading.cancelOrder(asset, oid);
     res.json({ success: true, data });
   } catch (err) {

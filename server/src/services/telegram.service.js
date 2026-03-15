@@ -74,6 +74,16 @@ class TelegramService {
     return `${sign}$${pnl.toFixed(2)}`;
   }
 
+  _fmtAccount(account) {
+    if (!account) return null;
+    const alias = account.alias || account.label || account.shortAddress || account.address;
+    const wallet = account.shortAddress
+      || (account.address ? `${account.address.slice(0, 6)}...${account.address.slice(-4)}` : '');
+    return wallet && alias !== wallet
+      ? `Cuenta: <b>${alias}</b> (${wallet})`
+      : `Cuenta: <b>${alias}</b>`;
+  }
+
   // ------------------------------------------------------------------
   // Coberturas automaticas (hedge events)
   // ------------------------------------------------------------------
@@ -84,6 +94,7 @@ class TelegramService {
     const exitRule = side === 'LONG' ? 'SL si precio ≤' : 'SL si precio ≥';
     const lines = [
       `🟡 <b>Cobertura creada</b>`,
+      this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | ${side} | ${hedge.leverage}x`,
       `${entryRule} $${this._fmtPrice(hedge.entryPrice)}`,
       `${exitRule} $${this._fmtPrice(hedge.exitPrice)}`,
@@ -99,6 +110,7 @@ class TelegramService {
     const notional = (parseFloat(hedge.size) * parseFloat(hedge.openPrice)).toFixed(2);
     const lines = [
       `${emoji} <b>${side} activado</b>`,
+      this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | ${hedge.leverage}x isolated`,
       `Precio entrada: $${this._fmtPrice(hedge.openPrice)}`,
       `Tamaño: ${hedge.size} ${hedge.asset} (~$${notional})`,
@@ -112,6 +124,7 @@ class TelegramService {
     const pnl = this._fmtPnl(hedge.openPrice, hedge.closePrice, hedge.size, isShort);
     const lines = [
       `✅ <b>Cobertura completada</b>`,
+      this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b>`,
       `Apertura: $${this._fmtPrice(hedge.openPrice)}`,
       `Cierre:   $${this._fmtPrice(hedge.closePrice)}`,
@@ -124,6 +137,7 @@ class TelegramService {
   notifyHedgeCancelled(hedge) {
     const lines = [
       `🚫 <b>Cobertura cancelada</b> #${hedge.id}`,
+      this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b>`,
       hedge.label ? `Etiqueta: ${hedge.label}` : null,
     ];
@@ -133,6 +147,7 @@ class TelegramService {
   notifyHedgeError(hedge, err) {
     const lines = [
       `❌ <b>Error en cobertura</b> #${hedge.id}`,
+      this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | Estado: ${hedge.status}`,
       `Error: ${err.message}`,
       hedge.label ? `Etiqueta: ${hedge.label}` : null,
@@ -144,11 +159,12 @@ class TelegramService {
   // Trading manual
   // ------------------------------------------------------------------
 
-  notifyTradeOpen({ asset, side, size, leverage, marginMode, orderPrice }) {
+  notifyTradeOpen({ account, asset, side, size, leverage, marginMode, orderPrice }) {
     const emoji   = side === 'long' ? '📈' : '📉';
     const notional = (parseFloat(size) * parseFloat(orderPrice)).toFixed(2);
     const lines = [
       `${emoji} <b>Posicion abierta</b>`,
+      this._fmtAccount(account),
       `Activo: <b>${asset}</b> | ${side.toUpperCase()} | ${leverage}x | ${marginMode}`,
       `Precio: $${this._fmtPrice(orderPrice)}`,
       `Tamano: ${size} ${asset} (~$${notional})`,
@@ -156,10 +172,11 @@ class TelegramService {
     return this.send(lines.join('\n'));
   }
 
-  notifyTradeClose({ asset, closedSide, closedSize, closePrice }) {
+  notifyTradeClose({ account, asset, closedSide, closedSize, closePrice }) {
     const emoji = closedSide === 'long' ? '📉' : '📈';
     const lines = [
       `${emoji} <b>Posicion cerrada</b>`,
+      this._fmtAccount(account),
       `Activo: <b>${asset}</b> | ${closedSide.toUpperCase()}`,
       `Precio cierre: $${this._fmtPrice(closePrice)}`,
       `Tamano: ${closedSize} ${asset}`,

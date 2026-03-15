@@ -6,6 +6,7 @@ const logger = require('../services/logger.service');
 
 async function bootstrapInfra(httpServer) {
   await db.ensureConnection();
+  await db.initSchema();
 
   const wss = createWsServer(httpServer);
 

@@ -45,6 +45,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.accountSelector {
+  max-width: 460px;
+}
+
 /* ── Account strip ─────────────────────────────────────────────── */
 .accountStrip {
   display: flex;
@@ -54,6 +58,26 @@
   border: 1px solid #2a2d35;
   border-radius: 8px;
   padding: 8px 14px;
+}
+
+.accountIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 180px;
+}
+
+.accountIdentityLabel {
+  font-size: 0.68rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.accountIdentityValue {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #cbd5e1;
 }
 
 .accountItem {

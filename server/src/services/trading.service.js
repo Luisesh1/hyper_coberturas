@@ -10,6 +10,7 @@
 
 const config = require('../config');
 const { placePositionProtection } = require('./protection.service');
+const balanceCacheService = require('./balance-cache.service');
 const { formatPrice, formatSize } = require('../utils/format');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
@@ -17,10 +18,14 @@ const MARKET_ORDER_SLIPPAGE = 0.002; // 0.2%
 
 class TradingService {
   /**
+   * @param {number} userId
+   * @param {{ id: number, alias: string, address: string, label: string, shortAddress: string }} account
    * @param {import('./hyperliquid.service')} hlService
    * @param {import('./telegram.service')} tgService
    */
-  constructor(hlService, tgService) {
+  constructor(userId, account, hlService, tgService) {
+    this.userId = userId;
+    this.account = account;
     this.hl = hlService;
     this.tg = tgService;
   }
@@ -74,6 +79,7 @@ class TradingService {
     const openResult = {
       success: true,
       action: 'open',
+      account: this.account,
       asset: assetName,
       side,
       size,
@@ -83,6 +89,7 @@ class TradingService {
       result,
     };
     this.tg.notifyTradeOpen(openResult);
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
     return openResult;
   }
 
@@ -132,6 +139,7 @@ class TradingService {
     const closeResult = {
       success: true,
       action: 'close',
+      account: this.account,
       asset: assetName,
       closedSide: isLong ? 'long' : 'short',
       closedSize: closeSize,
@@ -139,41 +147,34 @@ class TradingService {
       result,
     };
     this.tg.notifyTradeClose(closeResult);
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
     return closeResult;
   }
 
-  async getAccountState() {
-    const state = await this.hl.getClearinghouseState();
-    const marginSummary = state.marginSummary || {};
-    const positions = (state.assetPositions || [])
-      .filter((p) => parseFloat(p.position?.szi || 0) !== 0)
-      .map((p) => ({
-        asset: p.position.coin,
-        size: p.position.szi,
-        entryPrice: p.position.entryPx,
-        leverage: p.position.leverage,
-        unrealizedPnl: p.position.unrealizedPnl,
-        returnOnEquity: p.position.returnOnEquity,
-        liquidationPrice: p.position.liquidationPx,
-        marginUsed: p.position.marginUsed,
-        side: parseFloat(p.position.szi) > 0 ? 'long' : 'short',
-      }));
-
+  async getAccountState({ force = false } = {}) {
+    const state = await balanceCacheService.getSnapshot(this.userId, this.account.id, { force });
     return {
-      accountValue: marginSummary.accountValue,
-      totalMarginUsed: marginSummary.totalMarginUsed,
-      totalNtlPos: marginSummary.totalNtlPos,
+      account: this.account,
+      accountValue: state.accountValue,
+      totalMarginUsed: state.totalMarginUsed,
+      totalNtlPos: state.totalNtlPos,
       withdrawable: state.withdrawable,
-      positions,
+      positions: state.positions,
+      lastUpdatedAt: state.lastUpdatedAt,
     };
   }
 
-  async getOpenOrders() {
-    return this.hl.getOpenOrders();
+  async getOpenOrders({ force = false } = {}) {
+    const state = await balanceCacheService.getSnapshot(this.userId, this.account.id, { force });
+    return {
+      account: this.account,
+      orders: state.openOrders,
+      lastUpdatedAt: state.lastUpdatedAt,
+    };
   }
 
   async setSLTP({ asset, side, size, slPrice, tpPrice }) {
-    return placePositionProtection({
+    const result = await placePositionProtection({
       hl: this.hl,
       asset,
       side,
@@ -181,12 +182,18 @@ class TradingService {
       slPrice,
       tpPrice,
     });
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
+    return {
+      account: this.account,
+      result,
+    };
   }
 
   async cancelOrder(asset, orderId) {
     const assetIndex = await this.hl.getAssetIndex(asset);
     const result = await this.hl.cancelOrder(assetIndex, orderId);
-    return { success: true, result };
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
+    return { success: true, account: this.account, result };
   }
 }
 

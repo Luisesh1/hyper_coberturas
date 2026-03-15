@@ -14,6 +14,8 @@ const { Router } = require('express');
 const tgRegistry      = require('../services/telegram.registry');
 const hlRegistry      = require('../services/hyperliquid.registry');
 const hedgeRegistry   = require('../services/hedge.registry');
+const balanceCacheService = require('../services/balance-cache.service');
+const hyperliquidAccountsService = require('../services/hyperliquid-accounts.service');
 const settingsService = require('../services/settings.service');
 const uniswapService  = require('../services/uniswap.service');
 const { authenticate } = require('../middleware/auth.middleware');
@@ -36,6 +38,7 @@ router.get('/', async (req, res, next) => {
     const userId = req.user.userId;
     const tg     = await settingsService.getTelegram(userId);
     const wallet = await settingsService.getWallet(userId);
+    const accounts = await hyperliquidAccountsService.listAccounts(userId);
     res.json({
       success: true,
       data: {
@@ -45,11 +48,17 @@ router.get('/', async (req, res, next) => {
           enabled: !!(tg.token && tg.chatId),
         },
         wallet: {
+          id: wallet.id || null,
+          alias: wallet.alias || '',
           address:       wallet.address || '',
-          hasPrivateKey: !!wallet.privateKey,
+          hasPrivateKey: !!wallet.hasPrivateKey,
         },
         etherscan: {
           hasApiKey: !!(await settingsService.getEtherscan(userId)).apiKey,
+        },
+        hyperliquidAccounts: {
+          count: accounts.length,
+          hasDefault: accounts.some((account) => account.isDefault),
         },
       },
     });
@@ -93,7 +102,13 @@ router.get('/wallet', async (req, res, next) => {
     const wallet = await settingsService.getWallet(userId);
     res.json({
       success: true,
-      data: { address: wallet.address || '', hasPrivateKey: !!wallet.privateKey },
+      data: {
+        id: wallet.id || null,
+        alias: wallet.alias || '',
+        address: wallet.address || '',
+        hasPrivateKey: !!wallet.hasPrivateKey,
+        isDefault: true,
+      },
     });
   } catch (err) {
     next(err);
@@ -103,19 +118,123 @@ router.get('/wallet', async (req, res, next) => {
 router.put('/wallet', async (req, res, next) => {
   try {
     const userId = req.user.userId;
-    const { privateKey, address } = req.body;
+    const { privateKey, address, alias } = req.body;
     if (!privateKey || !address) {
       throw new ValidationError('privateKey y address son requeridos');
     }
-    await settingsService.setWallet(userId, {
+    const account = await settingsService.setWallet(userId, {
       privateKey: privateKey.trim(),
       address: address.trim(),
+      alias: alias?.trim() || 'Cuenta principal',
     });
-    await hlRegistry.reload(userId);
-    if (hedgeRegistry.get(userId)) {
-      await hedgeRegistry.reload(userId);
+    await hlRegistry.reload(userId, account.id);
+    if (hedgeRegistry.get(userId, account.id)) {
+      await hedgeRegistry.reload(userId, account.id);
     }
-    res.json({ success: true, data: { address: address.trim() } });
+    balanceCacheService.invalidateAccount(userId, account.id);
+    res.json({
+      success: true,
+      data: { id: account.id, alias: account.alias, address: account.address },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/hyperliquid-accounts', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const refreshAccountId = req.query.refreshAccountId ? Number(req.query.refreshAccountId) : null;
+    const accounts = await hyperliquidAccountsService.listAccounts(userId);
+    const enriched = await balanceCacheService.enrichAccounts(userId, accounts, { forceAccountId: refreshAccountId });
+    res.json({ success: true, data: enriched });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/hyperliquid-accounts/:id/summary', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const accountId = Number(req.params.id);
+    const account = await hyperliquidAccountsService.getAccount(userId, accountId);
+    const [balance] = await Promise.all([
+      balanceCacheService.getBalance(userId, accountId, { force: req.query.refresh === '1' }),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        ...account,
+        balanceUsd: balance.balanceUsd,
+        lastBalanceUpdatedAt: balance.lastUpdatedAt,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/hyperliquid-accounts', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const { alias, address, privateKey, isDefault } = req.body;
+    const account = await hyperliquidAccountsService.createAccount(userId, {
+      alias,
+      address,
+      privateKey,
+      isDefault,
+    });
+    balanceCacheService.invalidateUser(userId);
+    await hlRegistry.reload(userId, account.id).catch(() => {});
+    res.status(201).json({ success: true, data: account });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/hyperliquid-accounts/:id', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const accountId = Number(req.params.id);
+    const { alias, address, privateKey, isDefault } = req.body;
+    const account = await hyperliquidAccountsService.updateAccount(userId, accountId, {
+      alias,
+      address,
+      privateKey,
+      isDefault,
+    });
+    balanceCacheService.invalidateAccount(userId, accountId);
+    await hlRegistry.reload(userId, accountId);
+    if (hedgeRegistry.get(userId, accountId)) {
+      await hedgeRegistry.reload(userId, accountId);
+    }
+    res.json({ success: true, data: account });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/hyperliquid-accounts/:id/default', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const accountId = Number(req.params.id);
+    const account = await hyperliquidAccountsService.setDefaultAccount(userId, accountId);
+    balanceCacheService.invalidateUser(userId);
+    res.json({ success: true, data: account });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/hyperliquid-accounts/:id', async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const accountId = Number(req.params.id);
+    const account = await hyperliquidAccountsService.deleteAccount(userId, accountId);
+    balanceCacheService.invalidateAccount(userId, accountId);
+    hlRegistry.destroy(userId, accountId);
+    hedgeRegistry.destroy(userId, accountId);
+    res.json({ success: true, data: account });
   } catch (err) {
     next(err);
   }

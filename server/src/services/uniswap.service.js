@@ -30,6 +30,9 @@ const V3_POOL_ABI = [
   'function liquidity() view returns (uint128)',
   'function tickSpacing() view returns (int24)',
   'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
+  'function feeGrowthGlobal0X128() view returns (uint256)',
+  'function feeGrowthGlobal1X128() view returns (uint256)',
+  'function ticks(int24 tick) view returns (uint128 liquidityGross, int128 liquidityNet, uint256 feeGrowthOutside0X128, uint256 feeGrowthOutside1X128, int56 tickCumulativeOutside, uint160 secondsPerLiquidityOutsideX128, uint32 secondsOutside, bool initialized)',
 ];
 
 const V3_POSITION_MANAGER_ABI = [
@@ -41,11 +44,14 @@ const V3_POSITION_MANAGER_ABI = [
 const V4_STATE_VIEW_ABI = [
   'function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)',
   'function getLiquidity(bytes32) view returns (uint128)',
+  'function getPositionInfo(bytes32 poolId, bytes32 positionId) view returns (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128)',
+  'function getFeeGrowthInside(bytes32 poolId, int24 tickLower, int24 tickUpper) view returns (uint256 feeGrowthInside0X128, uint256 feeGrowthInside1X128)',
 ];
 
 const V4_POSITION_MANAGER_ABI = [
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks), uint256)',
+  'function getPositionLiquidity(uint256 tokenId) view returns (uint128 liquidity)',
 ];
 
 const EVENT_ABIS = {
@@ -74,7 +80,9 @@ const TXLIST_PAGE_SIZE = 1000;
 const MAX_TXLIST_PAGES = 5;
 const NFT_PAGE_SIZE = 100;
 const MAX_NFT_PAGES = 5;
-const HISTORICAL_PRICE_BLOCK_OFFSETS = [0, 50, 250, 1000, 5000];
+const HISTORICAL_PRICE_BLOCK_OFFSETS = [0, 50, 250, 1000, 5000, 50000, 500000];
+const Q96 = 2 ** 96;
+const Q128 = 2n ** 128n;
 
 const providerCache = new Map();
 const tokenCache = new Map();
@@ -268,6 +276,16 @@ function tickToPrice(tick, token0Decimals, token1Decimals) {
   return Math.pow(1.0001, Number(tick)) * Math.pow(10, decimalDelta);
 }
 
+function tickToRawSqrtRatio(tick) {
+  return Math.pow(1.0001, Number(tick) / 2);
+}
+
+function sqrtPriceX96ToFloat(sqrtPriceX96) {
+  const numeric = Number(sqrtPriceX96);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return numeric / Q96;
+}
+
 function isStableSymbol(symbol) {
   return STABLE_SYMBOLS.has(String(symbol || '').toUpperCase());
 }
@@ -319,6 +337,7 @@ async function resolveHistoricalSpotPrice({ blockNumber, fetchAtBlock }) {
     return {
       price: null,
       tick: null,
+      sqrtPriceX96: null,
       blockNumber: null,
       accuracy: 'unavailable',
     };
@@ -332,6 +351,7 @@ async function resolveHistoricalSpotPrice({ blockNumber, fetchAtBlock }) {
         return {
           price: compactNumber(value.price, 6),
           tick: Number(value.tick),
+          sqrtPriceX96: value.sqrtPriceX96 != null ? String(value.sqrtPriceX96) : null,
           blockNumber: targetBlock,
           accuracy: offset === 0 ? 'exact' : 'approximate',
         };
@@ -341,9 +361,26 @@ async function resolveHistoricalSpotPrice({ blockNumber, fetchAtBlock }) {
     }
   }
 
+  // Ultimo recurso: usar el bloque latest (el RPC siempre tiene el estado actual)
+  try {
+    const value = await fetchAtBlock('latest');
+    if (value && Number.isFinite(Number(value.tick)) && Number.isFinite(Number(value.price))) {
+      return {
+        price: compactNumber(value.price, 6),
+        tick: Number(value.tick),
+        sqrtPriceX96: value.sqrtPriceX96 != null ? String(value.sqrtPriceX96) : null,
+        blockNumber: null,
+        accuracy: 'approximate',
+      };
+    }
+  } catch {
+    // ignorar
+  }
+
   return {
     price: null,
     tick: null,
+    sqrtPriceX96: null,
     blockNumber: null,
     accuracy: 'unavailable',
   };
@@ -378,6 +415,228 @@ function computeRangeVisual(rangeLowerPrice, rangeUpperPrice, priceAtOpen, price
     currentMarkerPct: Number.isFinite(current)
       ? Math.max(0, Math.min(100, ((current - min) / (max - min)) * 100))
       : null,
+  };
+}
+
+function liquidityToTokenAmounts({
+  liquidity,
+  sqrtPriceX96,
+  tickCurrent,
+  tickLower,
+  tickUpper,
+  token0Decimals,
+  token1Decimals,
+}) {
+  const liquidityFloat = Number(liquidity);
+  const sqrtCurrent = sqrtPriceX96 != null
+    ? sqrtPriceX96ToFloat(sqrtPriceX96)
+    : tickCurrent != null
+      ? tickToRawSqrtRatio(tickCurrent)
+      : null;
+  const sqrtLower = tickToRawSqrtRatio(tickLower);
+  const sqrtUpper = tickToRawSqrtRatio(tickUpper);
+
+  if (
+    !Number.isFinite(liquidityFloat) ||
+    liquidityFloat <= 0 ||
+    !Number.isFinite(sqrtCurrent) ||
+    !Number.isFinite(sqrtLower) ||
+    !Number.isFinite(sqrtUpper) ||
+    sqrtLower <= 0 ||
+    sqrtUpper <= 0
+  ) {
+    return {
+      amount0: null,
+      amount1: null,
+    };
+  }
+
+  const lower = Math.min(sqrtLower, sqrtUpper);
+  const upper = Math.max(sqrtLower, sqrtUpper);
+  let amount0Raw = 0;
+  let amount1Raw = 0;
+
+  if (sqrtCurrent <= lower) {
+    amount0Raw = liquidityFloat * ((upper - lower) / (lower * upper));
+  } else if (sqrtCurrent < upper) {
+    amount0Raw = liquidityFloat * ((upper - sqrtCurrent) / (sqrtCurrent * upper));
+    amount1Raw = liquidityFloat * (sqrtCurrent - lower);
+  } else {
+    amount1Raw = liquidityFloat * (upper - lower);
+  }
+
+  return {
+    amount0: compactNumber(amount0Raw / (10 ** token0Decimals), 8),
+    amount1: compactNumber(amount1Raw / (10 ** token1Decimals), 8),
+  };
+}
+
+function estimateUsdValueFromPair(token0, token1, amount0, amount1, priceQuotePerBase) {
+  const a0 = Number(amount0);
+  const a1 = Number(amount1);
+  const price = Number(priceQuotePerBase);
+
+  if (!Number.isFinite(a0) || !Number.isFinite(a1)) return null;
+
+  const stable0 = isStableSymbol(token0?.symbol);
+  const stable1 = isStableSymbol(token1?.symbol);
+
+  if (stable0 && stable1) return compactNumber(a0 + a1, 2);
+  if (stable1 && Number.isFinite(price) && price > 0) {
+    return compactNumber(a1 + (a0 * price), 2);
+  }
+  if (stable0 && Number.isFinite(price) && price > 0) {
+    return compactNumber(a0 + (a1 / price), 2);
+  }
+  return null;
+}
+
+function computeDistanceToRange(rangeLowerPrice, rangeUpperPrice, priceCurrent) {
+  const lower = Number(rangeLowerPrice);
+  const upper = Number(rangeUpperPrice);
+  const current = Number(priceCurrent);
+
+  if (!Number.isFinite(lower) || !Number.isFinite(upper) || !Number.isFinite(current) || lower === upper) {
+    return {
+      distanceToRangePct: null,
+      distanceToRangePrice: null,
+    };
+  }
+
+  const min = Math.min(lower, upper);
+  const max = Math.max(lower, upper);
+
+  if (current >= min && current <= max) {
+    return {
+      distanceToRangePct: 0,
+      distanceToRangePrice: 0,
+    };
+  }
+
+  if (current < min) {
+    const delta = min - current;
+    return {
+      distanceToRangePrice: compactNumber(delta, 6),
+      distanceToRangePct: current > 0 ? compactNumber((delta / min) * 100, 4) : null,
+    };
+  }
+
+  const delta = current - max;
+  return {
+    distanceToRangePrice: compactNumber(delta, 6),
+    distanceToRangePct: compactNumber((delta / max) * 100, 4),
+  };
+}
+
+function computePnlMetrics(initialValueUsd, currentValueUsd, unclaimedFeesUsd) {
+  const initial = Number(initialValueUsd);
+  const current = Number(currentValueUsd);
+  const fees = Number(unclaimedFeesUsd);
+
+  if (!Number.isFinite(initial) || !Number.isFinite(current) || !Number.isFinite(fees) || initial <= 0) {
+    return {
+      pnlTotalUsd: null,
+      pnlTotalPct: null,
+      yieldPct: null,
+    };
+  }
+
+  const pnlTotalUsd = compactNumber(current + fees - initial, 2);
+  const pnlTotalPct = compactNumber((pnlTotalUsd / initial) * 100, 4);
+
+  return {
+    pnlTotalUsd,
+    pnlTotalPct,
+    yieldPct: pnlTotalPct,
+  };
+}
+
+/**
+ * Calcula las fees no reclamadas de una posicion V3 usando fee growth del pool.
+ * tokensOwed del position manager solo contiene fees pre-acumuladas (post-collect),
+ * NO las fees pendientes reales. Para obtener las fees reales hay que calcular
+ * feeGrowthInside a partir de los ticks y el estado global del pool.
+ */
+function computeV3UnclaimedFees({
+  liquidity,
+  tickCurrent,
+  tickLower,
+  tickUpper,
+  feeGrowthGlobal0X128,
+  feeGrowthGlobal1X128,
+  feeGrowthOutsideLower0X128,
+  feeGrowthOutsideLower1X128,
+  feeGrowthOutsideUpper0X128,
+  feeGrowthOutsideUpper1X128,
+  feeGrowthInside0LastX128,
+  feeGrowthInside1LastX128,
+  tokensOwed0,
+  tokensOwed1,
+}) {
+  const MAX_UINT256 = (1n << 256n) - 1n;
+  const liq = BigInt(liquidity || 0);
+  const tick = Number(tickCurrent);
+  const tl = Number(tickLower);
+  const tu = Number(tickUpper);
+
+  if (liq <= 0n) {
+    return { fees0: BigInt(tokensOwed0 || 0), fees1: BigInt(tokensOwed1 || 0) };
+  }
+
+  const fg0 = BigInt(feeGrowthGlobal0X128 || 0);
+  const fg1 = BigInt(feeGrowthGlobal1X128 || 0);
+  const foLow0 = BigInt(feeGrowthOutsideLower0X128 || 0);
+  const foLow1 = BigInt(feeGrowthOutsideLower1X128 || 0);
+  const foUp0 = BigInt(feeGrowthOutsideUpper0X128 || 0);
+  const foUp1 = BigInt(feeGrowthOutsideUpper1X128 || 0);
+  const fgLast0 = BigInt(feeGrowthInside0LastX128 || 0);
+  const fgLast1 = BigInt(feeGrowthInside1LastX128 || 0);
+
+  // feeGrowthBelow = tick >= tickLower ? feeGrowthOutside : feeGrowthGlobal - feeGrowthOutside
+  const fBelow0 = tick >= tl ? foLow0 : (fg0 - foLow0) & MAX_UINT256;
+  const fBelow1 = tick >= tl ? foLow1 : (fg1 - foLow1) & MAX_UINT256;
+  // feeGrowthAbove = tick < tickUpper ? feeGrowthOutside : feeGrowthGlobal - feeGrowthOutside
+  const fAbove0 = tick < tu ? foUp0 : (fg0 - foUp0) & MAX_UINT256;
+  const fAbove1 = tick < tu ? foUp1 : (fg1 - foUp1) & MAX_UINT256;
+
+  const fInside0 = (fg0 - fBelow0 - fAbove0) & MAX_UINT256;
+  const fInside1 = (fg1 - fBelow1 - fAbove1) & MAX_UINT256;
+
+  const delta0 = (fInside0 - fgLast0) & MAX_UINT256;
+  const delta1 = (fInside1 - fgLast1) & MAX_UINT256;
+
+  return {
+    fees0: (delta0 * liq) / Q128 + BigInt(tokensOwed0 || 0),
+    fees1: (delta1 * liq) / Q128 + BigInt(tokensOwed1 || 0),
+  };
+}
+
+function computeV4UnclaimedFees({
+  liquidity,
+  feeGrowthInside0LastX128,
+  feeGrowthInside1LastX128,
+  feeGrowthInside0X128,
+  feeGrowthInside1X128,
+}) {
+  const liq = BigInt(liquidity || 0);
+  const growthLast0 = BigInt(feeGrowthInside0LastX128 || 0);
+  const growthLast1 = BigInt(feeGrowthInside1LastX128 || 0);
+  const growth0 = BigInt(feeGrowthInside0X128 || 0);
+  const growth1 = BigInt(feeGrowthInside1X128 || 0);
+
+  if (liq <= 0n) {
+    return {
+      fees0: 0n,
+      fees1: 0n,
+    };
+  }
+
+  const delta0 = growth0 >= growthLast0 ? (growth0 - growthLast0) : 0n;
+  const delta1 = growth1 >= growthLast1 ? (growth1 - growthLast1) : 0n;
+
+  return {
+    fees0: (delta0 * liq) / Q128,
+    fees1: (delta1 * liq) / Q128,
   };
 }
 
@@ -904,11 +1163,15 @@ async function enrichV3Record(provider, networkConfig, record) {
   const token0Contract = token0.isNative ? null : new ethers.Contract(token0.address, ERC20_ABI, provider);
   const token1Contract = token1.isNative ? null : new ethers.Contract(token1.address, ERC20_ABI, provider);
 
-  const [liquidityRaw, slot0, balance0Raw, balance1Raw] = await Promise.all([
+  const [liquidityRaw, slot0, balance0Raw, balance1Raw, fg0Raw, fg1Raw, tickLowerInfo, tickUpperInfo] = await Promise.all([
     pool.liquidity(),
     pool.slot0(),
     token0.isNative ? provider.getBalance(record.poolAddress) : token0Contract.balanceOf(record.poolAddress),
     token1.isNative ? provider.getBalance(record.poolAddress) : token1Contract.balanceOf(record.poolAddress),
+    pool.feeGrowthGlobal0X128().catch(() => 0n),
+    pool.feeGrowthGlobal1X128().catch(() => 0n),
+    pool.ticks(record.tickLower).catch(() => null),
+    pool.ticks(record.tickUpper).catch(() => null),
   ]);
 
   const reserve0 = formatTokenAmount(balance0Raw, token0.decimals);
@@ -927,6 +1190,7 @@ async function enrichV3Record(provider, networkConfig, record) {
       return {
         tick: Number(historicalSlot0.tick),
         price: tickToPrice(historicalSlot0.tick, token0.decimals, token1.decimals),
+        sqrtPriceX96: historicalSlot0.sqrtPriceX96,
       };
     },
   });
@@ -942,6 +1206,94 @@ async function enrichV3Record(provider, networkConfig, record) {
     Number(slot0.tick) >= Number(record.tickLower) &&
     Number(slot0.tick) <= Number(record.tickUpper);
   const lpMeta = buildLpMeta(record);
+  const currentAmounts = liquidityToTokenAmounts({
+    liquidity: positionLiquidity,
+    sqrtPriceX96: slot0.sqrtPriceX96,
+    tickLower: record.tickLower,
+    tickUpper: record.tickUpper,
+    token0Decimals: token0.decimals,
+    token1Decimals: token1.decimals,
+  });
+  const initialAmounts = historicalPrice.tick != null
+    ? liquidityToTokenAmounts({
+      liquidity: positionLiquidity,
+      sqrtPriceX96: historicalPrice.sqrtPriceX96,
+      tickCurrent: historicalPrice.tick,
+      tickLower: record.tickLower,
+      tickUpper: record.tickUpper,
+      token0Decimals: token0.decimals,
+      token1Decimals: token1.decimals,
+    })
+    : { amount0: null, amount1: null };
+  // Calcular fees reales desde fee growth del pool (tokensOwed solo tiene fees pre-snapshotted)
+  let unclaimedFees0, unclaimedFees1;
+  if (tickLowerInfo && tickUpperInfo) {
+    const realFees = computeV3UnclaimedFees({
+      liquidity: positionLiquidity,
+      tickCurrent: Number(slot0.tick),
+      tickLower: record.tickLower,
+      tickUpper: record.tickUpper,
+      feeGrowthGlobal0X128: String(fg0Raw),
+      feeGrowthGlobal1X128: String(fg1Raw),
+      feeGrowthOutsideLower0X128: String(tickLowerInfo.feeGrowthOutside0X128),
+      feeGrowthOutsideLower1X128: String(tickLowerInfo.feeGrowthOutside1X128),
+      feeGrowthOutsideUpper0X128: String(tickUpperInfo.feeGrowthOutside0X128),
+      feeGrowthOutsideUpper1X128: String(tickUpperInfo.feeGrowthOutside1X128),
+      feeGrowthInside0LastX128: record.feeGrowthInside0LastX128,
+      feeGrowthInside1LastX128: record.feeGrowthInside1LastX128,
+      tokensOwed0: record.tokensOwed0,
+      tokensOwed1: record.tokensOwed1,
+    });
+    unclaimedFees0 = compactNumber(formatTokenAmount(realFees.fees0, token0.decimals), 8);
+    unclaimedFees1 = compactNumber(formatTokenAmount(realFees.fees1, token1.decimals), 8);
+  } else {
+    // Fallback a tokensOwed si no se pudieron leer los ticks
+    unclaimedFees0 = compactNumber(formatTokenAmount(record.tokensOwed0 || '0', token0.decimals), 8);
+    unclaimedFees1 = compactNumber(formatTokenAmount(record.tokensOwed1 || '0', token1.decimals), 8);
+  }
+  const currentValueUsd = estimateUsdValueFromPair(
+    token0,
+    token1,
+    currentAmounts.amount0,
+    currentAmounts.amount1,
+    priceCurrent
+  );
+  const initialValueUsd = historicalPrice.price != null
+    ? estimateUsdValueFromPair(
+      token0,
+      token1,
+      initialAmounts.amount0,
+      initialAmounts.amount1,
+      historicalPrice.price
+    )
+    : null;
+  const unclaimedFeesUsd = estimateUsdValueFromPair(
+    token0,
+    token1,
+    unclaimedFees0,
+    unclaimedFees1,
+    priceCurrent
+  );
+  const pnlMetrics = computePnlMetrics(initialValueUsd, currentValueUsd, unclaimedFeesUsd);
+  const distanceMetrics = computeDistanceToRange(rangeLowerPrice, rangeUpperPrice, priceCurrent);
+  let valuationAccuracy = historicalPrice.accuracy;
+  const valuationWarnings = [
+    'P&L best-effort: no reconstruye aumentos, reducciones o collects posteriores al mint.',
+  ];
+
+  if (historicalPrice.accuracy === 'approximate') {
+    valuationWarnings.push('El precio de apertura usa el primer bloque histórico disponible del RPC.');
+  }
+  if (historicalPrice.accuracy === 'unavailable') {
+    valuationWarnings.push('No se pudo reconstruir el precio al abrir; el P&L total puede no estar disponible.');
+  }
+  if (currentValueUsd == null || unclaimedFeesUsd == null) {
+    valuationAccuracy = valuationAccuracy === 'exact' ? 'approximate' : valuationAccuracy;
+    valuationWarnings.push('La valuación USD usa una heurística best-effort según el par del LP.');
+  }
+  if (initialValueUsd == null) {
+    valuationAccuracy = 'unavailable';
+  }
 
   return {
     ...record,
@@ -970,6 +1322,22 @@ async function enrichV3Record(provider, networkConfig, record) {
     priceQuoteSymbol: token1.symbol,
     priceBaseSymbol: token0.symbol,
     tvlApproxUsd,
+    positionAmount0: currentAmounts.amount0,
+    positionAmount1: currentAmounts.amount1,
+    initialAmount0: initialAmounts.amount0,
+    initialAmount1: initialAmounts.amount1,
+    currentValueUsd,
+    initialValueUsd,
+    unclaimedFees0,
+    unclaimedFees1,
+    unclaimedFeesUsd,
+    pnlTotalUsd: pnlMetrics.pnlTotalUsd,
+    pnlTotalPct: pnlMetrics.pnlTotalPct,
+    yieldPct: pnlMetrics.yieldPct,
+    distanceToRangePct: distanceMetrics.distanceToRangePct,
+    distanceToRangePrice: distanceMetrics.distanceToRangePrice,
+    valuationAccuracy,
+    valuationWarnings: buildWarningsWithDedup(valuationWarnings),
     liquiditySummary: buildLiquiditySummary(active ? 'active' : 'empty', [
       `Posición #${record.identifier}`,
       `Liquidity: ${positionLiquidity}`,
@@ -994,15 +1362,27 @@ async function enrichV4Record(provider, networkConfig, record) {
     V4_STATE_VIEW_ABI,
     provider
   );
+  const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
+  const positionManager = new ethers.Contract(positionManagerAddress, V4_POSITION_MANAGER_ABI, provider);
   const poolId = record.poolId || record.identifier;
+  const tokenId = BigInt(record.identifier);
+  const salt = ethers.zeroPadValue(ethers.toBeHex(tokenId), 32);
+  const positionId = ethers.solidityPackedKeccak256(
+    ['address', 'int24', 'int24', 'bytes32'],
+    [positionManagerAddress, Number(record.tickLower), Number(record.tickUpper), salt]
+  );
 
-  const [slot0, liquidityRaw] = await Promise.all([
+  const [slot0, poolLiquidityRaw, positionLiquidityRaw, positionInfo, feeGrowthInside] = await Promise.all([
     stateView.getSlot0(poolId),
     stateView.getLiquidity(poolId),
+    positionManager.getPositionLiquidity(tokenId),
+    stateView.getPositionInfo(poolId, positionId),
+    stateView.getFeeGrowthInside(poolId, Number(record.tickLower), Number(record.tickUpper)),
   ]);
 
-  const liquidity = String(liquidityRaw);
-  const active = liquidityRaw > 0n;
+  const liquidity = String(positionLiquidityRaw);
+  const poolLiquidity = String(poolLiquidityRaw);
+  const active = positionLiquidityRaw > 0n;
   const priceCurrent = compactNumber(tickToPrice(slot0.tick, token0.decimals, token1.decimals), 6);
   const rangeLowerPrice = compactNumber(tickToPrice(record.tickLower, token0.decimals, token1.decimals), 6);
   const rangeUpperPrice = compactNumber(tickToPrice(record.tickUpper, token0.decimals, token1.decimals), 6);
@@ -1013,6 +1393,7 @@ async function enrichV4Record(provider, networkConfig, record) {
       return {
         tick: Number(historicalSlot0.tick),
         price: tickToPrice(historicalSlot0.tick, token0.decimals, token1.decimals),
+        sqrtPriceX96: historicalSlot0.sqrtPriceX96,
       };
     },
   });
@@ -1028,6 +1409,77 @@ async function enrichV4Record(provider, networkConfig, record) {
     Number(slot0.tick) >= Number(record.tickLower) &&
     Number(slot0.tick) <= Number(record.tickUpper);
   const lpMeta = buildLpMeta(record);
+  const currentAmounts = liquidityToTokenAmounts({
+    liquidity,
+    sqrtPriceX96: slot0.sqrtPriceX96,
+    tickLower: record.tickLower,
+    tickUpper: record.tickUpper,
+    token0Decimals: token0.decimals,
+    token1Decimals: token1.decimals,
+  });
+  const initialAmounts = historicalPrice.tick != null
+    ? liquidityToTokenAmounts({
+      liquidity,
+      sqrtPriceX96: historicalPrice.sqrtPriceX96,
+      tickCurrent: historicalPrice.tick,
+      tickLower: record.tickLower,
+      tickUpper: record.tickUpper,
+      token0Decimals: token0.decimals,
+      token1Decimals: token1.decimals,
+    })
+    : { amount0: null, amount1: null };
+  const unclaimedFeesRaw = computeV4UnclaimedFees({
+    liquidity: positionInfo.liquidity,
+    feeGrowthInside0LastX128: positionInfo.feeGrowthInside0LastX128,
+    feeGrowthInside1LastX128: positionInfo.feeGrowthInside1LastX128,
+    feeGrowthInside0X128: feeGrowthInside.feeGrowthInside0X128,
+    feeGrowthInside1X128: feeGrowthInside.feeGrowthInside1X128,
+  });
+  const unclaimedFees0 = compactNumber(formatTokenAmount(unclaimedFeesRaw.fees0, token0.decimals), 8);
+  const unclaimedFees1 = compactNumber(formatTokenAmount(unclaimedFeesRaw.fees1, token1.decimals), 8);
+  const currentValueUsd = estimateUsdValueFromPair(
+    token0,
+    token1,
+    currentAmounts.amount0,
+    currentAmounts.amount1,
+    priceCurrent
+  );
+  const initialValueUsd = historicalPrice.price != null
+    ? estimateUsdValueFromPair(
+      token0,
+      token1,
+      initialAmounts.amount0,
+      initialAmounts.amount1,
+      historicalPrice.price
+    )
+    : null;
+  const unclaimedFeesUsd = estimateUsdValueFromPair(
+    token0,
+    token1,
+    unclaimedFees0,
+    unclaimedFees1,
+    priceCurrent
+  );
+  const pnlMetrics = computePnlMetrics(initialValueUsd, currentValueUsd, unclaimedFeesUsd);
+  const distanceMetrics = computeDistanceToRange(rangeLowerPrice, rangeUpperPrice, priceCurrent);
+  let valuationAccuracy = historicalPrice.accuracy;
+  const valuationWarnings = [
+    'P&L best-effort: no reconstruye aumentos, reducciones o collects posteriores al mint.',
+  ];
+
+  if (historicalPrice.accuracy === 'approximate') {
+    valuationWarnings.push('El precio de apertura usa el primer bloque histórico disponible del RPC.');
+  }
+  if (historicalPrice.accuracy === 'unavailable') {
+    valuationWarnings.push('No se pudo reconstruir el precio al abrir; el P&L total puede no estar disponible.');
+  }
+  if (currentValueUsd == null || unclaimedFeesUsd == null) {
+    valuationAccuracy = valuationAccuracy === 'exact' ? 'approximate' : valuationAccuracy;
+    valuationWarnings.push('La valuación USD usa una heurística best-effort según el par del LP.');
+  }
+  if (initialValueUsd == null) {
+    valuationAccuracy = 'unavailable';
+  }
 
   return {
     ...record,
@@ -1036,6 +1488,7 @@ async function enrichV4Record(provider, networkConfig, record) {
     poolUrl: null,
     status: active ? 'active' : 'empty',
     liquidity,
+    poolLiquidity,
     totalSupply: null,
     reserve0: null,
     reserve1: null,
@@ -1056,6 +1509,22 @@ async function enrichV4Record(provider, networkConfig, record) {
     priceBaseSymbol: token0.symbol,
     tvlApproxUsd: null,
     poolId,
+    positionAmount0: currentAmounts.amount0,
+    positionAmount1: currentAmounts.amount1,
+    initialAmount0: initialAmounts.amount0,
+    initialAmount1: initialAmounts.amount1,
+    currentValueUsd,
+    initialValueUsd,
+    unclaimedFees0,
+    unclaimedFees1,
+    unclaimedFeesUsd,
+    pnlTotalUsd: pnlMetrics.pnlTotalUsd,
+    pnlTotalPct: pnlMetrics.pnlTotalPct,
+    yieldPct: pnlMetrics.yieldPct,
+    distanceToRangePct: distanceMetrics.distanceToRangePct,
+    distanceToRangePrice: distanceMetrics.distanceToRangePrice,
+    valuationAccuracy,
+    valuationWarnings: buildWarningsWithDedup(valuationWarnings),
     liquiditySummary: buildLiquiditySummary(active ? 'active' : 'empty', [
       `Posición #${record.identifier}`,
       `Liquidity: ${liquidity}`,
@@ -1153,6 +1622,8 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
       tickLower: Number(position.tickLower),
       tickUpper: Number(position.tickUpper),
       positionLiquidity: String(position.liquidity),
+      feeGrowthInside0LastX128: String(position.feeGrowthInside0LastX128),
+      feeGrowthInside1LastX128: String(position.feeGrowthInside1LastX128),
       tokensOwed0: String(position.tokensOwed0),
       tokensOwed1: String(position.tokensOwed1),
     };
@@ -1371,11 +1842,18 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
 module.exports = {
   scanPoolsCreatedByWallet,
   testUserEtherscanKey,
+  computeDistanceToRange,
+  computePnlMetrics,
   getSupportMatrix,
+  liquidityToTokenAmounts,
   SUPPORTED_NETWORKS,
   computeRangeVisual,
+  computeV4UnclaimedFees,
   decodeV4PositionInfo,
+  estimateUsdValueFromPair,
   resolveHistoricalSpotPrice,
+  sqrtPriceX96ToFloat,
+  tickToRawSqrtRatio,
   tickToPrice,
   parseCreationLogs,
   estimateTvlApproxUsd,

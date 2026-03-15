@@ -456,6 +456,27 @@
   letter-spacing: 0.4px;
 }
 
+.accountSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  background: #0f1117;
+}
+
+.accountSummaryTitle {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.accountSummaryValue {
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
 .priceDisplay {
   background: #0f1117;
   border: 1px solid #2a2d35;
@@ -654,6 +675,29 @@
 }
 .submitBtnLong:not(:disabled):hover { background: #15803d; }
 .submitBtnLong:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.filterRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.filterLabel {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.filterSelect {
+  width: 100%;
+  background: #0f1117;
+  border: 1px solid #2a2d35;
+  border-radius: 8px;
+  color: #e2e8f0;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+}
 
 /* ── Tabs Activas / Historial ── */
 .tabBar {
@@ -895,6 +939,11 @@
   width: fit-content;
 }
 
+.accountMeta {
+  font-size: 0.7rem;
+  color: #22c55e;
+}
+
 /* card data separator */
 .cardDivider {
   height: 1px;
@@ -1051,6 +1100,11 @@
   font-size: 0.62rem;
   color: #475569;
   font-style: italic;
+}
+
+.cycleAccount {
+  font-size: 0.62rem;
+  color: #22c55e;
 }
 
 .cyclePrices {

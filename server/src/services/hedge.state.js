@@ -6,9 +6,28 @@ function normalizeStatus(row) {
 }
 
 function rowToHedge(row, cycles = []) {
+  const account = row.hyperliquid_account_id
+    ? {
+        id: row.hyperliquid_account_id,
+        alias: row.account_alias || null,
+        address: row.account_address || null,
+        shortAddress: row.account_address
+          ? `${row.account_address.slice(0, 6)}...${row.account_address.slice(-4)}`
+          : '',
+        label: row.account_alias
+          ? `${row.account_alias} · ${row.account_address.slice(0, 6)}...${row.account_address.slice(-4)}`
+          : (row.account_address
+              ? `${row.account_address.slice(0, 6)}...${row.account_address.slice(-4)}`
+              : ''),
+        isDefault: !!row.account_is_default,
+      }
+    : null;
+
   return {
     id: row.id,
     userId: row.user_id,
+    accountId: row.hyperliquid_account_id || null,
+    account,
     asset: row.asset,
     direction: row.direction || 'short',
     entryPrice: parseFloat(row.entry_price),

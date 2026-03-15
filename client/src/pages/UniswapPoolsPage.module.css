@@ -489,70 +489,248 @@
   font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 }
 
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kpiCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(8, 12, 18, 0.88);
+  border: 1px solid rgba(39, 49, 66, 0.9);
+}
+
+.kpiLabel {
+  color: #64748b;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.kpiValue {
+  color: #e2e8f0;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.kpiPositive {
+  color: #4ade80;
+}
+
+.kpiNegative {
+  color: #f87171;
+}
+
+.kpiNeutral {
+  color: #e2e8f0;
+}
+
+.positionBreakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 10px;
+}
+
+.positionMetric {
+  color: #94a3b8;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.noteRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.noteBadge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.12);
+  border: 1px solid rgba(250, 204, 21, 0.22);
+  color: #fcd34d;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.noteText {
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.noteList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.noteListItem {
+  color: #94a3b8;
+  font-size: 0.76rem;
+}
+
 /* ── Range visualization ───────────────────────────────────────── */
 .rangeCard {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 6px;
+  padding: 14px 16px;
   border-radius: 14px;
   background: rgba(7, 11, 17, 0.72);
   border: 1px solid rgba(39, 49, 66, 0.92);
 }
 
-.rangeHeader,
-.rangeLegend {
+.rangeAlertInline {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(249, 115, 22, 0.12);
+  border: 1px solid rgba(249, 115, 22, 0.24);
+  color: #fdba74;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: 0;
+  vertical-align: middle;
+}
+
+/* ── Price labels row (above track) ────────────────────────────── */
+.rangeLabelsRow {
+  position: relative;
+  height: 40px;
+  margin-bottom: 2px;
+}
+
+.rangeLabelPin {
+  position: absolute;
+  transform: translateX(-50%);
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 2px;
 }
 
-.rangeMetric {
-  color: #cbd5e1;
-  font-size: 0.78rem;
+.rangeLabelPinCurrent .rangeLabelTag {
+  color: #22c55e;
+}
+
+.rangeLabelPinCurrent .rangeLabelValue {
+  color: #22c55e;
+}
+
+.rangeLabelValue {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #f59e0b;
+  white-space: nowrap;
+}
+
+.rangeLabelTag {
+  font-size: 0.62rem;
   font-weight: 700;
+  color: #f59e0b;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
+/* ── Track ─────────────────────────────────────────────────────── */
 .rangeTrack {
   position: relative;
-  height: 18px;
-  border-radius: 999px;
+  height: 24px;
+  border-radius: 12px;
   background: rgba(16, 22, 31, 0.95);
-  border: 1px solid rgba(71, 85, 105, 0.4);
+  border: 1px solid rgba(71, 85, 105, 0.3);
   overflow: visible;
 }
 
 .rangeFill {
   position: absolute;
-  inset: 3px;
-  border-radius: inherit;
-  background: linear-gradient(90deg, rgba(59, 130, 246, 0.28), rgba(125, 211, 252, 0.22));
-  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.12);
+  top: 3px;
+  bottom: 3px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.24), rgba(125, 211, 252, 0.18));
+  border: 1px solid rgba(125, 211, 252, 0.15);
+}
+
+.rangeEdge {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: rgba(125, 211, 252, 0.4);
+  transform: translateX(-50%);
+  border-radius: 1px;
 }
 
 .rangeMarker {
   position: absolute;
   top: 50%;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
   transform: translate(-50%, -50%);
-  border: 2px solid rgba(15, 23, 42, 0.9);
-  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.5);
+  border: 2.5px solid rgba(10, 15, 22, 0.95);
+  z-index: 2;
 }
 
 .rangeMarkerOpen {
   background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
 }
 
 .rangeMarkerCurrent {
   background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
 }
 
 .rangeMarkerCurrentAlert {
   background: #f97316;
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.4);
+}
+
+/* ── Min/Max labels (below track) ──────────────────────────────── */
+.rangeEdgeLabels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.rangeEdgeValue {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #7dd3fc;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+.rangeEdgeCaption {
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ── Legend ─────────────────────────────────────────────────────── */
+.rangeLegend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(39, 49, 66, 0.6);
 }
 
 .rangeLegendItem {
@@ -560,7 +738,7 @@
   align-items: center;
   gap: 6px;
   color: #94a3b8;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   font-weight: 700;
 }
 
@@ -578,14 +756,12 @@
   background: #22c55e;
 }
 
-.rangeAlert {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(249, 115, 22, 0.12);
-  border: 1px solid rgba(249, 115, 22, 0.24);
-  color: #fdba74;
-  font-size: 0.72rem;
-  font-weight: 800;
+.rangeLegendDotRange {
+  width: 16px;
+  height: 8px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.4), rgba(125, 211, 252, 0.3));
+  border: 1px solid rgba(125, 211, 252, 0.2);
 }
 
 /* ── Responsive: tablet ────────────────────────────────────────── */
@@ -615,6 +791,10 @@
 
   .summary,
   .infoGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .kpiGrid {
     grid-template-columns: 1fr;
   }
 

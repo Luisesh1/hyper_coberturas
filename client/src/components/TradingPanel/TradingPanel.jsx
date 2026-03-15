@@ -6,13 +6,30 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTradingContext } from '../../context/TradingContext';
 import { tradingApi } from '../../services/api';
+import { AccountAutocomplete } from '../shared/AccountAutocomplete';
 import { ConfirmDialog } from '../shared/ConfirmDialog';
+import { formatAccountIdentity } from '../../utils/hyperliquidAccounts';
 import styles from './TradingPanel.module.css';
 
 export function TradingPanel({ selectedAsset }) {
-  const { prices, account, isLoadingAccount, isPriceStale, isConnected, openPosition, closePosition, refreshAccount, addNotification } = useTradingContext();
+  const {
+    prices,
+    account,
+    accounts,
+    defaultAccountId,
+    isLoadingAccount,
+    isLoadingAccounts,
+    isPriceStale,
+    isConnected,
+    openPosition,
+    closePosition,
+    refreshAccount,
+    refreshAccountSummary,
+    addNotification,
+  } = useTradingContext();
 
   const [side,           setSide]           = useState('long');
+  const [selectedAccountId, setSelectedAccountId] = useState(null);
   const [size,           setSize]           = useState('');
   const [leverage,       setLeverage]       = useState(10);
   const [marginMode,     setMarginMode]     = useState('cross');
@@ -34,34 +51,48 @@ export function TradingPanel({ selectedAsset }) {
   const currentPrice  = prices[asset] ? parseFloat(prices[asset]) : null;
   const positionCount = account?.positions?.length ?? 0;
   const priceUnavailable = !isConnected || isPriceStale;
+  const selectedAccount = accounts.find((item) => Number(item.id) === Number(selectedAccountId)) || null;
 
-  const refreshOrders = useCallback(async () => {
+  const refreshOrders = useCallback(async ({ force = false } = {}) => {
+    if (!selectedAccountId) {
+      setOpenOrders([]);
+      return;
+    }
     try {
-      const orders = await tradingApi.getOpenOrders();
-      setOpenOrders(Array.isArray(orders) ? orders : []);
+      const data = await tradingApi.getOpenOrders({ accountId: selectedAccountId, refresh: force });
+      setOpenOrders(Array.isArray(data?.orders) ? data.orders : []);
     } catch (err) {
       addNotification('error', `Error al cargar ordenes: ${err.message}`);
       setOpenOrders([]);
     }
-  }, [addNotification]);
+  }, [addNotification, selectedAccountId]);
 
-  // Initial load + auto-refresh every 30s
   useEffect(() => {
-    refreshAccount();
-    refreshOrders();
+    if (!selectedAccountId && defaultAccountId) {
+      setSelectedAccountId(defaultAccountId);
+    }
+  }, [defaultAccountId, selectedAccountId]);
+
+  useEffect(() => {
+    if (!selectedAccountId) return undefined;
+
+    refreshAccount({ accountId: selectedAccountId, force: true }).catch(() => {});
+    refreshOrders({ force: true });
+    refreshAccountSummary(selectedAccountId, { force: true }).catch(() => {});
     const interval = setInterval(() => {
-      refreshAccount();
-      refreshOrders();
+      refreshAccount({ accountId: selectedAccountId }).catch(() => {});
+      refreshOrders().catch(() => {});
     }, 30_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [refreshAccount, refreshAccountSummary, refreshOrders, selectedAccountId]);
 
   const handleOpen = async (e) => {
     e.preventDefault();
-    if (!sizeInAsset || sizeInAsset <= 0) return;
+    if (!selectedAccountId || !sizeInAsset || sizeInAsset <= 0) return;
     setIsSubmitting(true);
     try {
-      await openPosition({ asset, side, size: sizeInAsset, leverage, marginMode });
+      await openPosition({ accountId: selectedAccountId, asset, side, size: sizeInAsset, leverage, marginMode });
+      await refreshAccountSummary(selectedAccountId, { force: true }).catch(() => {});
       setSize('');
     } catch { /* notified by context */ } finally { setIsSubmitting(false); }
   };
@@ -75,8 +106,10 @@ export function TradingPanel({ selectedAsset }) {
         setConfirm(null);
         setClosingAsset(posAsset);
         try {
-          await closePosition({ asset: posAsset });
-          setTimeout(refreshAccount, 800);
+          await closePosition({ accountId: selectedAccountId, asset: posAsset });
+          setTimeout(() => {
+            refreshAccount({ accountId: selectedAccountId, force: true }).catch(() => {});
+          }, 800);
         } catch { /* notified by context */ } finally {
           setClosingAsset(null);
         }
@@ -99,6 +132,7 @@ export function TradingPanel({ selectedAsset }) {
     try {
       const posSize = Math.abs(parseFloat(sltpPos.size));
       await tradingApi.setSLTP({
+        accountId: selectedAccountId,
         asset: sltpPos.asset,
         side:  sltpPos.side,
         size:  posSize,
@@ -106,7 +140,7 @@ export function TradingPanel({ selectedAsset }) {
         tpPrice: tpPrice ? parseFloat(tpPrice) : undefined,
       });
       setSltpPos(null);
-      addNotification('success', `SL/TP configurado para ${sltpPos.asset}`);
+      addNotification('success', `${formatAccountIdentity(selectedAccount)}\nSL/TP configurado para ${sltpPos.asset}`);
     } catch (err) {
       setSltpError(err.message);
     } finally {
@@ -123,9 +157,9 @@ export function TradingPanel({ selectedAsset }) {
         setConfirm(null);
         setCancellingOid(oid);
         try {
-          await tradingApi.cancelOrder(orderAsset, oid);
+          await tradingApi.cancelOrder(orderAsset, oid, { accountId: selectedAccountId });
           await refreshOrders();
-          addNotification('success', `Orden ${orderAsset} cancelada`);
+          addNotification('success', `${formatAccountIdentity(selectedAccount)}\nOrden ${orderAsset} cancelada`);
         } catch (err) {
           addNotification('error', `Error al cancelar orden: ${err.message}`);
         } finally { setCancellingOid(null); }
@@ -165,9 +199,28 @@ export function TradingPanel({ selectedAsset }) {
         </div>
       </div>
 
+      <div className={styles.accountSelector}>
+        <AccountAutocomplete
+          accounts={accounts}
+          selectedAccountId={selectedAccountId}
+          onSelect={(selected) => {
+            setSelectedAccountId(selected.id);
+            refreshAccountSummary(selected.id, { force: true }).catch(() => {});
+          }}
+          label="Cuenta de trading"
+          disabled={isLoadingAccounts || accounts.length === 0}
+          placeholder="Selecciona una cuenta de Hyperliquid"
+        />
+      </div>
+
       {/* Strip de cuenta */}
-      {account && (
+      {account && selectedAccountId && (
         <div className={styles.accountStrip}>
+          <div className={styles.accountIdentity}>
+            <span className={styles.accountIdentityLabel}>Cuenta activa</span>
+            <span className={styles.accountIdentityValue}>{formatAccountIdentity(account.account || selectedAccount)}</span>
+          </div>
+          <div className={styles.accountDivider} />
           <div className={styles.accountItem}>
             <span className={styles.accountLabel}>Balance</span>
             <span className={styles.accountValue}>${parseFloat(account.accountValue || 0).toFixed(2)}</span>
@@ -182,7 +235,18 @@ export function TradingPanel({ selectedAsset }) {
             <span className={styles.accountLabel}>Retirable</span>
             <span className={`${styles.accountValue} ${styles.withdrawable}`}>${parseFloat(account.withdrawable || 0).toFixed(2)}</span>
           </div>
-          <button className={styles.refreshBtn} onClick={refreshAccount} title="Refrescar" aria-label="Refrescar cuenta">↻</button>
+          <button
+            className={styles.refreshBtn}
+            onClick={() => {
+              refreshAccount({ accountId: selectedAccountId, force: true }).catch(() => {});
+              refreshOrders({ force: true }).catch(() => {});
+              refreshAccountSummary(selectedAccountId, { force: true }).catch(() => {});
+            }}
+            title="Refrescar"
+            aria-label="Refrescar cuenta"
+          >
+            ↻
+          </button>
         </div>
       )}
 
@@ -263,10 +327,11 @@ export function TradingPanel({ selectedAsset }) {
           )}
 
           <button type="submit" className={`${styles.submitBtn} ${side === 'long' ? styles.longBtn : styles.shortBtn}`}
-            disabled={isSubmitting || !size || !currentPrice || hasInsufficientMargin || priceUnavailable}>
+            disabled={isSubmitting || !selectedAccountId || !size || !currentPrice || hasInsufficientMargin || priceUnavailable}>
             {isSubmitting ? 'Enviando...' : `${side === 'long' ? '▲ Long' : '▼ Short'} ${asset} a mercado`}
           </button>
 
+          {!selectedAccountId && <p className={styles.warn}>Configura o selecciona una cuenta para operar.</p>}
           {!currentPrice && <p className={styles.warn}>Esperando precio...</p>}
           {hasInsufficientMargin && (
             <p className={styles.warn} style={{ color: '#ef4444' }}>Margen insuficiente: req ${requiredMargin.toFixed(2)}</p>
@@ -280,15 +345,32 @@ export function TradingPanel({ selectedAsset }) {
               Posiciones abiertas
               {positionCount > 0 && <span className={styles.badge}>{positionCount}</span>}
             </span>
-            <button className={styles.refreshBtn} onClick={refreshAccount} title="Refrescar" aria-label="Refrescar posiciones">↻</button>
+            <button
+              className={styles.refreshBtn}
+              onClick={() => {
+                refreshAccount({ accountId: selectedAccountId, force: true }).catch(() => {});
+                refreshOrders({ force: true }).catch(() => {});
+              }}
+              title="Refrescar"
+              aria-label="Refrescar posiciones"
+            >
+              ↻
+            </button>
           </div>
 
           {isLoadingAccount && <p className={styles.empty}>Cargando posiciones...</p>}
-          {!isLoadingAccount && positionCount === 0 && (
+          {!isLoadingAccount && selectedAccountId && positionCount === 0 && (
             <div className={styles.emptyState}>
               <span className={styles.emptyIcon}>◈</span>
               <span>Sin posiciones abiertas</span>
               <span className={styles.emptyHint}>Usa el formulario para abrir tu primera posicion</span>
+            </div>
+          )}
+          {!selectedAccountId && (
+            <div className={styles.emptyState}>
+              <span className={styles.emptyIcon}>◈</span>
+              <span>Selecciona una cuenta</span>
+              <span className={styles.emptyHint}>El estado y las ordenes dependen de la cuenta elegida arriba</span>
             </div>
           )}
 

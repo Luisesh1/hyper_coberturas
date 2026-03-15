@@ -3,10 +3,15 @@ const assert = require('node:assert/strict');
 const { ethers } = require('ethers');
 
 const {
+  computeDistanceToRange,
+  computePnlMetrics,
   computeRangeVisual,
+  computeV4UnclaimedFees,
   decodeV4PositionInfo,
   estimateTvlApproxUsd,
+  estimateUsdValueFromPair,
   getSupportMatrix,
+  liquidityToTokenAmounts,
   parseCreationLogs,
   resolveHistoricalSpotPrice,
   SUPPORTED_NETWORKS,
@@ -135,12 +140,13 @@ test('decodeV4PositionInfo extrae tickLower y tickUpper del packed info', () => 
 test('resolveHistoricalSpotPrice usa lectura exacta si el bloque esta disponible', async () => {
   const result = await resolveHistoricalSpotPrice({
     blockNumber: 1000,
-    fetchAtBlock: async (block) => ({ tick: block, price: 123.4567 }),
+    fetchAtBlock: async (block) => ({ tick: block, price: 123.4567, sqrtPriceX96: 321n }),
   });
 
   assert.equal(result.accuracy, 'exact');
   assert.equal(result.blockNumber, 1000);
   assert.equal(result.price, 123.4567);
+  assert.equal(result.sqrtPriceX96, '321');
 });
 
 test('resolveHistoricalSpotPrice cae a bloque aproximado cuando el exacto falla', async () => {
@@ -150,13 +156,14 @@ test('resolveHistoricalSpotPrice cae a bloque aproximado cuando el exacto falla'
       if (block < 1250) {
         throw new Error('historical state unavailable');
       }
-      return { tick: 55, price: 98.7654 };
+      return { tick: 55, price: 98.7654, sqrtPriceX96: 999n };
     },
   });
 
   assert.equal(result.accuracy, 'approximate');
   assert.equal(result.blockNumber, 1250);
   assert.equal(result.tick, 55);
+  assert.equal(result.sqrtPriceX96, '999');
 });
 
 test('resolveHistoricalSpotPrice devuelve unavailable si ningun bloque responde', async () => {
@@ -177,4 +184,63 @@ test('computeRangeVisual detecta cuando el precio actual sale por arriba del ran
   assert.equal(visual.currentOutOfRangeSide, 'above');
   assert.equal(visual.openMarkerPct, 25);
   assert.equal(visual.currentMarkerPct, 100);
+});
+
+test('liquidityToTokenAmounts estima cantidades del LP con el precio actual', () => {
+  const amounts = liquidityToTokenAmounts({
+    liquidity: '118921496068917',
+    sqrtPriceX96: '3637950759960803672862868930969594',
+    tickLower: -200400,
+    tickUpper: -199860,
+    token0Decimals: 18,
+    token1Decimals: 6,
+  });
+
+  assert.ok(Number(amounts.amount0) >= 0);
+  assert.ok(Number(amounts.amount1) > 0);
+});
+
+test('estimateUsdValueFromPair valora un par cuando quote es stable', () => {
+  const usd = estimateUsdValueFromPair(
+    { symbol: 'WETH' },
+    { symbol: 'USDC' },
+    0.5,
+    100,
+    2000
+  );
+
+  assert.equal(usd, 1100);
+});
+
+test('computeDistanceToRange devuelve cero si el precio esta dentro del rango', () => {
+  const distance = computeDistanceToRange(100, 120, 110);
+  assert.equal(distance.distanceToRangePct, 0);
+  assert.equal(distance.distanceToRangePrice, 0);
+});
+
+test('computeDistanceToRange detecta distancia cuando el precio queda por arriba', () => {
+  const distance = computeDistanceToRange(100, 120, 132);
+  assert.equal(distance.distanceToRangePrice, 12);
+  assert.equal(distance.distanceToRangePct, 10);
+});
+
+test('computePnlMetrics calcula PnL total y rendimiento', () => {
+  const pnl = computePnlMetrics(1000, 1120, 30);
+  assert.equal(pnl.pnlTotalUsd, 150);
+  assert.equal(pnl.pnlTotalPct, 15);
+  assert.equal(pnl.yieldPct, 15);
+});
+
+test('computeV4UnclaimedFees replica la formula base de growth inside', () => {
+  const q128 = 2n ** 128n;
+  const fees = computeV4UnclaimedFees({
+    liquidity: 10n,
+    feeGrowthInside0LastX128: 0n,
+    feeGrowthInside1LastX128: 2n * q128,
+    feeGrowthInside0X128: 3n * q128,
+    feeGrowthInside1X128: 5n * q128,
+  });
+
+  assert.equal(fees.fees0, 30n);
+  assert.equal(fees.fees1, 30n);
 });

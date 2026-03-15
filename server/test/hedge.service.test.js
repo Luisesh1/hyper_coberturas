@@ -17,7 +17,7 @@ function createService() {
     error: () => {},
   };
 
-  const service = new HedgeService(1, {}, null, { repo, notifier });
+  const service = new HedgeService(1, { id: 10, alias: 'Test', address: '0x123' }, {}, null, { repo, notifier });
   service._placeEntryOrder = async () => {};
   return service;
 }

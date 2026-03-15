@@ -39,11 +39,35 @@ async function initSchema() {
     )
   `);
 
+  // ── Cuentas Hyperliquid por usuario ───────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hyperliquid_accounts (
+      id                    SERIAL PRIMARY KEY,
+      user_id               INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      alias                 VARCHAR(255) NOT NULL,
+      address               VARCHAR(255) NOT NULL,
+      private_key_encrypted TEXT,
+      is_default            BOOLEAN NOT NULL DEFAULT false,
+      created_at            BIGINT NOT NULL,
+      updated_at            BIGINT NOT NULL
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS hyperliquid_accounts_user_address
+      ON hyperliquid_accounts(user_id, lower(address))
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS hyperliquid_accounts_default_once
+      ON hyperliquid_accounts(user_id)
+      WHERE is_default = true
+  `);
+
   // ── Tabla de coberturas ────────────────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hedges (
       id             SERIAL PRIMARY KEY,
       user_id        INTEGER REFERENCES users(id),
+      hyperliquid_account_id INTEGER REFERENCES hyperliquid_accounts(id),
       asset          VARCHAR(20)  NOT NULL,
       direction      VARCHAR(10)  NOT NULL DEFAULT 'short',
       entry_price    NUMERIC      NOT NULL,
@@ -81,6 +105,9 @@ async function initSchema() {
   // user_id en hedges (migración additive para tablas existentes)
   await pool.query(`
     ALTER TABLE hedges ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)
+  `);
+  await pool.query(`
+    ALTER TABLE hedges ADD COLUMN IF NOT EXISTS hyperliquid_account_id INTEGER REFERENCES hyperliquid_accounts(id)
   `);
 
   // direction en hedges (short | long)

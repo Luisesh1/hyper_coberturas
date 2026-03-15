@@ -1,16 +1,27 @@
 const db = require('../db');
 const { rowToHedge } = require('../services/hedge.state');
 
-async function loadAllByUser(userId) {
+async function loadAllByUser(userId, accountId = null) {
+  const params = [userId];
+  const accountClause = accountId != null
+    ? ` AND h.hyperliquid_account_id = $2`
+    : '';
+  if (accountId != null) params.push(accountId);
+
   const { rows } = await db.query(
     `SELECT h.*,
+            a.alias AS account_alias,
+            a.address AS account_address,
+            a.is_default AS account_is_default,
             COALESCE(json_agg(c ORDER BY c.cycle_id) FILTER (WHERE c.id IS NOT NULL), '[]') AS cycles_json
      FROM hedges h
+     LEFT JOIN hyperliquid_accounts a ON a.id = h.hyperliquid_account_id
      LEFT JOIN cycles c ON c.hedge_id = h.id
      WHERE h.user_id = $1
-     GROUP BY h.id
+       ${accountClause}
+     GROUP BY h.id, a.id
      ORDER BY h.id`,
-    [userId]
+    params
   );
 
   return rows.map((row) => {
@@ -24,13 +35,14 @@ async function loadAllByUser(userId) {
 async function create(hedge) {
   const { rows } = await db.query(
     `INSERT INTO hedges (
-       user_id, asset, direction, entry_price, exit_price, size, leverage, label,
+       user_id, hyperliquid_account_id, asset, direction, entry_price, exit_price, size, leverage, label,
        margin_mode, status, created_at, position_key, last_reconciled_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'isolated', 'entry_pending', $9, $10, $9)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'isolated', 'entry_pending', $10, $11, $10)
      RETURNING id`,
     [
       hedge.userId,
+      hedge.accountId,
       hedge.asset,
       hedge.direction,
       hedge.entryPrice,

@@ -130,6 +130,111 @@
   color: #475569;
 }
 
+.accountsList {
+  display: grid;
+  gap: 10px;
+}
+
+.emptyAccounts {
+  padding: 14px;
+  border: 1px dashed #2a2d35;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.accountCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #2a2d35;
+  border-radius: 10px;
+  background: #0a0c10;
+}
+
+.accountCardTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.defaultRadio {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+}
+
+.accountAlias {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.accountMeta {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.accountBalance {
+  font-size: 0.76rem;
+  color: #22c55e;
+}
+
+.accountActions {
+  display: flex;
+  gap: 10px;
+}
+
+.deleteBtn {
+  padding: 12px 20px;
+  background: transparent;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  color: #ef4444;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.deleteBtn:not(:disabled):hover {
+  background: #2b0d0d;
+}
+
+.formHeaderRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.formTitle {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #e2e8f0;
+}
+
+.linkBtn {
+  background: none;
+  border: none;
+  color: #6366f1;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.checkboxRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+}
+
 /* ── Feedback ── */
 .feedbackOk {
   padding: 10px 14px;

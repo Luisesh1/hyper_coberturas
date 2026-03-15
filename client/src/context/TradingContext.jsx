@@ -3,6 +3,7 @@
  *
  * Mantiene providers separados por dominio:
  *   - NotificationsContext
+ *   - AccountsContext
  *   - MarketContext
  *   - AccountContext
  *   - HedgeContext
@@ -20,11 +21,13 @@ import {
   useState,
 } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { hedgeApi, tradingApi } from '../services/api';
+import { hedgeApi, settingsApi, tradingApi } from '../services/api';
+import { formatAccountIdentity } from '../utils/hyperliquidAccounts';
 
 const STALE_THRESHOLD_MS = 60_000;
 
 const NotificationsContext = createContext(null);
+const AccountsContext = createContext(null);
 const MarketContext = createContext(null);
 const AccountContext = createContext(null);
 const HedgeContext = createContext(null);
@@ -61,6 +64,59 @@ function NotificationsProvider({ children }) {
 function useNotifications() {
   const ctx = useContext(NotificationsContext);
   if (!ctx) throw new Error('useNotifications debe usarse dentro de TradingProvider');
+  return ctx;
+}
+
+function AccountsProvider({ children }) {
+  const { addNotification } = useNotifications();
+  const [accounts, setAccounts] = useState([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+
+  const refreshAccounts = useCallback(async ({ refreshAccountId } = {}) => {
+    setIsLoadingAccounts(true);
+    try {
+      const data = await settingsApi.getHyperliquidAccounts(refreshAccountId);
+      setAccounts(Array.isArray(data) ? data : []);
+      return data;
+    } catch (err) {
+      addNotification('error', `Error al cargar cuentas: ${err.message}`);
+      setAccounts([]);
+      throw err;
+    } finally {
+      setIsLoadingAccounts(false);
+    }
+  }, [addNotification]);
+
+  const refreshAccountSummary = useCallback(async (accountId, { force = false } = {}) => {
+    if (!accountId) return null;
+    const data = await settingsApi.getHyperliquidAccountSummary(accountId, { refresh: force });
+    setAccounts((prev) => prev.map((account) => (
+      Number(account.id) === Number(accountId) ? { ...account, ...data } : account
+    )));
+    return data;
+  }, []);
+
+  useEffect(() => {
+    refreshAccounts().catch(() => {});
+  }, [refreshAccounts]);
+
+  const defaultAccountId = accounts.find((account) => account.isDefault)?.id ?? null;
+
+  const value = useMemo(() => ({
+    accounts,
+    defaultAccountId,
+    isLoadingAccounts,
+    refreshAccounts,
+    refreshAccountSummary,
+    setAccounts,
+  }), [accounts, defaultAccountId, isLoadingAccounts, refreshAccounts, refreshAccountSummary]);
+
+  return <AccountsContext.Provider value={value}>{children}</AccountsContext.Provider>;
+}
+
+function useAccounts() {
+  const ctx = useContext(AccountsContext);
+  if (!ctx) throw new Error('useAccounts debe usarse dentro de TradingProvider');
   return ctx;
 }
 
@@ -110,13 +166,20 @@ function AccountProvider({ children }) {
   const [account, setAccount] = useState(null);
   const [isLoadingAccount, setIsLoadingAccount] = useState(false);
 
-  const refreshAccount = useCallback(async () => {
+  const refreshAccount = useCallback(async ({ accountId, force = false } = {}) => {
+    if (!accountId) {
+      setAccount(null);
+      return null;
+    }
+
     setIsLoadingAccount(true);
     try {
-      const data = await tradingApi.getAccount();
+      const data = await tradingApi.getAccount({ accountId, refresh: force });
       setAccount(data);
+      return data;
     } catch (err) {
       addNotification('error', `Error al cargar cuenta: ${err.message}`);
+      throw err;
     } finally {
       setIsLoadingAccount(false);
     }
@@ -125,8 +188,8 @@ function AccountProvider({ children }) {
   const openPosition = useCallback(async (params) => {
     try {
       const result = await tradingApi.openPosition(params);
-      addNotification('success', `${params.side.toUpperCase()} ${params.asset} abierto a mercado`);
-      await refreshAccount();
+      addNotification('success', `${formatAccountIdentity(result.account)}\n${params.side.toUpperCase()} ${params.asset} abierto a mercado`);
+      await refreshAccount({ accountId: params.accountId, force: true });
       return result;
     } catch (err) {
       addNotification('error', `Error al abrir: ${err.message}`);
@@ -137,8 +200,8 @@ function AccountProvider({ children }) {
   const closePosition = useCallback(async (params) => {
     try {
       const result = await tradingApi.closePosition(params);
-      addNotification('success', `Posicion ${params.asset} cerrada a mercado`);
-      await refreshAccount();
+      addNotification('success', `${formatAccountIdentity(result.account)}\nPosicion ${params.asset} cerrada a mercado`);
+      await refreshAccount({ accountId: params.accountId, force: true });
       return result;
     } catch (err) {
       addNotification('error', `Error al cerrar: ${err.message}`);
@@ -178,25 +241,28 @@ function HedgeProvider({ children }) {
     });
 
     const dir = (hedge.direction || 'short').toUpperCase();
+    const accountLabel = formatAccountIdentity(hedge.account);
     const notifMap = {
-      created: ['info', 5000, `Cobertura creada: ${hedge.asset} entrada ≤ $${hedge.entryPrice}`],
-      opened: ['alert', 12000, `POSICION ${dir} ABIERTA\n${hedge.asset} · $${Number(hedge.openPrice).toLocaleString()} · ${hedge.leverage}x Isolated`],
-      reconciled: ['info', 4000, `Cobertura #${hedge.id} reconciliada con el exchange`],
-      protection_missing: ['error', 8000, `Cobertura #${hedge.id} sin proteccion confirmada. Reintentando SL...`],
-      cycleComplete: ['success', 6000, `Ciclo #${msg.cycle?.cycleId} completado: ${dir} ${hedge.asset} cerrado a $${msg.cycle?.closePrice}`],
-      cancelled: ['info', 5000, `Cobertura #${hedge.id} cancelada`],
-      error: ['error', 8000, `Error en cobertura #${hedge.id}: ${msg.message}`],
+      created: ['info', 5000, `Cobertura creada\n${accountLabel} · ${hedge.asset} · entrada $${hedge.entryPrice}`],
+      opened: ['alert', 12000, `POSICION ${dir} ABIERTA\n${accountLabel}\n${hedge.asset} · $${Number(hedge.openPrice).toLocaleString()} · ${hedge.leverage}x Isolated`],
+      reconciled: ['info', 4000, `Cobertura reconciliada\n${accountLabel} · #${hedge.id}`],
+      protection_missing: ['error', 8000, `Cobertura sin proteccion confirmada\n${accountLabel} · #${hedge.id}`],
+      cycleComplete: ['success', 6000, `Ciclo completado\n${accountLabel}\n${dir} ${hedge.asset} cerrado a $${msg.cycle?.closePrice}`],
+      cancelled: ['info', 5000, `Cobertura cancelada\n${accountLabel} · #${hedge.id}`],
+      error: ['error', 8000, `Error en cobertura\n${accountLabel} · #${hedge.id}: ${msg.message}`],
     };
     const [type, duration, message] = notifMap[event] || [];
     if (type) addNotification(type, message, duration);
   }, [addNotification]);
 
-  const refreshHedges = useCallback(async () => {
+  const refreshHedges = useCallback(async ({ accountId } = {}) => {
     try {
-      const data = await hedgeApi.getAll();
+      const data = await hedgeApi.getAll({ accountId });
       setHedges(data);
+      return data;
     } catch (err) {
       addNotification('error', `Error al cargar coberturas: ${err.message}`);
+      throw err;
     }
   }, [addNotification]);
 
@@ -213,7 +279,7 @@ function HedgeProvider({ children }) {
     try {
       const hedge = await hedgeApi.cancel(id);
       setHedges((prev) => prev.map((item) => (item.id === id ? hedge : item)));
-      addNotification('info', `Cobertura #${id} cancelada`);
+      addNotification('info', `Cobertura cancelada\n${formatAccountIdentity(hedge.account)} · #${id}`);
     } catch (err) {
       addNotification('error', `Error al cancelar: ${err.message}`);
     }
@@ -241,12 +307,14 @@ function TradingProviders({ children }) {
 
   return (
     <NotificationsProvider>
-      <HedgeProvider>
-        <HedgeContextBridge onReady={(handler) => { hedgeMessageRef.current = handler; }} />
-        <MarketProvider onMessage={(msg) => hedgeMessageRef.current?.(msg)}>
-          <AccountProvider>{children}</AccountProvider>
-        </MarketProvider>
-      </HedgeProvider>
+      <AccountsProvider>
+        <HedgeProvider>
+          <HedgeContextBridge onReady={(handler) => { hedgeMessageRef.current = handler; }} />
+          <MarketProvider onMessage={(msg) => hedgeMessageRef.current?.(msg)}>
+            <AccountProvider>{children}</AccountProvider>
+          </MarketProvider>
+        </HedgeProvider>
+      </AccountsProvider>
     </NotificationsProvider>
   );
 }
@@ -267,11 +335,13 @@ export function TradingProvider({ children }) {
 
 export function useTradingContext() {
   const notifications = useNotifications();
+  const accounts = useAccounts();
   const market = useMarket();
   const account = useAccount();
   const hedges = useHedges();
 
   return {
+    ...accounts,
     ...market,
     ...account,
     ...hedges,

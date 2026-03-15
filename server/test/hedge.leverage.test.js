@@ -24,7 +24,7 @@ function createService(hlOverrides = {}) {
     error: () => {},
   };
 
-  return new HedgeService(1, hl, null, { repo, notifier });
+  return new HedgeService(1, { id: 10, alias: 'Test', address: '0x123' }, hl, null, { repo, notifier });
 }
 
 test('aplica leverage isolated del hedge antes de colocar la entry stop', async () => {

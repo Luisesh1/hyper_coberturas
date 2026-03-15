@@ -25,11 +25,35 @@ function formatNumber(value, digits = 2) {
 }
 
 function formatCompactUsd(value) {
+  if (value == null) return 'N/A';
   const n = Number(value);
-  if (!Number.isFinite(n)) return 'No disponible';
+  if (!Number.isFinite(n)) return 'N/A';
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
   return `$${formatNumber(n, 2)}`;
+}
+
+function formatUsd(value) {
+  if (value == null) return 'N/A';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'N/A';
+  return `$${formatNumber(n, 2)}`;
+}
+
+function formatSignedUsd(value) {
+  if (value == null) return 'N/A';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'N/A';
+  const sign = n > 0 ? '+' : n < 0 ? '-' : '';
+  return `${sign}$${formatNumber(Math.abs(n), 2)}`;
+}
+
+function formatPercent(value) {
+  if (value == null) return 'N/A';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'N/A';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${formatNumber(n, Math.abs(n) >= 10 ? 2 : 4)}%`;
 }
 
 function formatDuration(ms) {
@@ -43,8 +67,9 @@ function formatDuration(ms) {
 }
 
 function formatPrice(value, baseSymbol, quoteSymbol) {
+  if (value == null) return 'N/A';
   const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 'No disponible';
+  if (!Number.isFinite(numeric) || numeric <= 0) return 'N/A';
   return `${formatNumber(numeric, numeric >= 100 ? 2 : 6)} ${quoteSymbol}/${baseSymbol}`;
 }
 
@@ -68,6 +93,15 @@ function getStatusInfo(pool) {
   return { label: 'Inactiva', cls: styles.badgeInactive };
 }
 
+function formatCompactPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 10000) return formatNumber(n, 0);
+  if (n >= 100) return formatNumber(n, 2);
+  if (n >= 1) return formatNumber(n, 4);
+  return formatNumber(n, 6);
+}
+
 function getRangeBarData(pool) {
   const lower = Number(pool.rangeLowerPrice);
   const upper = Number(pool.rangeUpperPrice);
@@ -80,14 +114,24 @@ function getRangeBarData(pool) {
 
   const min = Math.min(lower, upper);
   const max = Math.max(lower, upper);
+  // Extend the visual range 15% on each side so markers near edges are visible
+  const padding = (max - min) * 0.15;
+  const visMin = min - padding;
+  const visMax = max + padding;
   const normalize = (value) => {
     if (!Number.isFinite(value)) return null;
-    return Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+    return Math.max(0, Math.min(100, ((value - visMin) / (visMax - visMin)) * 100));
   };
 
   return {
+    rangeLowPct: normalize(min),
+    rangeHighPct: normalize(max),
     openPct: normalize(open),
     currentPct: normalize(current),
+    openPrice: open,
+    currentPrice: current,
+    lowerPrice: min,
+    upperPrice: max,
     currentOutOfRangeSide: pool.currentOutOfRangeSide,
   };
 }
@@ -108,6 +152,14 @@ function PoolCard({ pool }) {
       ? 'Exacto'
       : null;
   const status = getStatusInfo(pool);
+  const pnlValue = Number(pool.pnlTotalUsd);
+  const pnlClass = Number.isFinite(pnlValue)
+    ? pnlValue > 0
+      ? styles.kpiPositive
+      : pnlValue < 0
+        ? styles.kpiNegative
+        : styles.kpiNeutral
+    : styles.kpiNeutral;
 
   return (
     <article className={styles.card}>
@@ -188,6 +240,74 @@ function PoolCard({ pool }) {
           <span className={styles.infoValue}>{pool.liquiditySummary?.text || '—'}</span>
         </div>
 
+        {isLpPosition && (
+          <div className={`${styles.infoItem} ${styles.infoItemWide}`}>
+            <span className={styles.infoLabel}>Seguimiento de inversion</span>
+            <div className={styles.kpiGrid}>
+              <div className={styles.kpiCard}>
+                <span className={styles.kpiLabel}>Capital inicial</span>
+                <span className={styles.kpiValue}>{formatUsd(pool.initialValueUsd)}</span>
+              </div>
+              <div className={styles.kpiCard}>
+                <span className={styles.kpiLabel}>Valor actual</span>
+                <span className={styles.kpiValue}>{formatUsd(pool.currentValueUsd)}</span>
+              </div>
+              <div className={styles.kpiCard}>
+                <span className={styles.kpiLabel}>Fees no reclamadas</span>
+                <span className={styles.kpiValue}>{formatUsd(pool.unclaimedFeesUsd)}</span>
+              </div>
+              <div className={styles.kpiCard}>
+                <span className={styles.kpiLabel}>P&L total</span>
+                <span className={`${styles.kpiValue} ${pnlClass}`}>{formatSignedUsd(pool.pnlTotalUsd)}</span>
+              </div>
+              <div className={styles.kpiCard}>
+                <span className={styles.kpiLabel}>Rendimiento</span>
+                <span className={`${styles.kpiValue} ${pnlClass}`}>{formatPercent(pool.yieldPct)}</span>
+              </div>
+              <div className={styles.kpiCard}>
+                <span className={styles.kpiLabel}>Distancia al rango</span>
+                <span className={styles.kpiValue}>
+                  {pool.distanceToRangePct === 0
+                    ? 'Dentro de rango'
+                    : pool.distanceToRangePct != null
+                      ? `${formatNumber(pool.distanceToRangePrice, 4)} · ${formatPercent(pool.distanceToRangePct)}`
+                      : 'No disponible'}
+                </span>
+              </div>
+            </div>
+
+            <div className={styles.positionBreakdown}>
+              <span className={styles.positionMetric}>
+                Ahora: {formatNumber(pool.positionAmount0, 6)} {pool.token0.symbol} · {formatNumber(pool.positionAmount1, 6)} {pool.token1.symbol}
+              </span>
+              <span className={styles.positionMetric}>
+                Fees: {formatNumber(pool.unclaimedFees0, 6)} {pool.token0.symbol} · {formatNumber(pool.unclaimedFees1, 6)} {pool.token1.symbol}
+              </span>
+            </div>
+
+            {pool.valuationAccuracy && pool.valuationAccuracy !== 'exact' && (
+              <div className={styles.noteRow}>
+                <span className={styles.noteBadge}>
+                  {pool.valuationAccuracy === 'approximate' ? 'Aprox.' : 'Parcial'}
+                </span>
+                <span className={styles.noteText}>
+                  {pool.valuationAccuracy === 'approximate'
+                    ? 'La valuacion usa historial o precios aproximados.'
+                    : 'Parte del P&L no pudo valorarse con precision.'}
+                </span>
+              </div>
+            )}
+
+            {pool.valuationWarnings?.length > 0 && (
+              <div className={styles.noteList}>
+                {pool.valuationWarnings.map((warning) => (
+                  <span key={warning} className={styles.noteListItem}>{warning}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className={styles.infoItem}>
           <span className={styles.infoLabel}>Reservas</span>
           <span className={styles.infoValue}>
@@ -239,49 +359,81 @@ function PoolCard({ pool }) {
 
         {isLpPosition && rangeBar && (
           <div className={`${styles.infoItem} ${styles.infoItemWide}`}>
-            <span className={styles.infoLabel}>Rango</span>
+            <span className={styles.infoLabel}>
+              Rango de precio
+              {pool.currentOutOfRangeSide && (
+                <span className={styles.rangeAlertInline}>
+                  {pool.currentOutOfRangeSide === 'below' ? 'Fuera por abajo' : 'Fuera por arriba'}
+                </span>
+              )}
+            </span>
             <div className={styles.rangeCard}>
-              <div className={styles.rangeHeader}>
-                <span className={styles.rangeMetric}>
-                  Min. {formatPrice(pool.rangeLowerPrice, pool.priceBaseSymbol, pool.priceQuoteSymbol)}
-                </span>
-                <span className={styles.rangeMetric}>
-                  Max. {formatPrice(pool.rangeUpperPrice, pool.priceBaseSymbol, pool.priceQuoteSymbol)}
-                </span>
+              {/* Labels above the track */}
+              <div className={styles.rangeLabelsRow}>
+                {rangeBar.openPct != null && (
+                  <div className={styles.rangeLabelPin} style={{ left: `${rangeBar.openPct}%` }}>
+                    <span className={styles.rangeLabelValue}>{formatCompactPrice(rangeBar.openPrice)}</span>
+                    <span className={styles.rangeLabelTag}>Entrada</span>
+                  </div>
+                )}
+                {rangeBar.currentPct != null && (
+                  <div className={`${styles.rangeLabelPin} ${styles.rangeLabelPinCurrent}`} style={{ left: `${rangeBar.currentPct}%` }}>
+                    <span className={styles.rangeLabelValue}>{formatCompactPrice(rangeBar.currentPrice)}</span>
+                    <span className={styles.rangeLabelTag}>Actual</span>
+                  </div>
+                )}
               </div>
 
+              {/* Track with range zone + markers */}
               <div className={styles.rangeTrack}>
-                <div className={styles.rangeFill} />
+                {/* Shaded active range zone */}
+                <div
+                  className={styles.rangeFill}
+                  style={{
+                    left: `${rangeBar.rangeLowPct}%`,
+                    width: `${rangeBar.rangeHighPct - rangeBar.rangeLowPct}%`,
+                  }}
+                />
+                {/* Min/Max edges */}
+                <div className={styles.rangeEdge} style={{ left: `${rangeBar.rangeLowPct}%` }} />
+                <div className={styles.rangeEdge} style={{ left: `${rangeBar.rangeHighPct}%` }} />
+                {/* Open marker */}
                 {rangeBar.openPct != null && (
                   <div
                     className={`${styles.rangeMarker} ${styles.rangeMarkerOpen}`}
                     style={{ left: `${rangeBar.openPct}%` }}
-                    title="Precio al abrir"
                   />
                 )}
+                {/* Current price marker */}
                 {rangeBar.currentPct != null && (
                   <div
                     className={`${styles.rangeMarker} ${styles.rangeMarkerCurrent} ${pool.currentOutOfRangeSide ? styles.rangeMarkerCurrentAlert : ''}`}
                     style={{ left: `${rangeBar.currentPct}%` }}
-                    title="Precio actual"
                   />
                 )}
               </div>
 
+              {/* Min/Max labels below */}
+              <div className={styles.rangeEdgeLabels}>
+                <span className={styles.rangeEdgeValue}>{formatCompactPrice(rangeBar.lowerPrice)}</span>
+                <span className={styles.rangeEdgeCaption}>Rango activo ({pool.priceQuoteSymbol}/{pool.priceBaseSymbol})</span>
+                <span className={styles.rangeEdgeValue}>{formatCompactPrice(rangeBar.upperPrice)}</span>
+              </div>
+
+              {/* Legend */}
               <div className={styles.rangeLegend}>
                 <span className={styles.rangeLegendItem}>
                   <span className={`${styles.rangeLegendDot} ${styles.rangeLegendDotOpen}`} />
-                  Apertura
+                  Entrada
                 </span>
                 <span className={styles.rangeLegendItem}>
                   <span className={`${styles.rangeLegendDot} ${styles.rangeLegendDotCurrent}`} />
                   Precio actual
                 </span>
-                {pool.currentOutOfRangeSide && (
-                  <span className={styles.rangeAlert}>
-                    {pool.currentOutOfRangeSide === 'below' ? 'Fuera por abajo' : 'Fuera por arriba'}
-                  </span>
-                )}
+                <span className={styles.rangeLegendItem}>
+                  <span className={styles.rangeLegendDotRange} />
+                  Rango activo
+                </span>
               </div>
             </div>
           </div>

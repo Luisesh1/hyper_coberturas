@@ -48,9 +48,11 @@ function isReduceOnlyOrder(order) {
 }
 
 class HedgeService extends EventEmitter {
-  constructor(userId, hlService, tgService, deps = {}) {
+  constructor(userId, account, hlService, tgService, deps = {}) {
     super();
     this.userId = userId;
+    this.account = account || null;
+    this.accountId = account?.id || null;
     this.hl = hlService;
     this.tg = tgService;
     this.repo = deps.repo || hedgeRepository;
@@ -60,13 +62,13 @@ class HedgeService extends EventEmitter {
   }
 
   async init() {
-    const hedges = await this.repo.loadAllByUser(this.userId);
+    const hedges = await this.repo.loadAllByUser(this.userId, this.accountId);
 
     for (const hedge of hedges) {
       this.hedges.set(hedge.id, hedge);
     }
 
-    console.log(`[Hedge] User ${this.userId}: ${this.hedges.size} coberturas restauradas`);
+    console.log(`[Hedge] User ${this.userId} account ${this.accountId}: ${this.hedges.size} coberturas restauradas`);
     this._startMonitor();
   }
 
@@ -92,7 +94,7 @@ class HedgeService extends EventEmitter {
 
   _nextPositionKey(hedge) {
     const nextCycle = hedge.cycleCount + 1;
-    return `${this.userId}:${hedge.id}:${nextCycle}:${Date.now()}`;
+    return `${this.userId}:${this.accountId}:${hedge.id}:${nextCycle}:${Date.now()}`;
   }
 
   async _emitUpdated(hedge) {
@@ -146,6 +148,8 @@ class HedgeService extends EventEmitter {
     const hedge = {
       id: null,
       userId: this.userId,
+      accountId: this.accountId,
+      account: this.account,
       asset: assetUp,
       direction: dir,
       entryPrice: entry,

@@ -7,7 +7,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTradingContext } from '../../context/TradingContext';
 import { useAuth } from '../../context/AuthContext';
+import { AccountAutocomplete } from '../shared/AccountAutocomplete';
 import { ConfirmDialog } from '../shared/ConfirmDialog';
+import { formatAccountIdentity, formatUsd } from '../../utils/hyperliquidAccounts';
 import styles from './HedgePanel.module.css';
 
 const STATUS_LABEL = {
@@ -32,10 +34,24 @@ function loadPct(username)  {
 }
 
 export function HedgePanel({ selectedAsset }) {
-  const { prices, hedges, createHedge, cancelHedge, refreshHedges, isPriceStale, isConnected, addNotification } = useTradingContext();
+  const {
+    prices,
+    hedges,
+    accounts,
+    defaultAccountId,
+    isLoadingAccounts,
+    createHedge,
+    cancelHedge,
+    refreshHedges,
+    refreshAccountSummary,
+    isPriceStale,
+    isConnected,
+  } = useTradingContext();
   const { user } = useAuth();
 
   const [asset, setAsset]           = useState(selectedAsset || 'BTC');
+  const [selectedAccountId, setSelectedAccountId] = useState(null);
+  const [filterAccountId, setFilterAccountId] = useState('all');
   const [direction, setDirection]   = useState('short'); // 'short' | 'long'
   const [entryPrice, setEntryPrice] = useState('');
   const [exitPrice, setExitPrice]   = useState('');
@@ -61,7 +77,13 @@ export function HedgePanel({ selectedAsset }) {
     if (selectedAsset) setAsset(selectedAsset);
   }, [selectedAsset]);
 
-  useEffect(() => { refreshHedges(); }, []);
+  useEffect(() => { refreshHedges().catch(() => {}); }, [refreshHedges]);
+
+  useEffect(() => {
+    if (!selectedAccountId && defaultAccountId) {
+      setSelectedAccountId(defaultAccountId);
+    }
+  }, [defaultAccountId, selectedAccountId]);
 
   // Reload pct from localStorage when user changes
   useEffect(() => {
@@ -115,9 +137,11 @@ export function HedgePanel({ selectedAsset }) {
 
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (!selectedAccountId) return;
     setIsSubmitting(true);
     try {
-      await createHedge({ asset, entryPrice, exitPrice, size: sizeInAsset, leverage, label, direction });
+      await createHedge({ accountId: selectedAccountId, asset, entryPrice, exitPrice, size: sizeInAsset, leverage, label, direction });
+      await refreshAccountSummary(selectedAccountId, { force: true }).catch(() => {});
       setEntryPrice('');
       setExitPrice('');
       setSize('');
@@ -142,11 +166,27 @@ export function HedgePanel({ selectedAsset }) {
     });
   };
 
-  const activeHedges    = hedges.filter((h) => ['waiting', 'entry_pending', 'entry_filled_pending_sl', 'open', 'open_protected', 'closing', 'cancel_pending', 'executing_open', 'executing_close'].includes(h.status));
+  const selectedAccount = accounts.find((account) => Number(account.id) === Number(selectedAccountId)) || null;
+
+  const activeHedges = hedges.filter((h) => ['waiting', 'entry_pending', 'entry_filled_pending_sl', 'open', 'open_protected', 'closing', 'cancel_pending', 'executing_open', 'executing_close'].includes(h.status));
   const cancelledHedges = hedges.filter((h) => ['cancelled', 'error'].includes(h.status));
   const completedCycles = hedges
-    .flatMap(h => (h.cycles || []).map(c => ({ ...c, asset: h.asset, label: h.label, leverage: h.leverage, direction: h.direction, hedgeId: h.id })))
+    .flatMap(h => (h.cycles || []).map(c => ({
+      ...c,
+      asset: h.asset,
+      label: h.label,
+      leverage: h.leverage,
+      direction: h.direction,
+      hedgeId: h.id,
+      accountId: h.accountId,
+      account: h.account,
+    })))
     .sort((a, b) => b.closedAt - a.closedAt);
+
+  const isVisibleForFilter = (accountId) => filterAccountId === 'all' || Number(accountId) === Number(filterAccountId);
+  const visibleActiveHedges = activeHedges.filter((hedge) => isVisibleForFilter(hedge.accountId));
+  const visibleCancelledHedges = cancelledHedges.filter((hedge) => isVisibleForFilter(hedge.accountId));
+  const visibleCompletedCycles = completedCycles.filter((cycle) => isVisibleForFilter(cycle.accountId));
 
   return (
     <div className={styles.container}>
@@ -158,7 +198,7 @@ export function HedgePanel({ selectedAsset }) {
             GTC nativo + SL nativo · Isolated · ciclos automaticos
           </p>
         </div>
-        <button className={styles.refreshBtn} onClick={refreshHedges} title="Refrescar" aria-label="Refrescar coberturas">↻</button>
+        <button className={styles.refreshBtn} onClick={() => refreshHedges()} title="Refrescar" aria-label="Refrescar coberturas">↻</button>
       </div>
 
       {/* Stale price warning */}
@@ -175,6 +215,25 @@ export function HedgePanel({ selectedAsset }) {
         <div className={styles.formCol}>
           {/* Section header */}
           <div className={styles.colLabel}>Abrir Cobertura</div>
+
+          <AccountAutocomplete
+            accounts={accounts}
+            selectedAccountId={selectedAccountId}
+            onSelect={(selected) => {
+              setSelectedAccountId(selected.id);
+              refreshAccountSummary(selected.id, { force: true }).catch(() => {});
+            }}
+            label="Cuenta de cobertura"
+            disabled={isLoadingAccounts || accounts.length === 0}
+            placeholder="Selecciona una cuenta de Hyperliquid"
+          />
+
+          {selectedAccount && (
+            <div className={styles.accountSummary}>
+              <span className={styles.accountSummaryTitle}>{formatAccountIdentity(selectedAccount)}</span>
+              <span className={styles.accountSummaryValue}>Balance {formatUsd(selectedAccount.balanceUsd)}</span>
+            </div>
+          )}
 
           {/* Direction selector */}
           <div className={styles.directionBar}>
@@ -407,10 +466,11 @@ export function HedgePanel({ selectedAsset }) {
             <button
               type="submit"
               className={isLong ? styles.submitBtnLong : styles.submitBtn}
-              disabled={isSubmitting || !logicValid || !sizeInAsset || sizeInAsset <= 0}
+              disabled={isSubmitting || !selectedAccountId || !logicValid || !sizeInAsset || sizeInAsset <= 0}
             >
               {isSubmitting ? 'Creando...' : (isLong ? '▲ Activar cobertura LONG' : '▼ Activar cobertura SHORT')}
             </button>
+            {!selectedAccountId && <span className={styles.fieldError}>Selecciona una cuenta para crear la cobertura.</span>}
           </form>
 
           {/* ── Modal editar porcentaje ── */}
@@ -455,6 +515,21 @@ export function HedgePanel({ selectedAsset }) {
 
         {/* ── RIGHT: Lista de coberturas ── */}
         <div className={styles.listCol}>
+          <div className={styles.filterRow}>
+            <label className={styles.filterLabel} htmlFor="hedge-account-filter">Filtro cuenta</label>
+            <select
+              id="hedge-account-filter"
+              className={styles.filterSelect}
+              value={filterAccountId}
+              onChange={(event) => setFilterAccountId(event.target.value)}
+            >
+              <option value="all">Todas las cuentas</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{formatAccountIdentity(account)}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Tab bar */}
           <div className={styles.tabBar} role="tablist" aria-label="Filtro de coberturas">
             <button
@@ -465,7 +540,7 @@ export function HedgePanel({ selectedAsset }) {
               onClick={() => setHistoryTab(false)}>
               <span className={styles.tabLabel}>Activas</span>
               <span className={`${styles.tabBadge} ${!historyTab ? styles.tabBadgeActive : ''}`}>
-                {activeHedges.length}
+                {visibleActiveHedges.length}
               </span>
             </button>
             <button
@@ -476,7 +551,7 @@ export function HedgePanel({ selectedAsset }) {
               onClick={() => setHistoryTab(true)}>
               <span className={styles.tabLabel}>Historial</span>
               <span className={`${styles.tabBadge} ${historyTab ? styles.tabBadgeActive : ''}`}>
-                {completedCycles.length + cancelledHedges.length}
+                {visibleCompletedCycles.length + visibleCancelledHedges.length}
               </span>
             </button>
           </div>
@@ -485,13 +560,13 @@ export function HedgePanel({ selectedAsset }) {
             {/* Tab: Activas */}
             {!historyTab && (
               <>
-                {activeHedges.length === 0 && (
+                {visibleActiveHedges.length === 0 && (
                   <div className={styles.empty}>
                     <span>No hay coberturas activas</span>
                     <span className={styles.emptyHint}>Usa el formulario de la izquierda para crear tu primera cobertura</span>
                   </div>
                 )}
-                {activeHedges.map((h) => (
+                {visibleActiveHedges.map((h) => (
                   <HedgeCard
                     key={h.id}
                     hedge={h}
@@ -505,16 +580,16 @@ export function HedgePanel({ selectedAsset }) {
             {/* Tab: Historial */}
             {historyTab && (
               <>
-                {completedCycles.length === 0 && cancelledHedges.length === 0 && (
+                {visibleCompletedCycles.length === 0 && visibleCancelledHedges.length === 0 && (
                   <div className={styles.empty}>
                     <span>No hay historial aun</span>
                     <span className={styles.emptyHint}>Los ciclos completados y coberturas canceladas apareceran aqui</span>
                   </div>
                 )}
-                {completedCycles.map((c, i) => (
+                {visibleCompletedCycles.map((c, i) => (
                   <CycleRow key={`${c.hedgeId}-${c.cycleId}-${i}`} cycle={c} />
                 ))}
-                {cancelledHedges.map((h) => (
+                {visibleCancelledHedges.map((h) => (
                   <HedgeCard key={h.id} hedge={h} currentPrice={null} onCancel={null} />
                 ))}
               </>
@@ -608,6 +683,9 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
         </div>
       </div>
 
+      {hedge.account && (
+        <div className={styles.accountMeta}>{formatAccountIdentity(hedge.account)}</div>
+      )}
       {hedge.label && <div className={styles.cardLabel}>{hedge.label}</div>}
 
       {/* Datos en grid 3-col */}
@@ -695,7 +773,7 @@ function HedgeCard({ hedge, currentPrice, onCancel }) {
           {[...cycles].reverse().map((c) => (
             <CycleRow
               key={c.cycleId}
-              cycle={{ ...c, asset: hedge.asset, label: hedge.label, leverage: hedge.leverage, direction: hedge.direction }}
+              cycle={{ ...c, asset: hedge.asset, label: hedge.label, leverage: hedge.leverage, direction: hedge.direction, account: hedge.account, accountId: hedge.accountId }}
               hedgeSize={hedge.size}
             />
           ))}
@@ -728,6 +806,7 @@ function CycleRow({ cycle, hedgeSize }) {
         <span className={`${styles.cycleBadge} ${isLong ? styles.cycleBadgeLong : ''}`}>
           {isLong ? 'LONG' : 'SHORT'} {cycle.leverage}x · #{cycle.cycleId}
         </span>
+        {cycle.account && <span className={styles.cycleAccount}>{formatAccountIdentity(cycle.account)}</span>}
         {cycle.label && <span className={styles.cycleLabel}>{cycle.label}</span>}
         <span className={styles.cycleDuration}>{duration}</span>
       </div>

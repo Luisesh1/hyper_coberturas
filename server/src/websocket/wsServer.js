@@ -46,17 +46,18 @@ function attachHedgeEvents(wss, hedgeSvc) {
 }
 
 async function bootstrapUserRuntime(wss, userId) {
-  await hlRegistry.getOrCreate(userId);
-  const hedgeSvc = await hedgeRegistry.getOrCreate(userId);
-  attachHedgeEvents(wss, hedgeSvc);
+  const hedgeServices = await hedgeRegistry.getOrCreateAllForUser(userId);
 
-  const hl = hlRegistry.get(userId);
-  if (hl?.address) {
-    hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
-    console.log(`[WS] userEvents suscrito para user ${userId} (${hl.address})`);
+  for (const hedgeSvc of hedgeServices) {
+    attachHedgeEvents(wss, hedgeSvc);
+    const hl = hlRegistry.get(userId, hedgeSvc.accountId);
+    if (hl?.address) {
+      hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
+      console.log(`[WS] userEvents suscrito para user ${userId} account ${hedgeSvc.accountId} (${hl.address})`);
+    }
   }
 
-  return hedgeSvc;
+  return hedgeServices;
 }
 
 /**
@@ -82,7 +83,7 @@ function createWsServer(httpServer) {
 
   hedgeRegistry.onCreate(async (hedgeSvc) => {
     attachHedgeEvents(wss, hedgeSvc);
-    const hl = hlRegistry.get(hedgeSvc.userId);
+    const hl = hlRegistry.get(hedgeSvc.userId, hedgeSvc.accountId);
     if (hl?.address) {
       hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
     }
@@ -119,14 +120,14 @@ function createWsServer(httpServer) {
       if (fills.length === 0) return;
 
       // Buscar qué usuario tiene esa wallet address
-      const addresses = hlRegistry.getAllAddresses();
+      const addresses = hlRegistry.getAllEntries();
       const fillUser  = addresses.find((a) => {
         // Los fills de HL incluyen el address del usuario
         return hlMessage?.data?.user?.toLowerCase() === a.address?.toLowerCase();
       });
 
       if (fillUser) {
-        const hedgeSvc = hedgeRegistry.get(fillUser.userId);
+        const hedgeSvc = hedgeRegistry.get(fillUser.userId, fillUser.accountId);
         if (hedgeSvc) fills.forEach((fill) => hedgeSvc.onFill(fill));
       } else {
         // Fallback: notificar a todos los hedge services activos
