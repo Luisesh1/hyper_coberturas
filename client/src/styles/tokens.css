@@ -1,0 +1,36 @@
+:root {
+  --bg-primary: #0f1117;
+  --bg-card: #1a1d23;
+  --bg-input: #0a0c10;
+  --bg-hover: #161922;
+  --border: #2a2d35;
+  --border-subtle: #1e2330;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+  --text-hint: #475569;
+  --radius-xl: 16px;
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+  --green: #22c55e;
+  --green-bg: rgba(34, 197, 94, 0.12);
+  --green-border: rgba(34, 197, 94, 0.25);
+  --red: #ef4444;
+  --red-bg: rgba(239, 68, 68, 0.12);
+  --red-border: rgba(239, 68, 68, 0.25);
+  --amber: #f59e0b;
+  --amber-bg: rgba(245, 158, 11, 0.12);
+  --amber-border: rgba(245, 158, 11, 0.25);
+  --indigo: #6366f1;
+  --indigo-bg: rgba(99, 102, 241, 0.12);
+  --indigo-border: rgba(99, 102, 241, 0.25);
+  --cyan: #38bdf8;
+  --teal: #2dd4bf;
+  --transition-fast: 0.15s ease;
+  --transition: 0.2s ease;
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.25);
+  --shadow-dropdown: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
+}

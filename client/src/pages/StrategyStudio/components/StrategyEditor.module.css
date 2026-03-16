@@ -1,0 +1,171 @@
+.editor {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.idBadge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-hint);
+  background: var(--bg-input);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field span {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.field input, .field select {
+  padding: 9px 12px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.field input:focus, .field select:focus {
+  border-color: var(--cyan);
+}
+
+.fieldWide { grid-column: 1 / -1; }
+
+.fieldError {
+  font-size: 0.72rem;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.checkField {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 20px;
+}
+
+.checkField input {
+  accent-color: var(--cyan);
+}
+
+.checkField span {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.codeField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.codeField span {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.codeField textarea {
+  width: 100%;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  resize: vertical;
+  tab-size: 2;
+  transition: border-color var(--transition-fast);
+}
+
+.codeField textarea:focus {
+  border-color: var(--cyan);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.primaryBtn, .secondaryBtn, .dangerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+}
+
+.primaryBtn {
+  color: #fff;
+  background: linear-gradient(135deg, var(--cyan), #2563eb);
+  border-color: transparent;
+}
+.primaryBtn:hover { filter: brightness(1.1); }
+.primaryBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.secondaryBtn {
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border-color: var(--border);
+}
+.secondaryBtn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.secondaryBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.dangerBtn {
+  color: var(--red);
+  background: var(--red-bg);
+  border-color: var(--red-border);
+  margin-left: auto;
+}
+.dangerBtn:hover { background: rgba(239, 68, 68, 0.2); }
+
+@media (max-width: 768px) {
+  .formGrid { grid-template-columns: 1fr; }
+  .fieldWide { grid-column: auto; }
+  .codeField textarea { rows: 12; }
+}

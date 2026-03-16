@@ -1,0 +1,118 @@
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.tab:hover { color: var(--text-secondary); }
+.tabActive { color: var(--text-primary); border-bottom-color: var(--cyan); }
+
+.tabBadge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  background: var(--bg-input);
+  border-radius: var(--radius-pill);
+  color: var(--text-hint);
+}
+
+.content {
+  padding: 16px;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+}
+
+.metric span {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-hint);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.metric strong {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+}
+
+.json {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin: 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.trades {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+
+.tradesTitle {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  margin: 0 0 8px;
+}
+
+.tradeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tradeRow:last-child { border-bottom: none; }
+
+.tradePrice {
+  flex: 1;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.long { color: var(--green); font-weight: 700; }
+.short { color: var(--red); font-weight: 700; }

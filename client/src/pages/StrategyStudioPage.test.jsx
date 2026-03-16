@@ -70,7 +70,7 @@ describe('StrategyStudioPage', () => {
     expect(await screen.findByText('Trend Rider')).toBeTruthy();
     expect(screen.getByText('@volume-zscore')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Validar' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Backtest' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Backtest' }).length).toBeGreaterThan(0);
   });
 
   it('ejecuta validacion y backtest de la estrategia seleccionada', async () => {
@@ -91,13 +91,14 @@ describe('StrategyStudioPage', () => {
       </MemoryRouter>
     );
     await screen.findByText('Trend Rider');
+    await userEvent.click(screen.getByRole('button', { name: /Trend Rider/i }));
 
     await userEvent.click(screen.getByRole('button', { name: 'Validar' }));
     await waitFor(() => expect(strategiesApi.validate).toHaveBeenCalledWith(11, expect.any(Object)));
     expect(await screen.findByText('Signal')).toBeTruthy();
     expect(screen.getAllByText('long').length).toBeGreaterThan(0);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Backtest' }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'Backtest' })[0]);
     await waitFor(() => expect(strategiesApi.backtest).toHaveBeenCalledWith(11, expect.any(Object)));
     expect(await screen.findByText('8 trades')).toBeTruthy();
   });

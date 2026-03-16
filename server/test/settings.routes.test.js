@@ -1,0 +1,97 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('http');
+const jwt = require('jsonwebtoken');
+
+const app = require('../src/app');
+const config = require('../src/config');
+const settingsService = require('../src/services/settings.service');
+const hyperliquidAccountsService = require('../src/services/hyperliquid-accounts.service');
+
+async function listen(server) {
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  return `http://${address.address}:${address.port}`;
+}
+
+function buildToken(payload = {}) {
+  return jwt.sign({
+    userId: 1,
+    username: 'tester',
+    role: 'user',
+    ...payload,
+  }, config.jwt.secret);
+}
+
+test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegram', async () => {
+  const originalGetTelegram = settingsService.getTelegram;
+  const originalGetWallet = settingsService.getWallet;
+  const originalGetEtherscan = settingsService.getEtherscan;
+  const originalListAccounts = hyperliquidAccountsService.listAccounts;
+
+  settingsService.getTelegram = async () => ({
+    token: '1234567890',
+    chatId: '999',
+  });
+  settingsService.getWallet = async () => ({
+    id: 7,
+    alias: 'Cuenta principal',
+    address: '0xabc',
+    hasPrivateKey: true,
+  });
+  settingsService.getEtherscan = async () => ({
+    apiKey: 'secret-key',
+  });
+  hyperliquidAccountsService.listAccounts = async () => ([
+    { id: 1, isDefault: true },
+    { id: 2, isDefault: false },
+  ]);
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/settings`, {
+      headers: { Authorization: `Bearer ${buildToken()}` },
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.data.telegram.enabled, true);
+    assert.equal(json.data.telegram.token, '123456***');
+    assert.equal(json.data.wallet.alias, 'Cuenta principal');
+    assert.equal(json.data.etherscan.hasApiKey, true);
+    assert.deepEqual(json.data.hyperliquidAccounts, {
+      count: 2,
+      hasDefault: true,
+    });
+  } finally {
+    settingsService.getTelegram = originalGetTelegram;
+    settingsService.getWallet = originalGetWallet;
+    settingsService.getEtherscan = originalGetEtherscan;
+    hyperliquidAccountsService.listAccounts = originalListAccounts;
+    server.close();
+  }
+});
+
+test('PUT /api/settings/telegram valida token y chatId requeridos', async () => {
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/settings/telegram`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({ token: '', chatId: '' }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 400);
+    assert.match(json.error, /token y chatId son requeridos/i);
+  } finally {
+    server.close();
+  }
+});
