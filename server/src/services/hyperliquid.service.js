@@ -193,6 +193,19 @@ class HyperliquidService {
     return this._post(INFO_URL, { type: 'metaAndAssetCtxs' });
   }
 
+  /** Obtiene velas OHLCV de Hyperliquid */
+  async getCandleSnapshot({ asset, interval, startTime, endTime }) {
+    return this._post(INFO_URL, {
+      type: 'candleSnapshot',
+      req: {
+        coin: asset,
+        interval,
+        startTime,
+        endTime,
+      },
+    });
+  }
+
   /** Historial de trades de un usuario */
   async getUserFills(address) {
     const userAddress = address || this.address;

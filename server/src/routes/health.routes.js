@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const asyncHandler   = require('../middleware/async-handler');
 const db = require('../db');
 const hlWsClient = require('../websocket/hyperliquidWs');
 const runtimeStatus = require('../runtime/status');
@@ -13,32 +14,28 @@ router.get('/', (req, res) => {
   });
 });
 
-router.get('/ready', async (req, res, next) => {
+router.get('/ready', asyncHandler(async (req, res) => {
+  let dbReady = true;
   try {
-    let dbReady = true;
-    try {
-      await db.ensureConnection();
-    } catch {
-      dbReady = false;
-    }
-
-    const runtime = runtimeStatus.snapshot();
-    const ready = dbReady && runtime.bootstrapped;
-
-    res.status(ready ? 200 : 503).json({
-      status: ready ? 'ready' : 'degraded',
-      requestId: req.requestId,
-      checks: {
-        db: dbReady,
-        hyperliquidWs: !!hlWsClient.isConnected,
-        bootstrapped: runtime.bootstrapped,
-      },
-      runtime,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    next(err);
+    await db.ensureConnection();
+  } catch {
+    dbReady = false;
   }
-});
+
+  const runtime = runtimeStatus.snapshot();
+  const ready = dbReady && runtime.bootstrapped;
+
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'degraded',
+    requestId: req.requestId,
+    checks: {
+      db: dbReady,
+      hyperliquidWs: !!hlWsClient.isConnected,
+      bootstrapped: runtime.bootstrapped,
+    },
+    runtime,
+    timestamp: new Date().toISOString(),
+  });
+}));
 
 module.exports = router;

@@ -183,6 +183,32 @@ class TelegramService {
     ];
     return this.send(lines.join('\n'));
   }
+
+  notifyBotRuntimeEvent(event, bot, payload = {}) {
+    const labels = {
+      runtime_warning: { emoji: '⚠️', title: 'Bot con incidente' },
+      runtime_retry_scheduled: { emoji: '🔁', title: 'Bot reintentando' },
+      runtime_fallback_applied: { emoji: '🛟', title: 'Fallback aplicado' },
+      runtime_recovered: { emoji: '✅', title: 'Bot recuperado' },
+      runtime_paused: { emoji: '⛔', title: 'Bot pausado por seguridad' },
+    };
+    const meta = labels[event] || { emoji: 'ℹ️', title: 'Bot runtime' };
+    const when = new Date(payload.timestamp || Date.now()).toLocaleString('es-MX', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+    const lines = [
+      `${meta.emoji} <b>${meta.title}</b>`,
+      bot?.account ? this._fmtAccount(bot.account) : null,
+      `Bot: <b>#${bot?.id || '?'}</b> | ${bot?.asset || 'N/A'} | estado ${bot?.status || 'N/A'}`,
+      payload.stage ? `Etapa: ${payload.stage}` : null,
+      payload.message ? `Error: ${payload.message}` : null,
+      payload.actionTaken ? `Medida: ${payload.actionTaken}` : null,
+      payload.nextRetryAt ? `Proximo reintento: ${new Date(payload.nextRetryAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}` : null,
+      `Fecha: ${when}`,
+    ];
+    return this.send(lines.filter(Boolean).join('\n'));
+  }
 }
 
 module.exports = TelegramService;

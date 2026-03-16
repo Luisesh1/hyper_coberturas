@@ -7,28 +7,19 @@
 
 const TelegramService = require('./telegram.service');
 const settingsService = require('./settings.service');
+const { createRegistry } = require('./registry.factory');
 
-const registry = new Map(); // userId -> TelegramService
+const registry = createRegistry({
+  name: 'TelegramRegistry',
+  keyFn: (userId) => String(userId),
+  async buildFn(userId) {
+    const cfg = await settingsService.getTelegram(userId);
+    return new TelegramService(cfg.token || '', cfg.chatId || '');
+  },
+});
 
-async function getOrCreate(userId) {
-  if (registry.has(userId)) return registry.get(userId);
-
-  const cfg     = await settingsService.getTelegram(userId);
-  const service = new TelegramService(cfg.token || '', cfg.chatId || '');
-  registry.set(userId, service);
-  return service;
-}
-
-/** Recarga la instancia cuando el usuario actualiza su config */
-async function reload(userId) {
-  const cfg     = await settingsService.getTelegram(userId);
-  const service = new TelegramService(cfg.token || '', cfg.chatId || '');
-  registry.set(userId, service);
-  return service;
-}
-
-function get(userId) {
-  return registry.get(userId) || null;
-}
-
-module.exports = { getOrCreate, reload, get };
+module.exports = {
+  getOrCreate: registry.getOrCreate,
+  reload: registry.reload,
+  get: registry.get,
+};

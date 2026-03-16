@@ -16,14 +16,16 @@ async function bootstrapInfra(httpServer) {
     logger.warn('hl_ws_connect_failed', { error: err.message });
   }
 
+  let bootstrapOk = true;
   try {
     await loadActiveUsers(wss);
   } catch (err) {
+    bootstrapOk = false;
     runtimeStatus.markBootstrapError(err);
     logger.error('load_active_users_failed', { error: err.message });
   }
 
-  runtimeStatus.markBootstrapped();
+  if (bootstrapOk) runtimeStatus.markBootstrapped();
   return { wss };
 }
 

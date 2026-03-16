@@ -1,27 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { settingsApi, uniswapApi } from '../services/api';
+import { formatNumber, formatTimestamp, formatDuration } from '../utils/formatters';
 import styles from './UniswapPoolsPage.module.css';
 
 function shortAddress(value) {
   if (!value) return '—';
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
-
-function formatTimestamp(timestamp) {
-  if (!timestamp) return '—';
-  return new Date(timestamp * 1000).toLocaleString('es-MX', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
-}
-
-function formatNumber(value, digits = 2) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  return new Intl.NumberFormat('es-MX', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: digits,
-  }).format(numeric);
 }
 
 function formatCompactUsd(value) {
@@ -54,16 +38,6 @@ function formatPercent(value) {
   if (!Number.isFinite(n)) return 'N/A';
   const sign = n > 0 ? '+' : '';
   return `${sign}${formatNumber(n, Math.abs(n) >= 10 ? 2 : 4)}%`;
-}
-
-function formatDuration(ms) {
-  const numeric = Number(ms);
-  if (!Number.isFinite(numeric) || numeric <= 0) return '—';
-  const minutes = Math.max(1, Math.floor(numeric / 60000));
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
 }
 
 function formatPrice(value, baseSymbol, quoteSymbol) {

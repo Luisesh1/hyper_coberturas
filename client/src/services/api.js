@@ -168,3 +168,40 @@ export const uniswapApi = {
   scanPools: ({ wallet, network, version }) =>
     request('POST', '/uniswap/pools/scan', { wallet, network, version }),
 };
+
+// ------------------------------------------------------------------
+// Strategies / Indicators / Bots
+// ------------------------------------------------------------------
+export const strategiesApi = {
+  list: () => request('GET', '/strategies'),
+  getById: (id) => request('GET', `/strategies/${id}`),
+  create: (payload) => request('POST', '/strategies', payload),
+  update: (id, payload) => request('PUT', `/strategies/${id}`, payload),
+  remove: (id) => request('DELETE', `/strategies/${id}`),
+  validate: (id, payload = {}) => request('POST', `/strategies/${id}/validate`, payload),
+  backtest: (id, payload = {}) => request('POST', `/strategies/${id}/backtest`, payload),
+};
+
+export const indicatorsApi = {
+  list: () => request('GET', '/indicators'),
+  create: (payload) => request('POST', '/indicators', payload),
+  update: (id, payload) => request('PUT', `/indicators/${id}`, payload),
+  remove: (id) => request('DELETE', `/indicators/${id}`),
+};
+
+export const botsApi = {
+  list: () => request('GET', '/bots'),
+  getById: (id) => request('GET', `/bots/${id}`),
+  create: (payload) => request('POST', '/bots', payload),
+  update: (id, payload) => request('PUT', `/bots/${id}`, payload),
+  remove: (id) => request('DELETE', `/bots/${id}`),
+  duplicate: (id) => request('POST', `/bots/${id}/duplicate`, {}),
+  activate: (id) => request('POST', `/bots/${id}/activate`, {}),
+  pause: (id) => request('POST', `/bots/${id}/pause`, {}),
+  stop: (id) => request('POST', `/bots/${id}/stop`, {}),
+  getRuns: (id) => request('GET', `/bots/${id}/runs`),
+};
+
+export const backtestingApi = {
+  simulate: (payload) => request('POST', '/backtesting/simulate', payload),
+};

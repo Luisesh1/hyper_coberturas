@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const asyncHandler = require('../middleware/async-handler');
 const { authenticate } = require('../middleware/auth.middleware');
 const {
   scanPoolsCreatedByWallet,
@@ -12,16 +13,12 @@ router.get('/meta', (req, res) => {
   res.json({ success: true, data: getSupportMatrix() });
 });
 
-router.post('/pools/scan', async (req, res, next) => {
-  try {
-    const data = await scanPoolsCreatedByWallet({
-      ...(req.body || {}),
-      userId: req.user.userId,
-    });
-    res.json({ success: true, data });
-  } catch (err) {
-    next(err);
-  }
-});
+router.post('/pools/scan', asyncHandler(async (req, res) => {
+  const data = await scanPoolsCreatedByWallet({
+    ...(req.body || {}),
+    userId: req.user.userId,
+  });
+  res.json({ success: true, data });
+}));
 
 module.exports = router;

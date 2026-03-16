@@ -14,7 +14,7 @@ const balanceCacheService = require('./balance-cache.service');
 const { formatPrice, formatSize } = require('../utils/format');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
-const MARKET_ORDER_SLIPPAGE = 0.002; // 0.2%
+const MARKET_ORDER_SLIPPAGE = config.trading.marketOrderSlippage;
 
 class TradingService {
   /**

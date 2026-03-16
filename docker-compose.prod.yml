@@ -8,13 +8,15 @@
 #     ├── /ws     → server:3001  (WebSocket del bot)
 #     └── /*      → archivos estaticos del build de React (servidos por nginx)
 #
-# Uso:
-#   docker-compose -f docker-compose.prod.yml up --build -d
-#   docker-compose -f docker-compose.prod.yml down
-#   docker-compose -f docker-compose.prod.yml logs -f
+# Requisitos:
+#   1. Crear .env en la raiz con POSTGRES_PASSWORD y CLIENT_URL
+#   2. Crear server/.env con JWT_SECRET, SETTINGS_ENCRYPTION_KEY, etc.
+#   Ver DEPLOYMENT.md para instrucciones completas.
 #
-# Variables requeridas en server/.env:
-#   PRIVATE_KEY, WALLET_ADDRESS (y el resto del .env)
+# Uso:
+#   docker compose -f docker-compose.prod.yml up --build -d
+#   docker compose -f docker-compose.prod.yml down
+#   docker compose -f docker-compose.prod.yml logs -f
 # ══════════════════════════════════════════════
 
 services:
@@ -26,10 +28,53 @@ services:
       dockerfile: nginx/Dockerfile.prod
     container_name: testbot-nginx-prod
     ports:
-      - "80:80"
+      - "${NGINX_PORT:-80}:80"
     depends_on:
-      - server
+      server:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - testbot-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Base de datos PostgreSQL ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: testbot-postgres-prod
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-testbot}
+      POSTGRES_USER:     ${POSTGRES_USER:-testbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requerido — ver DEPLOYMENT.md}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backups:/backups
+    restart: unless-stopped
+    networks:
+      - testbot-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-testbot} -d ${POSTGRES_DB:-testbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # ── Backend Node.js (produccion, sin nodemon) ──────────────────────
   server:
@@ -42,9 +87,43 @@ services:
       - ./server/.env
     environment:
       NODE_ENV: production
-      CLIENT_URL: "http://localhost"
+      CLIENT_URL: "${CLIENT_URL:?CLIENT_URL requerido (ej: https://tudominio.com) — ver DEPLOYMENT.md}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-testbot}:${POSTGRES_PASSWORD:?requerido}@postgres:5432/${POSTGRES_DB:-testbot}"
     volumes:
-      # Solo persistir datos, no montar codigo fuente
-      - ./server/data:/app/data
+      - server_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - testbot-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
     # Sin 'ports': solo nginx accede al backend internamente
+
+volumes:
+  postgres_data:
+    name: testbot-postgres-data
+  postgres_backups:
+    name: testbot-postgres-backups
+  server_data:
+    name: testbot-server-data
+
+networks:
+  testbot-net:
+    name: testbot-network
+    driver: bridge

@@ -10,6 +10,7 @@
  */
 
 const { Router } = require('express');
+const asyncHandler = require('../middleware/async-handler');
 const authService = require('../services/auth.service');
 const { authenticate, requireSuperuser, requireSelfOrSuper } = require('../middleware/auth.middleware');
 
@@ -18,66 +19,42 @@ const router = Router();
 // Todos los endpoints requieren autenticación
 router.use(authenticate);
 
-router.get('/', requireSuperuser, async (req, res, next) => {
-  try {
-    const users = await authService.listUsers();
-    res.json({ success: true, data: users });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get('/', requireSuperuser, asyncHandler(async (req, res) => {
+  const users = await authService.listUsers();
+  res.json({ success: true, data: users });
+}));
 
-router.post('/', requireSuperuser, async (req, res, next) => {
-  try {
-    const user = await authService.createUser(req.body);
-    res.status(201).json({ success: true, data: user });
-  } catch (err) {
-    next(err);
-  }
-});
+router.post('/', requireSuperuser, asyncHandler(async (req, res) => {
+  const user = await authService.createUser(req.body);
+  res.status(201).json({ success: true, data: user });
+}));
 
-router.get('/:id', requireSelfOrSuper, async (req, res, next) => {
-  try {
-    const user = await authService.getUserById(parseInt(req.params.id, 10));
-    res.json({ success: true, data: user });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get('/:id', requireSelfOrSuper, asyncHandler(async (req, res) => {
+  const user = await authService.getUserById(parseInt(req.params.id, 10));
+  res.json({ success: true, data: user });
+}));
 
-router.put('/:id', requireSelfOrSuper, async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    // Los usuarios normales no pueden cambiar su propio rol
-    const body = { ...req.body };
-    if (req.user.role !== 'superuser') delete body.role;
+router.put('/:id', requireSelfOrSuper, asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  // Los usuarios normales no pueden cambiar su propio rol
+  const body = { ...req.body };
+  if (req.user.role !== 'superuser') delete body.role;
 
-    const user = await authService.updateUser(id, body);
-    res.json({ success: true, data: user });
-  } catch (err) {
-    next(err);
-  }
-});
+  const user = await authService.updateUser(id, body);
+  res.json({ success: true, data: user });
+}));
 
-router.put('/:id/active', requireSuperuser, async (req, res, next) => {
-  try {
-    const id     = parseInt(req.params.id, 10);
-    const active = Boolean(req.body.active);
-    const user   = await authService.setActive(id, active);
-    res.json({ success: true, data: user });
-  } catch (err) {
-    next(err);
-  }
-});
+router.put('/:id/active', requireSuperuser, asyncHandler(async (req, res) => {
+  const id     = parseInt(req.params.id, 10);
+  const active = Boolean(req.body.active);
+  const user   = await authService.setActive(id, active);
+  res.json({ success: true, data: user });
+}));
 
-router.put('/:id/role', requireSuperuser, async (req, res, next) => {
-  try {
-    const id   = parseInt(req.params.id, 10);
-    const user = await authService.setRole(id, req.body.role);
-    res.json({ success: true, data: user });
-  } catch (err) {
-    next(err);
-  }
-});
+router.put('/:id/role', requireSuperuser, asyncHandler(async (req, res) => {
+  const id   = parseInt(req.params.id, 10);
+  const user = await authService.setRole(id, req.body.role);
+  res.json({ success: true, data: user });
+}));
 
 module.exports = router;

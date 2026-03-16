@@ -56,6 +56,7 @@
 /* ── Nav horizontal (desktop) ──────────────────────────────────── */
 .modeNav {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   background: #0f1117;
   border-radius: 8px;

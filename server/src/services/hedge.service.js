@@ -20,9 +20,10 @@ const { placePositionProtection } = require('./protection.service');
 const { getTrackedPositionSize } = require('./hedge.state');
 const { formatPrice, formatSize, numericEqual } = require('../utils/format');
 const { ValidationError } = require('../errors/app-error');
+const config = require('../config');
 
-const MONITOR_INTERVAL_MS = 10_000;
-const CLOSING_TIMEOUT_MS = 90_000;
+const MONITOR_INTERVAL_MS = config.intervals.hedgeMonitorMs;
+const CLOSING_TIMEOUT_MS = config.intervals.hedgeClosingTimeoutMs;
 
 function getOrderCoin(order) {
   return String(order?.coin ?? order?.asset ?? '').toUpperCase();
@@ -723,7 +724,7 @@ class HedgeService extends EventEmitter {
 
   async _reconcileCancelPending(hedge) {
     // Timeout de cancelación: si lleva más de 5 minutos sin poder cancelar, forzar error
-    const CANCEL_TIMEOUT_MS = 5 * 60_000;
+    const CANCEL_TIMEOUT_MS = config.intervals.hedgeCancelTimeoutMs;
     if (hedge.cancelStartedAt && Date.now() - hedge.cancelStartedAt > CANCEL_TIMEOUT_MS) {
       hedge.status = 'error';
       hedge.error = 'Cancelación bloqueada por más de 5 min. Intervención manual requerida.';

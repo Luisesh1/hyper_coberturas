@@ -1,323 +1,17 @@
 /**
  * TradingContext.jsx
  *
- * Mantiene providers separados por dominio:
- *   - NotificationsContext
- *   - AccountsContext
- *   - MarketContext
- *   - AccountContext
- *   - HedgeContext
- *
- * useTradingContext() se conserva como fachada agregada para no romper la UI.
+ * Facade que compone los providers de dominio y expone
+ * useTradingContext() como API agregada para la UI.
  */
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-import { useWebSocket } from '../hooks/useWebSocket';
-import { hedgeApi, settingsApi, tradingApi } from '../services/api';
-import { formatAccountIdentity } from '../utils/hyperliquidAccounts';
-
-const STALE_THRESHOLD_MS = 60_000;
-
-const NotificationsContext = createContext(null);
-const AccountsContext = createContext(null);
-const MarketContext = createContext(null);
-const AccountContext = createContext(null);
-const HedgeContext = createContext(null);
-
-function NotificationsProvider({ children }) {
-  const [notifications, setNotifications] = useState([]);
-  const notifIdRef = useRef(0);
-
-  const addNotification = useCallback((type, message, duration = 5000) => {
-    const id = ++notifIdRef.current;
-    setNotifications((prev) => [...prev, { id, type, message }]);
-    setTimeout(() => {
-      setNotifications((prev) => prev.filter((item) => item.id !== id));
-    }, duration);
-  }, []);
-
-  const removeNotification = useCallback((id) => {
-    setNotifications((prev) => prev.filter((item) => item.id !== id));
-  }, []);
-
-  const value = useMemo(() => ({
-    notifications,
-    addNotification,
-    removeNotification,
-  }), [notifications, addNotification, removeNotification]);
-
-  return (
-    <NotificationsContext.Provider value={value}>
-      {children}
-    </NotificationsContext.Provider>
-  );
-}
-
-function useNotifications() {
-  const ctx = useContext(NotificationsContext);
-  if (!ctx) throw new Error('useNotifications debe usarse dentro de TradingProvider');
-  return ctx;
-}
-
-function AccountsProvider({ children }) {
-  const { addNotification } = useNotifications();
-  const [accounts, setAccounts] = useState([]);
-  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
-
-  const refreshAccounts = useCallback(async ({ refreshAccountId } = {}) => {
-    setIsLoadingAccounts(true);
-    try {
-      const data = await settingsApi.getHyperliquidAccounts(refreshAccountId);
-      setAccounts(Array.isArray(data) ? data : []);
-      return data;
-    } catch (err) {
-      addNotification('error', `Error al cargar cuentas: ${err.message}`);
-      setAccounts([]);
-      throw err;
-    } finally {
-      setIsLoadingAccounts(false);
-    }
-  }, [addNotification]);
-
-  const refreshAccountSummary = useCallback(async (accountId, { force = false } = {}) => {
-    if (!accountId) return null;
-    const data = await settingsApi.getHyperliquidAccountSummary(accountId, { refresh: force });
-    setAccounts((prev) => prev.map((account) => (
-      Number(account.id) === Number(accountId) ? { ...account, ...data } : account
-    )));
-    return data;
-  }, []);
-
-  useEffect(() => {
-    refreshAccounts().catch(() => {});
-  }, [refreshAccounts]);
-
-  const defaultAccountId = accounts.find((account) => account.isDefault)?.id ?? null;
-
-  const value = useMemo(() => ({
-    accounts,
-    defaultAccountId,
-    isLoadingAccounts,
-    refreshAccounts,
-    refreshAccountSummary,
-    setAccounts,
-  }), [accounts, defaultAccountId, isLoadingAccounts, refreshAccounts, refreshAccountSummary]);
-
-  return <AccountsContext.Provider value={value}>{children}</AccountsContext.Provider>;
-}
-
-function useAccounts() {
-  const ctx = useContext(AccountsContext);
-  if (!ctx) throw new Error('useAccounts debe usarse dentro de TradingProvider');
-  return ctx;
-}
-
-function MarketProvider({ children, onMessage }) {
-  const [prices, setPrices] = useState({});
-  const [isPriceStale, setIsPriceStale] = useState(false);
-  const lastPriceAtRef = useRef(null);
-
-  const handleWsMessage = useCallback((msg) => {
-    if (msg.type === 'hl_message' && msg.data?.channel === 'allMids' && msg.data?.data?.mids) {
-      lastPriceAtRef.current = Date.now();
-      setIsPriceStale(false);
-      setPrices(msg.data.data.mids);
-    }
-    onMessage?.(msg);
-  }, [onMessage]);
-
-  const { isConnected } = useWebSocket(handleWsMessage);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const last = lastPriceAtRef.current;
-      if (last && (Date.now() - last) > STALE_THRESHOLD_MS) {
-        setIsPriceStale(true);
-      }
-    }, 15_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const value = useMemo(() => ({
-    prices,
-    isConnected,
-    isPriceStale,
-  }), [prices, isConnected, isPriceStale]);
-
-  return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
-}
-
-function useMarket() {
-  const ctx = useContext(MarketContext);
-  if (!ctx) throw new Error('useMarket debe usarse dentro de TradingProvider');
-  return ctx;
-}
-
-function AccountProvider({ children }) {
-  const { addNotification } = useNotifications();
-  const [account, setAccount] = useState(null);
-  const [isLoadingAccount, setIsLoadingAccount] = useState(false);
-
-  const refreshAccount = useCallback(async ({ accountId, force = false } = {}) => {
-    if (!accountId) {
-      setAccount(null);
-      return null;
-    }
-
-    setIsLoadingAccount(true);
-    try {
-      const data = await tradingApi.getAccount({ accountId, refresh: force });
-      setAccount(data);
-      return data;
-    } catch (err) {
-      addNotification('error', `Error al cargar cuenta: ${err.message}`);
-      throw err;
-    } finally {
-      setIsLoadingAccount(false);
-    }
-  }, [addNotification]);
-
-  const openPosition = useCallback(async (params) => {
-    try {
-      const result = await tradingApi.openPosition(params);
-      addNotification('success', `${formatAccountIdentity(result.account)}\n${params.side.toUpperCase()} ${params.asset} abierto a mercado`);
-      await refreshAccount({ accountId: params.accountId, force: true });
-      return result;
-    } catch (err) {
-      addNotification('error', `Error al abrir: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification, refreshAccount]);
-
-  const closePosition = useCallback(async (params) => {
-    try {
-      const result = await tradingApi.closePosition(params);
-      addNotification('success', `${formatAccountIdentity(result.account)}\nPosicion ${params.asset} cerrada a mercado`);
-      await refreshAccount({ accountId: params.accountId, force: true });
-      return result;
-    } catch (err) {
-      addNotification('error', `Error al cerrar: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification, refreshAccount]);
-
-  const value = useMemo(() => ({
-    account,
-    isLoadingAccount,
-    refreshAccount,
-    openPosition,
-    closePosition,
-  }), [account, isLoadingAccount, refreshAccount, openPosition, closePosition]);
-
-  return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>;
-}
-
-function useAccount() {
-  const ctx = useContext(AccountContext);
-  if (!ctx) throw new Error('useAccount debe usarse dentro de TradingProvider');
-  return ctx;
-}
-
-function HedgeProvider({ children }) {
-  const { addNotification } = useNotifications();
-  const [hedges, setHedges] = useState([]);
-
-  const handleHedgeEvent = useCallback((msg) => {
-    if (msg.type !== 'hedge_event') return;
-    const { event, hedge } = msg;
-
-    setHedges((prev) => {
-      const exists = prev.find((item) => item.id === hedge.id);
-      if (exists) return prev.map((item) => (item.id === hedge.id ? hedge : item));
-      return [hedge, ...prev];
-    });
-
-    const dir = (hedge.direction || 'short').toUpperCase();
-    const accountLabel = formatAccountIdentity(hedge.account);
-    const notifMap = {
-      created: ['info', 5000, `Cobertura creada\n${accountLabel} · ${hedge.asset} · entrada $${hedge.entryPrice}`],
-      opened: ['alert', 12000, `POSICION ${dir} ABIERTA\n${accountLabel}\n${hedge.asset} · $${Number(hedge.openPrice).toLocaleString()} · ${hedge.leverage}x Isolated`],
-      reconciled: ['info', 4000, `Cobertura reconciliada\n${accountLabel} · #${hedge.id}`],
-      protection_missing: ['error', 8000, `Cobertura sin proteccion confirmada\n${accountLabel} · #${hedge.id}`],
-      cycleComplete: ['success', 6000, `Ciclo completado\n${accountLabel}\n${dir} ${hedge.asset} cerrado a $${msg.cycle?.closePrice}`],
-      cancelled: ['info', 5000, `Cobertura cancelada\n${accountLabel} · #${hedge.id}`],
-      error: ['error', 8000, `Error en cobertura\n${accountLabel} · #${hedge.id}: ${msg.message}`],
-    };
-    const [type, duration, message] = notifMap[event] || [];
-    if (type) addNotification(type, message, duration);
-  }, [addNotification]);
-
-  const refreshHedges = useCallback(async ({ accountId } = {}) => {
-    try {
-      const data = await hedgeApi.getAll({ accountId });
-      setHedges(data);
-      return data;
-    } catch (err) {
-      addNotification('error', `Error al cargar coberturas: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification]);
-
-  const createHedge = useCallback(async (params) => {
-    try {
-      return await hedgeApi.create(params);
-    } catch (err) {
-      addNotification('error', `Error al crear cobertura: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification]);
-
-  const cancelHedge = useCallback(async (id) => {
-    try {
-      const hedge = await hedgeApi.cancel(id);
-      setHedges((prev) => prev.map((item) => (item.id === id ? hedge : item)));
-      addNotification('info', `Cobertura cancelada\n${formatAccountIdentity(hedge.account)} · #${id}`);
-    } catch (err) {
-      addNotification('error', `Error al cancelar: ${err.message}`);
-    }
-  }, [addNotification]);
-
-  const value = useMemo(() => ({
-    hedges,
-    refreshHedges,
-    createHedge,
-    cancelHedge,
-    handleHedgeEvent,
-  }), [hedges, refreshHedges, createHedge, cancelHedge, handleHedgeEvent]);
-
-  return <HedgeContext.Provider value={value}>{children}</HedgeContext.Provider>;
-}
-
-function useHedges() {
-  const ctx = useContext(HedgeContext);
-  if (!ctx) throw new Error('useHedges debe usarse dentro de TradingProvider');
-  return ctx;
-}
-
-function TradingProviders({ children }) {
-  const hedgeMessageRef = useRef(null);
-
-  return (
-    <NotificationsProvider>
-      <AccountsProvider>
-        <HedgeProvider>
-          <HedgeContextBridge onReady={(handler) => { hedgeMessageRef.current = handler; }} />
-          <MarketProvider onMessage={(msg) => hedgeMessageRef.current?.(msg)}>
-            <AccountProvider>{children}</AccountProvider>
-          </MarketProvider>
-        </HedgeProvider>
-      </AccountsProvider>
-    </NotificationsProvider>
-  );
-}
+import { useEffect, useRef } from 'react';
+import { NotificationsProvider, useNotifications } from './NotificationsContext';
+import { AccountsProvider, useAccounts } from './AccountsContext';
+import { MarketProvider, useMarket } from './MarketContext';
+import { AccountProvider, useAccount } from './AccountContext';
+import { HedgeProvider, useHedges } from './HedgeContext';
+import { BotEventsProvider, useBotEvents } from './BotEventsContext';
 
 function HedgeContextBridge({ onReady }) {
   const { handleHedgeEvent } = useHedges();
@@ -327,6 +21,42 @@ function HedgeContextBridge({ onReady }) {
   }, [handleHedgeEvent, onReady]);
 
   return null;
+}
+
+function BotEventsBridge({ onReady }) {
+  const { handleBotEvent } = useBotEvents();
+
+  useEffect(() => {
+    onReady(handleBotEvent);
+  }, [handleBotEvent, onReady]);
+
+  return null;
+}
+
+function TradingProviders({ children }) {
+  const hedgeMessageRef = useRef(null);
+  const botMessageRef = useRef(null);
+
+  return (
+    <NotificationsProvider>
+      <AccountsProvider>
+        <BotEventsProvider>
+          <HedgeProvider>
+            <HedgeContextBridge onReady={(handler) => { hedgeMessageRef.current = handler; }} />
+            <BotEventsBridge onReady={(handler) => { botMessageRef.current = handler; }} />
+            <MarketProvider
+              onMessage={(msg) => {
+                hedgeMessageRef.current?.(msg);
+                botMessageRef.current?.(msg);
+              }}
+            >
+              <AccountProvider>{children}</AccountProvider>
+            </MarketProvider>
+          </HedgeProvider>
+        </BotEventsProvider>
+      </AccountsProvider>
+    </NotificationsProvider>
+  );
 }
 
 export function TradingProvider({ children }) {
@@ -339,12 +69,14 @@ export function useTradingContext() {
   const market = useMarket();
   const account = useAccount();
   const hedges = useHedges();
+  const bots = useBotEvents();
 
   return {
     ...accounts,
     ...market,
     ...account,
     ...hedges,
+    ...bots,
     notifications: notifications.notifications,
     addNotification: notifications.addNotification,
     removeNotification: notifications.removeNotification,

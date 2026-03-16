@@ -17,10 +17,10 @@
 const WebSocket = require('ws');
 const config = require('../config');
 
-const RECONNECT_DELAY_MS = 5000;
-const PING_INTERVAL_MS = 30000;
-const WATCHDOG_INTERVAL_MS = 60_000;    // verificar cada 60s
-const WATCHDOG_MAX_SILENCE_MS = 90_000; // forzar reconexión tras 90s sin datos
+const RECONNECT_DELAY_MS = config.intervals.wsReconnectDelayMs;
+const PING_INTERVAL_MS = config.intervals.wsPingIntervalMs;
+const WATCHDOG_INTERVAL_MS = config.intervals.wsWatchdogIntervalMs;
+const WATCHDOG_MAX_SILENCE_MS = config.intervals.wsWatchdogMaxSilenceMs;
 
 class HyperliquidWsClient {
   constructor() {

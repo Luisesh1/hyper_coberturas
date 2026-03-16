@@ -7,6 +7,10 @@ const hedgeRoutes    = require('./hedge.routes');
 const settingsRoutes = require('./settings.routes');
 const healthRoutes   = require('./health.routes');
 const uniswapRoutes  = require('./uniswap.routes');
+const strategiesRoutes = require('./strategies.routes');
+const indicatorsRoutes = require('./indicators.routes');
+const botsRoutes = require('./bots.routes');
+const backtestingRoutes = require('./backtesting.routes');
 
 const router = Router();
 
@@ -18,5 +22,9 @@ router.use('/hedge',    hedgeRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/health',   healthRoutes);
 router.use('/uniswap',  uniswapRoutes);
+router.use('/strategies', strategiesRoutes);
+router.use('/indicators', indicatorsRoutes);
+router.use('/bots', botsRoutes);
+router.use('/backtesting', backtestingRoutes);
 
 module.exports = router;

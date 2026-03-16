@@ -12,11 +12,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { getToken } from '../services/sessionStore';
 
-// Construir URL WS relativa al host actual, incluyendo el token JWT
+// Construir URL WS relativa al host actual (token se envía por mensaje, no por query)
 function getWsUrl() {
-  const base  = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
-  const token = getToken();
-  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  return import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
 }
 
 const PING_INTERVAL_MS      = 25_000;  // enviar ping cada 25s
@@ -67,10 +65,16 @@ export function useWebSocket(onMessage) {
     // ── onopen ─────────────────────────────────────────────────────────
     ws.onopen = () => {
       if (unmountedRef.current) { ws.close(); return; }
+
+      // Autenticar por mensaje (no por query param)
+      const token = getToken();
+      if (token) {
+        ws.send(JSON.stringify({ type: 'auth', token }));
+      }
+
       setIsConnected(true);
       retryCountRef.current = 0;
       lastMsgAtRef.current  = Date.now();
-      console.log('[WS] Conectado');
 
       // Ping periódico para mantener viva la conexión
       pingRef.current = setInterval(() => {

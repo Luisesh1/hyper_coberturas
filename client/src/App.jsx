@@ -8,14 +8,21 @@ import { HedgePanel } from './components/HedgePanel/HedgePanel';
 import SettingsPanel from './components/SettingsPanel/SettingsPanel';
 import UsersPanel from './components/UsersPanel/UsersPanel';
 import { Notifications } from './components/Layout/Notifications';
+import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
 import UniswapPoolsPage from './pages/UniswapPoolsPage';
+import StrategyStudioPage from './pages/StrategyStudio/StrategyStudioPage';
+import BotsPage from './pages/Bots/BotsPage';
+import BacktestingPage from './pages/BacktestingPage';
 import styles from './App.module.css';
 
 const BASE_NAV = [
   { id: 'manual',   path: '/trade',      label: 'Trading Manual', activeClass: 'modeBtnActive',  title: 'Trading' },
   { id: 'hedge',    path: '/coberturas', label: 'Coberturas',     activeClass: 'modeHedgeActive', title: 'Coberturas' },
+  { id: 'strategies', path: '/estrategias', label: 'Estrategias', activeClass: 'modeBtnActive', title: 'Estrategias' },
+  { id: 'backtesting', path: '/backtesting', label: 'Backtesting', activeClass: 'modeBtnActive', title: 'Backtesting' },
+  { id: 'bots', path: '/bots', label: 'Bots', activeClass: 'modeBtnActive', title: 'Bots' },
   { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
@@ -119,15 +126,20 @@ function AppContent() {
         </aside>
 
         <section className={styles.content}>
-          <Routes>
-            <Route path="/"           element={<Navigate to="/trade" replace />} />
-            <Route path="/trade"      element={<TradingPanel selectedAsset={selectedAsset} />} />
-            <Route path="/coberturas" element={<HedgePanel selectedAsset={selectedAsset} />} />
-            <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
-            <Route path="/config"     element={<SettingsPanel />} />
-            {isSuperuser && <Route path="/usuarios" element={<UsersPanel />} />}
-            <Route path="*"           element={<Navigate to="/trade" replace />} />
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/"           element={<Navigate to="/trade" replace />} />
+              <Route path="/trade"      element={<TradingPanel selectedAsset={selectedAsset} />} />
+              <Route path="/coberturas" element={<HedgePanel selectedAsset={selectedAsset} />} />
+              <Route path="/estrategias" element={<StrategyStudioPage />} />
+              <Route path="/backtesting" element={<BacktestingPage />} />
+              <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
+              <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
+              <Route path="/config"     element={<SettingsPanel />} />
+              {isSuperuser && <Route path="/usuarios" element={<UsersPanel />} />}
+              <Route path="*"           element={<Navigate to="/trade" replace />} />
+            </Routes>
+          </ErrorBoundary>
         </section>
       </main>
 

@@ -10,45 +10,30 @@
  */
 
 const { Router } = require('express');
+const asyncHandler  = require('../middleware/async-handler');
 const marketService = require('../services/market.service');
 
 const router = Router();
 
-router.get('/prices', async (req, res, next) => {
-  try {
-    const prices = await marketService.getAllPrices();
-    res.json({ success: true, data: prices });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get('/prices', asyncHandler(async (req, res) => {
+  const prices = await marketService.getAllPrices();
+  res.json({ success: true, data: prices });
+}));
 
-router.get('/prices/:asset', async (req, res, next) => {
-  try {
-    const { asset } = req.params;
-    const data = await marketService.getPrice(asset);
-    res.json({ success: true, data });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get('/prices/:asset', asyncHandler(async (req, res) => {
+  const { asset } = req.params;
+  const data = await marketService.getPrice(asset);
+  res.json({ success: true, data });
+}));
 
-router.get('/assets', async (req, res, next) => {
-  try {
-    const assets = await marketService.getAvailableAssets();
-    res.json({ success: true, data: assets });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get('/assets', asyncHandler(async (req, res) => {
+  const assets = await marketService.getAvailableAssets();
+  res.json({ success: true, data: assets });
+}));
 
-router.get('/contexts', async (req, res, next) => {
-  try {
-    const contexts = await marketService.getAssetContexts();
-    res.json({ success: true, data: contexts });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get('/contexts', asyncHandler(async (req, res) => {
+  const contexts = await marketService.getAssetContexts();
+  res.json({ success: true, data: contexts });
+}));
 
 module.exports = router;

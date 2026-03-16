@@ -21,4 +21,6 @@ FROM base AS production
 RUN npm ci --omit=dev
 COPY . .
 EXPOSE 3001
+HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=30s \
+  CMD node -e "fetch('http://localhost:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 CMD ["node", "index.js"]

@@ -104,3 +104,90 @@ test('openPosition refresca cache y notifica incluyendo la cuenta', async () => 
     release();
   }
 });
+
+test('closePosition refresca cache y notifica incluyendo la cuenta', async () => {
+  const { service, tgCalls, account } = createTrading({
+    hl: {
+      getClearinghouseState: async () => ({
+        assetPositions: [{
+          position: {
+            coin: 'BTC',
+            szi: '0.015',
+          },
+        }],
+      }),
+      getAssetMeta: async () => ({ index: 0, szDecimals: 3 }),
+      getAllMids: async () => ({ BTC: '51000' }),
+      placeOrder: async () => ({ statuses: ['ok'] }),
+    },
+  });
+  const cacheCalls = [];
+  const release = withPatched(balanceCacheService, {
+    refreshSnapshot: async (userId, accountId) => cacheCalls.push([userId, accountId]),
+  });
+
+  try {
+    const result = await service.closePosition({
+      asset: 'BTC',
+      size: 0.01,
+    });
+
+    assert.equal(result.account.alias, account.alias);
+    assert.equal(result.action, 'close');
+    assert.equal(result.closedSize, 0.01);
+    assert.deepEqual(cacheCalls, [[1, 8]]);
+    assert.equal(tgCalls[0][0], 'close');
+    assert.equal(tgCalls[0][1].account.alias, account.alias);
+  } finally {
+    release();
+  }
+});
+
+test('closePosition falla si no existe posicion abierta y no refresca cache', async () => {
+  const { service, tgCalls } = createTrading({
+    hl: {
+      getClearinghouseState: async () => ({
+        assetPositions: [],
+      }),
+    },
+  });
+  const cacheCalls = [];
+  const release = withPatched(balanceCacheService, {
+    refreshSnapshot: async (userId, accountId) => cacheCalls.push([userId, accountId]),
+  });
+
+  try {
+    await assert.rejects(
+      () => service.closePosition({ asset: 'BTC' }),
+      /No existe posicion abierta en BTC/
+    );
+    assert.deepEqual(cacheCalls, []);
+    assert.deepEqual(tgCalls, []);
+  } finally {
+    release();
+  }
+});
+
+test('cancelOrder refresca cache y devuelve la cuenta', async () => {
+  const { service, account } = createTrading({
+    hl: {
+      getAssetIndex: async () => 5,
+      cancelOrder: async () => ({ ok: true, cancelled: 123 }),
+    },
+  });
+  const cacheCalls = [];
+  const release = withPatched(balanceCacheService, {
+    refreshSnapshot: async (userId, accountId) => cacheCalls.push([userId, accountId]),
+  });
+
+  try {
+    const result = await service.cancelOrder('BTC', 123);
+
+    assert.equal(result.success, true);
+    assert.equal(result.account.alias, account.alias);
+    assert.equal(result.result.cancelled, 123);
+    assert.deepEqual(cacheCalls, [[1, 8]]);
+  } finally {
+    release();
+  }
+});

@@ -6,74 +6,61 @@
 
 const HyperliquidService = require('./hyperliquid.service');
 const hyperliquidAccountsService = require('./hyperliquid-accounts.service');
+const { createRegistry } = require('./registry.factory');
 
-const registry = new Map(); // `${userId}:${accountId}` -> { service, account }
-
-function key(userId, accountId) {
-  return `${userId}:${accountId}`;
-}
-
-async function buildEntry(userId, accountId) {
-  const account = await hyperliquidAccountsService.resolveAccount(userId, accountId, {
-    includePrivateKey: true,
-  });
-  const service = new HyperliquidService({
-    privateKey: account.privateKey,
-    address: account.address,
-  });
-  registry.set(key(userId, account.id), { service, account });
-  return service;
-}
+const registry = createRegistry({
+  name: 'HyperliquidRegistry',
+  keyFn: (userId, accountId) => `${userId}:${accountId}`,
+  async buildFn(userId, accountId) {
+    const account = await hyperliquidAccountsService.resolveAccount(userId, accountId, {
+      includePrivateKey: true,
+    });
+    const service = new HyperliquidService({
+      privateKey: account.privateKey,
+      address: account.address,
+    });
+    // Adjuntar metadata de cuenta para routing en WS
+    service._account = account;
+    return service;
+  },
+});
 
 async function getOrCreate(userId, accountId) {
   const account = await hyperliquidAccountsService.resolveAccount(userId, accountId);
-  const entryKey = key(userId, account.id);
-  if (registry.has(entryKey)) return registry.get(entryKey).service;
-  return buildEntry(userId, account.id);
+  return registry.getOrCreate(userId, account.id);
 }
 
 async function reload(userId, accountId) {
   if (accountId != null) {
-    registry.delete(key(userId, accountId));
+    registry.destroy(userId, accountId);
     return getOrCreate(userId, accountId);
   }
-
-  for (const entryKey of registry.keys()) {
-    if (entryKey.startsWith(`${userId}:`)) {
-      registry.delete(entryKey);
-    }
-  }
+  registry.destroyByPrefix(`${userId}:`);
   return null;
 }
 
 function get(userId, accountId) {
   if (accountId == null) return null;
-  return registry.get(key(userId, accountId))?.service || null;
+  return registry.get(userId, accountId);
 }
 
 function destroy(userId, accountId) {
-  registry.delete(key(userId, accountId));
+  registry.destroy(userId, accountId);
 }
 
 function getAllEntries() {
   const result = [];
-  for (const [entryKey, entry] of registry.entries()) {
+  for (const [entryKey, service] of registry.entries()) {
     const [userId, accountId] = entryKey.split(':');
     result.push({
       userId: Number(userId),
       accountId: Number(accountId),
-      address: entry.service.address,
-      service: entry.service,
-      account: entry.account,
+      address: service.address,
+      service,
+      account: service._account,
     });
   }
   return result;
 }
 
-module.exports = {
-  destroy,
-  get,
-  getAllEntries,
-  getOrCreate,
-  reload,
-};
+module.exports = { destroy, get, getAllEntries, getOrCreate, reload };

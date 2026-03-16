@@ -6,7 +6,7 @@ const logger = require('../services/logger.service');
  */
 function errorHandler(err, req, res, _next) {
   const status = err.status || err.statusCode || 500;
-  const message = err.message || 'Error interno del servidor';
+  const rawMessage = err.message || 'Error interno del servidor';
 
   logger.error('http_error', {
     requestId: req.requestId,
@@ -14,16 +14,22 @@ function errorHandler(err, req, res, _next) {
     path: req.path,
     status,
     code: err.code || 'UNHANDLED_ERROR',
-    message,
+    message: rawMessage,
   });
+
+  // En producción, no exponer mensajes internos en errores 500
+  const IS_PROD = process.env.NODE_ENV === 'production';
+  const safeMessage = (IS_PROD && status >= 500)
+    ? 'Error interno del servidor'
+    : rawMessage;
 
   res.status(status).json({
     success: false,
-    error: message,
+    error: safeMessage,
     code: err.code || 'UNHANDLED_ERROR',
     requestId: req.requestId,
-    ...(err.details ? { details: err.details } : {}),
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    ...(err.details && !IS_PROD ? { details: err.details } : {}),
+    ...(!IS_PROD && { stack: err.stack }),
   });
 }
 

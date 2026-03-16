@@ -1,7 +1,8 @@
 const hlRegistry = require('./hyperliquid.registry');
+const config = require('../config');
 
-const CACHE_TTL_MS = 30_000;
-const REFRESH_INTERVAL_MS = 30_000;
+const CACHE_TTL_MS = config.intervals.balanceCacheTtlMs;
+const REFRESH_INTERVAL_MS = config.intervals.balanceRefreshMs;
 
 const cache = new Map();
 let refreshTimer = null;
@@ -112,6 +113,13 @@ async function getSnapshot(userId, accountId, { force = false } = {}) {
   return refreshSnapshot(userId, accountId);
 }
 
+function getCachedSnapshot(userId, accountId, { maxAgeMs = Infinity } = {}) {
+  const entry = cache.get(key(userId, accountId));
+  if (!entry?.value) return null;
+  if ((Date.now() - entry.lastUpdatedAt) > maxAgeMs) return null;
+  return entry.value;
+}
+
 async function getBalance(userId, accountId, { force = false } = {}) {
   const snapshot = await getSnapshot(userId, accountId, { force });
   return {
@@ -156,6 +164,7 @@ function invalidateUser(userId) {
 module.exports = {
   enrichAccounts,
   getBalance,
+  getCachedSnapshot,
   getSnapshot,
   invalidateAccount,
   invalidateUser,
