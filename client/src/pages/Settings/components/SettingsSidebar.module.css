@@ -1,0 +1,87 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.heading {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-hint);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 0 12px 8px;
+  margin: 0;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  width: 100%;
+}
+.item:hover { background: var(--bg-hover); }
+
+.itemActive {
+  background: var(--bg-hover);
+  border-color: var(--indigo-border);
+  border-left: 2px solid var(--indigo);
+}
+
+.itemIcon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+.itemActive .itemIcon { color: var(--indigo); }
+
+.itemBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.itemLabel {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.itemHint {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--text-hint);
+  margin-top: 1px;
+}
+
+.badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.badgeGreen {
+  color: var(--green);
+  background: var(--green-bg);
+}
+
+.badgeOff {
+  color: var(--text-hint);
+  background: rgba(71, 85, 105, 0.2);
+}

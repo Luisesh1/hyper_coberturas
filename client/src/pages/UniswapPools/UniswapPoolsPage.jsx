@@ -37,10 +37,12 @@ export default function UniswapPoolsPage() {
   const [activeTab, setActiveTab] = useState('results');
   const { dialog, confirm } = useConfirmAction();
 
-  const loadProtectedPools = useCallback(async () => {
+  const loadProtectedPools = useCallback(async ({ force = false } = {}) => {
     setIsLoadingProtected(true);
     try {
-      const data = await uniswapApi.listProtectedPools();
+      const data = force
+        ? await uniswapApi.refreshProtectedPools()
+        : await uniswapApi.listProtectedPools();
       setProtectedPools(data);
       setProtectedRefreshedAt(Date.now());
       setResult((prev) => mergeResultProtections(prev, data));
@@ -344,7 +346,7 @@ export default function UniswapPoolsPage() {
             <button
               type="button"
               className={styles.refreshBtn}
-              onClick={() => loadProtectedPools()}
+              onClick={() => loadProtectedPools({ force: true })}
               disabled={isLoadingProtected}
             >
               {isLoadingProtected ? 'Actualizando...' : 'Refrescar'}

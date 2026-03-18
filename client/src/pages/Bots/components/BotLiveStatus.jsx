@@ -1,7 +1,39 @@
-import { formatDate } from '../../../utils/formatters';
+import { formatDate, formatNumber } from '../../../utils/formatters';
 import styles from './BotLiveStatus.module.css';
 
-export function BotLiveStatus({ bot }) {
+function computePerformance(runs = []) {
+  const closedTrades = runs
+    .map((run) => run?.details?.closedTrade)
+    .filter((trade) => Number.isFinite(Number(trade?.pnl)));
+
+  const tradeCount = closedTrades.length;
+  const netPnl = closedTrades.reduce((acc, trade) => acc + Number(trade.pnl || 0), 0);
+  const wins = closedTrades.filter((trade) => Number(trade.pnl || 0) >= 0).length;
+  const bestTrade = closedTrades.reduce((acc, trade) => (
+    acc == null ? Number(trade.pnl) : Math.max(acc, Number(trade.pnl))
+  ), null);
+  const worstTrade = closedTrades.reduce((acc, trade) => (
+    acc == null ? Number(trade.pnl) : Math.min(acc, Number(trade.pnl))
+  ), null);
+
+  return {
+    tradeCount,
+    winRate: tradeCount ? Number(((wins / tradeCount) * 100).toFixed(2)) : null,
+    netPnl: tradeCount ? Number(netPnl.toFixed(2)) : null,
+    avgTrade: tradeCount ? Number((netPnl / tradeCount).toFixed(2)) : null,
+    bestTrade: tradeCount ? bestTrade : null,
+    worstTrade: tradeCount ? worstTrade : null,
+  };
+}
+
+function formatSignedUsd(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+  const sign = numeric > 0 ? '+' : numeric < 0 ? '-' : '';
+  return `${sign}$${formatNumber(Math.abs(numeric), 2)}`;
+}
+
+export function BotLiveStatus({ bot, runs = [] }) {
   if (!bot) {
     return (
       <div className={styles.panel}>
@@ -11,8 +43,16 @@ export function BotLiveStatus({ bot }) {
     );
   }
 
+  const performance = computePerformance(runs);
+  const pnlTone = performance.netPnl > 0 ? 'healthy' : performance.netPnl < 0 ? 'negative' : null;
+  const winRateTone = performance.winRate >= 50 ? 'healthy' : performance.winRate != null ? 'negative' : null;
   const metrics = [
     { label: 'Runtime', value: bot.runtime?.state || 'healthy', tone: bot.runtime?.state },
+    { label: 'PnL real', value: formatSignedUsd(performance.netPnl), tone: pnlTone },
+    { label: 'Win rate real', value: performance.winRate != null ? `${formatNumber(performance.winRate, 2)}%` : '—', tone: winRateTone },
+    { label: 'Trades cerrados', value: String(performance.tradeCount || 0) },
+    { label: 'Prom. trade', value: formatSignedUsd(performance.avgTrade) },
+    { label: 'Mejor / peor', value: performance.tradeCount ? `${formatSignedUsd(performance.bestTrade)} / ${formatSignedUsd(performance.worstTrade)}` : '—' },
     { label: 'Ultima evaluacion', value: formatDate(bot.lastEvaluatedAt) },
     { label: 'Ultima vela', value: formatDate(bot.lastCandleAt) },
     { label: 'Signal', value: bot.lastSignal?.type || '—' },

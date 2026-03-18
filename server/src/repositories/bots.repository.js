@@ -196,7 +196,7 @@ async function appendRun(userId, botId, payload) {
   return rows[0];
 }
 
-async function listRuns(userId, botId, { limit = 50 } = {}) {
+async function listRuns(userId, botId, { limit = 500 } = {}) {
   const { rows } = await db.query(
     `SELECT *
        FROM bot_runs

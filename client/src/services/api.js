@@ -168,6 +168,7 @@ export const uniswapApi = {
   scanPools: ({ wallet, network, version }) =>
     request('POST', '/uniswap/pools/scan', { wallet, network, version }),
   listProtectedPools: () => request('GET', '/uniswap/protected-pools'),
+  refreshProtectedPools: () => request('POST', '/uniswap/protected-pools/refresh', {}),
   createProtectedPool: ({ pool, accountId, leverage, configuredNotionalUsd, valueMultiplier, stopLossDifferencePct }) =>
     request('POST', '/uniswap/protected-pools', { pool, accountId, leverage, configuredNotionalUsd, valueMultiplier, stopLossDifferencePct }),
   deactivateProtectedPool: (id) =>

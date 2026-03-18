@@ -5,7 +5,7 @@ import { TradingProvider } from './context/TradingContext';
 import { PricePanel } from './components/PricePanel/PricePanel';
 import { TradingPanel } from './components/TradingPanel/TradingPanel';
 import { HedgePanel } from './components/HedgePanel/HedgePanel';
-import SettingsPanel from './components/SettingsPanel/SettingsPanel';
+import SettingsPage from './pages/Settings/SettingsPage';
 import UsersPanel from './components/UsersPanel/UsersPanel';
 import { Notifications } from './components/Layout/Notifications';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
@@ -135,7 +135,7 @@ function AppContent() {
               <Route path="/backtesting" element={<BacktestingPage />} />
               <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
               <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
-              <Route path="/config"     element={<SettingsPanel />} />
+              <Route path="/config"     element={<SettingsPage />} />
               {isSuperuser && <Route path="/usuarios" element={<UsersPanel />} />}
               <Route path="*"           element={<Navigate to="/trade" replace />} />
             </Routes>

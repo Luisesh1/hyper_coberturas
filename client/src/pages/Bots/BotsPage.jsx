@@ -187,7 +187,7 @@ function BotsPage({ selectedAsset }) {
           </form>
 
           <div className={styles.bottomGrid}>
-            <BotLiveStatus bot={botForm.selected} />
+            <BotLiveStatus bot={botForm.selected} runs={botForm.runs} />
             <BotRunLogs runs={botForm.runs} />
           </div>
         </div>

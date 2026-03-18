@@ -56,6 +56,10 @@
   color: var(--yellow);
 }
 
+.tone_negative {
+  color: var(--red);
+}
+
 .tone_healthy {
   color: var(--green);
 }

@@ -1,0 +1,170 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 0.76rem;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.addBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--indigo);
+  background: var(--indigo-bg);
+  border: 1px solid var(--indigo-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  white-space: nowrap;
+}
+.addBtn:hover { background: rgba(99, 102, 241, 0.2); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  transition: border-color var(--transition-fast);
+}
+.card:hover { border-color: var(--border-subtle); }
+
+.cardDefault {
+  border-color: var(--green-border);
+}
+
+.cardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.cardAlias {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.badgeDefault {
+  color: var(--green);
+  background: var(--green-bg);
+}
+
+.badgeActive {
+  color: var(--text-hint);
+  background: rgba(71, 85, 105, 0.2);
+}
+
+.cardMeta {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.cardBalance {
+  font-size: 0.78rem;
+  color: var(--green);
+  font-weight: 600;
+}
+
+.cardActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.defaultRadio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex: 1;
+}
+
+.actionBtn {
+  padding: 6px 14px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.actionBtn:hover { color: var(--text-secondary); border-color: var(--text-tertiary); }
+
+.deleteBtn {
+  padding: 6px 14px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--red-border);
+  border-radius: var(--radius-sm);
+  color: var(--red);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.deleteBtn:not(:disabled):hover { background: var(--red-bg); }
+.deleteBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.empty {
+  padding: 32px 20px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 0.82rem;
+}
+
+.emptyHint {
+  font-size: 0.74rem;
+  color: var(--text-hint);
+  margin-top: 6px;
+}

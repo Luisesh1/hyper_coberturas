@@ -320,6 +320,19 @@ class BotRuntime extends EventEmitter {
     });
   }
 
+  _buildClosedTradeDetails(closeResult, extras = {}) {
+    if (!closeResult || closeResult.action !== 'close') return null;
+    return {
+      asset: closeResult.asset || this.bot.asset,
+      side: closeResult.closedSide || extras.side || null,
+      size: closeResult.closedSize ?? null,
+      entryPrice: closeResult.openPrice ?? null,
+      closePrice: closeResult.closePrice ?? null,
+      pnl: closeResult.pnl ?? null,
+      ...extras,
+    };
+  }
+
   async _markFallback(stage, message, candle, details = {}) {
     const runtime = this._runtime();
     const now = Date.now();
@@ -739,8 +752,9 @@ class BotRuntime extends EventEmitter {
       if (!position) {
         return { action: 'close_skip', details: { reason: 'no_position' } };
       }
+      let closeResult;
       try {
-        await trading.closePosition({ accountId: this.bot.accountId, asset: normalizedAsset });
+        closeResult = await trading.closePosition({ accountId: this.bot.accountId, asset: normalizedAsset });
       } catch (error) {
         throw new RuntimeStageError('execution', error.message, {
           signal,
@@ -751,16 +765,24 @@ class BotRuntime extends EventEmitter {
           cause: error,
         });
       }
-      return { action: 'close', details: { side: position.side } };
+      return {
+        action: 'close',
+        details: {
+          side: position.side,
+          closedTrade: this._buildClosedTradeDetails(closeResult, { reason: 'signal_close' }),
+        },
+      };
     }
 
     if (position && position.side === signal.type) {
       return { action: 'skip_same_side', details: { side: position.side } };
     }
 
+    let closedTrade = null;
     if (position && position.side !== signal.type) {
+      let closeResult;
       try {
-        await trading.closePosition({ accountId: this.bot.accountId, asset: normalizedAsset });
+        closeResult = await trading.closePosition({ accountId: this.bot.accountId, asset: normalizedAsset });
       } catch (error) {
         throw new RuntimeStageError('execution', error.message, {
           signal,
@@ -771,6 +793,7 @@ class BotRuntime extends EventEmitter {
           cause: error,
         });
       }
+      closedTrade = this._buildClosedTradeDetails(closeResult, { reason: 'signal_reverse' });
     }
 
     const referencePrice = Number(candle.close);
@@ -842,6 +865,8 @@ class BotRuntime extends EventEmitter {
         assetSize: size,
         referencePrice,
         leverage: this.bot.leverage,
+        closedTrade,
+        reversedFrom: closedTrade?.side || null,
       },
     };
   }

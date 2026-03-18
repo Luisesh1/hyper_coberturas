@@ -49,23 +49,8 @@ class ProtectedPoolRefreshService {
 
     try {
       const activePools = await this.repo.listActiveForRefresh();
-      if (activePools.length === 0) {
-        return;
-      }
-
-      const groups = new Map();
-      for (const item of activePools) {
-        const key = buildGroupKey(item);
-        const current = groups.get(key) || {
-          userId: item.userId,
-          walletAddress: item.walletAddress,
-          network: item.network,
-          version: item.version,
-          items: [],
-        };
-        current.items.push(item);
-        groups.set(key, current);
-      }
+      const groups = this._buildGroups(activePools);
+      if (groups.size === 0) return;
 
       for (const group of groups.values()) {
         await this.refreshGroup(group);
@@ -79,6 +64,53 @@ class ProtectedPoolRefreshService {
     } finally {
       this.running = false;
     }
+  }
+
+  async refreshUser(userId) {
+    if (this.running) {
+      this.logger.warn('protected_pool_refresh_skipped', { reason: 'already_running', userId });
+      return;
+    }
+
+    this.running = true;
+    const startedAt = Date.now();
+
+    try {
+      const activePools = await this.repo.listActiveForRefresh();
+      const filteredPools = activePools.filter((item) => Number(item.userId) === Number(userId));
+      const groups = this._buildGroups(filteredPools);
+      if (groups.size === 0) return;
+
+      for (const group of groups.values()) {
+        await this.refreshGroup(group);
+      }
+
+      this.logger.info('protected_pool_refresh_completed', {
+        activePoolCount: filteredPools.length,
+        groupCount: groups.size,
+        userId,
+        durationMs: Date.now() - startedAt,
+      });
+    } finally {
+      this.running = false;
+    }
+  }
+
+  _buildGroups(activePools) {
+    const groups = new Map();
+    for (const item of activePools) {
+      const key = buildGroupKey(item);
+      const current = groups.get(key) || {
+        userId: item.userId,
+        walletAddress: item.walletAddress,
+        network: item.network,
+        version: item.version,
+        items: [],
+      };
+      current.items.push(item);
+      groups.set(key, current);
+    }
+    return groups;
   }
 
   async refreshGroup(group) {

@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth.middleware');
 const { validate } = require('../middleware/validate.middleware');
 const uniswapService = require('../services/uniswap.service');
 const uniswapProtectionService = require('../services/uniswap-protection.service');
+const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
 const { createProtectedPoolSchema, scanPoolsSchema } = require('../schemas/uniswap.schema');
 
 const router = Router();
@@ -22,6 +23,12 @@ router.post('/pools/scan', validate(scanPoolsSchema), asyncHandler(async (req, r
 }));
 
 router.get('/protected-pools', asyncHandler(async (req, res) => {
+  const data = await uniswapProtectionService.listProtectedPools(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.post('/protected-pools/refresh', asyncHandler(async (req, res) => {
+  await protectedPoolRefreshService.refreshUser(req.user.userId);
   const data = await uniswapProtectionService.listProtectedPools(req.user.userId);
   res.json({ success: true, data });
 }));

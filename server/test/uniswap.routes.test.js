@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const app = require('../src/app');
 const config = require('../src/config');
 const uniswapProtectionService = require('../src/services/uniswap-protection.service');
+const protectedPoolRefreshService = require('../src/services/protected-pool-refresh.service');
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -41,6 +42,39 @@ test('GET /api/uniswap/protected-pools devuelve la lista del usuario autenticado
     assert.equal(json.data[0].id, 31);
     assert.equal(json.data[0].userId, 1);
   } finally {
+    uniswapProtectionService.listProtectedPools = originalList;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/protected-pools/refresh fuerza refresh y devuelve la lista actualizada', async () => {
+  const originalRefresh = protectedPoolRefreshService.refreshUser;
+  const originalList = uniswapProtectionService.listProtectedPools;
+  const calls = [];
+
+  protectedPoolRefreshService.refreshUser = async (userId) => {
+    calls.push(['refresh', userId]);
+  };
+  uniswapProtectionService.listProtectedPools = async (userId) => {
+    calls.push(['list', userId]);
+    return [{ id: 41, userId, status: 'active' }];
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/protected-pools/refresh`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${buildToken()}` },
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, [['refresh', 1], ['list', 1]]);
+    assert.equal(json.data[0].id, 41);
+  } finally {
+    protectedPoolRefreshService.refreshUser = originalRefresh;
     uniswapProtectionService.listProtectedPools = originalList;
     server.close();
   }
