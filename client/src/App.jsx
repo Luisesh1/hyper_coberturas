@@ -11,10 +11,10 @@ import { Notifications } from './components/Layout/Notifications';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
-import UniswapPoolsPage from './pages/UniswapPoolsPage';
+import UniswapPoolsPage from './pages/UniswapPools/UniswapPoolsPage';
 import StrategyStudioPage from './pages/StrategyStudio/StrategyStudioPage';
 import BotsPage from './pages/Bots/BotsPage';
-import BacktestingPage from './pages/BacktestingPage';
+import BacktestingPage from './pages/Backtesting/BacktestingPage';
 import styles from './App.module.css';
 
 const BASE_NAV = [

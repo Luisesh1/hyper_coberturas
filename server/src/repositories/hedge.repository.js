@@ -36,9 +36,9 @@ async function create(hedge) {
   const { rows } = await db.query(
     `INSERT INTO hedges (
        user_id, hyperliquid_account_id, asset, direction, entry_price, exit_price, size, leverage, label,
-       margin_mode, status, created_at, position_key, last_reconciled_at
+       margin_mode, status, created_at, position_key, last_reconciled_at, protected_pool_id, protected_role
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'isolated', 'entry_pending', $10, $11, $10)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'entry_pending', $11, $12, $11, $13, $14)
      RETURNING id`,
     [
       hedge.userId,
@@ -50,8 +50,11 @@ async function create(hedge) {
       hedge.size,
       hedge.leverage,
       hedge.label,
+      hedge.marginMode || 'isolated',
       hedge.createdAt,
       hedge.positionKey,
+      hedge.protectedPoolId || null,
+      hedge.protectedRole || null,
     ]
   );
   return rows[0].id;
@@ -143,9 +146,31 @@ async function saveCycle(hedgeId, cycle) {
   );
 }
 
+async function unlinkByProtectedPoolId(protectedPoolId) {
+  await db.query(
+    `UPDATE hedges
+        SET protected_pool_id = NULL,
+            protected_role = NULL
+      WHERE protected_pool_id = $1`,
+    [protectedPoolId]
+  );
+}
+
+async function deleteByProtectedPoolIds(protectedPoolIds = []) {
+  if (!Array.isArray(protectedPoolIds) || protectedPoolIds.length === 0) return 0;
+  const { rowCount } = await db.query(
+    `DELETE FROM hedges
+      WHERE protected_pool_id = ANY($1::int[])`,
+    [protectedPoolIds]
+  );
+  return rowCount || 0;
+}
+
 module.exports = {
+  deleteByProtectedPoolIds,
   loadAllByUser,
   create,
   save,
   saveCycle,
+  unlinkByProtectedPoolId,
 };

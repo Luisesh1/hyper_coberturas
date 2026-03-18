@@ -1,0 +1,136 @@
+.manager {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  font-size: 0.74rem;
+}
+
+.chipName {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chipParams {
+  color: var(--text-tertiary);
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+.chipPane {
+  color: var(--text-hint);
+  font-size: 0.68rem;
+}
+
+.chipRemove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 0.82rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  transition: background var(--transition-fast);
+}
+
+.chipRemove:hover {
+  background: var(--red);
+  color: #fff;
+}
+
+.addForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+}
+
+.addRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.select,
+.input,
+.textarea {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.select { flex: 1; min-width: 80px; }
+.input { width: 64px; }
+
+.textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.paramField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+}
+
+.addActions {
+  display: flex;
+  gap: 6px;
+}
+
+.addBtn,
+.cancelBtn {
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.addBtn {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border-color: var(--amber-border);
+}
+
+.addBtn:hover { opacity: 0.85; }
+
+.cancelBtn {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-color: var(--border);
+}

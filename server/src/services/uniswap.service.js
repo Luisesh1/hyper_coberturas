@@ -1,9 +1,9 @@
-const axios = require('axios');
 const { ethers } = require('ethers');
 const config = require('../config');
 const settingsService = require('./settings.service');
+const { annotatePoolsWithProtection } = require('./uniswap-protection.service');
+const etherscanQueueService = require('./etherscan-queue.service');
 const {
-  ExternalServiceError,
   ValidationError,
 } = require('../errors/app-error');
 
@@ -74,7 +74,6 @@ const STABLE_SYMBOLS = new Set([
   'USDE',
 ]);
 
-const ETHERSCAN_API_URL = 'https://api.etherscan.io/v2/api';
 const DEFAULT_TIMEOUT_MS = config.uniswap.scanTimeoutMs;
 const TXLIST_PAGE_SIZE = 1000;
 const MAX_TXLIST_PAGES = 5;
@@ -83,6 +82,7 @@ const MAX_NFT_PAGES = 5;
 const HISTORICAL_PRICE_BLOCK_OFFSETS = [0, 50, 250, 1000, 5000, 50000, 500000];
 const Q96 = 2 ** 96;
 const Q128 = 2n ** 128n;
+const MAX_UINT256 = (1n << 256n) - 1n;
 
 const providerCache = new Map();
 const tokenCache = new Map();
@@ -573,7 +573,6 @@ function computeV3UnclaimedFees({
   tokensOwed0,
   tokensOwed1,
 }) {
-  const MAX_UINT256 = (1n << 256n) - 1n;
   const liq = BigInt(liquidity || 0);
   const tick = Number(tickCurrent);
   const tl = Number(tickLower);
@@ -631,8 +630,10 @@ function computeV4UnclaimedFees({
     };
   }
 
-  const delta0 = growth0 >= growthLast0 ? (growth0 - growthLast0) : 0n;
-  const delta1 = growth1 >= growthLast1 ? (growth1 - growthLast1) : 0n;
+  // En v4 puede venir un snapshot previo cercano a uint256 max. La resta debe
+  // hacerse en aritmetica modular para no perder fees legitimas en token0/token1.
+  const delta0 = (growth0 - growthLast0) & MAX_UINT256;
+  const delta1 = (growth1 - growthLast1) & MAX_UINT256;
 
   return {
     fees0: (delta0 * liq) / Q128,
@@ -904,54 +905,10 @@ function getConfiguredApiKey(userConfig) {
   return apiKey;
 }
 
-function normalizeEtherscanError(result) {
-  const message = String(result?.result || result?.message || 'Error desconocido');
-  const lowered = message.toLowerCase();
-  if (
-    lowered.includes('invalid api key') ||
-    lowered.includes('missing or unsupported chainid') ||
-    lowered.includes('unauthorized') ||
-    lowered.includes('invalid key')
-  ) {
-    throw new ValidationError('Etherscan API key invalida o sin permisos para esta red');
-  }
-  if (lowered.includes('max rate limit')) {
-    throw new ExternalServiceError('Etherscan rate limit excedido');
-  }
-  throw new ExternalServiceError(`Etherscan error: ${message}`);
-}
-
 async function etherscanRequest(apiKey, params) {
-  try {
-    const { data } = await axios.get(ETHERSCAN_API_URL, {
-      params: {
-        ...params,
-        apikey: apiKey,
-      },
-      timeout: DEFAULT_TIMEOUT_MS,
-    });
-
-    if (data?.status === '1') {
-      return data.result;
-    }
-
-    const noResults =
-      (params.action === 'txlist' || params.action === 'tokennfttx') &&
-      data?.status === '0' &&
-      (
-        String(data?.message || '').toLowerCase().includes('no transactions') ||
-        String(data?.result || '').toLowerCase().includes('no transactions')
-      );
-
-    if (noResults) {
-      return [];
-    }
-
-    normalizeEtherscanError(data);
-  } catch (err) {
-    if (err instanceof ValidationError || err instanceof ExternalServiceError) throw err;
-    throw new ExternalServiceError(`Etherscan request fallo: ${err.message}`);
-  }
+  return etherscanQueueService.request(apiKey, params, {
+    requestTimeoutMs: DEFAULT_TIMEOUT_MS,
+  });
 }
 
 async function fetchWalletTransactions(apiKey, networkConfig, wallet) {
@@ -1638,7 +1595,10 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
     }
   });
 
-  const pools = enriched.filter(Boolean).filter(isRelevantRecord);
+  const pools = await annotatePoolsWithProtection({
+    userId,
+    pools: enriched.filter(Boolean).filter(isRelevantRecord),
+  });
   return {
     wallet,
     network: {
@@ -1730,7 +1690,10 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
     }
   });
 
-  const pools = enriched.filter(Boolean).filter(isRelevantRecord);
+  const pools = await annotatePoolsWithProtection({
+    userId,
+    pools: enriched.filter(Boolean).filter(isRelevantRecord),
+  });
   return {
     wallet,
     network: {
@@ -1816,6 +1779,7 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
   }
 
   pools.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.blockNumber - a.blockNumber);
+  const annotatedPools = await annotatePoolsWithProtection({ userId, pools });
 
   return {
     wallet: normalizedWallet,
@@ -1829,13 +1793,13 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
     mode: 'created_pools',
     source: 'etherscan',
     completeness: truncated ? 'partial' : 'full',
-    count: pools.length,
+    count: annotatedPools.length,
     filteredOutCount,
     inspectedTxCount: uniqueTxHashes.length,
     totalTxCount: transactions.length,
     scannedAt: Date.now(),
     warnings,
-    pools,
+    pools: annotatedPools,
   };
 }
 

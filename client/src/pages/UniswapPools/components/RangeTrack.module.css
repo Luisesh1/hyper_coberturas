@@ -1,0 +1,139 @@
+.rangeCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(7, 12, 18, 0.78);
+  border: 1px solid var(--uni-border);
+}
+
+.rangeCardCompact {
+  padding: 10px;
+  gap: 6px;
+}
+
+.rangeHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.rangeTitle {
+  color: var(--uni-text-1);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+}
+
+.rangeMeta {
+  color: var(--uni-text-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.pinsRow {
+  position: relative;
+  height: 30px;
+}
+
+.pin {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.pinValue {
+  color: var(--uni-amber);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pinLabel {
+  color: var(--uni-amber);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pinCurrent .pinValue,
+.pinCurrent .pinLabel {
+  color: var(--uni-green);
+}
+
+.track {
+  position: relative;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(11, 18, 26, 0.98);
+  border: 1px solid rgba(93, 115, 137, 0.28);
+}
+
+.fill {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(92, 163, 255, 0.34), rgba(102, 225, 219, 0.28));
+}
+
+.edge {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(102, 225, 219, 0.56);
+}
+
+.marker {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(7, 12, 18, 0.96);
+  z-index: 1;
+}
+
+.markerOpen {
+  background: var(--uni-amber);
+}
+
+.markerCurrent {
+  background: var(--uni-green);
+}
+
+.markerAlert {
+  background: var(--uni-orange);
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.edgeValue {
+  color: #b5dcff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+.caption {
+  color: var(--uni-text-2);
+  font-size: 0.65rem;
+  font-weight: 700;
+}

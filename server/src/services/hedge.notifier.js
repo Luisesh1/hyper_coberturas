@@ -33,6 +33,8 @@ class HedgeNotifier {
       openPrice: cycle.openPrice,
       closePrice: cycle.closePrice,
       size: cycle.size || hedge.positionSize || hedge.size,
+      closedPnl: cycle.closedPnl ?? null,
+      netPnl: cycle.netPnl ?? null,
     });
     this.emitter.emit('cycleComplete', hedge, cycle);
   }

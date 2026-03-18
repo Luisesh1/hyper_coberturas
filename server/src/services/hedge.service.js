@@ -116,7 +116,7 @@ class HedgeService extends EventEmitter {
     }
   }
 
-  async createHedge({ asset, entryPrice, exitPrice, size, leverage, label, direction = 'short' }) {
+  validateCreateRequest({ asset, entryPrice, exitPrice, size, leverage, direction = 'short' }) {
     const entry = parseFloat(entryPrice);
     const exit = parseFloat(exitPrice);
     const lev = parseInt(leverage, 10);
@@ -143,6 +143,40 @@ class HedgeService extends EventEmitter {
         `(#${duplicate.id} — ${duplicate.status}). Cancélala antes de crear una nueva.`
       );
     }
+
+    return {
+      asset: assetUp,
+      direction: dir,
+      entryPrice: entry,
+      exitPrice: exit,
+      leverage: lev,
+      size: sz,
+    };
+  }
+
+  async createHedge({
+    asset,
+    entryPrice,
+    exitPrice,
+    size,
+    leverage,
+    label,
+    direction = 'short',
+    marginMode = 'isolated',
+    protectedPoolId = null,
+    protectedRole = null,
+  }) {
+    const normalized = this.validateCreateRequest({
+      asset,
+      entryPrice,
+      exitPrice,
+      size,
+      leverage,
+      direction,
+    });
+
+    const { asset: assetUp, direction: dir, entryPrice: entry, exitPrice: exit, leverage: lev, size: sz } = normalized;
+
     const hedgeLabel = label || `${assetUp} Cobertura`;
     const createdAt = Date.now();
 
@@ -158,7 +192,7 @@ class HedgeService extends EventEmitter {
       size: sz,
       leverage: lev,
       label: hedgeLabel,
-      marginMode: 'isolated',
+      marginMode,
       status: 'entry_pending',
       createdAt,
       openedAt: null,
@@ -183,6 +217,8 @@ class HedgeService extends EventEmitter {
       entryFillTime: null,
       entryFeePaid: 0,
       fundingAccum: 0,
+      protectedPoolId,
+      protectedRole,
     };
 
     hedge.positionKey = this._nextPositionKey(hedge);

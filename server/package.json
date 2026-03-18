@@ -11,6 +11,7 @@
     "check": "npm run lint && npm run test",
     "migrate": "node src/scripts/migrate.js",
     "seed:dev": "node src/scripts/seed-dev.js",
+    "maintenance:dedupe-protected-pools": "node src/scripts/dedupe-protected-uniswap-pools.js",
     "seed:strategy:ma-cross": "node src/scripts/seed-ma-crossover-strategy.js",
     "seed:indicator:sqzmom-lb": "node src/scripts/seed-sqzmom-lb-indicator.js",
     "optimize:strategy:sqzmom": "node src/scripts/optimize-sqzmom-strategy.js"

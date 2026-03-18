@@ -12,7 +12,7 @@ const logger = require('./src/services/logger.service');
 async function start() {
   bootstrapConfig();
   const server = http.createServer(app);
-  await bootstrapInfra(server);
+  const infra = await bootstrapInfra(server);
 
   await startHttpServer({
     server,
@@ -20,6 +20,9 @@ async function start() {
     async onShutdown() {
       logger.info('server_shutdown_started');
       hlWsClient.disconnect();
+      await infra?.shutdown?.().catch((err) => {
+        logger.warn('infra_shutdown_failed', { error: err.message });
+      });
       await db.pool.end().catch((err) => {
         logger.warn('db_pool_end_failed', { error: err.message });
       });

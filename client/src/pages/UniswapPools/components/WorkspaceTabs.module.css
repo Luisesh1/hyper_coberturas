@@ -1,0 +1,74 @@
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 16px;
+  border: 1px solid var(--uni-border);
+  background: rgba(8, 12, 18, 0.9);
+  width: fit-content;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 18px;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  color: var(--uni-text-2);
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--uni-text-1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tabActive {
+  background: rgba(102, 225, 219, 0.12);
+  color: var(--uni-cyan);
+  border: 1px solid rgba(102, 225, 219, 0.2);
+}
+
+.tabActive:hover {
+  background: rgba(102, 225, 219, 0.16);
+  color: var(--uni-cyan);
+}
+
+.badge {
+  font-size: 0.55rem;
+  color: var(--uni-cyan);
+  opacity: 0.7;
+}
+
+.badgeCount {
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(102, 225, 219, 0.15);
+  color: var(--uni-cyan);
+  opacity: 1;
+}
+
+.tabActive .badgeCount {
+  background: rgba(102, 225, 219, 0.22);
+}
+
+@media (max-width: 680px) {
+  .tabs {
+    width: 100%;
+  }
+
+  .tab {
+    flex: 1;
+    justify-content: center;
+    padding: 9px 12px;
+    font-size: 0.8rem;
+  }
+}

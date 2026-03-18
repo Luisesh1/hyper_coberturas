@@ -70,8 +70,19 @@ class TelegramService {
     if (!openPrice || !closePrice) return null;
     const diff = (parseFloat(closePrice) - parseFloat(openPrice)) * parseFloat(size);
     const pnl  = isShort ? -diff : diff;
-    const sign = pnl >= 0 ? '+' : '';
-    return `${sign}$${pnl.toFixed(2)}`;
+    return this._fmtPnlValue(pnl);
+  }
+
+  _fmtPnlValue(pnl) {
+    const value = parseFloat(pnl);
+    if (!Number.isFinite(value)) return null;
+    const sign = value >= 0 ? '+' : '';
+    return `${sign}$${value.toFixed(2)}`;
+  }
+
+  _resolveTradePnl({ pnl, openPrice, closePrice, size, isShort }) {
+    if (pnl != null) return this._fmtPnlValue(pnl);
+    return this._fmtPnl(openPrice, closePrice, size, isShort);
   }
 
   _fmtAccount(account) {
@@ -121,14 +132,20 @@ class TelegramService {
 
   notifyHedgeClosed(hedge) {
     const isShort = (hedge.direction || 'short') !== 'long';
-    const pnl = this._fmtPnl(hedge.openPrice, hedge.closePrice, hedge.size, isShort);
+    const pnl = this._resolveTradePnl({
+      pnl: hedge.netPnl ?? hedge.closedPnl,
+      openPrice: hedge.openPrice,
+      closePrice: hedge.closePrice,
+      size: hedge.size,
+      isShort,
+    });
     const lines = [
       `✅ <b>Cobertura completada</b>`,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b>`,
       `Apertura: $${this._fmtPrice(hedge.openPrice)}`,
       `Cierre:   $${this._fmtPrice(hedge.closePrice)}`,
-      pnl ? `PnL estimado: ${pnl}` : null,
+      pnl ? `PnL: ${pnl}` : null,
       hedge.label ? `Cobertura: ${hedge.label}` : null,
     ];
     return this.send(lines.filter(Boolean).join('\n'));
@@ -159,29 +176,39 @@ class TelegramService {
   // Trading manual
   // ------------------------------------------------------------------
 
-  notifyTradeOpen({ account, asset, side, size, leverage, marginMode, orderPrice }) {
+  notifyTradeOpen({ account, asset, side, size, leverage, marginMode, orderPrice, fillPrice }) {
     const emoji   = side === 'long' ? '📈' : '📉';
-    const notional = (parseFloat(size) * parseFloat(orderPrice)).toFixed(2);
+    const displayPrice = fillPrice ?? parseFloat(orderPrice);
+    const notional = (parseFloat(size) * displayPrice).toFixed(2);
     const lines = [
       `${emoji} <b>Posicion abierta</b>`,
       this._fmtAccount(account),
       `Activo: <b>${asset}</b> | ${side.toUpperCase()} | ${leverage}x | ${marginMode}`,
-      `Precio: $${this._fmtPrice(orderPrice)}`,
+      `Precio: $${this._fmtPrice(displayPrice)}`,
       `Tamano: ${size} ${asset} (~$${notional})`,
     ];
     return this.send(lines.join('\n'));
   }
 
-  notifyTradeClose({ account, asset, closedSide, closedSize, closePrice }) {
+  notifyTradeClose({ account, asset, closedSide, closedSize, closePrice, openPrice, pnl }) {
     const emoji = closedSide === 'long' ? '📉' : '📈';
+    const formattedPnl = this._resolveTradePnl({
+      pnl,
+      openPrice,
+      closePrice,
+      size: closedSize,
+      isShort: closedSide !== 'long',
+    });
     const lines = [
       `${emoji} <b>Posicion cerrada</b>`,
       this._fmtAccount(account),
       `Activo: <b>${asset}</b> | ${closedSide.toUpperCase()}`,
+      openPrice != null ? `Precio entrada: $${this._fmtPrice(openPrice)}` : null,
       `Precio cierre: $${this._fmtPrice(closePrice)}`,
       `Tamano: ${closedSize} ${asset}`,
+      formattedPnl ? `PnL: ${formattedPnl}` : null,
     ];
-    return this.send(lines.join('\n'));
+    return this.send(lines.filter(Boolean).join('\n'));
   }
 
   notifyBotRuntimeEvent(event, bot, payload = {}) {

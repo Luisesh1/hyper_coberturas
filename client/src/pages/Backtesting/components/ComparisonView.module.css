@@ -1,0 +1,48 @@
+.wrap {
+  overflow: auto;
+  padding: 8px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.table th,
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.table th {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.table td {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.metricLabel {
+  color: var(--text-secondary) !important;
+  font-family: inherit !important;
+  font-weight: 500;
+}
+
+.best {
+  color: var(--green) !important;
+  font-weight: 700;
+}
+
+.empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-hint);
+  font-size: 0.82rem;
+}

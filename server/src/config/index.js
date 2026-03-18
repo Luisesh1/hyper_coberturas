@@ -63,6 +63,7 @@ const config = {
     hedgeMonitorMs: parseInt(process.env.HEDGE_MONITOR_INTERVAL_MS, 10) || 10_000,
     hedgeClosingTimeoutMs: parseInt(process.env.HEDGE_CLOSING_TIMEOUT_MS, 10) || 90_000,
     hedgeCancelTimeoutMs: parseInt(process.env.HEDGE_CANCEL_TIMEOUT_MS, 10) || 300_000,
+    protectedPoolRefreshMs: parseInt(process.env.PROTECTED_POOL_REFRESH_INTERVAL_MS, 10) || 600_000,
     botEvalMs: parseInt(process.env.BOT_EVAL_INTERVAL_MS, 10) || 15_000,
     balanceCacheTtlMs: parseInt(process.env.BALANCE_CACHE_TTL_MS, 10) || 30_000,
     balanceRefreshMs: parseInt(process.env.BALANCE_REFRESH_INTERVAL_MS, 10) || 30_000,

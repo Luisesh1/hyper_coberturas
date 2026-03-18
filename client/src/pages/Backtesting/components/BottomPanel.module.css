@@ -1,0 +1,265 @@
+/* ── Panel shell ── */
+.panel {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+  min-height: 150px;
+}
+
+.handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 8px;
+  cursor: ns-resize;
+  flex-shrink: 0;
+}
+
+.handleBar {
+  width: 48px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background var(--transition-fast);
+}
+
+.handle:hover .handleBar {
+  background: var(--amber);
+}
+
+/* ── Tabs ── */
+.tabBar {
+  display: flex;
+  gap: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tab:hover {
+  color: var(--text-secondary);
+}
+
+.tabActive {
+  color: var(--amber);
+  border-bottom-color: var(--amber);
+}
+
+.badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  font-size: 0.66rem;
+  color: var(--text-hint);
+  font-weight: 500;
+}
+
+/* ── Body ── */
+.body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.tabContent {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ── Shared filter bar ── */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+}
+
+.filterBtn {
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.filterBtn:hover {
+  border-color: var(--amber-border);
+}
+
+.filterBtnActive {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.filterCount {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-hint);
+}
+
+/* ── Tables ── */
+.tableWrap {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+
+.table th,
+.table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-hint);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.table td strong {
+  display: block;
+  color: var(--text-primary);
+}
+
+.table td small {
+  display: block;
+  color: var(--text-hint);
+  font-size: 0.66rem;
+  margin-top: 1px;
+}
+
+.table tbody tr {
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.rowActive {
+  background: var(--amber-bg) !important;
+  border-left: 2px solid var(--amber);
+}
+
+.emptyCell {
+  text-align: center;
+  color: var(--text-hint);
+  padding: 20px !important;
+}
+
+/* ── Side dots ── */
+.dotLong,
+.dotShort {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.dotLong { background: var(--green); }
+.dotShort { background: var(--red); }
+
+/* ── PnL colors ── */
+.pnlPositive {
+  color: var(--green);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.pnlNegative {
+  color: var(--red);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+/* ── Load more ── */
+.loadMoreBtn {
+  padding: 6px 16px;
+  margin: 8px auto;
+  display: block;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.loadMoreBtn:hover {
+  border-color: var(--amber-border);
+  color: var(--amber);
+}
+
+/* ── Assumption chips ── */
+.chipGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.assumptionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.72rem;
+}
+
+.assumptionKey {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.assumptionVal {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}

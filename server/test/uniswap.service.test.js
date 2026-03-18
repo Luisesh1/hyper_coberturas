@@ -244,3 +244,18 @@ test('computeV4UnclaimedFees replica la formula base de growth inside', () => {
   assert.equal(fees.fees0, 30n);
   assert.equal(fees.fees1, 30n);
 });
+
+test('computeV4UnclaimedFees maneja wraparound uint256 sin perder fees', () => {
+  const q128 = 2n ** 128n;
+  const maxUint256 = (1n << 256n) - 1n;
+  const fees = computeV4UnclaimedFees({
+    liquidity: 10n,
+    feeGrowthInside0LastX128: maxUint256 - (2n * q128) + 1n,
+    feeGrowthInside1LastX128: maxUint256 - q128 + 1n,
+    feeGrowthInside0X128: q128,
+    feeGrowthInside1X128: 4n * q128,
+  });
+
+  assert.equal(fees.fees0, 30n);
+  assert.equal(fees.fees1, 50n);
+});

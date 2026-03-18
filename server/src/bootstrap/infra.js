@@ -3,6 +3,8 @@ const { createWsServer, loadActiveUsers } = require('../websocket/wsServer');
 const hlWsClient = require('../websocket/hyperliquidWs');
 const runtimeStatus = require('../runtime/status');
 const logger = require('../services/logger.service');
+const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
+const etherscanQueueService = require('../services/etherscan-queue.service');
 
 async function bootstrapInfra(httpServer) {
   await db.ensureConnection();
@@ -26,7 +28,15 @@ async function bootstrapInfra(httpServer) {
   }
 
   if (bootstrapOk) runtimeStatus.markBootstrapped();
-  return { wss };
+  protectedPoolRefreshService.start();
+
+  return {
+    wss,
+    async shutdown() {
+      protectedPoolRefreshService.stop();
+      etherscanQueueService.shutdown();
+    },
+  };
 }
 
 module.exports = { bootstrapInfra };

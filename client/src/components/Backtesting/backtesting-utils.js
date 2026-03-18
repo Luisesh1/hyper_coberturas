@@ -98,3 +98,42 @@ export function matchTradeFilter(trade, filter) {
   if (filter === 'loss') return Number(trade.pnl) < 0;
   return true;
 }
+
+export const PRESETS = {
+  rapido: {
+    rangeMode: '250',
+    stopLossPct: '',
+    takeProfitPct: '',
+    feeBps: '0',
+    slippageBps: '0',
+  },
+  completo: {
+    rangeMode: '1000',
+    stopLossPct: '1.5',
+    takeProfitPct: '3',
+    feeBps: '4',
+    slippageBps: '2',
+  },
+};
+
+export const INDICATOR_PARAM_SCHEMAS = {
+  sma: [{ key: 'period', label: 'Periodo', type: 'number', default: 20 }],
+  ema: [{ key: 'period', label: 'Periodo', type: 'number', default: 9 }],
+  rsi: [{ key: 'period', label: 'Periodo', type: 'number', default: 14 }],
+  macd: [
+    { key: 'fastPeriod', label: 'Fast', type: 'number', default: 12 },
+    { key: 'slowPeriod', label: 'Slow', type: 'number', default: 26 },
+    { key: 'signalPeriod', label: 'Signal', type: 'number', default: 9 },
+  ],
+  atr: [{ key: 'period', label: 'Periodo', type: 'number', default: 14 }],
+  bollinger: [
+    { key: 'period', label: 'Periodo', type: 'number', default: 20 },
+    { key: 'multiplier', label: 'Multiplicador', type: 'number', default: 2 },
+  ],
+};
+
+export function defaultOverlayParams(slug) {
+  const schema = INDICATOR_PARAM_SCHEMAS[slug];
+  if (!schema) return {};
+  return Object.fromEntries(schema.map((f) => [f.key, f.default]));
+}

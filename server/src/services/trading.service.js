@@ -30,6 +30,17 @@ class TradingService {
     this.tg = tgService;
   }
 
+  _estimateClosedPnl({ entryPrice, closePrice, size, isLong }) {
+    const entry = parseFloat(entryPrice);
+    const close = parseFloat(closePrice);
+    const normalizedSize = parseFloat(size);
+    if (!Number.isFinite(entry) || !Number.isFinite(close) || !Number.isFinite(normalizedSize)) {
+      return null;
+    }
+    const diff = (close - entry) * normalizedSize;
+    return isLong ? diff : -diff;
+  }
+
   async openPosition({ asset, side, size, leverage, marginMode, limitPrice }) {
     const assetName = asset.toUpperCase();
     const isBuy = side === 'long';
@@ -76,6 +87,10 @@ class TradingService {
       tif: limitPrice ? 'Gtc' : 'Ioc',
     });
 
+    const statuses = result?.result?.response?.data?.statuses || [];
+    const fillPx = (statuses[0] || {}).filled?.px;
+    const fillPrice = fillPx ? parseFloat(fillPx) : parseFloat(orderPrice);
+
     const openResult = {
       success: true,
       action: 'open',
@@ -86,6 +101,7 @@ class TradingService {
       leverage: lev,
       marginMode: isCross ? 'cross' : 'isolated',
       orderPrice,
+      fillPrice,
       result,
     };
     this.tg.notifyTradeOpen(openResult);
@@ -110,6 +126,7 @@ class TradingService {
     const position = positionEntry.position;
     const szi = parseFloat(position.szi);
     const isLong = szi > 0;
+    const entryPrice = parseFloat(position.entryPx);
 
     if (szi === 0) throw new Error(`La posicion en ${assetName} es cero`);
 
@@ -143,7 +160,14 @@ class TradingService {
       asset: assetName,
       closedSide: isLong ? 'long' : 'short',
       closedSize: closeSize,
+      openPrice: Number.isFinite(entryPrice) ? entryPrice : null,
       closePrice,
+      pnl: this._estimateClosedPnl({
+        entryPrice,
+        closePrice,
+        size: closeSize,
+        isLong,
+      }),
       result,
     };
     this.tg.notifyTradeClose(closeResult);

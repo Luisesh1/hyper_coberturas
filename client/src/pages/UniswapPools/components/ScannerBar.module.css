@@ -1,0 +1,167 @@
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--uni-border);
+  background: rgba(10, 16, 24, 0.95);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--uni-shadow);
+}
+
+.form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.walletInput,
+.select {
+  border: 1px solid var(--uni-border);
+  border-radius: 12px;
+  background: rgba(8, 12, 18, 0.9);
+  color: var(--uni-text-0);
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+
+.walletInput {
+  flex: 1;
+  min-width: 0;
+}
+
+.select {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.walletInput::placeholder {
+  color: #67829c;
+}
+
+.walletInput:focus,
+.select:focus {
+  border-color: rgba(102, 225, 219, 0.48);
+  box-shadow: 0 0 0 3px rgba(102, 225, 219, 0.12);
+}
+
+.scanBtn {
+  border: none;
+  border-radius: 12px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, #1fc9c6, #2f7dff);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.16s, opacity 0.16s;
+  box-shadow: 0 8px 20px rgba(31, 201, 198, 0.18);
+}
+
+.scanBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.scanBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.stats {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.stat {
+  font-size: 0.74rem;
+  color: var(--uni-text-2);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(6, 12, 18, 0.7);
+  border: 1px solid var(--uni-border);
+}
+
+.stat strong {
+  color: var(--uni-text-0);
+  margin-right: 3px;
+}
+
+.statAlert {
+  border-color: rgba(255, 143, 77, 0.25);
+  color: var(--uni-orange);
+}
+
+.statAlert strong {
+  color: var(--uni-orange);
+}
+
+.statMuted {
+  font-size: 0.7rem;
+  color: var(--uni-text-3);
+}
+
+.status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.dot {
+  color: var(--uni-text-3);
+}
+
+.statusOk {
+  color: var(--uni-green);
+}
+
+.statusWarn {
+  color: var(--uni-amber);
+}
+
+.statusNeutral {
+  color: var(--uni-text-2);
+}
+
+@media (max-width: 900px) {
+  .form {
+    flex-wrap: wrap;
+  }
+
+  .walletInput {
+    width: 100%;
+    flex: none;
+  }
+
+  .select {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+
+  .scanBtn {
+    flex: 1;
+  }
+}
+
+@media (max-width: 680px) {
+  .bar {
+    position: static;
+    border-radius: 14px;
+  }
+
+  .stats {
+    gap: 6px;
+  }
+}

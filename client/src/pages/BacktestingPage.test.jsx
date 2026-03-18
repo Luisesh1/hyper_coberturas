@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import BacktestingPage from './BacktestingPage';
+import BacktestingPage from './Backtesting/BacktestingPage';
 
 const { strategiesApi, indicatorsApi, backtestingApi, addNotification } = vi.hoisted(() => ({
   strategiesApi: {
@@ -80,6 +80,7 @@ describe('BacktestingPage', () => {
         entryPrice: 100,
         exitPrice: 104,
         qty: 1,
+        sizeUsd: 100,
         pnl: 4,
         reason: 'signal_close',
       }],
@@ -99,17 +100,27 @@ describe('BacktestingPage', () => {
     });
   });
 
-  it('carga la configuracion base y ejecuta una simulacion', async () => {
+  it('carga la configuracion base y muestra topbar', async () => {
     render(
       <MemoryRouter initialEntries={[{ pathname: '/backtesting', state: { strategyId: 11 } }]}>
         <BacktestingPage />
-      </MemoryRouter>
+      </MemoryRouter>,
     );
 
     expect(await screen.findByText('Backtesting Lab')).toBeTruthy();
-    expect(screen.getByDisplayValue('Trend Rider')).toBeTruthy();
+    expect(await screen.findByText('Configuracion')).toBeTruthy();
+  });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Simular backtest' }));
+  it('ejecuta una simulacion y muestra resultados', async () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/backtesting', state: { strategyId: 11 } }]}>
+        <BacktestingPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Backtesting Lab');
+    const simBtns = screen.getAllByRole('button', { name: /simular/i });
+    await userEvent.click(simBtns[0]);
 
     await waitFor(() => expect(backtestingApi.simulate).toHaveBeenCalledTimes(1));
     expect(backtestingApi.simulate).toHaveBeenCalledWith(expect.objectContaining({
@@ -120,22 +131,15 @@ describe('BacktestingPage', () => {
       overlayRequests: expect.any(Array),
     }));
     expect(await screen.findByText('chart 3')).toBeTruthy();
-    expect(screen.getByText('signal_close')).toBeTruthy();
   });
 
-  it('permite cambiar filtros de trades', async () => {
+  it('muestra empty state cuando no hay resultado', async () => {
     render(
       <MemoryRouter>
         <BacktestingPage />
-      </MemoryRouter>
+      </MemoryRouter>,
     );
 
-    await screen.findByText('Backtesting Lab');
-    await userEvent.selectOptions(screen.getByLabelText('Estrategia'), '11');
-    await userEvent.click(screen.getByRole('button', { name: 'Simular backtest' }));
-    await screen.findByText('signal_close');
-
-    await userEvent.click(screen.getByRole('button', { name: 'win' }));
-    expect(screen.getByRole('button', { name: 'win' }).className).toContain('filterBtnActive');
+    expect(await screen.findByText('Configura tu primera simulacion')).toBeTruthy();
   });
 });

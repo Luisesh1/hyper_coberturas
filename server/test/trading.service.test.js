@@ -113,6 +113,7 @@ test('closePosition refresca cache y notifica incluyendo la cuenta', async () =>
           position: {
             coin: 'BTC',
             szi: '0.015',
+            entryPx: '50000',
           },
         }],
       }),
@@ -135,9 +136,45 @@ test('closePosition refresca cache y notifica incluyendo la cuenta', async () =>
     assert.equal(result.account.alias, account.alias);
     assert.equal(result.action, 'close');
     assert.equal(result.closedSize, 0.01);
+    assert.equal(result.openPrice, 50000);
+    assert.equal(result.pnl, 8.98);
     assert.deepEqual(cacheCalls, [[1, 8]]);
     assert.equal(tgCalls[0][0], 'close');
     assert.equal(tgCalls[0][1].account.alias, account.alias);
+    assert.equal(tgCalls[0][1].openPrice, 50000);
+    assert.equal(tgCalls[0][1].pnl, 8.98);
+  } finally {
+    release();
+  }
+});
+
+test('closePosition calcula pnl para posiciones short', async () => {
+  const { service, tgCalls } = createTrading({
+    hl: {
+      getClearinghouseState: async () => ({
+        assetPositions: [{
+          position: {
+            coin: 'BTC',
+            szi: '-0.02',
+            entryPx: '50000',
+          },
+        }],
+      }),
+      getAssetMeta: async () => ({ index: 0, szDecimals: 3 }),
+      getAllMids: async () => ({ BTC: '49000' }),
+      placeOrder: async () => ({ statuses: ['ok'] }),
+    },
+  });
+  const release = withPatched(balanceCacheService, {
+    refreshSnapshot: async () => {},
+  });
+
+  try {
+    const result = await service.closePosition({ asset: 'BTC' });
+    assert.equal(result.closedSide, 'short');
+    assert.equal(result.openPrice, 50000);
+    assert.equal(result.pnl, 18.04);
+    assert.equal(tgCalls[0][1].pnl, 18.04);
   } finally {
     release();
   }

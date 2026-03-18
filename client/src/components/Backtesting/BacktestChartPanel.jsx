@@ -56,7 +56,7 @@ function getLineValue(value) {
   return null;
 }
 
-function BacktestChartPanel({ result, focusedTrade }) {
+function BacktestChartPanel({ result, focusedTrade, compareEquity }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const legendRefs = useRef([]);
@@ -125,9 +125,10 @@ function BacktestChartPanel({ result, focusedTrade }) {
   useEffect(() => {
     if (!containerRef.current || !chartPayload) return undefined;
 
+    const containerHeight = containerRef.current.clientHeight || 500;
     const chart = createChart(containerRef.current, {
       autoSize: true,
-      height: 620,
+      height: containerHeight,
       layout: {
         background: { type: ColorType.Solid, color: '#07111f' },
         textColor: '#cbd5e1',
@@ -200,6 +201,20 @@ function BacktestChartPanel({ result, focusedTrade }) {
     equitySeries.setData(chartPayload.equity);
     legendRefs.current.push({ series: equitySeries, label: 'Equity' });
 
+    if (compareEquity?.length) {
+      const compareEquitySeries = chart.addSeries(LineSeries, {
+        color: '#6366f1',
+        lineWidth: 2,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      }, PANE_EQUITY);
+      compareEquitySeries.setData(
+        compareEquity.map((p) => ({ time: toChartTime(p.time), value: Number(p.value) })),
+      );
+      legendRefs.current.push({ series: compareEquitySeries, label: 'Equity (comp)' });
+    }
+
     const drawdownSeries = chart.addSeries(AreaSeries, {
       lineColor: '#fb7185',
       topColor: 'rgba(251, 113, 133, 0.35)',
@@ -223,11 +238,14 @@ function BacktestChartPanel({ result, focusedTrade }) {
     }
 
     const panes = chart.panes?.() || [];
-    panes[PANE_PRICE]?.setHeight?.(340);
-    panes[PANE_EQUITY]?.setHeight?.(130);
-    panes[PANE_DRAWDOWN]?.setHeight?.(110);
-    if (chartPayload.indicatorOverlays.length) {
-      panes[PANE_INDICATOR]?.setHeight?.(150);
+    const hasIndicators = chartPayload.indicatorOverlays.length > 0;
+    const totalParts = 34 + 13 + 11 + (hasIndicators ? 15 : 0);
+    const unit = containerHeight / totalParts;
+    panes[PANE_PRICE]?.setHeight?.(Math.round(34 * unit));
+    panes[PANE_EQUITY]?.setHeight?.(Math.round(13 * unit));
+    panes[PANE_DRAWDOWN]?.setHeight?.(Math.round(11 * unit));
+    if (hasIndicators) {
+      panes[PANE_INDICATOR]?.setHeight?.(Math.round(15 * unit));
     }
 
     chart.subscribeCrosshairMove((param) => {
@@ -250,7 +268,10 @@ function BacktestChartPanel({ result, focusedTrade }) {
       const observer = new ResizeObserver((entries) => {
         const entry = entries[0];
         if (!entry?.contentRect) return;
-        chart.applyOptions({ width: Math.max(320, Math.floor(entry.contentRect.width)) });
+        chart.applyOptions({
+          width: Math.max(320, Math.floor(entry.contentRect.width)),
+          height: Math.max(200, Math.floor(entry.contentRect.height)),
+        });
       });
       observer.observe(containerRef.current);
       cleanupResize = () => observer.disconnect();
@@ -269,7 +290,7 @@ function BacktestChartPanel({ result, focusedTrade }) {
       chartRef.current = null;
       legendRefs.current = [];
     };
-  }, [chartPayload]);
+  }, [chartPayload, compareEquity]);
 
   useEffect(() => {
     const chart = chartRef.current;

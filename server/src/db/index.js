@@ -105,6 +105,42 @@ async function initSchema() {
     )
   `);
 
+  // ── Pools Uniswap protegidos ─────────────────────────────────────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS protected_uniswap_pools (
+      id                     SERIAL PRIMARY KEY,
+      user_id                INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      hyperliquid_account_id INTEGER NOT NULL REFERENCES hyperliquid_accounts(id) ON DELETE CASCADE,
+      network                VARCHAR(40) NOT NULL,
+      version                VARCHAR(10) NOT NULL,
+      wallet_address         VARCHAR(255) NOT NULL,
+      pool_address           VARCHAR(255),
+      position_identifier    VARCHAR(255) NOT NULL,
+      token0_symbol          VARCHAR(50) NOT NULL,
+      token1_symbol          VARCHAR(50) NOT NULL,
+      token0_address         VARCHAR(255),
+      token1_address         VARCHAR(255),
+      range_lower_price      NUMERIC NOT NULL,
+      range_upper_price      NUMERIC NOT NULL,
+      price_current          NUMERIC,
+      inferred_asset         VARCHAR(20) NOT NULL,
+      hedge_size             NUMERIC NOT NULL,
+      hedge_notional_usd     NUMERIC NOT NULL,
+      configured_hedge_notional_usd NUMERIC NOT NULL,
+      value_multiplier       NUMERIC,
+      stop_loss_difference_pct NUMERIC NOT NULL DEFAULT 0.05,
+      value_mode             VARCHAR(20) NOT NULL DEFAULT 'usd',
+      leverage               INTEGER NOT NULL,
+      margin_mode            VARCHAR(20) NOT NULL DEFAULT 'isolated',
+      status                 VARCHAR(20) NOT NULL DEFAULT 'active'
+                             CHECK (status IN ('active', 'inactive')),
+      pool_snapshot_json     TEXT NOT NULL,
+      created_at             BIGINT NOT NULL,
+      updated_at             BIGINT NOT NULL,
+      deactivated_at         BIGINT
+    )
+  `);
+
   // user_id en hedges (migración additive para tablas existentes)
   await pool.query(`
     ALTER TABLE hedges ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)
@@ -146,6 +182,52 @@ async function initSchema() {
   `);
   await pool.query(`
     ALTER TABLE hedges ADD COLUMN IF NOT EXISTS last_reconciled_at BIGINT
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS configured_hedge_notional_usd NUMERIC
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS value_multiplier NUMERIC
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS value_mode VARCHAR(20) NOT NULL DEFAULT 'usd'
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS stop_loss_difference_pct NUMERIC NOT NULL DEFAULT 0.05
+  `);
+  await pool.query(`
+    UPDATE protected_uniswap_pools
+       SET configured_hedge_notional_usd = hedge_notional_usd
+     WHERE configured_hedge_notional_usd IS NULL
+  `);
+  await pool.query(`
+    UPDATE protected_uniswap_pools
+       SET stop_loss_difference_pct = 0.05
+     WHERE stop_loss_difference_pct IS NULL
+  `);
+  await pool.query(`
+    UPDATE protected_uniswap_pools
+       SET value_mode = 'usd'
+     WHERE value_mode IS NULL OR value_mode = ''
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools
+      ALTER COLUMN configured_hedge_notional_usd SET NOT NULL
+  `);
+  await pool.query(`
+    ALTER TABLE hedges ADD COLUMN IF NOT EXISTS protected_pool_id INTEGER REFERENCES protected_uniswap_pools(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE hedges ADD COLUMN IF NOT EXISTS protected_role VARCHAR(20)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS hedges_protected_pool_idx
+      ON hedges(protected_pool_id)
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS protected_uniswap_pools_active_identity
+      ON protected_uniswap_pools(user_id, network, version, lower(wallet_address), position_identifier)
+      WHERE status = 'active'
   `);
 
   // ── Tabla de ciclos ────────────────────────────────────────────────

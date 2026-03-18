@@ -59,6 +59,8 @@ function rowToHedge(row, cycles = []) {
     entryFillTime: row.entry_fill_time ? Number(row.entry_fill_time) : null,
     entryFeePaid: parseFloat(row.entry_fee_paid || 0),
     fundingAccum: parseFloat(row.funding_accum || 0),
+    protectedPoolId: row.protected_pool_id ? Number(row.protected_pool_id) : null,
+    protectedRole: row.protected_role || null,
     cycles: cycles.map((c) => ({
       cycleId: c.cycle_id,
       openedAt: c.opened_at ? Number(c.opened_at) : null,
