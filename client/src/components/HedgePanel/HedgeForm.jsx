@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { AccountAutocomplete } from '../shared/AccountAutocomplete';
 import { formatAccountIdentity, formatUsd } from '../../utils/hyperliquidAccounts';
+import { AccountAutocomplete } from '../shared/AccountAutocomplete';
 import { loadPct } from './constants';
 import styles from './HedgePanel.module.css';
 
@@ -120,21 +120,14 @@ export function HedgeForm({
       <AccountAutocomplete
         accounts={accounts}
         selectedAccountId={selectedAccountId}
-        onSelect={(selected) => {
-          setSelectedAccountId(selected.id);
-          refreshAccountSummary(selected.id, { force: true }).catch(() => {});
+        onSelect={(account) => {
+          setSelectedAccountId(account.id);
+          refreshAccountSummary(account.id, { force: true }).catch(() => {});
         }}
         label="Cuenta de cobertura"
         disabled={isLoadingAccounts || accounts.length === 0}
         placeholder="Selecciona una cuenta de Hyperliquid"
       />
-
-      {selectedAccount && (
-        <div className={styles.accountSummary}>
-          <span className={styles.accountSummaryTitle}>{formatAccountIdentity(selectedAccount)}</span>
-          <span className={styles.accountSummaryValue}>Balance {formatUsd(selectedAccount.balanceUsd)}</span>
-        </div>
-      )}
 
       {/* Direction selector */}
       <div className={styles.directionBar}>

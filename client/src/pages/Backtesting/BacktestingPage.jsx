@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import BacktestChartPanel from '../../components/Backtesting/BacktestChartPanel';
 import { matchTradeFilter } from '../../components/Backtesting/backtesting-utils';
 import { useTradingContext } from '../../context/TradingContext';
+import { EmptyState } from '../../components/shared/EmptyState';
 import { indicatorsApi, strategiesApi } from '../../services/api';
 import BacktestTopBar from './components/BacktestTopBar';
 import BottomPanel from './components/BottomPanel';
@@ -29,7 +30,7 @@ function BacktestingPage() {
 
   const {
     runs, activeRunId, setActiveRunId, compareRunId, toggleCompare,
-    activeResult, compareResult, isRunning, execute,
+    activeResult, compareResult, isRunning, pendingJob, execute,
   } = useBacktestRuns(getPayload, addNotification);
 
   useEffect(() => {
@@ -82,6 +83,7 @@ function BacktestingPage() {
         metrics={metrics}
         isRunning={isRunning}
         isLoading={isLoading}
+        pendingJob={pendingJob}
         onRun={handleRun}
         configOpen={configOpen}
         onToggleConfig={toggleConfig}
@@ -115,27 +117,17 @@ function BacktestingPage() {
               />
             </>
           ) : (
-            <div className={styles.emptyState}>
-              <div className={styles.emptyTitle}>
-                {form.strategyId
-                  ? `Listo para simular ${selectedStrategy?.name || ''} en ${form.asset} ${form.timeframe}`
-                  : 'Configura tu primera simulacion'}
-              </div>
-              <div className={styles.emptySubtitle}>
-                {form.strategyId
-                  ? 'Presiona Simular o Ctrl+Enter para comenzar.'
-                  : 'Selecciona una estrategia en el panel de configuracion para comenzar.'}
-              </div>
-              {form.strategyId ? (
-                <button type="button" className={styles.emptyBtn} onClick={handleRun}>
-                  Simular
-                </button>
-              ) : (
-                <button type="button" className={styles.emptyBtn} onClick={toggleConfig}>
-                  Abrir configuracion
-                </button>
-              )}
-            </div>
+            <EmptyState
+              icon={form.strategyId ? '▶' : '⚙'}
+              title={form.strategyId
+                ? `Listo para simular ${selectedStrategy?.name || ''} en ${form.asset} ${form.timeframe}`
+                : 'Configura tu primera simulacion'}
+              description={form.strategyId
+                ? 'Presiona Simular o Ctrl+Enter para comenzar.'
+                : 'Selecciona una estrategia en el panel de configuracion para comenzar.'}
+              action={form.strategyId ? 'Simular' : 'Abrir configuracion'}
+              onAction={form.strategyId ? handleRun : toggleConfig}
+            />
           )}
         </div>
 

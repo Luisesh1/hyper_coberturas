@@ -71,13 +71,27 @@ function ConfigDrawer({
             <label className={styles.field}>
               <span>Timeframe</span>
               <select value={form.timeframe} onChange={set('timeframe')}>
-                {TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                {TIMEFRAMES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </label>
             <label className={styles.field}>
-              <span>Monto USD</span>
-              <input type="number" min="1" step="1" value={form.sizeUsd} onChange={set('sizeUsd')} />
+              <span>Sizing</span>
+              <select value={form.sizingMode} onChange={set('sizingMode')}>
+                <option value="usd">USD fijo</option>
+                <option value="pct_equity">% Equity</option>
+              </select>
             </label>
+            {form.sizingMode === 'pct_equity' ? (
+              <label className={styles.field}>
+                <span>% Equity</span>
+                <input type="number" min="0.1" max="100" step="0.5" value={form.pctEquity} onChange={set('pctEquity')} />
+              </label>
+            ) : (
+              <label className={styles.field}>
+                <span>Monto USD</span>
+                <input type="number" min="1" step="1" value={form.sizeUsd} onChange={set('sizeUsd')} />
+              </label>
+            )}
             <label className={styles.field}>
               <span>Leverage</span>
               <input type="number" min="1" step="1" value={form.leverage} onChange={set('leverage')} />

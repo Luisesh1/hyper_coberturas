@@ -3,7 +3,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--uni-border);
   background: linear-gradient(180deg, rgba(11, 18, 26, 0.96), rgba(8, 13, 19, 0.94));
   box-shadow: var(--uni-shadow);
@@ -38,14 +38,14 @@
 
 .chip {
   padding: 6px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--uni-border);
   background: transparent;
   color: var(--uni-text-2);
   font-size: 0.74rem;
   font-weight: 700;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--transition-fast);
   display: flex;
   align-items: center;
   gap: 5px;

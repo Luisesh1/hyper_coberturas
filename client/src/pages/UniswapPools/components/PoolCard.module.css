@@ -51,7 +51,7 @@
   display: inline-flex;
   align-items: center;
   padding: 3px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.64rem;
   font-weight: 800;
   border: 1px solid var(--uni-border);
@@ -87,7 +87,7 @@
 .statusDot {
   width: 7px;
   height: 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   flex-shrink: 0;
   background: var(--uni-text-3);
 }
@@ -144,7 +144,7 @@
   width: 100%;
   padding: 10px;
   border: 1px solid rgba(102, 225, 219, 0.22);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(135deg, rgba(31, 201, 198, 0.1), rgba(47, 125, 255, 0.1));
   color: var(--uni-cyan);
   font-weight: 800;

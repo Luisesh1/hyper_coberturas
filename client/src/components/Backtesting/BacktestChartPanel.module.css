@@ -3,7 +3,7 @@
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: #07111f;
+  background: var(--bg-primary);
   overflow: hidden;
 }
 
@@ -18,13 +18,13 @@
 
 .header h2 {
   font-size: 0.82rem;
-  color: #f8fafc;
+  color: var(--text-primary);
 }
 
 .eyebrow {
   display: inline-flex;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.66rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -39,11 +39,11 @@
   justify-content: flex-end;
   gap: 8px;
   font-size: 0.76rem;
-  color: #94a3b8;
+  color: var(--text-secondary);
 }
 
 .legend strong {
-  color: #f8fafc;
+  color: var(--text-primary);
 }
 
 .chart {

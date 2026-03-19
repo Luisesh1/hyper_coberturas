@@ -1,6 +1,6 @@
 .page {
   min-height: 100vh;
-  background: #0a0c10;
+  background: var(--bg-input);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8,9 +8,9 @@
 }
 
 .card {
-  background: #1a1d23;
-  border: 1px solid #2a2d35;
-  border-radius: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
   padding: 36px 32px;
   width: 100%;
   max-width: 380px;
@@ -28,20 +28,20 @@
 
 .logoIcon {
   font-size: 1.6rem;
-  color: #6366f1;
+  color: var(--indigo);
 }
 
 .logoText {
   font-size: 1.1rem;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--text-primary);
   letter-spacing: 0.3px;
 }
 
 .title {
   font-size: 1rem;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--text-secondary);
   text-align: center;
   margin: 0;
 }
@@ -61,49 +61,49 @@
 .label {
   font-size: 0.74rem;
   font-weight: 600;
-  color: #64748b;
+  color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
 
 .input {
-  background: #0f1117;
-  border: 1px solid #2a2d35;
-  border-radius: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   padding: 10px 14px;
-  color: #e2e8f0;
+  color: var(--text-primary);
   font-size: 0.9rem;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color var(--transition);
   width: 100%;
   box-sizing: border-box;
 }
 
-.input:focus { border-color: #6366f1; }
+.input:focus { border-color: var(--indigo); }
 .input:disabled { opacity: 0.5; }
 
 .error {
-  background: #2b0d0d;
-  border: 1px solid #7f1d1d;
-  border-radius: 6px;
+  background: var(--red-dark-bg);
+  border: 1px solid var(--red-dark-border);
+  border-radius: var(--radius-sm);
   padding: 8px 12px;
   font-size: 0.8rem;
-  color: #ef4444;
+  color: var(--red);
   margin: 0;
 }
 
 .submit {
   padding: 12px;
-  background: #6366f1;
+  background: var(--indigo);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: #fff;
   font-size: 0.9rem;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--transition-fast);
   margin-top: 4px;
 }
 
-.submit:hover:not(:disabled) { background: #4f46e5; }
+.submit:hover:not(:disabled) { background: var(--indigo-hover); }
 .submit:disabled { opacity: 0.5; cursor: not-allowed; }

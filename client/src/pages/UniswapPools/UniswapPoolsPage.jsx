@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { settingsApi, uniswapApi } from '../../services/api';
 import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
+import { EmptyState } from '../../components/shared/EmptyState';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
 import { mergeResultProtections } from './utils/pool-sorting';
 import { getPoolSortScore } from './utils/pool-sorting';
@@ -177,11 +178,33 @@ export default function UniswapPoolsPage() {
     setApplyPool(pool);
   };
 
-  const handleApplyProtection = async ({ pool, accountId, leverage, configuredNotionalUsd, valueMultiplier, stopLossDifferencePct }) => {
+  const handleApplyProtection = async ({
+    pool,
+    accountId,
+    leverage,
+    configuredNotionalUsd,
+    valueMultiplier,
+    stopLossDifferencePct,
+    protectionMode,
+    reentryBufferPct,
+    flipCooldownSec,
+    maxSequentialFlips,
+  }) => {
     setIsApplyingProtection(true);
     setError('');
     try {
-      await uniswapApi.createProtectedPool({ pool, accountId, leverage, configuredNotionalUsd, valueMultiplier, stopLossDifferencePct });
+      await uniswapApi.createProtectedPool({
+        pool,
+        accountId,
+        leverage,
+        configuredNotionalUsd,
+        valueMultiplier,
+        stopLossDifferencePct,
+        protectionMode,
+        reentryBufferPct,
+        flipCooldownSec,
+        maxSequentialFlips,
+      });
       setApplyPool(null);
       await loadProtectedPools();
       setActiveTab('protected');
@@ -274,12 +297,11 @@ export default function UniswapPoolsPage() {
       {activeTab === 'results' && (
         <section className={styles.tabContent}>
           {!result && !isScanning && (
-            <div className={styles.empty}>
-              <span className={styles.emptyTitle}>Listo para escanear una wallet</span>
-              <p className={styles.emptyText}>
-                Usa la barra superior para buscar posiciones LP de Uniswap y encontrar pools listos para proteger.
-              </p>
-            </div>
+            <EmptyState
+              icon="🦄"
+              title="Listo para escanear una wallet"
+              description="Usa la barra superior para buscar posiciones LP de Uniswap y encontrar pools listos para proteger."
+            />
           )}
 
           {isScanning && (
@@ -300,20 +322,17 @@ export default function UniswapPoolsPage() {
               />
 
               {filteredPools.length === 0 ? (
-                <div className={styles.empty}>
-                  <span className={styles.emptyTitle}>
-                    {result.count === 0
-                      ? isLpModeSelection
-                        ? 'No se encontraron posiciones LP activas.'
-                        : 'No se encontraron pools con liquidez relevante.'
-                      : 'Ningun pool coincide con los filtros actuales.'}
-                  </span>
-                  <p className={styles.emptyText}>
-                    {result.count === 0
-                      ? 'Prueba con otra red, version o wallet.'
-                      : 'Ajusta la busqueda, el filtro o el orden para explorar otros resultados.'}
-                  </p>
-                </div>
+                <EmptyState
+                  icon={result.count === 0 ? '📭' : '🔍'}
+                  title={result.count === 0
+                    ? isLpModeSelection
+                      ? 'No se encontraron posiciones LP activas.'
+                      : 'No se encontraron pools con liquidez relevante.'
+                    : 'Ningun pool coincide con los filtros actuales.'}
+                  description={result.count === 0
+                    ? 'Prueba con otra red, version o wallet.'
+                    : 'Ajusta la busqueda, el filtro o el orden para explorar otros resultados.'}
+                />
               ) : (
                 <div className={styles.grid}>
                   {filteredPools.map((pool) => (
@@ -354,10 +373,11 @@ export default function UniswapPoolsPage() {
           </div>
 
           {protectedPools.length === 0 ? (
-            <div className={styles.empty}>
-              <span className={styles.emptyTitle}>No tienes pools protegidos todavia.</span>
-              <p className={styles.emptyText}>Escanea una posicion LP y usa "Aplicar cobertura".</p>
-            </div>
+            <EmptyState
+              icon="🛡️"
+              title="No tienes pools protegidos todavia."
+              description="Escanea una posicion LP y usa 'Aplicar cobertura'."
+            />
           ) : (
             <div className={styles.grid}>
               {orderedProtectedPools.map((protection) => (

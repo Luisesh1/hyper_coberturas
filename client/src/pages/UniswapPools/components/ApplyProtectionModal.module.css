@@ -156,7 +156,7 @@
 .select {
   width: 100%;
   border: 1px solid var(--uni-border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(8, 12, 18, 0.9);
   color: var(--uni-text-0);
   padding: 10px 12px;
@@ -195,7 +195,7 @@
   background: rgba(8, 13, 19, 0.94);
   color: var(--uni-text-1);
   padding: 7px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-weight: 800;
   cursor: pointer;
   transition: transform 0.16s, border-color 0.16s, background 0.16s;
@@ -265,7 +265,7 @@
   background: rgba(11, 18, 26, 0.88);
   color: var(--uni-text-1);
   padding: 10px 16px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-weight: 800;
   cursor: pointer;
   transition: transform 0.16s;
@@ -278,7 +278,7 @@
 .primaryBtn {
   border: none;
   padding: 10px 20px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: linear-gradient(135deg, #1fc9c6, #2f7dff);
   color: #fff;
   font-weight: 800;

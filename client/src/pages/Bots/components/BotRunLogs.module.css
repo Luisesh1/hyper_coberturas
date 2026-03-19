@@ -102,9 +102,9 @@
   letter-spacing: 0.3px;
 }
 
-.statusOk { color: #86efac; background: rgba(34, 197, 94, 0.14); }
-.statusError { color: #fda4af; background: rgba(244, 63, 94, 0.14); }
-.statusNeutral { color: #cbd5e1; background: rgba(71, 85, 105, 0.2); }
+.statusOk { color: var(--status-ok); background: var(--status-ok-bg); }
+.statusError { color: var(--status-error); background: var(--status-error-bg); }
+.statusNeutral { color: var(--status-idle); background: var(--status-idle-bg); }
 
 .itemDetails {
   display: flex;

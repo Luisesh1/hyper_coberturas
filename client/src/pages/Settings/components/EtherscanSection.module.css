@@ -88,7 +88,7 @@
   cursor: pointer;
   transition: background var(--transition-fast);
 }
-.saveBtn:not(:disabled):hover { background: #4f46e5; }
+.saveBtn:not(:disabled):hover { background: var(--indigo-hover); }
 .saveBtn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .testBtn {

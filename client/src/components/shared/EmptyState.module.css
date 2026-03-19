@@ -40,5 +40,5 @@
 }
 
 .cta:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: var(--indigo-border);
 }

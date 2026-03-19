@@ -11,6 +11,7 @@ function BacktestTopBar({
   metrics,
   isRunning,
   isLoading,
+  pendingJob,
   onRun,
   configOpen,
   onToggleConfig,
@@ -67,6 +68,12 @@ function BacktestTopBar({
         >
           {isRunning ? <><Spinner size={14} color="#92400e" /> Simulando...</> : 'Simular'}
         </button>
+        {pendingJob && (
+          <span className={styles.pendingBadge}>
+            <Spinner size={12} color="#6366f1" />
+            <span>En cola: {pendingJob.asset} {pendingJob.timeframe}</span>
+          </span>
+        )}
       </div>
 
       <div className={styles.right}>

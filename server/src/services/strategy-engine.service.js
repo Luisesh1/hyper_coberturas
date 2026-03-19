@@ -58,6 +58,7 @@ async function simulateBacktest({
   customIndicators = [],
   sizingMode = 'usd',
   sizeUsd,
+  pctEquity,
   tradeSize,
   leverage,
   marginMode,
@@ -66,6 +67,7 @@ async function simulateBacktest({
   feeBps,
   slippageBps,
   overlayRequests = [],
+  timeoutMs = 8_000,
 }) {
   return runWorker({
     type: 'backtest',
@@ -74,6 +76,7 @@ async function simulateBacktest({
     customIndicators,
     sizingMode,
     sizeUsd,
+    pctEquity,
     tradeSize,
     leverage,
     marginMode,
@@ -82,7 +85,7 @@ async function simulateBacktest({
     feeBps,
     slippageBps,
     overlayRequests,
-  }, { timeout: 8_000 });
+  }, { timeout: timeoutMs });
 }
 
 async function validateIndicator({ slug, source, input, params }) {

@@ -22,7 +22,7 @@
 .walletInput,
 .select {
   border: 1px solid var(--uni-border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: rgba(8, 12, 18, 0.9);
   color: var(--uni-text-0);
   padding: 10px 12px;
@@ -53,7 +53,7 @@
 
 .scanBtn {
   border: none;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 10px 20px;
   background: linear-gradient(135deg, #1fc9c6, #2f7dff);
   color: #fff;
@@ -86,7 +86,7 @@
   font-size: 0.74rem;
   color: var(--uni-text-2);
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(6, 12, 18, 0.7);
   border: 1px solid var(--uni-border);
 }

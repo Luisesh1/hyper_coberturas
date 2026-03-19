@@ -1,4 +1,5 @@
 import { Component } from 'react';
+import styles from './ErrorBoundary.module.css';
 
 export class ErrorBoundary extends Component {
   constructor(props) {
@@ -17,28 +18,14 @@ export class ErrorBoundary extends Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{
-          padding: '2rem',
-          textAlign: 'center',
-          color: '#e2e8f0',
-          background: '#1a1b23',
-          borderRadius: '8px',
-          margin: '1rem',
-        }}>
-          <h2 style={{ color: '#f87171', marginBottom: '0.5rem' }}>Algo salio mal</h2>
-          <p style={{ color: '#94a3b8', marginBottom: '1rem' }}>
+        <div className={styles.container}>
+          <h2 className={styles.title}>Algo salio mal</h2>
+          <p className={styles.message}>
             {this.state.error?.message || 'Error inesperado'}
           </p>
           <button
+            className={styles.retryBtn}
             onClick={() => this.setState({ hasError: false, error: null })}
-            style={{
-              padding: '0.5rem 1.5rem',
-              background: '#3b82f6',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-            }}
           >
             Reintentar
           </button>

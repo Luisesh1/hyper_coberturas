@@ -169,8 +169,30 @@ export const uniswapApi = {
     request('POST', '/uniswap/pools/scan', { wallet, network, version }),
   listProtectedPools: () => request('GET', '/uniswap/protected-pools'),
   refreshProtectedPools: () => request('POST', '/uniswap/protected-pools/refresh', {}),
-  createProtectedPool: ({ pool, accountId, leverage, configuredNotionalUsd, valueMultiplier, stopLossDifferencePct }) =>
-    request('POST', '/uniswap/protected-pools', { pool, accountId, leverage, configuredNotionalUsd, valueMultiplier, stopLossDifferencePct }),
+  createProtectedPool: ({
+    pool,
+    accountId,
+    leverage,
+    configuredNotionalUsd,
+    valueMultiplier,
+    stopLossDifferencePct,
+    protectionMode,
+    reentryBufferPct,
+    flipCooldownSec,
+    maxSequentialFlips,
+  }) =>
+    request('POST', '/uniswap/protected-pools', {
+      pool,
+      accountId,
+      leverage,
+      configuredNotionalUsd,
+      valueMultiplier,
+      stopLossDifferencePct,
+      protectionMode,
+      reentryBufferPct,
+      flipCooldownSec,
+      maxSequentialFlips,
+    }),
   deactivateProtectedPool: (id) =>
     request('POST', `/uniswap/protected-pools/${id}/deactivate`, {}),
 };
@@ -210,4 +232,7 @@ export const botsApi = {
 
 export const backtestingApi = {
   simulate: (payload) => request('POST', '/backtesting/simulate', payload),
+  enqueue: (payload) => request('POST', '/backtesting/queue', payload),
+  getJob: (jobId) => request('GET', `/backtesting/jobs/${jobId}`),
+  getJobs: () => request('GET', '/backtesting/jobs'),
 };

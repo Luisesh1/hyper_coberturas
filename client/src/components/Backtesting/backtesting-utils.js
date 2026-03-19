@@ -1,9 +1,9 @@
 import { safeJsonParse, stringifyJson } from '../../utils/json';
+import { TIMEFRAMES, TIMEFRAME_VALUES } from '../../config/timeframes';
 
-export { stringifyJson };
+export { stringifyJson, TIMEFRAMES, TIMEFRAME_VALUES };
 
 export const STORAGE_KEY = 'hl_backtesting_config';
-export const TIMEFRAMES = ['1m', '5m', '15m', '1h'];
 export const RANGE_OPTIONS = ['250', '500', '1000', 'custom'];
 export const BUILTIN_OVERLAYS = ['sma', 'ema', 'rsi', 'macd', 'atr', 'bollinger'];
 export const TRADE_FILTERS = ['all', 'long', 'short', 'win', 'loss'];
@@ -36,7 +36,9 @@ export function defaultForm(strategyId = '') {
     asset: 'BTC',
     timeframe: '15m',
     params: stringifyJson({ fastPeriod: 9, slowPeriod: 21 }),
+    sizingMode: 'usd',
     sizeUsd: '100',
+    pctEquity: '10',
     leverage: '10',
     marginMode: 'cross',
     stopLossPct: '',
@@ -71,7 +73,9 @@ export function buildPayload(form) {
     asset: form.asset,
     timeframe: form.timeframe,
     params: parseJsonObject(form.params, {}),
+    sizingMode: form.sizingMode || 'usd',
     sizeUsd: Number(form.sizeUsd),
+    pctEquity: Number(form.pctEquity || 10),
     leverage: Number(form.leverage),
     marginMode: form.marginMode,
     stopLossPct: form.stopLossPct === '' ? null : Number(form.stopLossPct),

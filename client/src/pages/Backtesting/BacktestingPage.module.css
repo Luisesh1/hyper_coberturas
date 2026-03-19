@@ -26,48 +26,6 @@
   position: relative;
 }
 
-.emptyState {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  text-align: center;
-  padding: 32px;
-}
-
-.emptyTitle {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.emptySubtitle {
-  font-size: 0.84rem;
-  color: var(--text-secondary);
-  max-width: 360px;
-}
-
-.emptyBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 20px;
-  border-radius: var(--radius-pill);
-  border: none;
-  background: linear-gradient(135deg, #f59e0b, #f97316);
-  color: #422006;
-  font: inherit;
-  font-size: 0.84rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: transform var(--transition-fast);
-}
-
-.emptyBtn:hover {
-  transform: translateY(-1px);
-}
 
 /* Drawer backdrop for mobile */
 .drawerBackdrop {

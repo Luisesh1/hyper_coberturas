@@ -7,6 +7,7 @@
 
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { readSession, setSession, clearSession, subscribe } from '../services/sessionStore';
+import { authApi } from '../services/api';
 
 const AuthContext = createContext(null);
 function readStorage() {
@@ -19,16 +20,7 @@ export function AuthProvider({ children }) {
   useEffect(() => subscribe(setState), []);
 
   const login = useCallback(async (username, password) => {
-    const res = await fetch('/api/auth/login', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ username, password }),
-    });
-    const json = await res.json();
-    if (!res.ok || !json.success) {
-      throw new Error(json.error || 'Error al iniciar sesión');
-    }
-    const { token, user } = json.data;
+    const { token, user } = await authApi.login({ username, password });
     setSession({ token, user });
     return user;
   }, []);

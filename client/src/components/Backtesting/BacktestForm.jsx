@@ -86,21 +86,48 @@ function BacktestForm({
             value={form.timeframe}
             onChange={(event) => setForm((prev) => ({ ...prev, timeframe: event.target.value }))}
           >
-            {TIMEFRAMES.map((timeframe) => <option key={timeframe} value={timeframe}>{timeframe}</option>)}
+            {TIMEFRAMES.map((tf) => <option key={tf.value} value={tf.value}>{tf.label}</option>)}
           </select>
         </label>
 
         <label className={styles.field}>
-          <span>Monto USD</span>
-          <input
-            aria-label="Monto USD"
-            type="number"
-            min="1"
-            step="1"
-            value={form.sizeUsd}
-            onChange={(event) => setForm((prev) => ({ ...prev, sizeUsd: event.target.value }))}
-          />
+          <span>Sizing mode</span>
+          <select
+            aria-label="Sizing mode"
+            value={form.sizingMode}
+            onChange={(event) => setForm((prev) => ({ ...prev, sizingMode: event.target.value }))}
+          >
+            <option value="usd">USD fijo</option>
+            <option value="pct_equity">% Equity</option>
+          </select>
         </label>
+
+        {form.sizingMode === 'pct_equity' ? (
+          <label className={styles.field}>
+            <span>% Equity</span>
+            <input
+              aria-label="% Equity"
+              type="number"
+              min="0.1"
+              max="100"
+              step="0.5"
+              value={form.pctEquity}
+              onChange={(event) => setForm((prev) => ({ ...prev, pctEquity: event.target.value }))}
+            />
+          </label>
+        ) : (
+          <label className={styles.field}>
+            <span>Monto USD</span>
+            <input
+              aria-label="Monto USD"
+              type="number"
+              min="1"
+              step="1"
+              value={form.sizeUsd}
+              onChange={(event) => setForm((prev) => ({ ...prev, sizeUsd: event.target.value }))}
+            />
+          </label>
+        )}
 
         <label className={styles.field}>
           <span>Leverage</span>

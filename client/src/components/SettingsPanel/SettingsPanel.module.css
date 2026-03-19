@@ -1,7 +1,7 @@
 .container {
-  background: #1a1d23;
-  border: 1px solid #2a2d35;
-  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -19,20 +19,20 @@
 .title {
   font-size: 0.95rem;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--text-primary);
   margin: 0 0 4px 0;
 }
 
 .subtitle {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--text-tertiary);
   margin: 0;
 }
 
 /* ── Section ── */
 .section {
-  background: #0f1117;
-  border: 1px solid #2a2d35;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 18px;
   display: flex;
@@ -48,13 +48,13 @@
 
 .sectionIcon {
   font-size: 1rem;
-  color: #6366f1;
+  color: var(--indigo);
 }
 
 .sectionTitle {
   font-size: 0.88rem;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--text-primary);
   margin: 0;
   flex: 1;
 }
@@ -64,9 +64,9 @@
   font-weight: 700;
   padding: 2px 8px;
   border-radius: 4px;
-  background: #052e16;
-  color: #22c55e;
-  border: 1px solid #166534;
+  background: var(--green-bg);
+  color: var(--green);
+  border: 1px solid var(--green-border);
 }
 
 .badgeOff {
@@ -74,20 +74,20 @@
   font-weight: 700;
   padding: 2px 8px;
   border-radius: 4px;
-  background: #1c1400;
-  color: #94a3b8;
-  border: 1px solid #334155;
+  background: var(--amber-dark-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--text-disabled);
 }
 
 .description {
   font-size: 0.78rem;
-  color: #64748b;
+  color: var(--text-tertiary);
   line-height: 1.5;
   margin: 0;
 }
 
 .description strong {
-  color: #94a3b8;
+  color: var(--text-secondary);
 }
 
 /* ── Form ── */
@@ -105,29 +105,29 @@
 
 .label {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--text-tertiary);
   font-weight: 500;
 }
 
 .input {
-  background: #0a0c10;
-  border: 1px solid #2a2d35;
-  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   padding: 10px 14px;
-  color: #e2e8f0;
+  color: var(--text-primary);
   font-size: 0.9rem;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color var(--transition);
   width: 100%;
   box-sizing: border-box;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
-.input:focus { border-color: #6366f1; }
-.input::placeholder { color: #334155; }
+.input:focus { border-color: var(--indigo); }
+.input::placeholder { color: var(--text-disabled); }
 
 .hint {
   font-size: 0.68rem;
-  color: #475569;
+  color: var(--text-hint);
 }
 
 .accountsList {
@@ -137,9 +137,9 @@
 
 .emptyAccounts {
   padding: 14px;
-  border: 1px dashed #2a2d35;
-  border-radius: 8px;
-  color: #64748b;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
   font-size: 0.8rem;
   text-align: center;
 }
@@ -149,9 +149,9 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  border: 1px solid #2a2d35;
+  border: 1px solid var(--border);
   border-radius: 10px;
-  background: #0a0c10;
+  background: var(--bg-input);
 }
 
 .accountCardTop {
@@ -166,23 +166,23 @@
   align-items: center;
   gap: 8px;
   font-size: 0.75rem;
-  color: #cbd5e1;
+  color: var(--text-muted);
 }
 
 .accountAlias {
   font-size: 0.9rem;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
 
 .accountMeta {
   font-size: 0.78rem;
-  color: #94a3b8;
+  color: var(--text-secondary);
 }
 
 .accountBalance {
   font-size: 0.76rem;
-  color: #22c55e;
+  color: var(--green);
 }
 
 .accountActions {
@@ -193,18 +193,18 @@
 .deleteBtn {
   padding: 12px 20px;
   background: transparent;
-  border: 1px solid #7f1d1d;
-  border-radius: 8px;
-  color: #ef4444;
+  border: 1px solid var(--red-dark-border);
+  border-radius: var(--radius-md);
+  color: var(--red);
   font-size: 0.88rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--transition-fast);
   white-space: nowrap;
 }
 
 .deleteBtn:not(:disabled):hover {
-  background: #2b0d0d;
+  background: var(--red-bg);
 }
 
 .formHeaderRow {
@@ -216,13 +216,13 @@
 .formTitle {
   margin: 0;
   font-size: 0.82rem;
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
 
 .linkBtn {
   background: none;
   border: none;
-  color: #6366f1;
+  color: var(--indigo);
   cursor: pointer;
   font-size: 0.78rem;
 }
@@ -231,27 +231,27 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #cbd5e1;
+  color: var(--text-muted);
   font-size: 0.78rem;
 }
 
 /* ── Feedback ── */
 .feedbackOk {
   padding: 10px 14px;
-  background: #052e16;
-  border: 1px solid #166534;
-  border-radius: 8px;
-  color: #22c55e;
+  background: var(--green-bg);
+  border: 1px solid var(--green-border);
+  border-radius: var(--radius-md);
+  color: var(--green);
   font-size: 0.82rem;
   font-weight: 500;
 }
 
 .feedbackError {
   padding: 10px 14px;
-  background: #2b0d0d;
-  border: 1px solid #7f1d1d;
-  border-radius: 8px;
-  color: #ef4444;
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  border-radius: var(--radius-md);
+  color: var(--red);
   font-size: 0.82rem;
   font-weight: 500;
 }
@@ -265,32 +265,32 @@
 .saveBtn {
   flex: 1;
   padding: 12px;
-  background: #6366f1;
+  background: var(--indigo);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: #fff;
   font-size: 0.88rem;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--transition-fast);
 }
-.saveBtn:not(:disabled):hover { background: #4f46e5; }
+.saveBtn:not(:disabled):hover { background: var(--indigo-hover); }
 .saveBtn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .testBtn {
   padding: 12px 20px;
   background: transparent;
-  border: 1px solid #2a2d35;
-  border-radius: 8px;
-  color: #94a3b8;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
   font-size: 0.88rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--transition-fast);
   white-space: nowrap;
 }
 .testBtn:not(:disabled):hover {
-  border-color: #6366f1;
-  color: #6366f1;
+  border-color: var(--indigo);
+  color: var(--indigo);
 }
 .testBtn:disabled { opacity: 0.35; cursor: not-allowed; }

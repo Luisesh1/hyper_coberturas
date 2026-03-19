@@ -6,7 +6,7 @@ import { PricePanel } from './components/PricePanel/PricePanel';
 import { TradingPanel } from './components/TradingPanel/TradingPanel';
 import { HedgePanel } from './components/HedgePanel/HedgePanel';
 import SettingsPage from './pages/Settings/SettingsPage';
-import UsersPanel from './components/UsersPanel/UsersPanel';
+import UsersPage from './pages/Users/UsersPage';
 import { Notifications } from './components/Layout/Notifications';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { useTradingContext } from './context/TradingContext';
@@ -136,7 +136,7 @@ function AppContent() {
               <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
               <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
               <Route path="/config"     element={<SettingsPage />} />
-              {isSuperuser && <Route path="/usuarios" element={<UsersPanel />} />}
+              {isSuperuser && <Route path="/usuarios" element={<UsersPage />} />}
               <Route path="*"           element={<Navigate to="/trade" replace />} />
             </Routes>
           </ErrorBoundary>

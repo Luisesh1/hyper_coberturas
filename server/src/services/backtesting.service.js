@@ -39,7 +39,7 @@ function normalizeNumber(value, fallback = null) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-async function simulateBacktest(userId, input = {}) {
+async function simulateBacktest(userId, input = {}, { timeoutMs } = {}) {
   const strategyId = Number(input.strategyId);
   if (!Number.isFinite(strategyId) || strategyId <= 0) {
     throw new ValidationError('strategyId es requerido');
@@ -77,12 +77,16 @@ async function simulateBacktest(userId, input = {}) {
   const slippageBps = Math.max(0, normalizeNumber(input.slippageBps, 0));
   const overlayRequests = normalizeOverlayRequests(input.overlayRequests);
 
+  const sizingMode = ['usd', 'qty', 'pct_equity'].includes(input.sizingMode) ? input.sizingMode : 'usd';
+  const pctEquity = normalizeNumber(input.pctEquity, 10);
+
   const result = await strategyEngine.simulateBacktest({
     source: strategy.scriptSource,
     baseContext: validationContext.context,
     customIndicators: validationContext.customIndicators,
-    sizingMode: 'usd',
+    sizingMode,
     sizeUsd,
+    pctEquity,
     leverage,
     marginMode,
     stopLossPct,
@@ -90,6 +94,7 @@ async function simulateBacktest(userId, input = {}) {
     feeBps,
     slippageBps,
     overlayRequests,
+    ...(timeoutMs ? { timeoutMs } : {}),
   });
 
   const candles = validationContext.context.market.candles;

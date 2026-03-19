@@ -58,7 +58,29 @@
 .center {
   flex: 1;
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 10px;
+}
+
+.pendingBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--indigo-bg);
+  border: 1px solid var(--indigo-border);
+  color: var(--indigo);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .runBtn {

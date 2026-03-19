@@ -1,7 +1,7 @@
 .container {
-  background: #1a1d23;
-  border: 1px solid #2a2d35;
-  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -21,33 +21,33 @@
 .title {
   font-size: 0.9rem;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--text-primary);
   margin: 0 0 2px;
 }
 
 .subtitle {
   font-size: 0.72rem;
-  color: #64748b;
+  color: var(--text-tertiary);
   margin: 0;
 }
 
 .refreshBtn {
   background: none;
-  border: 1px solid #2a2d35;
-  color: #64748b;
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
   padding: 4px 10px;
   font-size: 1rem;
   cursor: pointer;
-  transition: color 0.15s;
+  transition: color var(--transition-fast);
 }
-.refreshBtn:hover { color: #6366f1; }
+.refreshBtn:hover { color: var(--indigo); }
 
 /* ── Create section ─── */
 .createSection {
-  background: #0f1117;
-  border: 1px solid #2a2d35;
-  border-radius: 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -57,11 +57,11 @@
 .sectionTitle {
   font-size: 0.78rem;
   font-weight: 700;
-  color: #94a3b8;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #2a2d35;
+  border-bottom: 1px solid var(--border);
 }
 
 .createForm {
@@ -87,55 +87,55 @@
 
 .label {
   font-size: 0.7rem;
-  color: #64748b;
+  color: var(--text-tertiary);
   font-weight: 500;
 }
 
 .input {
-  background: #1a1d23;
-  border: 1px solid #2a2d35;
-  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
-  color: #e2e8f0;
+  color: var(--text-primary);
   font-size: 0.83rem;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color var(--transition);
   width: 100%;
   box-sizing: border-box;
 }
-.input:focus { border-color: #6366f1; }
+.input:focus { border-color: var(--indigo); }
 .input:disabled { opacity: 0.5; }
 
 .createBtn {
   padding: 8px 18px;
-  background: #6366f1;
+  background: var(--indigo);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: #fff;
   font-size: 0.83rem;
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s;
+  transition: background var(--transition-fast);
   height: fit-content;
 }
-.createBtn:hover:not(:disabled) { background: #4f46e5; }
+.createBtn:hover:not(:disabled) { background: var(--indigo-hover); }
 .createBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .error {
   font-size: 0.78rem;
-  color: #ef4444;
-  background: #2b0d0d;
-  border: 1px solid #7f1d1d;
-  border-radius: 6px;
+  color: var(--red);
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
 }
 
 /* ── Table section ─── */
 .tableSection {
-  background: #0f1117;
-  border: 1px solid #2a2d35;
-  border-radius: 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -157,42 +157,42 @@
   text-align: left;
   font-size: 0.7rem;
   font-weight: 700;
-  color: #475569;
+  color: var(--text-hint);
   text-transform: uppercase;
   letter-spacing: 0.4px;
   padding: 8px 12px;
-  border-bottom: 1px solid #2a2d35;
+  border-bottom: 1px solid var(--border);
 }
 
 .row { transition: background 0.1s; }
-.row:hover td { background: #1a1d23; }
+.row:hover td { background: var(--bg-card); }
 .rowInactive { opacity: 0.55; }
 
 .cell {
   padding: 10px 12px;
-  border-bottom: 1px solid #1e2535;
+  border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle;
 }
 
 .name {
   display: block;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
 
 .username {
   display: block;
   font-size: 0.72rem;
-  color: #64748b;
+  color: var(--text-tertiary);
 }
 
 .selfBadge {
   font-size: 0.62rem;
   font-weight: 700;
   padding: 1px 5px;
-  border-radius: 4px;
-  background: #1e2a4a;
-  color: #6366f1;
+  border-radius: var(--radius-sm);
+  background: var(--indigo-bg);
+  color: var(--indigo);
   margin-left: 5px;
 }
 
@@ -200,35 +200,35 @@
   font-size: 0.72rem;
   font-weight: 700;
   padding: 2px 7px;
-  border-radius: 4px;
-  background: #1e2a4a;
-  color: #6366f1;
+  border-radius: var(--radius-sm);
+  background: var(--indigo-bg);
+  color: var(--indigo);
 }
 
 .roleUser {
   font-size: 0.72rem;
   font-weight: 600;
   padding: 2px 7px;
-  border-radius: 4px;
-  background: #1a2535;
-  color: #94a3b8;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .statusOn {
   font-size: 0.72rem;
   font-weight: 600;
-  color: #22c55e;
+  color: var(--green);
 }
 
 .statusOff {
   font-size: 0.72rem;
   font-weight: 600;
-  color: #64748b;
+  color: var(--text-tertiary);
 }
 
 .date {
   font-size: 0.72rem;
-  color: #64748b;
+  color: var(--text-tertiary);
 }
 
 .actions {
@@ -238,21 +238,21 @@
 
 .actionBtn {
   background: transparent;
-  border: 1px solid #2a2d35;
-  color: #94a3b8;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   padding: 3px 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-size: 0.7rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--transition-fast);
   white-space: nowrap;
 }
-.actionBtn:hover { border-color: #6366f1; color: #6366f1; }
+.actionBtn:hover { border-color: var(--indigo); color: var(--indigo); }
 .actionBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.deactivateBtn:hover { border-color: #ef4444; color: #ef4444; }
-.activateBtn:hover   { border-color: #22c55e; color: #22c55e; }
+.deactivateBtn:hover { border-color: var(--red); color: var(--red); }
+.activateBtn:hover   { border-color: var(--green); color: var(--green); }
 
-.empty { color: #64748b; font-size: 0.82rem; padding: 16px 0; }
-.errorMsg { color: #ef4444; font-size: 0.82rem; }
+.empty { color: var(--text-tertiary); font-size: 0.82rem; padding: 16px 0; }
+.errorMsg { color: var(--red); font-size: 0.82rem; }

@@ -2,7 +2,7 @@
   display: flex;
   gap: 4px;
   padding: 4px;
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   border: 1px solid var(--uni-border);
   background: rgba(8, 12, 18, 0.9);
   width: fit-content;
@@ -13,14 +13,14 @@
   align-items: center;
   gap: 7px;
   padding: 9px 18px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: none;
   background: transparent;
   color: var(--uni-text-2);
   font-size: 0.84rem;
   font-weight: 700;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color var(--transition-fast), background var(--transition-fast);
   white-space: nowrap;
 }
 
@@ -50,7 +50,7 @@
   font-size: 0.72rem;
   font-weight: 800;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(102, 225, 219, 0.15);
   color: var(--uni-cyan);
   opacity: 1;

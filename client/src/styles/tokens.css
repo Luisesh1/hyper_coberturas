@@ -1,36 +1,107 @@
 :root {
+  /* ── Backgrounds ──────────────────────────────────────── */
   --bg-primary: #0f1117;
   --bg-card: #1a1d23;
   --bg-input: #0a0c10;
   --bg-hover: #161922;
+  --bg-deep: #0a0c14;
+  --bg-surface: #13161e;
+
+  /* ── Borders ──────────────────────────────────────────── */
   --border: #2a2d35;
   --border-subtle: #1e2330;
+  --border-strong: #3a3d45;
+
+  /* ── Text ─────────────────────────────────────────────── */
+  --text-bright: #f8fafc;
   --text-primary: #e2e8f0;
   --text-secondary: #94a3b8;
   --text-tertiary: #64748b;
   --text-hint: #475569;
+  --text-disabled: #334155;
+  --text-muted: #cbd5e1;
+
+  /* ── Radii ────────────────────────────────────────────── */
   --radius-xl: 16px;
   --radius-lg: 12px;
   --radius-md: 8px;
   --radius-sm: 6px;
   --radius-pill: 999px;
+
+  /* ── Green ────────────────────────────────────────────── */
   --green: #22c55e;
+  --green-hover: #15803d;
+  --green-light: #4ade80;
+  --green-pastel: #86efac;
   --green-bg: rgba(34, 197, 94, 0.12);
   --green-border: rgba(34, 197, 94, 0.25);
+  --green-dark-bg: #052e16;
+  --green-dark-border: #14532d;
+
+  /* ── Red ──────────────────────────────────────────────── */
   --red: #ef4444;
+  --red-hover: #b91c1c;
+  --red-light: #f87171;
+  --red-pastel: #fda4af;
   --red-bg: rgba(239, 68, 68, 0.12);
   --red-border: rgba(239, 68, 68, 0.25);
+  --red-dark-bg: #2b0d0d;
+  --red-dark-border: #7f1d1d;
+
+  /* ── Amber ────────────────────────────────────────────── */
   --amber: #f59e0b;
+  --amber-pastel: #fde68a;
   --amber-bg: rgba(245, 158, 11, 0.12);
   --amber-border: rgba(245, 158, 11, 0.25);
+  --amber-dark-bg: #1c1400;
+  --amber-dark-border: #78350f;
+
+  /* ── Orange ───────────────────────────────────────────── */
+  --orange: #f97316;
+
+  /* ── Indigo ───────────────────────────────────────────── */
   --indigo: #6366f1;
+  --indigo-hover: #4f46e5;
   --indigo-bg: rgba(99, 102, 241, 0.12);
   --indigo-border: rgba(99, 102, 241, 0.25);
+  --indigo-dark-bg: #1e2040;
+
+  /* ── Cyan ─────────────────────────────────────────────── */
   --cyan: #38bdf8;
+  --cyan-bg: rgba(56, 189, 248, 0.12);
+  --cyan-border: rgba(56, 189, 248, 0.25);
+
+  /* ── Blue ─────────────────────────────────────────────── */
+  --blue: #3b82f6;
+  --blue-pastel: #93c5fd;
+  --blue-bg: rgba(59, 130, 246, 0.14);
+  --blue-light: #60a5fa;
+
+  /* ── Teal ─────────────────────────────────────────────── */
   --teal: #2dd4bf;
+  --teal-bg: rgba(45, 212, 191, 0.12);
+  --teal-border: rgba(45, 212, 191, 0.25);
+
+  /* ── Status badges (pastel on dark) ───────────────────── */
+  --status-ok: #86efac;
+  --status-ok-bg: rgba(34, 197, 94, 0.14);
+  --status-warn: #fde68a;
+  --status-warn-bg: rgba(250, 204, 21, 0.14);
+  --status-error: #fda4af;
+  --status-error-bg: rgba(244, 63, 94, 0.14);
+  --status-idle: #cbd5e1;
+  --status-idle-bg: rgba(71, 85, 105, 0.2);
+  --status-info: #93c5fd;
+  --status-info-bg: rgba(59, 130, 246, 0.14);
+
+  /* ── Transitions ──────────────────────────────────────── */
   --transition-fast: 0.15s ease;
   --transition: 0.2s ease;
+
+  /* ── Shadows ──────────────────────────────────────────── */
   --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.25);
   --shadow-dropdown: 0 8px 32px rgba(0, 0, 0, 0.4);
+
+  /* ── Font ─────────────────────────────────────────────── */
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
 }

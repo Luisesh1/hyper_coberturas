@@ -11,9 +11,9 @@
 }
 
 .dialog {
-  background: #13161e;
-  border: 1px solid #2a2d40;
-  border-radius: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 20px 24px;
   width: 340px;
   max-width: calc(100vw - 32px);
@@ -38,12 +38,12 @@
 .title {
   font-size: 0.92rem;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
 
 .message {
   font-size: 0.78rem;
-  color: #94a3b8;
+  color: var(--text-secondary);
   margin: 0;
   line-height: 1.5;
 }
@@ -57,22 +57,22 @@
 
 .cancelBtn {
   background: transparent;
-  border: 1px solid #2a2d40;
-  color: #64748b;
+  border: 1px solid var(--border);
+  color: var(--text-tertiary);
   padding: 8px 16px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
 }
-.cancelBtn:hover { color: #94a3b8; border-color: #475569; }
+.cancelBtn:hover { color: var(--text-secondary); border-color: var(--text-hint); }
 
 .confirmBtn {
   border: none;
   color: #fff;
   padding: 8px 20px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   font-size: 0.82rem;
   font-weight: 700;
   cursor: pointer;
@@ -80,14 +80,14 @@
 }
 
 .danger {
-  background: #dc2626;
+  background: var(--red);
 }
-.danger:hover { background: #b91c1c; }
+.danger:hover { background: var(--red-hover); }
 
 .info {
-  background: #6366f1;
+  background: var(--indigo);
 }
-.info:hover { background: #4f46e5; }
+.info:hover { background: var(--indigo-hover); }
 
 @keyframes fadeIn {
   from { opacity: 0; }

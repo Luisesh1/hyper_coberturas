@@ -3,6 +3,7 @@ import { useTradingContext } from '../../../context/TradingContext';
 import { settingsApi } from '../../../services/api';
 import { formatAccountIdentity, formatUsd } from '../../../utils/hyperliquidAccounts';
 import { Spinner } from '../../../components/shared/Spinner';
+import { EmptyState } from '../../../components/shared/EmptyState';
 import styles from './HyperliquidAccountsSection.module.css';
 
 export function HyperliquidAccountsSection({ onOpenForm, onDeleteAccount }) {
@@ -39,10 +40,13 @@ export function HyperliquidAccountsSection({ onOpenForm, onDeleteAccount }) {
       {isLoadingAccounts && <Spinner />}
 
       {!isLoadingAccounts && accounts.length === 0 && (
-        <div className={styles.empty}>
-          No hay cuentas registradas
-          <div className={styles.emptyHint}>Agrega tu primera cuenta Hyperliquid para comenzar</div>
-        </div>
+        <EmptyState
+          icon="🔑"
+          title="No hay cuentas registradas"
+          description="Agrega tu primera cuenta Hyperliquid para comenzar"
+          action="+ Nueva cuenta"
+          onAction={() => onOpenForm(null)}
+        />
       )}
 
       {accounts.length > 0 && (

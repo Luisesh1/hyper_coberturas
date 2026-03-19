@@ -153,18 +153,3 @@
 }
 .deleteBtn:not(:disabled):hover { background: var(--red-bg); }
 .deleteBtn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.empty {
-  padding: 32px 20px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-lg);
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: 0.82rem;
-}
-
-.emptyHint {
-  font-size: 0.74rem;
-  color: var(--text-hint);
-  margin-top: 6px;
-}

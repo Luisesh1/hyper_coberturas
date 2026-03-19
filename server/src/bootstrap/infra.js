@@ -4,7 +4,9 @@ const hlWsClient = require('../websocket/hyperliquidWs');
 const runtimeStatus = require('../runtime/status');
 const logger = require('../services/logger.service');
 const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
+const protectedPoolDynamicService = require('../services/protected-pool-dynamic.service');
 const etherscanQueueService = require('../services/etherscan-queue.service');
+const backtestQueueService = require('../services/backtest-queue.service');
 
 async function bootstrapInfra(httpServer) {
   await db.ensureConnection();
@@ -29,12 +31,16 @@ async function bootstrapInfra(httpServer) {
 
   if (bootstrapOk) runtimeStatus.markBootstrapped();
   protectedPoolRefreshService.start();
+  protectedPoolDynamicService.start();
+  backtestQueueService.start();
 
   return {
     wss,
     async shutdown() {
       protectedPoolRefreshService.stop();
+      protectedPoolDynamicService.stop();
       etherscanQueueService.shutdown();
+      backtestQueueService.stop();
     },
   };
 }
