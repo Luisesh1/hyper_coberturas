@@ -81,6 +81,7 @@ function StrategyStudioPage() {
             onSelectIndicator={(i) => { indicatorForm.select(i); setSidebarOpen(false); }}
             onNewStrategy={() => { strategyForm.select(null); setActiveTab('strategy'); setSidebarOpen(false); }}
             onNewIndicator={() => { indicatorForm.select(null); setActiveTab('indicator'); setSidebarOpen(false); }}
+            onSelectTemplate={(tpl) => { strategyForm.selectTemplate(tpl); setSidebarOpen(false); }}
             activeTab={activeTab}
             onTabChange={setActiveTab}
           />

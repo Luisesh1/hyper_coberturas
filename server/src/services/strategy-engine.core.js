@@ -395,11 +395,12 @@ async function runBacktest(payload) {
     ? payload.baseContext.market.candles
     : [];
   const params = payload.baseContext?.params || {};
-  const sizingMode = payload.sizingMode === 'usd' ? 'usd' : 'qty';
+  const sizingMode = ['usd', 'qty', 'pct_equity'].includes(payload.sizingMode) ? payload.sizingMode : 'usd';
   const leverage = Math.max(1, normalizeNumber(payload.leverage, 1));
   const marginMode = payload.marginMode === 'isolated' ? 'isolated' : 'cross';
   const sizeUsdBase = Math.max(0, normalizeNumber(payload.sizeUsd, normalizeNumber(params.sizeUsd, normalizeNumber(params.size, 100))));
   const tradeSizeBase = Math.max(0, normalizeNumber(payload.tradeSize, normalizeNumber(params.size, 1)));
+  const pctEquity = Math.max(0.1, Math.min(100, normalizeNumber(payload.pctEquity, 10)));
   const stopLossPct = normalizePercent(payload.stopLossPct);
   const takeProfitPct = normalizePercent(payload.takeProfitPct);
   const feeRate = normalizeRateFromBps(payload.feeBps);
@@ -419,9 +420,16 @@ async function runBacktest(payload) {
     const fillPrice = applySlippage(referencePrice, positionSide, 'open', slippageRate);
     const sizeMultiplier = Number(signalMeta.sizeMultiplier);
     const multiplier = Number.isFinite(sizeMultiplier) && sizeMultiplier > 0 ? sizeMultiplier : 1;
-    const qty = sizingMode === 'usd'
-      ? (sizeUsdBase * multiplier) / fillPrice
-      : tradeSizeBase * multiplier;
+    let effectiveSize;
+    if (sizingMode === 'pct_equity') {
+      const currentEquity = sizeUsdBase + realizedPnl;
+      effectiveSize = Math.max(1, currentEquity * (pctEquity / 100)) * multiplier;
+    } else {
+      effectiveSize = sizeUsdBase * multiplier;
+    }
+    const qty = sizingMode === 'qty'
+      ? tradeSizeBase * multiplier
+      : effectiveSize / fillPrice;
     const sizeUsd = qty * fillPrice;
     const entryFee = sizeUsd * feeRate;
 

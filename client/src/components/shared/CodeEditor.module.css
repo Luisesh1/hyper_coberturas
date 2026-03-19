@@ -1,0 +1,11 @@
+.wrapper {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.wrapper:focus-within {
+  border-color: var(--indigo);
+}

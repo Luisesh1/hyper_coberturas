@@ -7,6 +7,9 @@ import styles from './ApplyProtectionModal.module.css';
 
 const SHORTCUT_MULTIPLIERS = [1.25, 1.5, 2, 3, 4];
 const STOP_LOSS_DIFFERENCE_DEFAULT_PCT = 0.05;
+const DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT = 0.01;
+const DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC = 15;
+const DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT = 6;
 
 export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onClose, onSubmit }) {
   const candidate = pool?.protectionCandidate;
@@ -15,6 +18,10 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
   const [leverage, setLeverage] = useState(String(candidate?.defaultLeverage || 10));
   const [configuredNotionalUsd, setConfiguredNotionalUsd] = useState(String(candidate?.suggestedNotionalUsd || candidate?.baseNotionalUsd || ''));
   const [stopLossDifferencePct, setStopLossDifferencePct] = useState(String(candidate?.stopLossDifferenceDefaultPct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT));
+  const [protectionMode, setProtectionMode] = useState('static');
+  const [reentryBufferPct, setReentryBufferPct] = useState(String(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
+  const [flipCooldownSec, setFlipCooldownSec] = useState(String(candidate?.flipCooldownSec ?? DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC));
+  const [maxSequentialFlips, setMaxSequentialFlips] = useState(String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT));
   const [selectedMultiplier, setSelectedMultiplier] = useState(null);
   const [error, setError] = useState('');
 
@@ -23,23 +30,38 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
     setLeverage(String(candidate?.defaultLeverage || 10));
     setConfiguredNotionalUsd(String(candidate?.suggestedNotionalUsd || candidate?.baseNotionalUsd || ''));
     setStopLossDifferencePct(String(candidate?.stopLossDifferenceDefaultPct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT));
+    setProtectionMode('static');
+    setReentryBufferPct(String(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
+    setFlipCooldownSec(String(candidate?.flipCooldownSec ?? DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC));
+    setMaxSequentialFlips(String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT));
     setSelectedMultiplier(null);
     setError('');
-  }, [pool, defaultAccount, candidate?.defaultLeverage, candidate?.suggestedNotionalUsd, candidate?.baseNotionalUsd, candidate?.stopLossDifferenceDefaultPct]);
+  }, [pool, defaultAccount, candidate?.defaultLeverage, candidate?.suggestedNotionalUsd, candidate?.baseNotionalUsd, candidate?.stopLossDifferenceDefaultPct, candidate?.reentryBufferPct, candidate?.flipCooldownSec, candidate?.maxSequentialFlips]);
 
   if (!pool || !candidate) return null;
 
   const maxLeverage = Number(candidate.maxLeverage || 1);
   const parsedNotionalUsd = Number(configuredNotionalUsd);
   const parsedStopLossDifferencePct = Number(stopLossDifferencePct);
+  const parsedReentryBufferPct = Number(reentryBufferPct);
+  const parsedFlipCooldownSec = Number(flipCooldownSec);
+  const parsedMaxSequentialFlips = Number(maxSequentialFlips);
+  const isDynamic = protectionMode === 'dynamic';
   const estimatedSize = Number.isFinite(parsedNotionalUsd) && parsedNotionalUsd > 0 && Number(candidate.midPrice) > 0
     ? parsedNotionalUsd / Number(candidate.midPrice)
     : null;
-  const downsideStopLoss = Number.isFinite(parsedStopLossDifferencePct) && parsedStopLossDifferencePct > 0 && parsedStopLossDifferencePct < 1
-    ? Number(pool.rangeLowerPrice) * (1 + parsedStopLossDifferencePct)
+  const stopLossRatio = parsedStopLossDifferencePct / 100;
+  const downsideStopLoss = Number.isFinite(parsedStopLossDifferencePct) && parsedStopLossDifferencePct > 0 && parsedStopLossDifferencePct < 100
+    ? Number(pool.rangeLowerPrice) * (1 + stopLossRatio)
     : null;
-  const upsideStopLoss = Number.isFinite(parsedStopLossDifferencePct) && parsedStopLossDifferencePct > 0 && parsedStopLossDifferencePct < 1
-    ? Number(pool.rangeUpperPrice) * (1 - parsedStopLossDifferencePct)
+  const upsideStopLoss = Number.isFinite(parsedStopLossDifferencePct) && parsedStopLossDifferencePct > 0 && parsedStopLossDifferencePct < 100
+    ? Number(pool.rangeUpperPrice) * (1 - stopLossRatio)
+    : null;
+  const upperReentry = isDynamic && Number.isFinite(parsedReentryBufferPct) && parsedReentryBufferPct > 0 && parsedReentryBufferPct < 1
+    ? Number(pool.rangeUpperPrice) * (1 - parsedReentryBufferPct)
+    : null;
+  const lowerReentry = isDynamic && Number.isFinite(parsedReentryBufferPct) && parsedReentryBufferPct > 0 && parsedReentryBufferPct < 1
+    ? Number(pool.rangeLowerPrice) * (1 + parsedReentryBufferPct)
     : null;
 
   const applyMultiplier = (multiplier) => {
@@ -67,8 +89,20 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       setError('El valor de proteccion debe ser un numero positivo en USD.');
       return;
     }
-    if (!Number.isFinite(parsedStopLossDifferencePct) || parsedStopLossDifferencePct <= 0 || parsedStopLossDifferencePct >= 1) {
-      setError('La diferencia de SL debe ser un decimal mayor que 0 y menor que 1. Ejemplo: 0.05 = 5%.');
+    if (!Number.isFinite(parsedStopLossDifferencePct) || parsedStopLossDifferencePct <= 0 || parsedStopLossDifferencePct >= 100) {
+      setError('La diferencia de SL debe ser un porcentaje mayor que 0 y menor que 100. Ejemplo: 0.05 = 0.05%.');
+      return;
+    }
+    if (isDynamic && (!Number.isFinite(parsedReentryBufferPct) || parsedReentryBufferPct <= 0 || parsedReentryBufferPct >= 1)) {
+      setError('La separacion de reentrada debe ser un decimal mayor que 0 y menor que 1.');
+      return;
+    }
+    if (isDynamic && (!Number.isInteger(parsedFlipCooldownSec) || parsedFlipCooldownSec < 0)) {
+      setError('El cooldown debe ser un entero mayor o igual a 0.');
+      return;
+    }
+    if (isDynamic && (!Number.isInteger(parsedMaxSequentialFlips) || parsedMaxSequentialFlips < 1)) {
+      setError('El maximo de flips debe ser un entero positivo.');
       return;
     }
 
@@ -80,6 +114,10 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       configuredNotionalUsd: roundUsd(normalizedNotionalUsd),
       valueMultiplier: selectedMultiplier,
       stopLossDifferencePct: parsedStopLossDifferencePct,
+      protectionMode,
+      reentryBufferPct: isDynamic ? parsedReentryBufferPct : undefined,
+      flipCooldownSec: isDynamic ? parsedFlipCooldownSec : undefined,
+      maxSequentialFlips: isDynamic ? parsedMaxSequentialFlips : undefined,
     });
   };
 
@@ -98,7 +136,9 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
             <span className={styles.eyebrow}>Configuracion de cobertura</span>
             <h2 className={styles.title}>Aplicar cobertura al pool</h2>
             <p className={styles.desc}>
-              Se crearan dos coberturas ligadas al rango: una SHORT para ruptura por abajo y una LONG para ruptura por arriba.
+              {isDynamic
+                ? 'La proteccion dinamica mantiene la cobertura del breakout y mueve la cobertura opuesta para monetizar el reingreso al rango.'
+                : 'Se crearan dos coberturas ligadas al rango: una SHORT para ruptura por abajo y una LONG para ruptura por arriba.'}
             </p>
           </div>
           <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Cerrar">✕</button>
@@ -135,6 +175,14 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
               </label>
 
               <label className={styles.field}>
+                <span className={styles.fieldLabel}>Modo</span>
+                <select className={styles.select} value={protectionMode} onChange={(e) => setProtectionMode(e.target.value)}>
+                  <option value="static">Proteccion normal</option>
+                  <option value="dynamic">Proteccion dinamica</option>
+                </select>
+              </label>
+
+              <label className={styles.field}>
                 <span className={styles.fieldLabel}>Leverage</span>
                 <input className={styles.input} type="number" min="1" max={maxLeverage} step="1" value={leverage} onChange={(e) => setLeverage(e.target.value)} />
                 <span className={styles.hint}>Default 10x isolated.</span>
@@ -148,9 +196,31 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
 
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Diferencia SL</span>
-                <input className={styles.input} type="number" min="0.001" max="0.99" step="0.001" value={stopLossDifferencePct} onChange={(e) => setStopLossDifferencePct(e.target.value)} />
-                <span className={styles.hint}>0.05 = 5% desde la entrada.</span>
+                <input className={styles.input} type="number" min="0.001" max="99.99" step="0.001" value={stopLossDifferencePct} onChange={(e) => setStopLossDifferencePct(e.target.value)} />
+                <span className={styles.hint}>{isDynamic ? 'En dinamica actua como SL de emergencia. 0.05 = 0.05%.' : 'El valor ya esta en porcentaje. 0.05 = 0.05% desde la entrada.'}</span>
               </label>
+
+              {isDynamic && (
+                <>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Separacion reentrada</span>
+                    <input className={styles.input} type="number" min="0.001" max="0.99" step="0.001" value={reentryBufferPct} onChange={(e) => setReentryBufferPct(e.target.value)} />
+                    <span className={styles.hint}>0.01 = 1% hacia dentro del rango.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Cooldown flips</span>
+                    <input className={styles.input} type="number" min="0" step="1" value={flipCooldownSec} onChange={(e) => setFlipCooldownSec(e.target.value)} />
+                    <span className={styles.hint}>Evita rearmes duplicados por ruido.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Max flips seguidos</span>
+                    <input className={styles.input} type="number" min="1" step="1" value={maxSequentialFlips} onChange={(e) => setMaxSequentialFlips(e.target.value)} />
+                    <span className={styles.hint}>Si se excede, la dinamica se pausa.</span>
+                  </label>
+                </>
+              )}
             </div>
 
             <div className={styles.multiplierBlock}>
@@ -181,6 +251,12 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
               <div className={styles.previewCard}><span className={styles.previewLabel}>Tamano por cobertura</span><strong className={styles.previewValue}>{estimatedSize != null ? `${formatNumber(estimatedSize, 6)} ${candidate.inferredAsset}` : '—'}</strong></div>
               <div className={styles.previewCard}><span className={styles.previewLabel}>SHORT de defensa</span><strong className={styles.previewValue}>Entra {formatCompactPrice(pool.rangeLowerPrice)} · SL {formatCompactPrice(downsideStopLoss)}</strong></div>
               <div className={styles.previewCard}><span className={styles.previewLabel}>LONG de defensa</span><strong className={styles.previewValue}>Entra {formatCompactPrice(pool.rangeUpperPrice)} · SL {formatCompactPrice(upsideStopLoss)}</strong></div>
+              {isDynamic && (
+                <>
+                  <div className={styles.previewCard}><span className={styles.previewLabel}>Reentrada alta</span><strong className={styles.previewValue}>SHORT espera en {formatCompactPrice(upperReentry)} y el LONG protege hasta {formatCompactPrice(upperReentry)}</strong></div>
+                  <div className={styles.previewCard}><span className={styles.previewLabel}>Reentrada baja</span><strong className={styles.previewValue}>LONG espera en {formatCompactPrice(lowerReentry)} y el SHORT protege hasta {formatCompactPrice(lowerReentry)}</strong></div>
+                </>
+              )}
             </div>
 
             <RangeTrack pool={pool} compact />

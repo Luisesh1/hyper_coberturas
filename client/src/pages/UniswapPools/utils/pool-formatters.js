@@ -40,7 +40,7 @@ export function formatPercent(value) {
 export function formatPercentRatio(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 'N/A';
-  return `${formatNumber(n * 100, 2)}%`;
+  return `${formatNumber(n, n >= 1 ? 2 : 4)}%`;
 }
 
 export function formatPrice(value, baseSymbol, quoteSymbol) {

@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 
 const app = require('../src/app');
 const config = require('../src/config');
+const authService = require('../src/services/auth.service');
 const TradingService = require('../src/services/trading.service');
 const hlRegistry = require('../src/services/hyperliquid.registry');
 const tgRegistry = require('../src/services/telegram.registry');
@@ -23,6 +24,20 @@ function buildToken(payload = {}) {
     role: 'user',
     ...payload,
   }, config.jwt.secret);
+}
+
+function buildSessionUser(overrides = {}) {
+  return {
+    id: 1,
+    userId: 1,
+    username: 'tester',
+    name: 'Tester',
+    role: 'user',
+    active: true,
+    createdAt: 1710000000000,
+    updatedAt: 1710000000000,
+    ...overrides,
+  };
 }
 
 function patchTradingDeps() {
@@ -48,6 +63,8 @@ function patchTradingDeps() {
 }
 
 test('POST /api/trading/open valida side y size', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  authService.validateSessionToken = async () => buildSessionUser();
   const server = http.createServer(app);
   const baseUrl = await listen(server);
 
@@ -65,13 +82,16 @@ test('POST /api/trading/open valida side y size', async () => {
     assert.equal(res.status, 400);
     assert.match(json.error, /side debe ser 'long' o 'short'/i);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     server.close();
   }
 });
 
 test('POST /api/trading/close responde la cuenta y el resultado del cierre', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const releaseDeps = patchTradingDeps();
   const originalClose = TradingService.prototype.closePosition;
+  authService.validateSessionToken = async () => buildSessionUser();
   TradingService.prototype.closePosition = async function closePosition({ asset, size }) {
     return {
       success: true,
@@ -103,6 +123,7 @@ test('POST /api/trading/close responde la cuenta y el resultado del cierre', asy
     assert.equal(json.data.account.alias, 'Cuenta Alpha');
     assert.equal(json.data.asset, 'BTC');
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     TradingService.prototype.closePosition = originalClose;
     releaseDeps();
     server.close();
@@ -110,8 +131,10 @@ test('POST /api/trading/close responde la cuenta y el resultado del cierre', asy
 });
 
 test('POST /api/trading/sltp responde el resultado y mantiene el contrato JSON', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const releaseDeps = patchTradingDeps();
   const originalSetSLTP = TradingService.prototype.setSLTP;
+  authService.validateSessionToken = async () => buildSessionUser();
   TradingService.prototype.setSLTP = async function setSLTP(payload) {
     return {
       account: this.account,
@@ -148,6 +171,7 @@ test('POST /api/trading/sltp responde el resultado y mantiene el contrato JSON',
     assert.equal(json.data.account.id, 8);
     assert.equal(json.data.result.ok, true);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     TradingService.prototype.setSLTP = originalSetSLTP;
     releaseDeps();
     server.close();
@@ -155,6 +179,8 @@ test('POST /api/trading/sltp responde el resultado y mantiene el contrato JSON',
 });
 
 test('DELETE /api/trading/orders/:asset/:oid valida el oid', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  authService.validateSessionToken = async () => buildSessionUser();
   const server = http.createServer(app);
   const baseUrl = await listen(server);
 
@@ -170,6 +196,7 @@ test('DELETE /api/trading/orders/:asset/:oid valida el oid', async () => {
     assert.equal(res.status, 400);
     assert.match(json.error, /oid debe ser un numero/i);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     server.close();
   }
 });

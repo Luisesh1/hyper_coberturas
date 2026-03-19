@@ -1,22 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { strategiesApi } from '../../../services/api';
 import { safeJsonParse, stringifyJson } from '../../../utils/json';
+import { STRATEGY_TEMPLATES } from '../strategy-templates';
 
-const STRATEGY_TEMPLATE = `module.exports.evaluate = async function evaluate(ctx) {
-  const candles = ctx.market.candles({ limit: 120 });
-  const fast = ctx.indicators.ema(candles, { period: ctx.params.fastPeriod || 9 });
-  const slow = ctx.indicators.ema(candles, { period: ctx.params.slowPeriod || 21 });
-  const fastLast = ctx.indicators.last(fast);
-  const slowLast = ctx.indicators.last(slow);
-  const position = ctx.account.position();
-
-  if (fastLast == null || slowLast == null) return signal.hold();
-  if (!position && fastLast > slowLast) return signal.long();
-  if (!position && fastLast < slowLast) return signal.short();
-  if (position?.side === 'long' && fastLast < slowLast) return signal.close();
-  if (position?.side === 'short' && fastLast > slowLast) return signal.close();
-  return signal.hold();
-};`;
+const DEFAULT_TEMPLATE = STRATEGY_TEMPLATES[0];
 
 function blank() {
   return {
@@ -24,9 +11,22 @@ function blank() {
     name: '',
     description: '',
     assetUniverse: 'BTC',
-    timeframe: '15m',
-    defaultParams: stringifyJson({ fastPeriod: 9, slowPeriod: 21, size: 0.01 }),
-    scriptSource: STRATEGY_TEMPLATE,
+    timeframe: DEFAULT_TEMPLATE.timeframe,
+    defaultParams: stringifyJson(DEFAULT_TEMPLATE.defaultParams),
+    scriptSource: DEFAULT_TEMPLATE.scriptSource,
+    isActiveDraft: true,
+  };
+}
+
+function fromTemplate(tpl) {
+  return {
+    id: null,
+    name: tpl.name,
+    description: tpl.description,
+    assetUniverse: 'BTC',
+    timeframe: tpl.timeframe,
+    defaultParams: stringifyJson(tpl.defaultParams),
+    scriptSource: tpl.scriptSource,
     isActiveDraft: true,
   };
 }
@@ -86,6 +86,16 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
     setSelectedId(strategy?.id || null);
     setForm(f);
     savedSnapshot.current = strategy ? { ...f } : null;
+    setErrors({});
+    setValidationResult(null);
+    setBacktestResult(null);
+  }, []);
+
+  const selectTemplate = useCallback((tpl) => {
+    const f = fromTemplate(tpl);
+    setSelectedId(null);
+    setForm(f);
+    savedSnapshot.current = null;
     setErrors({});
     setValidationResult(null);
     setBacktestResult(null);
@@ -184,6 +194,6 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
     form, errors, isDirty, selected, selectedId,
     isSaving, isValidating, isBacktesting,
     validationResult, backtestResult,
-    select, update, save, remove, runValidation, runBacktest,
+    select, selectTemplate, update, save, remove, runValidation, runBacktest,
   };
 }

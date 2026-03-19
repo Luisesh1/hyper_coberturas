@@ -1,26 +1,10 @@
-import { useCallback, useRef } from 'react';
 import { Spinner } from '../../../components/shared/Spinner';
 import { ConfirmDialog } from '../../../components/shared/ConfirmDialog';
+import { CodeEditor } from '../../../components/shared/CodeEditor';
+import { TIMEFRAMES } from '../../../config/timeframes';
 import styles from './StrategyEditor.module.css';
 
-const TIMEFRAMES = ['1m', '5m', '15m', '1h'];
-
 export function StrategyEditor({ form, errors, isSaving, isValidating, isBacktesting, onUpdate, onSave, onDelete, onValidate, onBacktest, confirmDialog }) {
-  const codeRef = useRef(null);
-
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const ta = e.target;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const val = ta.value;
-      ta.value = val.substring(0, start) + '  ' + val.substring(end);
-      ta.selectionStart = ta.selectionEnd = start + 2;
-      onUpdate('scriptSource', ta.value);
-    }
-  }, [onUpdate]);
-
   const handleSubmit = (e) => { e.preventDefault(); onSave(); };
 
   return (
@@ -39,7 +23,7 @@ export function StrategyEditor({ form, errors, isSaving, isValidating, isBacktes
         <label className={styles.field}>
           <span>Timeframe</span>
           <select value={form.timeframe} onChange={(e) => onUpdate('timeframe', e.target.value)}>
-            {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+            {TIMEFRAMES.map((tf) => <option key={tf.value} value={tf.value}>{tf.label}</option>)}
           </select>
         </label>
         <label className={`${styles.field} ${styles.fieldWide}`}>
@@ -56,17 +40,17 @@ export function StrategyEditor({ form, errors, isSaving, isValidating, isBacktes
         </label>
       </div>
 
-      <label className={styles.codeField}>
+      <div className={styles.codeField}>
         <span>Params (JSON)</span>
-        <textarea value={form.defaultParams} onChange={(e) => onUpdate('defaultParams', e.target.value)} rows={6} />
+        <CodeEditor value={form.defaultParams} onChange={(v) => onUpdate('defaultParams', v)} minHeight="120px" />
         {errors.defaultParams && <span className={styles.fieldError}>{errors.defaultParams}</span>}
-      </label>
+      </div>
 
-      <label className={styles.codeField}>
+      <div className={styles.codeField}>
         <span>Script</span>
-        <textarea ref={codeRef} value={form.scriptSource} onChange={(e) => onUpdate('scriptSource', e.target.value)} onKeyDown={handleKeyDown} rows={18} spellCheck={false} />
+        <CodeEditor value={form.scriptSource} onChange={(v) => onUpdate('scriptSource', v)} minHeight="320px" />
         {errors.scriptSource && <span className={styles.fieldError}>{errors.scriptSource}</span>}
-      </label>
+      </div>
 
       <div className={styles.actions}>
         <button type="submit" className={styles.primaryBtn} disabled={isSaving}>

@@ -28,7 +28,11 @@ const createProtectedPoolSchema = z.object({
   accountId: z.number().int().positive().optional(),
   leverage: z.number().int().positive(),
   configuredNotionalUsd: z.number().positive(),
-  stopLossDifferencePct: z.number().positive().lt(1).optional(),
+  stopLossDifferencePct: z.number().positive().lt(100).optional(),
+  protectionMode: z.enum(['static', 'dynamic']).optional(),
+  reentryBufferPct: z.number().positive().lt(1).optional(),
+  flipCooldownSec: z.number().int().min(0).optional(),
+  maxSequentialFlips: z.number().int().positive().optional(),
   valueMultiplier: z.union([
     z.literal(1.25),
     z.literal(1.5),

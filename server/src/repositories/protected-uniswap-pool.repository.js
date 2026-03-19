@@ -78,6 +78,11 @@ function mapIdentityRow(row) {
     configuredHedgeNotionalUsd: Number(row.configured_hedge_notional_usd),
     valueMultiplier: row.value_multiplier != null ? Number(row.value_multiplier) : null,
     stopLossDifferencePct: row.stop_loss_difference_pct != null ? Number(row.stop_loss_difference_pct) : 0.05,
+    protectionMode: row.protection_mode || 'static',
+    reentryBufferPct: row.reentry_buffer_pct != null ? Number(row.reentry_buffer_pct) : null,
+    flipCooldownSec: row.flip_cooldown_sec != null ? Number(row.flip_cooldown_sec) : null,
+    maxSequentialFlips: row.max_sequential_flips != null ? Number(row.max_sequential_flips) : null,
+    dynamicState: parseJsonSafe(row.dynamic_state_json, null),
     valueMode: row.value_mode || 'usd',
     leverage: Number(row.leverage),
     marginMode: row.margin_mode,
@@ -151,13 +156,54 @@ async function listByUser(userId, executor) {
   return rows.map(mapRow);
 }
 
+async function listActiveDynamic(executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT p.*,
+            a.alias AS account_alias,
+            a.address AS account_address,
+            a.is_default AS account_is_default,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', h.id,
+                  'asset', h.asset,
+                  'direction', h.direction,
+                  'entryPrice', h.entry_price,
+                  'exitPrice', h.exit_price,
+                  'size', h.size,
+                  'leverage', h.leverage,
+                  'status', h.status,
+                  'label', h.label,
+                  'protectedRole', h.protected_role,
+                  'createdAt', h.created_at,
+                  'openedAt', h.opened_at,
+                  'closedAt', h.closed_at,
+                  'error', h.error
+                )
+                ORDER BY h.id
+              ) FILTER (WHERE h.id IS NOT NULL),
+              '[]'
+            ) AS hedges_json
+       FROM protected_uniswap_pools p
+       LEFT JOIN hyperliquid_accounts a ON a.id = p.hyperliquid_account_id
+       LEFT JOIN hedges h ON h.protected_pool_id = p.id
+      WHERE p.status = 'active'
+        AND p.protection_mode = 'dynamic'
+      GROUP BY p.id, a.id
+      ORDER BY p.updated_at DESC, p.id DESC`
+  );
+
+  return rows.map(mapRow);
+}
+
 async function listActiveByUser(userId, executor) {
   const { rows } = await exec(executor).query(
     `SELECT id, user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
             token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
             price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
-            value_multiplier, stop_loss_difference_pct, value_mode, leverage, margin_mode, status, created_at, updated_at,
-            deactivated_at
+            value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
+            max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
+            updated_at, deactivated_at
        FROM protected_uniswap_pools
       WHERE user_id = $1 AND status = 'active'`,
     [userId]
@@ -171,8 +217,9 @@ async function listActiveForRefresh(executor) {
     `SELECT id, user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
             token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
             price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
-            value_multiplier, stop_loss_difference_pct, value_mode, leverage, margin_mode, status, created_at, updated_at,
-            deactivated_at, pool_snapshot_json
+            value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
+            max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
+            updated_at, deactivated_at, pool_snapshot_json
        FROM protected_uniswap_pools
       WHERE status = 'active'
       ORDER BY user_id, network, version, lower(wallet_address), position_identifier, updated_at DESC, id DESC`
@@ -228,8 +275,9 @@ async function findReusableByIdentity(userId, { network, version, walletAddress,
     `SELECT id, user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
             token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
             price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
-            value_multiplier, stop_loss_difference_pct, value_mode, leverage, margin_mode, status, created_at, updated_at,
-            deactivated_at
+            value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
+            max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
+            updated_at, deactivated_at
        FROM protected_uniswap_pools
       WHERE user_id = $1
         AND network = $2
@@ -250,9 +298,11 @@ async function create(record, executor) {
        user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
        token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
        price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
-       value_multiplier, stop_loss_difference_pct, value_mode, leverage, margin_mode, status, pool_snapshot_json, created_at, updated_at
+       value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
+       max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, pool_snapshot_json,
+       created_at, updated_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'active', $24, $25, $25)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, 'active', $29, $30, $30)
      RETURNING id`,
     [
       record.userId,
@@ -275,6 +325,11 @@ async function create(record, executor) {
       record.configuredHedgeNotionalUsd,
       record.valueMultiplier,
       record.stopLossDifferencePct ?? 0.05,
+      record.protectionMode || 'static',
+      record.reentryBufferPct ?? null,
+      record.flipCooldownSec ?? null,
+      record.maxSequentialFlips ?? null,
+      record.dynamicState ? JSON.stringify(record.dynamicState) : null,
       record.valueMode || 'usd',
       record.leverage,
       record.marginMode || 'isolated',
@@ -309,12 +364,17 @@ async function reactivate(userId, id, record, executor) {
             configured_hedge_notional_usd = $19,
             value_multiplier = $20,
             stop_loss_difference_pct = $21,
-            value_mode = $22,
-            leverage = $23,
-            margin_mode = $24,
+            protection_mode = $22,
+            reentry_buffer_pct = $23,
+            flip_cooldown_sec = $24,
+            max_sequential_flips = $25,
+            dynamic_state_json = $26,
+            value_mode = $27,
+            leverage = $28,
+            margin_mode = $29,
             status = 'active',
-            pool_snapshot_json = $25,
-            updated_at = $26,
+            pool_snapshot_json = $30,
+            updated_at = $31,
             deactivated_at = NULL
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
@@ -340,6 +400,11 @@ async function reactivate(userId, id, record, executor) {
       record.configuredHedgeNotionalUsd,
       record.valueMultiplier,
       record.stopLossDifferencePct ?? 0.05,
+      record.protectionMode || 'static',
+      record.reentryBufferPct ?? null,
+      record.flipCooldownSec ?? null,
+      record.maxSequentialFlips ?? null,
+      record.dynamicState ? JSON.stringify(record.dynamicState) : null,
       record.valueMode || 'usd',
       record.leverage,
       record.marginMode || 'isolated',
@@ -400,14 +465,46 @@ async function deactivate(userId, id, { deactivatedAt = Date.now() } = {}, execu
   return rows[0]?.id || null;
 }
 
+async function updateDynamicState(userId, id, {
+  dynamicState,
+  updatedAt = Date.now(),
+  reentryBufferPct,
+  flipCooldownSec,
+  maxSequentialFlips,
+}, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET dynamic_state_json = $3,
+            reentry_buffer_pct = COALESCE($4, reentry_buffer_pct),
+            flip_cooldown_sec = COALESCE($5, flip_cooldown_sec),
+            max_sequential_flips = COALESCE($6, max_sequential_flips),
+            updated_at = $7
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [
+      userId,
+      id,
+      dynamicState ? JSON.stringify(dynamicState) : null,
+      reentryBufferPct ?? null,
+      flipCooldownSec ?? null,
+      maxSequentialFlips ?? null,
+      updatedAt,
+    ]
+  );
+
+  return rows[0]?.id || null;
+}
+
 module.exports = {
   create,
   deactivate,
   findReusableByIdentity,
   getById,
   listActiveByUser,
+  listActiveDynamic,
   listActiveForRefresh,
   listByUser,
   reactivate,
+  updateDynamicState,
   updateSnapshot,
 };

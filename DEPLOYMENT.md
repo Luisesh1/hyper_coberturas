@@ -294,6 +294,8 @@ docker compose -f docker-compose.prod.yml restart server
 
 ## 5. Backups y restauracion
 
+**Regla obligatoria del proyecto:** antes de cualquier proceso con alto impacto sobre la base de datos se debe crear un backup verificable. Esto aplica a restauraciones, migraciones delicadas, limpiezas masivas, reseteos, cambios manuales sobre datos, rotación de claves que afecten datos cifrados y cualquier operación con riesgo de pérdida o corrupción.
+
 ### 5.1 Backup manual
 
 ```bash
@@ -305,6 +307,13 @@ docker compose -f docker-compose.prod.yml exec postgres \
 # Listar backups existentes
 docker compose -f docker-compose.prod.yml exec postgres ls -la /backups/
 ```
+
+Checklist minima antes de continuar con una operación de alto impacto:
+
+1. Generar el backup.
+2. Confirmar que el archivo existe y tiene un tamaño razonable.
+3. Si la operación es crítica, copiar también el backup fuera del contenedor o del host actual.
+4. Solo entonces ejecutar el cambio sobre la base de datos.
 
 ### 5.2 Restaurar un backup
 

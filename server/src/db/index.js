@@ -129,6 +129,11 @@ async function initSchema() {
       configured_hedge_notional_usd NUMERIC NOT NULL,
       value_multiplier       NUMERIC,
       stop_loss_difference_pct NUMERIC NOT NULL DEFAULT 0.05,
+      protection_mode        VARCHAR(20) NOT NULL DEFAULT 'static',
+      reentry_buffer_pct     NUMERIC,
+      flip_cooldown_sec      INTEGER,
+      max_sequential_flips   INTEGER,
+      dynamic_state_json     TEXT,
       value_mode             VARCHAR(20) NOT NULL DEFAULT 'usd',
       leverage               INTEGER NOT NULL,
       margin_mode            VARCHAR(20) NOT NULL DEFAULT 'isolated',
@@ -196,6 +201,21 @@ async function initSchema() {
     ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS stop_loss_difference_pct NUMERIC NOT NULL DEFAULT 0.05
   `);
   await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS protection_mode VARCHAR(20) NOT NULL DEFAULT 'static'
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS reentry_buffer_pct NUMERIC
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS flip_cooldown_sec INTEGER
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS max_sequential_flips INTEGER
+  `);
+  await pool.query(`
+    ALTER TABLE protected_uniswap_pools ADD COLUMN IF NOT EXISTS dynamic_state_json TEXT
+  `);
+  await pool.query(`
     UPDATE protected_uniswap_pools
        SET configured_hedge_notional_usd = hedge_notional_usd
      WHERE configured_hedge_notional_usd IS NULL
@@ -209,6 +229,11 @@ async function initSchema() {
     UPDATE protected_uniswap_pools
        SET value_mode = 'usd'
      WHERE value_mode IS NULL OR value_mode = ''
+  `);
+  await pool.query(`
+    UPDATE protected_uniswap_pools
+       SET protection_mode = 'static'
+     WHERE protection_mode IS NULL OR protection_mode = ''
   `);
   await pool.query(`
     ALTER TABLE protected_uniswap_pools

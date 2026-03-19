@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 
 const app = require('../src/app');
 const config = require('../src/config');
+const authService = require('../src/services/auth.service');
 const botsService = require('../src/services/bots.service');
 const botRegistry = require('../src/services/bot.registry');
 
@@ -21,6 +22,20 @@ function buildToken(payload = {}) {
     role: 'user',
     ...payload,
   }, config.jwt.secret);
+}
+
+function buildSessionUser(overrides = {}) {
+  return {
+    id: 1,
+    userId: 1,
+    username: 'tester',
+    name: 'Tester',
+    role: 'user',
+    active: true,
+    createdAt: 1710000000000,
+    updatedAt: 1710000000000,
+    ...overrides,
+  };
 }
 
 function buildBot(overrides = {}) {
@@ -79,8 +94,10 @@ test('GET /api/bots requiere autenticacion', async () => {
 });
 
 test('GET /api/bots devuelve runtime persistido en lista y detalle', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const originalListBots = botsService.listBots;
   const originalGetBot = botsService.getBot;
+  authService.validateSessionToken = async () => buildSessionUser();
   botsService.listBots = async () => [buildBot()];
   botsService.getBot = async () => buildBot();
 
@@ -105,6 +122,7 @@ test('GET /api/bots devuelve runtime persistido en lista y detalle', async () =>
     assert.equal(detailJson.data.runtime.lastRecoveryAction, 'market_data_failed');
     assert.deepEqual(detailJson.data.runtime.context, { stage: 'market_data' });
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     botsService.listBots = originalListBots;
     botsService.getBot = originalGetBot;
     server.close();
@@ -112,8 +130,10 @@ test('GET /api/bots devuelve runtime persistido en lista y detalle', async () =>
 });
 
 test('GET /api/bots/:id/runs devuelve historial con fecha y detalles estructurados', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const originalListBotRuns = botsService.listBotRuns;
   const originalGetBot = botsService.getBot;
+  authService.validateSessionToken = async () => buildSessionUser();
   botsService.getBot = async () => buildBot();
   botsService.listBotRuns = async () => [{
     id: 1,
@@ -147,6 +167,7 @@ test('GET /api/bots/:id/runs devuelve historial con fecha y detalles estructurad
     assert.equal(json.data[0].details.actionTaken, 'Reintento programado');
     assert.equal(json.data[0].createdAt, 1710000300000);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     botsService.listBotRuns = originalListBotRuns;
     botsService.getBot = originalGetBot;
     server.close();
@@ -154,10 +175,12 @@ test('GET /api/bots/:id/runs devuelve historial con fecha y detalles estructurad
 });
 
 test('POST /api/bots/:id/activate usa el registry y devuelve el bot actualizado', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const originalActivate = botRegistry.activate;
   const originalGetBot = botsService.getBot;
   let activatedBotId = null;
 
+  authService.validateSessionToken = async () => buildSessionUser();
   botRegistry.activate = async (_userId, botId) => {
     activatedBotId = botId;
   };
@@ -178,6 +201,7 @@ test('POST /api/bots/:id/activate usa el registry y devuelve el bot actualizado'
     assert.equal(json.data.status, 'active');
     assert.equal(json.data.runtime.state, 'healthy');
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     botRegistry.activate = originalActivate;
     botsService.getBot = originalGetBot;
     server.close();

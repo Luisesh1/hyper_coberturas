@@ -5,6 +5,9 @@ const {
   buildProtectionCandidate,
   createProtectedPool,
   deactivateProtectedPool,
+  DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT,
+  DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC,
+  DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT,
 } = require('../src/services/uniswap-protection.service');
 
 function buildPool(overrides = {}) {
@@ -163,18 +166,20 @@ test('createProtectedPool crea dos coberturas ligadas con parametros correctos',
   assert.equal(protectionWrites.length, 1);
   assert.equal(createdHedges[0].direction, 'short');
   assert.equal(createdHedges[0].entryPrice, 49000);
-  assert.equal(createdHedges[0].exitPrice, 52920);
+  assert.equal(createdHedges[0].exitPrice, 49039.2);
   assert.equal(createdHedges[0].size, 0.03);
   assert.equal(createdHedges[0].protectedPoolId, 77);
   assert.equal(createdHedges[0].protectedRole, 'downside');
   assert.equal(createdHedges[1].direction, 'long');
   assert.equal(createdHedges[1].entryPrice, 51000);
-  assert.equal(createdHedges[1].exitPrice, 46920);
+  assert.equal(createdHedges[1].exitPrice, 50959.2);
   assert.equal(createdHedges[1].size, 0.03);
   assert.equal(createdHedges[1].protectedRole, 'upside');
   assert.equal(protectionWrites[0].configuredHedgeNotionalUsd, 1500);
   assert.equal(protectionWrites[0].valueMultiplier, 1.5);
   assert.equal(protectionWrites[0].stopLossDifferencePct, 0.08);
+  assert.equal(protectionWrites[0].protectionMode, 'static');
+  assert.equal(protectionWrites[0].dynamicState, null);
 });
 
 test('createProtectedPool usa 0.05 como diferencia SL por defecto', async () => {
@@ -213,8 +218,8 @@ test('createProtectedPool usa 0.05 como diferencia SL por defecto', async () => 
     },
   });
 
-  assert.equal(createdHedges[0].exitPrice, 51450);
-  assert.equal(createdHedges[1].exitPrice, 48450);
+  assert.equal(createdHedges[0].exitPrice, 49024.5);
+  assert.equal(createdHedges[1].exitPrice, 50974.5);
 });
 
 test('createProtectedPool reactiva un pool inactivo sin duplicar el registro', async () => {
@@ -261,6 +266,51 @@ test('createProtectedPool reactiva un pool inactivo sin duplicar el registro', a
   assert.equal(reactivated[0].id, 55);
   assert.equal(createdHedges[0].protectedPoolId, 55);
   assert.equal(createdHedges[1].protectedPoolId, 55);
+});
+
+test('createProtectedPool guarda configuracion dinamica y defaults operativos', async () => {
+  const protectionWrites = [];
+
+  await createProtectedPool({
+    userId: 1,
+    pool: buildPool(),
+    accountId: 5,
+    leverage: 10,
+    configuredNotionalUsd: 1000,
+    protectionMode: 'dynamic',
+  }, {
+    availableAssets: [{ name: 'BTC', maxLeverage: 30 }],
+    mids: { BTC: '50000' },
+    hyperliquidAccountsService: {
+      resolveAccount: async () => ({ id: 5, alias: 'Cuenta test', address: '0xabc' }),
+    },
+    protectedPoolRepository: {
+      findReusableByIdentity: async () => null,
+      create: async (record) => {
+        protectionWrites.push(record);
+        return 91;
+      },
+      updateSnapshot: async () => 91,
+      getById: async () => ({ id: 91, status: 'active' }),
+    },
+    hedgeRepository: {
+      unlinkByProtectedPoolId: async () => {},
+    },
+    hedgeRegistry: {
+      getOrCreate: async () => ({
+        validateCreateRequest: () => {},
+        createHedge: async (payload) => ({ id: payload.direction === 'short' ? 1 : 2, status: 'entry_pending' }),
+      }),
+    },
+  });
+
+  assert.equal(protectionWrites.length, 1);
+  assert.equal(protectionWrites[0].protectionMode, 'dynamic');
+  assert.equal(protectionWrites[0].reentryBufferPct, DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT);
+  assert.equal(protectionWrites[0].flipCooldownSec, DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC);
+  assert.equal(protectionWrites[0].maxSequentialFlips, DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT);
+  assert.equal(protectionWrites[0].dynamicState.phase, 'inside_range');
+  assert.equal(protectionWrites[0].dynamicState.upperReentryPrice, 51000 * (1 - DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
 });
 
 test('createProtectedPool rechaza pools que ya tienen proteccion activa', async () => {

@@ -1,21 +1,9 @@
-import { useCallback } from 'react';
 import { Spinner } from '../../../components/shared/Spinner';
 import { ConfirmDialog } from '../../../components/shared/ConfirmDialog';
+import { CodeEditor } from '../../../components/shared/CodeEditor';
 import styles from './StrategyEditor.module.css';
 
 export function IndicatorEditor({ form, errors, isSaving, onUpdate, onSave, onDelete, confirmDialog }) {
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const ta = e.target;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
-      ta.selectionStart = ta.selectionEnd = start + 2;
-      onUpdate('scriptSource', ta.value);
-    }
-  }, [onUpdate]);
-
   const handleSubmit = (e) => { e.preventDefault(); onSave(); };
 
   return (
@@ -38,16 +26,16 @@ export function IndicatorEditor({ form, errors, isSaving, onUpdate, onSave, onDe
         </label>
       </div>
 
-      <label className={styles.codeField}>
+      <div className={styles.codeField}>
         <span>Parameter schema (JSON)</span>
-        <textarea value={form.parameterSchema} onChange={(e) => onUpdate('parameterSchema', e.target.value)} rows={5} />
+        <CodeEditor value={form.parameterSchema} onChange={(v) => onUpdate('parameterSchema', v)} minHeight="100px" />
         {errors.parameterSchema && <span className={styles.fieldError}>{errors.parameterSchema}</span>}
-      </label>
+      </div>
 
-      <label className={styles.codeField}>
+      <div className={styles.codeField}>
         <span>Script</span>
-        <textarea value={form.scriptSource} onChange={(e) => onUpdate('scriptSource', e.target.value)} onKeyDown={handleKeyDown} rows={14} spellCheck={false} />
-      </label>
+        <CodeEditor value={form.scriptSource} onChange={(v) => onUpdate('scriptSource', v)} minHeight="260px" />
+      </div>
 
       <div className={styles.actions}>
         <button type="submit" className={styles.primaryBtn} disabled={isSaving}>

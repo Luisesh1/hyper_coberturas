@@ -10,9 +10,8 @@ import { BotSidebar } from './components/BotSidebar';
 import { BotActionBar } from './components/BotActionBar';
 import { BotLiveStatus } from './components/BotLiveStatus';
 import { BotRunLogs } from './components/BotRunLogs';
+import { TIMEFRAMES } from '../../config/timeframes';
 import styles from './BotsPage.module.css';
-
-const TIMEFRAMES = ['1m', '5m', '15m', '1h'];
 
 function BotsPage({ selectedAsset }) {
   const { accounts, defaultAccountId, isLoadingAccounts, lastBotEvent, addNotification } = useTradingContext();
@@ -129,7 +128,7 @@ function BotsPage({ selectedAsset }) {
               <label className={styles.field}>
                 <span>Timeframe</span>
                 <select value={botForm.form.timeframe} onChange={(e) => botForm.update('timeframe', e.target.value)}>
-                  {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+                  {TIMEFRAMES.map((tf) => <option key={tf.value} value={tf.value}>{tf.label}</option>)}
                 </select>
               </label>
               <label className={styles.field}>

@@ -33,6 +33,7 @@ function signToken(user) {
 function rowToUser(row) {
   return {
     id:        row.id,
+    userId:    row.id,
     username:  row.username,
     name:      row.name,
     role:      row.role,
@@ -40,6 +41,34 @@ function rowToUser(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+async function getActiveUserById(id) {
+  const { rows } = await db.query(
+    'SELECT * FROM users WHERE id = $1',
+    [id]
+  );
+  const user = rows[0];
+  if (!user || !user.active) {
+    return null;
+  }
+  return rowToUser(user);
+}
+
+async function validateSessionToken(token) {
+  let decoded;
+  try {
+    decoded = jwt.verify(token, config.jwt.secret);
+  } catch {
+    throw new AuthError('Token inválido o expirado');
+  }
+
+  const user = await getActiveUserById(decoded.userId);
+  if (!user) {
+    throw new AuthError('Sesión inválida');
+  }
+
+  return user;
 }
 
 async function login(username, password) {
@@ -158,4 +187,14 @@ async function getUserById(id) {
   return rowToUser(rows[0]);
 }
 
-module.exports = { login, createUser, updateUser, setActive, setRole, listUsers, getUserById };
+module.exports = {
+  login,
+  createUser,
+  updateUser,
+  setActive,
+  setRole,
+  listUsers,
+  getUserById,
+  getActiveUserById,
+  validateSessionToken,
+};

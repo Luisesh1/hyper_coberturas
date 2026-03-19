@@ -38,6 +38,8 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
 
   const pnlTone = Number.isFinite(pnlValue) ? (pnlValue > 0 ? styles.positive : pnlValue < 0 ? styles.negative : '') : '';
   const yieldTone = Number.isFinite(yieldValue) ? (yieldValue > 0 ? styles.positive : yieldValue < 0 ? styles.negative : '') : '';
+  const isDynamic = protection.protectionMode === 'dynamic';
+  const dynamicState = protection.dynamicState || null;
 
   return (
     <article className={`${styles.card} ${toneCls}`}>
@@ -47,6 +49,7 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
           <div className={styles.badges}>
             <span className={styles.badgeVersion}>{protection.version.toUpperCase()}</span>
             <span className={styles.badgeNetwork}>{snapshot.networkLabel || protection.network}</span>
+            {isDynamic && <span className={styles.badgeDynamic}>Dinámica</span>}
             <span className={protection.status === 'active' ? styles.badgeProtected : styles.badgeNeutral}>
               {protection.status === 'active' ? 'Activa' : 'Inactiva'}
             </span>
@@ -107,6 +110,10 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
             <div className={styles.metaChip}><span>Notional</span><strong>{formatUsd(protection.configuredHedgeNotionalUsd)}</strong></div>
             <div className={styles.metaChip}><span>Leverage</span><strong>{protection.leverage}x {protection.marginMode}</strong></div>
             <div className={styles.metaChip}><span>SL diff</span><strong>{formatPercentRatio(protection.stopLossDifferencePct)}</strong></div>
+            {isDynamic && <div className={styles.metaChip}><span>Fase dinámica</span><strong>{dynamicState?.phase || 'inside_range'}</strong></div>}
+            {isDynamic && <div className={styles.metaChip}><span>Ult. borde</span><strong>{dynamicState?.lastBrokenEdge || '—'}</strong></div>}
+            {isDynamic && <div className={styles.metaChip}><span>Reentrada</span><strong>{formatCompactPrice(dynamicState?.currentReentryPrice)}</strong></div>}
+            {isDynamic && <div className={styles.metaChip}><span>Recovery</span><strong>{dynamicState?.recoveryStatus || 'OK'}</strong></div>}
             <div className={styles.metaChip}>
               <span>Origen</span>
               <strong>{protection.valueMultiplier ? `${protection.valueMultiplier}x LP` : 'Manual / base LP'}</strong>

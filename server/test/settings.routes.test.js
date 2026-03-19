@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 
 const app = require('../src/app');
 const config = require('../src/config');
+const authService = require('../src/services/auth.service');
 const settingsService = require('../src/services/settings.service');
 const hyperliquidAccountsService = require('../src/services/hyperliquid-accounts.service');
 
@@ -23,7 +24,22 @@ function buildToken(payload = {}) {
   }, config.jwt.secret);
 }
 
+function buildSessionUser(overrides = {}) {
+  return {
+    id: 1,
+    userId: 1,
+    username: 'tester',
+    name: 'Tester',
+    role: 'user',
+    active: true,
+    createdAt: 1710000000000,
+    updatedAt: 1710000000000,
+    ...overrides,
+  };
+}
+
 test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegram', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const originalGetTelegram = settingsService.getTelegram;
   const originalGetWallet = settingsService.getWallet;
   const originalGetEtherscan = settingsService.getEtherscan;
@@ -46,6 +62,7 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
     { id: 1, isDefault: true },
     { id: 2, isDefault: false },
   ]);
+  authService.validateSessionToken = async () => buildSessionUser();
 
   const server = http.createServer(app);
   const baseUrl = await listen(server);
@@ -66,6 +83,7 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
       hasDefault: true,
     });
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     settingsService.getTelegram = originalGetTelegram;
     settingsService.getWallet = originalGetWallet;
     settingsService.getEtherscan = originalGetEtherscan;
@@ -75,6 +93,8 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
 });
 
 test('PUT /api/settings/telegram valida token y chatId requeridos', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  authService.validateSessionToken = async () => buildSessionUser();
   const server = http.createServer(app);
   const baseUrl = await listen(server);
 
@@ -92,6 +112,7 @@ test('PUT /api/settings/telegram valida token y chatId requeridos', async () => 
     assert.equal(res.status, 400);
     assert.match(json.error, /token y chatId son requeridos/i);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     server.close();
   }
 });

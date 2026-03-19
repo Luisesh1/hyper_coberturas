@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatDate } from '../../../utils/formatters';
 import { EmptyState } from '../../../components/shared/EmptyState';
+import { STRATEGY_TEMPLATES } from '../strategy-templates';
 import styles from './StrategySidebar.module.css';
 
 const BUILTIN_INDICATORS = ['sma', 'ema', 'rsi', 'macd', 'atr', 'bollinger'];
@@ -8,8 +9,10 @@ const BUILTIN_INDICATORS = ['sma', 'ema', 'rsi', 'macd', 'atr', 'bollinger'];
 export function StrategySidebar({
   strategies, indicators, selectedStrategyId, selectedIndicatorId,
   onSelectStrategy, onSelectIndicator, onNewStrategy, onNewIndicator,
+  onSelectTemplate,
   activeTab, onTabChange,
 }) {
+  const [showTemplates, setShowTemplates] = useState(false);
   const [search, setSearch] = useState('');
   const query = search.toLowerCase();
 
@@ -33,8 +36,28 @@ export function StrategySidebar({
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <h3>Estrategias <span className={styles.count}>{strategies.length}</span></h3>
-          <button className={styles.addBtn} onClick={onNewStrategy} title="Nueva estrategia">+</button>
+          <div className={styles.headerActions}>
+            <button className={styles.templateToggle} onClick={() => setShowTemplates(!showTemplates)} title="Templates">
+              {showTemplates ? '✕' : '⚡'}
+            </button>
+            <button className={styles.addBtn} onClick={onNewStrategy} title="Nueva en blanco">+</button>
+          </div>
         </div>
+        {showTemplates && (
+          <div className={styles.templateList}>
+            <span className={styles.templateLabel}>Crear desde template:</span>
+            {STRATEGY_TEMPLATES.map((tpl) => (
+              <button
+                key={tpl.key}
+                className={styles.templateItem}
+                onClick={() => { onSelectTemplate(tpl); setShowTemplates(false); onTabChange('strategy'); }}
+              >
+                <strong className={styles.itemName}>{tpl.name}</strong>
+                <span className={styles.itemMeta}>{tpl.description}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className={styles.list}>
           {filteredStrategies.map((s) => (
             <button

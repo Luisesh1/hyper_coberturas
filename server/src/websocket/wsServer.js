@@ -9,12 +9,12 @@
  */
 
 const WebSocket = require('ws');
-const jwt       = require('jsonwebtoken');
 const url       = require('url');
 const hlWsClient   = require('./hyperliquidWs');
 const hedgeRegistry = require('../services/hedge.registry');
 const hlRegistry    = require('../services/hyperliquid.registry');
 const botRegistry   = require('../services/bot.registry');
+const authService   = require('../services/auth.service');
 const db            = require('../db');
 const config        = require('../config');
 
@@ -235,19 +235,26 @@ function createWsServer(httpServer) {
     ws._msgCount = 0;
     ws._msgWindowStart = Date.now();
 
+    async function authenticateSocket(token) {
+      try {
+        const user = await authService.validateSessionToken(token);
+        ws.userId = user.id;
+        ws.userRole = user.role;
+        ws.userName = user.name;
+        ws._authenticated = true;
+        clearTimeout(ws._authTimeout);
+        finishAuth(ws);
+      } catch (err) {
+        const message = err?.message === 'Sesión inválida' ? 'Sesión inválida' : 'Token inválido';
+        ws.send(JSON.stringify({ type: 'error', message }));
+        ws.close(4001, 'Unauthorized');
+      }
+    }
+
     // Compatibilidad: aceptar token por query param O por primer mensaje (auth)
     const { query: q } = url.parse(req.url, true);
     if (q.token) {
-      try {
-        const decoded = jwt.verify(q.token, config.jwt.secret);
-        ws.userId   = decoded.userId;
-        ws.userRole = decoded.role;
-        finishAuth(ws);
-      } catch {
-        ws.send(JSON.stringify({ type: 'error', message: 'Token inválido' }));
-        ws.close(4001, 'Unauthorized');
-        return;
-      }
+      void authenticateSocket(q.token);
     } else {
       // Esperar primer mensaje tipo { type: 'auth', token: '...' }
       ws._authenticated = false;
@@ -278,17 +285,7 @@ function createWsServer(httpServer) {
         // Si aún no está autenticado, solo aceptar mensajes de auth
         if (!ws.userId) {
           if (msg.type === 'auth' && msg.token) {
-            try {
-              const decoded = jwt.verify(msg.token, config.jwt.secret);
-              ws.userId   = decoded.userId;
-              ws.userRole = decoded.role;
-              ws._authenticated = true;
-              clearTimeout(ws._authTimeout);
-              finishAuth(ws);
-            } catch {
-              ws.send(JSON.stringify({ type: 'error', message: 'Token inválido' }));
-              ws.close(4001, 'Unauthorized');
-            }
+            void authenticateSocket(msg.token);
           } else {
             ws.send(JSON.stringify({ type: 'error', message: 'Autenticación requerida' }));
           }

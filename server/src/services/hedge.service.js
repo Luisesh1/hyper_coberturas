@@ -244,6 +244,87 @@ class HedgeService extends EventEmitter {
     return hedge;
   }
 
+  async retargetPendingHedge(id, {
+    entryPrice,
+    exitPrice,
+    label,
+  }) {
+    const hedge = this.getById(id);
+    if (['open', 'open_protected', 'entry_filled_pending_sl', 'closing'].includes(hedge.status)) {
+      throw new Error(`La cobertura #${id} ya esta abierta y no se puede mover como pendiente`);
+    }
+    if (hedge.status === 'cancel_pending' || hedge.status === 'cancelled') {
+      throw new Error(`La cobertura #${id} no esta disponible para retarget`);
+    }
+
+    const nextEntryPrice = parseFloat(entryPrice);
+    const nextExitPrice = parseFloat(exitPrice);
+    const nextLabel = label || hedge.label;
+    this.validateCreateRequest({
+      asset: hedge.asset,
+      direction: hedge.direction,
+      entryPrice: nextEntryPrice,
+      exitPrice: nextExitPrice,
+      size: hedge.size,
+      leverage: hedge.leverage,
+    });
+
+    await this._ensureEntryConfig(hedge);
+    if (hedge.entryOid) {
+      await this.hl.cancelOrder(hedge.assetIndex, hedge.entryOid).catch((err) => {
+        throw new Error(`No se pudo cancelar la orden de entrada actual: ${err.message}`);
+      });
+    }
+
+    hedge.entryOid = null;
+    hedge.entryPrice = nextEntryPrice;
+    hedge.exitPrice = nextExitPrice;
+    hedge.label = nextLabel;
+    hedge.status = 'waiting';
+    hedge.error = null;
+    hedge.lastReconciledAt = Date.now();
+    await this._emitUpdated(hedge);
+    await this._placeEntryOrder(hedge);
+    return hedge;
+  }
+
+  async updateOpenHedgeExit(id, exitPrice) {
+    const hedge = this.getById(id);
+    const nextExitPrice = parseFloat(exitPrice);
+
+    this.validateCreateRequest({
+      asset: hedge.asset,
+      direction: hedge.direction,
+      entryPrice: hedge.entryPrice,
+      exitPrice: nextExitPrice,
+      size: hedge.size,
+      leverage: hedge.leverage,
+    });
+
+    hedge.exitPrice = nextExitPrice;
+    hedge.lastReconciledAt = Date.now();
+    hedge.error = null;
+
+    if (!['open', 'open_protected', 'entry_filled_pending_sl'].includes(hedge.status)) {
+      await this._emitUpdated(hedge);
+      return hedge;
+    }
+
+    await this._ensureEntryConfig(hedge);
+    if (hedge.slOid) {
+      await this.hl.cancelOrder(hedge.assetIndex, hedge.slOid).catch((err) => {
+        throw new Error(`No se pudo cancelar el stop actual: ${err.message}`);
+      });
+      hedge.slOid = null;
+      hedge.slPlacedAt = null;
+    }
+
+    hedge.status = 'entry_filled_pending_sl';
+    await this._emitUpdated(hedge);
+    await this._ensureStopLoss(hedge);
+    return hedge;
+  }
+
   getAll() {
     return [...this.hedges.values()].sort((a, b) => b.id - a.id);
   }

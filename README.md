@@ -172,3 +172,4 @@ Las variables de base de datos (`DATABASE_URL`) son inyectadas por Docker Compos
 - `JWT_SECRET` debe ser un valor aleatorio largo (mínimo 32 bytes)
 - El endpoint `/api` no debe exponerse directamente; usar siempre nginx como proxy
 - No commitear `.env` al repositorio
+- Regla del proyecto: antes de cualquier proceso con alto impacto sobre la base de datos, crear un backup verificable. Esto incluye restauraciones, migraciones delicadas, limpiezas masivas, reseteos, cambios manuales en producción, rotación de claves que afecten datos cifrados y cualquier operación con riesgo de pérdida o corrupción.

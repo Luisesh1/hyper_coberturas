@@ -9,7 +9,7 @@
  */
 
 const jwt    = require('jsonwebtoken');
-const config = require('../config');
+const authService = require('../services/auth.service');
 const { AuthError, ForbiddenError } = require('../errors/app-error');
 
 function extractToken(req) {
@@ -18,17 +18,23 @@ function extractToken(req) {
   return null;
 }
 
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   const token = extractToken(req);
   if (!token) {
     return next(new AuthError('Token requerido'));
   }
 
   try {
-    req.user = jwt.verify(token, config.jwt.secret);
+    req.user = await authService.validateSessionToken(token);
     next();
-  } catch {
-    return next(new AuthError('Token inválido o expirado'));
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return next(err);
+    }
+    if (err instanceof jwt.JsonWebTokenError || err instanceof jwt.TokenExpiredError) {
+      return next(new AuthError('Token inválido o expirado'));
+    }
+    return next(new AuthError('Sesión inválida'));
   }
 }
 

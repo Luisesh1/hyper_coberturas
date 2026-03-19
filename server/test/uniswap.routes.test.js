@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 
 const app = require('../src/app');
 const config = require('../src/config');
+const authService = require('../src/services/auth.service');
 const uniswapProtectionService = require('../src/services/uniswap-protection.service');
 const protectedPoolRefreshService = require('../src/services/protected-pool-refresh.service');
 
@@ -23,8 +24,24 @@ function buildToken(payload = {}) {
   }, config.jwt.secret);
 }
 
+function buildSessionUser(overrides = {}) {
+  return {
+    id: 1,
+    userId: 1,
+    username: 'tester',
+    name: 'Tester',
+    role: 'user',
+    active: true,
+    createdAt: 1710000000000,
+    updatedAt: 1710000000000,
+    ...overrides,
+  };
+}
+
 test('GET /api/uniswap/protected-pools devuelve la lista del usuario autenticado', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const originalList = uniswapProtectionService.listProtectedPools;
+  authService.validateSessionToken = async () => buildSessionUser();
   uniswapProtectionService.listProtectedPools = async (userId) => ([
     { id: 31, userId, status: 'active' },
   ]);
@@ -42,16 +59,19 @@ test('GET /api/uniswap/protected-pools devuelve la lista del usuario autenticado
     assert.equal(json.data[0].id, 31);
     assert.equal(json.data[0].userId, 1);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     uniswapProtectionService.listProtectedPools = originalList;
     server.close();
   }
 });
 
 test('POST /api/uniswap/protected-pools/refresh fuerza refresh y devuelve la lista actualizada', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const originalRefresh = protectedPoolRefreshService.refreshUser;
   const originalList = uniswapProtectionService.listProtectedPools;
   const calls = [];
 
+  authService.validateSessionToken = async () => buildSessionUser();
   protectedPoolRefreshService.refreshUser = async (userId) => {
     calls.push(['refresh', userId]);
   };
@@ -74,6 +94,7 @@ test('POST /api/uniswap/protected-pools/refresh fuerza refresh y devuelve la lis
     assert.deepEqual(calls, [['refresh', 1], ['list', 1]]);
     assert.equal(json.data[0].id, 41);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     protectedPoolRefreshService.refreshUser = originalRefresh;
     uniswapProtectionService.listProtectedPools = originalList;
     server.close();
@@ -81,8 +102,10 @@ test('POST /api/uniswap/protected-pools/refresh fuerza refresh y devuelve la lis
 });
 
 test('POST /api/uniswap/protected-pools crea la proteccion con el userId autenticado', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
   const originalCreate = uniswapProtectionService.createProtectedPool;
   const calls = [];
+  authService.validateSessionToken = async () => buildSessionUser();
   uniswapProtectionService.createProtectedPool = async (payload) => {
     calls.push(payload);
     return { id: 88, status: 'active' };
@@ -131,12 +154,15 @@ test('POST /api/uniswap/protected-pools crea la proteccion con el userId autenti
     assert.equal(calls[0].valueMultiplier, 1.25);
     assert.equal(calls[0].stopLossDifferencePct, 0.05);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     uniswapProtectionService.createProtectedPool = originalCreate;
     server.close();
   }
 });
 
 test('POST /api/uniswap/protected-pools/:id/deactivate valida el id', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  authService.validateSessionToken = async () => buildSessionUser();
   const server = http.createServer(app);
   const baseUrl = await listen(server);
 
@@ -150,6 +176,7 @@ test('POST /api/uniswap/protected-pools/:id/deactivate valida el id', async () =
     assert.equal(res.status, 400);
     assert.match(json.error, /ID invalido/i);
   } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
     server.close();
   }
 });

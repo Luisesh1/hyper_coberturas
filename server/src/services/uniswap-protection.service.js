@@ -9,6 +9,9 @@ const logger = require('./logger.service');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 const SHORTCUT_MULTIPLIERS = [1.25, 1.5, 2, 3, 4];
 const STOP_LOSS_DIFFERENCE_DEFAULT_PCT = 0.05;
+const DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT = 0.01;
+const DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC = 15;
+const DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT = 6;
 const WRAPPED_TOKEN_EQUIVALENTS = new Map([
   ['WBTC', 'BTC'],
   ['WETH', 'ETH'],
@@ -273,6 +276,11 @@ async function annotatePoolsWithProtection({ userId, pools }, deps = {}) {
             configuredHedgeNotionalUsd: protection.configuredHedgeNotionalUsd,
             valueMultiplier: protection.valueMultiplier,
             stopLossDifferencePct: protection.stopLossDifferencePct,
+            protectionMode: protection.protectionMode || 'static',
+            reentryBufferPct: protection.reentryBufferPct ?? null,
+            flipCooldownSec: protection.flipCooldownSec ?? null,
+            maxSequentialFlips: protection.maxSequentialFlips ?? null,
+            dynamicState: protection.dynamicState ?? null,
             valueMode: protection.valueMode,
             leverage: protection.leverage,
             accountId: protection.accountId,
@@ -316,8 +324,47 @@ function normalizeValueMultiplier(valueMultiplier) {
 function normalizeStopLossDifferencePct(stopLossDifferencePct) {
   if (stopLossDifferencePct == null) return STOP_LOSS_DIFFERENCE_DEFAULT_PCT;
   const parsed = Number(stopLossDifferencePct);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= 100) {
+    throw new ValidationError('stopLossDifferencePct debe ser un porcentaje positivo menor que 100. Ejemplo: 0.05 = 0.05%');
+  }
+  return parsed;
+}
+
+function normalizeProtectionMode(protectionMode) {
+  if (protectionMode == null || protectionMode === '') return 'static';
+  const normalized = String(protectionMode).trim().toLowerCase();
+  if (!['static', 'dynamic'].includes(normalized)) {
+    throw new ValidationError('protectionMode invalido. Usa static o dynamic');
+  }
+  return normalized;
+}
+
+function normalizeReentryBufferPct(reentryBufferPct, protectionMode) {
+  if (protectionMode !== 'dynamic') return null;
+  if (reentryBufferPct == null) return DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT;
+  const parsed = Number(reentryBufferPct);
   if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= 1) {
-    throw new ValidationError('stopLossDifferencePct debe ser un numero positivo menor que 1. Usa formato decimal, por ejemplo 0.05 = 5%');
+    throw new ValidationError('reentryBufferPct debe ser un numero positivo menor que 1. Usa formato decimal, por ejemplo 0.01 = 1%');
+  }
+  return parsed;
+}
+
+function normalizeFlipCooldownSec(flipCooldownSec, protectionMode) {
+  if (protectionMode !== 'dynamic') return null;
+  if (flipCooldownSec == null) return DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC;
+  const parsed = Number(flipCooldownSec);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new ValidationError('flipCooldownSec debe ser un entero mayor o igual a 0');
+  }
+  return parsed;
+}
+
+function normalizeMaxSequentialFlips(maxSequentialFlips, protectionMode) {
+  if (protectionMode !== 'dynamic') return null;
+  if (maxSequentialFlips == null) return DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT;
+  const parsed = Number(maxSequentialFlips);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new ValidationError('maxSequentialFlips debe ser un entero positivo');
   }
   return parsed;
 }
@@ -327,9 +374,10 @@ function roundUsd(value) {
 }
 
 function buildStopLossExitPrices(snapshot, stopLossDifferencePct) {
+  const pctRatio = Number(stopLossDifferencePct) / 100;
   return {
-    downsideExitPrice: snapshot.rangeLowerPrice * (1 + stopLossDifferencePct),
-    upsideExitPrice: snapshot.rangeUpperPrice * (1 - stopLossDifferencePct),
+    downsideExitPrice: snapshot.rangeLowerPrice * (1 + pctRatio),
+    upsideExitPrice: snapshot.rangeUpperPrice * (1 - pctRatio),
   };
 }
 
@@ -341,6 +389,11 @@ function buildStoredPoolSnapshot({
   normalizedNotionalUsd,
   normalizedValueMultiplier,
   normalizedStopLossDifferencePct,
+  protectionMode,
+  reentryBufferPct,
+  flipCooldownSec,
+  maxSequentialFlips,
+  dynamicState,
   normalizedLeverage,
   hedgeSize,
 }) {
@@ -355,6 +408,11 @@ function buildStoredPoolSnapshot({
       configuredHedgeNotionalUsd: normalizedNotionalUsd,
       valueMultiplier: normalizedValueMultiplier,
       stopLossDifferencePct: normalizedStopLossDifferencePct,
+      protectionMode,
+      reentryBufferPct,
+      flipCooldownSec,
+      maxSequentialFlips,
+      dynamicState,
       valueMode: 'usd',
       leverage: normalizedLeverage,
       accountId,
@@ -364,8 +422,37 @@ function buildStoredPoolSnapshot({
       hedgeSize,
       hedgeNotionalUsd: normalizedNotionalUsd,
       stopLossDifferenceDefaultPct: normalizedStopLossDifferencePct,
+      protectionMode,
+      reentryBufferPct,
+      flipCooldownSec,
+      maxSequentialFlips,
       defaultLeverage: Math.min(10, candidate.maxLeverage),
     },
+  };
+}
+
+function buildInitialDynamicState(snapshot, {
+  reentryBufferPct,
+  flipCooldownSec,
+  maxSequentialFlips,
+}) {
+  return {
+    phase: 'inside_range',
+    activeSide: null,
+    armedReentrySide: null,
+    lastBrokenEdge: null,
+    currentReentryPrice: null,
+    lastFlipAt: null,
+    sequentialFlipCount: 0,
+    recoveryStatus: null,
+    transition: null,
+    reentryBufferPct,
+    flipCooldownSec,
+    maxSequentialFlips,
+    upperReentryPrice: snapshot.rangeUpperPrice * (1 - reentryBufferPct),
+    lowerReentryPrice: snapshot.rangeLowerPrice * (1 + reentryBufferPct),
+    lastEvaluatedPrice: snapshot.priceCurrent != null ? Number(snapshot.priceCurrent) : null,
+    lastTransitionAt: Date.now(),
   };
 }
 
@@ -377,6 +464,10 @@ async function createProtectedPool({
   configuredNotionalUsd,
   valueMultiplier,
   stopLossDifferencePct,
+  protectionMode,
+  reentryBufferPct,
+  flipCooldownSec,
+  maxSequentialFlips,
 }, deps = {}) {
   const snapshot = normalizePoolSnapshot(pool);
   const candidate = await buildProtectionCandidate(snapshot, deps);
@@ -397,6 +488,10 @@ async function createProtectedPool({
     }
   }
   const normalizedStopLossDifferencePct = normalizeStopLossDifferencePct(stopLossDifferencePct);
+  const normalizedProtectionMode = normalizeProtectionMode(protectionMode);
+  const normalizedReentryBufferPct = normalizeReentryBufferPct(reentryBufferPct, normalizedProtectionMode);
+  const normalizedFlipCooldownSec = normalizeFlipCooldownSec(flipCooldownSec, normalizedProtectionMode);
+  const normalizedMaxSequentialFlips = normalizeMaxSequentialFlips(maxSequentialFlips, normalizedProtectionMode);
   const { downsideExitPrice, upsideExitPrice } = buildStopLossExitPrices(
     snapshot,
     normalizedStopLossDifferencePct
@@ -444,6 +539,13 @@ async function createProtectedPool({
   });
 
   const createdAt = Date.now();
+  const dynamicState = normalizedProtectionMode === 'dynamic'
+    ? buildInitialDynamicState(snapshot, {
+        reentryBufferPct: normalizedReentryBufferPct,
+        flipCooldownSec: normalizedFlipCooldownSec,
+        maxSequentialFlips: normalizedMaxSequentialFlips,
+      })
+    : null;
   const executor = deps.db || db;
   const baseRecord = {
     userId,
@@ -466,6 +568,11 @@ async function createProtectedPool({
     configuredHedgeNotionalUsd: normalizedNotionalUsd,
     valueMultiplier: normalizedValueMultiplier,
     stopLossDifferencePct: normalizedStopLossDifferencePct,
+    protectionMode: normalizedProtectionMode,
+    reentryBufferPct: normalizedReentryBufferPct,
+    flipCooldownSec: normalizedFlipCooldownSec,
+    maxSequentialFlips: normalizedMaxSequentialFlips,
+    dynamicState,
     valueMode: 'usd',
     leverage: normalizedLeverage,
     marginMode: 'isolated',
@@ -481,6 +588,11 @@ async function createProtectedPool({
     normalizedNotionalUsd,
     normalizedValueMultiplier,
     normalizedStopLossDifferencePct,
+    protectionMode: normalizedProtectionMode,
+    reentryBufferPct: normalizedReentryBufferPct,
+    flipCooldownSec: normalizedFlipCooldownSec,
+    maxSequentialFlips: normalizedMaxSequentialFlips,
+    dynamicState,
     normalizedLeverage,
     hedgeSize,
   });
@@ -513,6 +625,11 @@ async function createProtectedPool({
         normalizedNotionalUsd,
         normalizedValueMultiplier,
         normalizedStopLossDifferencePct,
+        protectionMode: normalizedProtectionMode,
+        reentryBufferPct: normalizedReentryBufferPct,
+        flipCooldownSec: normalizedFlipCooldownSec,
+        maxSequentialFlips: normalizedMaxSequentialFlips,
+        dynamicState,
         normalizedLeverage,
         hedgeSize,
       }),
@@ -603,6 +720,9 @@ module.exports = {
   ACTIVE_HEDGE_STATUSES,
   SHORTCUT_MULTIPLIERS,
   STOP_LOSS_DIFFERENCE_DEFAULT_PCT,
+  DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT,
+  DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC,
+  DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT,
   annotatePoolsWithProtection,
   buildProtectionCandidate,
   buildProtectionKey,
