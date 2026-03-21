@@ -17,12 +17,17 @@ const botRegistry   = require('../services/bot.registry');
 const authService   = require('../services/auth.service');
 const db            = require('../db');
 const config        = require('../config');
+const logger        = require('../services/logger.service');
 
 const CLIENT_PING_INTERVAL_MS = 20_000;
 const WS_AUTH_TIMEOUT_MS = 5_000;       // tiempo máximo para autenticar tras conexión
 const WS_MAX_MSG_PER_MIN = 60;          // rate limit por conexión
 const attachedHedgeServices = new WeakSet();
 const attachedBotRuntimes = new WeakSet();
+
+function normalizeAddress(address) {
+  return String(address || '').trim().toLowerCase();
+}
 
 /** Envía un mensaje JSON a todos los sockets del usuario indicado */
 function broadcastToUser(wss, userId, payload) {
@@ -35,15 +40,25 @@ function broadcastToUser(wss, userId, payload) {
 }
 
 /** Adjunta los eventos de un HedgeService al WS server */
-function attachHedgeEvents(wss, hedgeSvc) {
+function attachHedgeEvents(wss, hedgeSvc, deps = {}) {
+  const { registerAsset } = deps;
   if (attachedHedgeServices.has(hedgeSvc)) return;
   attachedHedgeServices.add(hedgeSvc);
+
+  if (typeof hedgeSvc.getAll === 'function' && registerAsset) {
+    hedgeSvc.getAll().forEach((hedge) => registerAsset(hedgeSvc, hedge?.asset));
+  }
+
   const userId = hedgeSvc.userId;
-  hedgeSvc.on('created',      (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'created',      hedge: h }));
+  hedgeSvc.on('created',      (h)         => {
+    registerAsset?.(hedgeSvc, h?.asset);
+    broadcastToUser(wss, userId, { type: 'hedge_event', event: 'created', hedge: h });
+  });
   hedgeSvc.on('updated',      (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'updated',      hedge: h }));
   hedgeSvc.on('opened',       (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'opened',       hedge: h }));
   hedgeSvc.on('reconciled',   (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'reconciled',   hedge: h }));
   hedgeSvc.on('protection_missing', (h)   => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'protection_missing', hedge: h }));
+  hedgeSvc.on('partial_coverage', (h, payload) => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'partial_coverage', hedge: h, payload }));
   hedgeSvc.on('cycleComplete',(h, cycle)  => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'cycleComplete', hedge: h, cycle }));
   hedgeSvc.on('cancelled',    (h)         => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'cancelled',    hedge: h }));
   hedgeSvc.on('error',        (h, err)    => broadcastToUser(wss, userId, { type: 'hedge_event', event: 'error',        hedge: h, message: err.message }));
@@ -100,15 +115,17 @@ function attachBotEvents(wss, botRuntime) {
 }
 
 async function bootstrapUserRuntime(wss, userId) {
+  const { registerAsset, registerAddress } = wss._routing || {};
   const hedgeServices = await hedgeRegistry.getOrCreateAllForUser(userId);
   const botRuntimes = await botRegistry.getOrCreateActiveForUser(userId);
 
   for (const hedgeSvc of hedgeServices) {
-    attachHedgeEvents(wss, hedgeSvc);
+    attachHedgeEvents(wss, hedgeSvc, { registerAsset });
     const hl = hlRegistry.get(userId, hedgeSvc.accountId);
     if (hl?.address) {
+      registerAddress?.(userId, hedgeSvc.accountId, hl.address);
       hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
-      console.log(`[WS] userEvents suscrito para user ${userId} account ${hedgeSvc.accountId} (${hl.address})`);
+      logger.info('ws_user_events_subscribed', { userId, accountId: hedgeSvc.accountId, address: hl.address });
     }
   }
 
@@ -132,18 +149,42 @@ async function loadActiveUsers(wss) {
     try {
       await bootstrapUserRuntime(wss, userId);
     } catch (err) {
-      console.error(`[WS] Error al inicializar user ${userId}:`, err.message);
+      logger.error('ws_user_init_failed', { userId, error: err.message });
     }
   }
 }
 
 function createWsServer(httpServer) {
   const wss = new WebSocket.Server({ server: httpServer, path: '/ws' });
+  const hedgeServicesByAsset = new Map();
+  const runtimeByAddress = new Map();
+
+  function registerAsset(hedgeSvc, asset) {
+    const normalizedAsset = String(asset || '').trim().toUpperCase();
+    if (!normalizedAsset) return;
+    if (!hedgeServicesByAsset.has(normalizedAsset)) {
+      hedgeServicesByAsset.set(normalizedAsset, new Set());
+    }
+    hedgeServicesByAsset.get(normalizedAsset).add(hedgeSvc);
+  }
+
+  function registerAddress(userId, accountId, address) {
+    const normalized = normalizeAddress(address);
+    if (!normalized) return;
+    runtimeByAddress.set(normalized, {
+      userId: Number(userId),
+      accountId: Number(accountId),
+      address: normalized,
+    });
+  }
+
+  wss._routing = { registerAsset, registerAddress };
 
   hedgeRegistry.onCreate(async (hedgeSvc) => {
-    attachHedgeEvents(wss, hedgeSvc);
+    attachHedgeEvents(wss, hedgeSvc, { registerAsset });
     const hl = hlRegistry.get(hedgeSvc.userId, hedgeSvc.accountId);
     if (hl?.address) {
+      registerAddress(hedgeSvc.userId, hedgeSvc.accountId, hl.address);
       hlWsClient.subscribe({ type: 'userEvents', user: hl.address });
     }
   });
@@ -159,12 +200,15 @@ function createWsServer(httpServer) {
   hlWsClient.addSubscriber((hlMessage) => {
     // Retransmitir precios a todos los clientes autenticados + reacción en tiempo real
     if (hlMessage?.channel === 'allMids') {
-      // Notificar a cada HedgeService para que revise condiciones de entrada/salida
+      // Notificar solo a los HedgeService que siguen assets presentes en el tick.
       const mids = hlMessage?.data?.mids || {};
-      for (const svc of hedgeRegistry.getAll()) {
-        for (const [asset, priceStr] of Object.entries(mids)) {
-          const price = parseFloat(priceStr);
-          if (price > 0) svc.onPriceUpdate(asset, price);
+      for (const [asset, priceStr] of Object.entries(mids)) {
+        const listeners = hedgeServicesByAsset.get(String(asset || '').toUpperCase());
+        if (!listeners || listeners.size === 0) continue;
+        const price = parseFloat(priceStr);
+        if (!(price > 0)) continue;
+        for (const svc of listeners) {
+          svc.onPriceUpdate(asset, price);
         }
       }
 
@@ -182,12 +226,7 @@ function createWsServer(httpServer) {
       const fills = hlMessage?.data?.fills || [];
       if (fills.length === 0) return;
 
-      // Buscar qué usuario tiene esa wallet address
-      const addresses = hlRegistry.getAllEntries();
-      const fillUser  = addresses.find((a) => {
-        // Los fills de HL incluyen el address del usuario
-        return hlMessage?.data?.user?.toLowerCase() === a.address?.toLowerCase();
-      });
+      const fillUser = runtimeByAddress.get(normalizeAddress(hlMessage?.data?.user));
 
       if (fillUser) {
         const hedgeSvc = hedgeRegistry.get(fillUser.userId, fillUser.accountId);
@@ -300,16 +339,16 @@ function createWsServer(httpServer) {
 
     ws.on('close', () => {
       clearTimeout(ws._authTimeout);
-      if (ws.userId) console.log(`[WS] Cliente desconectado: user ${ws.userId}`);
+      if (ws.userId) logger.info('ws_client_disconnected', { userId: ws.userId });
     });
 
     ws.on('error', (err) => {
-      console.error(`[WS] Error cliente user ${ws.userId || 'unauthenticated'}:`, err.message);
+      logger.error('ws_client_error', { userId: ws.userId || null, error: err.message });
     });
   });
 
   function finishAuth(ws) {
-    console.log(`[WS] Cliente conectado: user ${ws.userId}`);
+    logger.info('ws_client_connected', { userId: ws.userId });
     ws.send(JSON.stringify({
       type: 'connected',
       message: 'Conectado al bot de Hyperliquid',
@@ -317,7 +356,7 @@ function createWsServer(httpServer) {
     }));
   }
 
-  console.log('[WS Server] Servidor WebSocket listo en /ws');
+  logger.info('ws_server_ready');
   return wss;
 }
 

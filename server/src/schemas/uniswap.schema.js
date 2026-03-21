@@ -33,6 +33,8 @@ const createProtectedPoolSchema = z.object({
   reentryBufferPct: z.number().positive().lt(1).optional(),
   flipCooldownSec: z.number().int().min(0).optional(),
   maxSequentialFlips: z.number().int().positive().optional(),
+  breakoutConfirmDistancePct: z.number().min(0).lt(100).optional(),
+  breakoutConfirmDurationSec: z.number().int().min(0).optional(),
   valueMultiplier: z.union([
     z.literal(1.25),
     z.literal(1.5),

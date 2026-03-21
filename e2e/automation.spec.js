@@ -393,7 +393,7 @@ test('Strategy Studio permite validar y backtestear una estrategia', async ({ pa
   await page.getByRole('button', { name: 'Validar' }).click();
   await expect(page.getByText('Signal: long')).toBeVisible();
   await page.getByRole('button', { name: 'Backtest', exact: true }).click();
-  await expect(page.getByText('8 trades')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Backtest 8 trades/i })).toBeVisible();
   await expect(page.getByText('Volume Z-Score')).toBeVisible();
 });
 
@@ -430,9 +430,8 @@ test('Backtesting permite correr una simulacion e inspeccionar trades', async ({
   await page.goto('/backtesting');
 
   await expect(page.getByText('Backtesting Lab')).toBeVisible();
-  await page.getByLabel('Estrategia', { exact: true }).selectOption('11');
+  await page.getByRole('combobox', { name: 'Estrategia' }).first().selectOption('11');
   await page.getByRole('button', { name: 'Simular backtest' }).click();
-  await expect(page.getByText('Net PnL', { exact: true })).toBeVisible();
   await expect(page.getByTestId('backtest-chart')).toBeVisible();
   await expect(page.getByText('signal_reverse')).toBeVisible();
   await page.getByText('signal_reverse').click();

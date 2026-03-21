@@ -38,6 +38,7 @@ test('rowToHedge normaliza campos numéricos clave', () => {
     asset_index: 0,
     sz_decimals: 5,
     position_size: '0.0007',
+    dynamic_anchor_price: '70500',
     open_price: '69900',
     close_price: null,
     unrealized_pnl: '1.23',
@@ -60,6 +61,7 @@ test('rowToHedge normaliza campos numéricos clave', () => {
   assert.equal(hedge.status, 'open_protected');
   assert.equal(hedge.positionSize, 0.0007);
   assert.equal(hedge.openPrice, 69900);
+  assert.equal(hedge.dynamicAnchorPrice, 70500);
   assert.equal(hedge.entryOid, 11);
   assert.equal(hedge.slOid, 12);
 });

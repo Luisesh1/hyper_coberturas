@@ -1,4 +1,3 @@
-import { formatNumber } from '../../../utils/formatters';
 import { formatAccountIdentity } from '../../../utils/hyperliquidAccounts';
 import { STATUS_LABEL } from '../../../components/HedgePanel/constants';
 import { getPoolStatus } from '../utils/pool-helpers';
@@ -110,9 +109,12 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
             <div className={styles.metaChip}><span>Notional</span><strong>{formatUsd(protection.configuredHedgeNotionalUsd)}</strong></div>
             <div className={styles.metaChip}><span>Leverage</span><strong>{protection.leverage}x {protection.marginMode}</strong></div>
             <div className={styles.metaChip}><span>SL diff</span><strong>{formatPercentRatio(protection.stopLossDifferencePct)}</strong></div>
-            {isDynamic && <div className={styles.metaChip}><span>Fase dinámica</span><strong>{dynamicState?.phase || 'inside_range'}</strong></div>}
+            {isDynamic && <div className={styles.metaChip}><span>Fase dinámica</span><strong>{dynamicState?.phase || 'neutral'}</strong></div>}
+            {isDynamic && <div className={styles.metaChip}><span>Dist. breakout</span><strong>{protection.breakoutConfirmDistancePct != null ? `${protection.breakoutConfirmDistancePct}%` : '0.5%'}</strong></div>}
+            {isDynamic && <div className={styles.metaChip}><span>Tiempo breakout</span><strong>{protection.breakoutConfirmDurationSec != null ? formatDuration(protection.breakoutConfirmDurationSec * 1000) : '10m'}</strong></div>}
             {isDynamic && <div className={styles.metaChip}><span>Ult. borde</span><strong>{dynamicState?.lastBrokenEdge || '—'}</strong></div>}
             {isDynamic && <div className={styles.metaChip}><span>Reentrada</span><strong>{formatCompactPrice(dynamicState?.currentReentryPrice)}</strong></div>}
+            {isDynamic && <div className={styles.metaChip}><span>Breakout pendiente</span><strong>{dynamicState?.pendingBreakoutEdge || '—'}</strong></div>}
             {isDynamic && <div className={styles.metaChip}><span>Recovery</span><strong>{dynamicState?.recoveryStatus || 'OK'}</strong></div>}
             <div className={styles.metaChip}>
               <span>Origen</span>
@@ -127,6 +129,11 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
                 <p className={styles.hedgeText}>
                   SHORT entra en {formatCompactPrice(downside?.entryPrice || protection.rangeLowerPrice)} y SL en {formatCompactPrice(downside?.exitPrice)}
                 </p>
+                {isDynamic && (
+                  <p className={styles.hedgeText}>
+                    Ancla dinámica: {formatCompactPrice(downside?.dynamicAnchorPrice || downside?.entryPrice || protection.rangeLowerPrice)}
+                  </p>
+                )}
               </div>
               <div className={styles.hedgeSide}>
                 <ProtectionStatus hedge={downside} />
@@ -140,6 +147,11 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
                 <p className={styles.hedgeText}>
                   LONG entra en {formatCompactPrice(upside?.entryPrice || protection.rangeUpperPrice)} y SL en {formatCompactPrice(upside?.exitPrice)}
                 </p>
+                {isDynamic && (
+                  <p className={styles.hedgeText}>
+                    Ancla dinámica: {formatCompactPrice(upside?.dynamicAnchorPrice || upside?.entryPrice || protection.rangeUpperPrice)}
+                  </p>
+                )}
               </div>
               <div className={styles.hedgeSide}>
                 <ProtectionStatus hedge={upside} />

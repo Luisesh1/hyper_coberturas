@@ -60,6 +60,7 @@ async function stop(userId, botId) {
 module.exports = {
   activate,
   destroy: registry.destroy,
+  destroyAll: registry.destroyAll,
   get: registry.get,
   getOrCreate: registry.getOrCreate,
   getOrCreateActiveForUser,

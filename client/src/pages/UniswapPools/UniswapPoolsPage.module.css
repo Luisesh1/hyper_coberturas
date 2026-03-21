@@ -138,6 +138,13 @@
   flex-wrap: wrap;
 }
 
+.protectedActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .protectedStats {
   display: flex;
   gap: 10px;
@@ -189,10 +196,24 @@
   cursor: not-allowed;
 }
 
+.checkboxRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--uni-text-1);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.checkboxRow input {
+  accent-color: var(--uni-cyan);
+}
+
 /* Focus states */
 .tab:focus-visible,
 .dismissBtn:focus-visible,
-.refreshBtn:focus-visible {
+.refreshBtn:focus-visible,
+.checkboxRow input:focus-visible {
   outline: 2px solid var(--uni-cyan);
   outline-offset: 2px;
 }
@@ -226,5 +247,9 @@
   .protectedHeader {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .protectedActions {
+    justify-content: space-between;
   }
 }

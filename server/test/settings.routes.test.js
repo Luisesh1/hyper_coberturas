@@ -7,6 +7,8 @@ const app = require('../src/app');
 const config = require('../src/config');
 const authService = require('../src/services/auth.service');
 const settingsService = require('../src/services/settings.service');
+const tgRegistry = require('../src/services/telegram.registry');
+const telegramCommandService = require('../src/services/telegram-command.service');
 const hyperliquidAccountsService = require('../src/services/hyperliquid-accounts.service');
 
 async function listen(server) {
@@ -113,6 +115,54 @@ test('PUT /api/settings/telegram valida token y chatId requeridos', async () => 
     assert.match(json.error, /token y chatId son requeridos/i);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
+    server.close();
+  }
+});
+
+test('PUT /api/settings/telegram recarga Telegram y refresca el listener de comandos', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalSetTelegram = settingsService.setTelegram;
+  const originalReload = tgRegistry.reload;
+  const originalRefreshConfigs = telegramCommandService.refreshConfigs;
+  const calls = [];
+
+  authService.validateSessionToken = async () => buildSessionUser();
+  settingsService.setTelegram = async (userId, payload) => {
+    calls.push({ type: 'set', userId, payload });
+  };
+  tgRegistry.reload = async (userId) => {
+    calls.push({ type: 'reload', userId });
+  };
+  telegramCommandService.refreshConfigs = async () => {
+    calls.push({ type: 'refresh-configs' });
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/settings/telegram`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({ token: 'bot-token', chatId: '999999' }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.success, true);
+    assert.deepEqual(calls, [
+      { type: 'set', userId: 1, payload: { token: 'bot-token', chatId: '999999' } },
+      { type: 'reload', userId: 1 },
+      { type: 'refresh-configs' },
+    ]);
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    settingsService.setTelegram = originalSetTelegram;
+    tgRegistry.reload = originalReload;
+    telegramCommandService.refreshConfigs = originalRefreshConfigs;
     server.close();
   }
 });

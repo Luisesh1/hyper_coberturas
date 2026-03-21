@@ -37,6 +37,7 @@ function BacktestTopBar({
         <span className={styles.eyebrow}>Backtesting Lab</span>
         <select
           className={styles.strategyPill}
+          aria-label="Estrategia"
           value={form.strategyId}
           onChange={(e) => setForm((p) => ({ ...p, strategyId: e.target.value }))}
           disabled={isLoading}
@@ -62,6 +63,7 @@ function BacktestTopBar({
         <button
           type="button"
           className={styles.runBtn}
+          aria-label="Simular backtest"
           onClick={onRun}
           disabled={isRunning || isLoading || !form.strategyId}
           title="Ctrl+Enter"

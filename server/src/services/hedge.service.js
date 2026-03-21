@@ -21,9 +21,10 @@ const { getTrackedPositionSize } = require('./hedge.state');
 const { formatPrice, formatSize, numericEqual } = require('../utils/format');
 const { ValidationError } = require('../errors/app-error');
 const config = require('../config');
+const logger = require('./logger.service');
 
-const MONITOR_INTERVAL_MS = config.intervals.hedgeMonitorMs;
-const CLOSING_TIMEOUT_MS = config.intervals.hedgeClosingTimeoutMs;
+const ENTRY_RESCUE_GRACE_MS = 15_000;
+const MARKET_ORDER_SLIPPAGE = config.trading.marketOrderSlippage || 0.002;
 
 function getOrderCoin(order) {
   return String(order?.coin ?? order?.asset ?? '').toUpperCase();
@@ -69,7 +70,7 @@ class HedgeService extends EventEmitter {
       this.hedges.set(hedge.id, hedge);
     }
 
-    console.log(`[Hedge] User ${this.userId} account ${this.accountId}: ${this.hedges.size} coberturas restauradas`);
+    logger.info('hedge_init', { userId: this.userId, accountId: this.accountId, count: this.hedges.size });
     this._startMonitor();
   }
 
@@ -100,7 +101,7 @@ class HedgeService extends EventEmitter {
 
   async _emitUpdated(hedge) {
     hedge.lastReconciledAt = Date.now();
-    await this._save(hedge).catch(() => {});
+    await this._save(hedge).catch((err) => logger.error('hedge_save_failed', { hedgeId: hedge.id, error: err.message }));
     this.notifier.updated(hedge);
   }
 
@@ -109,14 +110,137 @@ class HedgeService extends EventEmitter {
     hedge.error = err.message;
     hedge.lastReconciledAt = Date.now();
     if (persist) {
-      await this._save(hedge).catch(() => {});
+      await this._save(hedge).catch((err) => logger.error('hedge_save_failed', { hedgeId: hedge.id, error: err.message }));
     }
     if (emit) {
       this.notifier.error(hedge, err);
     }
   }
 
-  validateCreateRequest({ asset, entryPrice, exitPrice, size, leverage, direction = 'short' }) {
+  _sizeEpsilon(hedge) {
+    return Math.pow(10, -(hedge.szDecimals ?? 4));
+  }
+
+  _getExpectedSize(hedge) {
+    const expectedSize = Math.abs(parseFloat(hedge?.size || 0));
+    return Number.isFinite(expectedSize) ? expectedSize : 0;
+  }
+
+  _normalizePositionSize(positionSize) {
+    const actualSize = Math.abs(parseFloat(positionSize || 0));
+    return Number.isFinite(actualSize) ? actualSize : 0;
+  }
+
+  _isEntryTransitionInProgress(hedge) {
+    return !!(hedge?._entryPlacementInProgress || hedge?._entryRescueInProgress);
+  }
+
+  _isPartialPositionSize(hedge, positionSize) {
+    const expectedSize = this._getExpectedSize(hedge);
+    const actualSize = this._normalizePositionSize(positionSize);
+    if (expectedSize <= 0 || actualSize <= 0) return false;
+    return (actualSize + this._sizeEpsilon(hedge)) < expectedSize;
+  }
+
+  _buildPartialCoveragePayload(hedge, positionSize, source = 'partial_fill') {
+    const expectedSize = this._getExpectedSize(hedge);
+    const actualSize = this._normalizePositionSize(positionSize);
+    const missingSize = Math.max(expectedSize - actualSize, 0);
+
+    return {
+      source,
+      asset: hedge.asset,
+      expectedSize,
+      actualSize,
+      missingSize,
+      message:
+        `Cobertura parcial detectada (${source}): abierta ${actualSize} ${hedge.asset} ` +
+        `de ${expectedSize}. Falta ${missingSize} ${hedge.asset}.`,
+    };
+  }
+
+  _clearPartialCoverageInfo(hedge) {
+    hedge.partialCoverageInfo = null;
+  }
+
+  async _notifyPartialCoverage(hedge, positionSize, source = 'partial_fill') {
+    if (!this._isPartialPositionSize(hedge, positionSize)) {
+      this._clearPartialCoverageInfo(hedge);
+      return null;
+    }
+
+    const payload = this._buildPartialCoveragePayload(hedge, positionSize, source);
+    const previous = hedge.partialCoverageInfo;
+    if (
+      previous
+      && previous.source === payload.source
+      && numericEqual(previous.actualSize, payload.actualSize, this._sizeEpsilon(hedge))
+    ) {
+      return previous;
+    }
+
+    hedge.partialCoverageInfo = payload;
+    this.notifier.partialCoverage(hedge, payload);
+    return payload;
+  }
+
+  _hasOpenOrder(openOrders = [], oid) {
+    return !!oid && Array.isArray(openOrders) && openOrders.some((order) => Number(order.oid) === Number(oid));
+  }
+
+  _isEntryConditionMet(hedge, price) {
+    if (!Number.isFinite(price) || price <= 0) return false;
+    return hedge.direction === 'short'
+      ? price <= parseFloat(hedge.entryPrice)
+      : price >= parseFloat(hedge.entryPrice);
+  }
+
+  _isExitBreached(hedge, price) {
+    if (!Number.isFinite(price) || price <= 0) return false;
+    return hedge.direction === 'short'
+      ? price >= parseFloat(hedge.exitPrice)
+      : price <= parseFloat(hedge.exitPrice);
+  }
+
+  _getDynamicAnchorPrice(hedge) {
+    const anchor = parseFloat(hedge.dynamicAnchorPrice);
+    if (Number.isFinite(anchor) && anchor > 0) return anchor;
+    return parseFloat(hedge.entryPrice);
+  }
+
+  async _handleUnexpectedPositionSize(hedge, positionSize, context = 'position_check') {
+    const expectedSize = this._getExpectedSize(hedge);
+    const actualSize = this._normalizePositionSize(positionSize);
+
+    if (!Number.isFinite(expectedSize) || expectedSize <= 0) return false;
+    if (!Number.isFinite(actualSize) || actualSize <= 0) return false;
+
+    hedge.positionSize = actualSize;
+    if (actualSize < expectedSize || numericEqual(actualSize, expectedSize, this._sizeEpsilon(hedge))) {
+      this._clearPartialCoverageInfo(hedge);
+      return false;
+    }
+
+    await this._cancelRelatedEntryOrders(hedge, { keepOid: null });
+    await this._setError(
+      hedge,
+      new Error(
+        `Posicion sobredimensionada detectada (${context}): ${actualSize} ${hedge.asset} > ${expectedSize}. ` +
+        'Se detiene la cobertura para evitar entradas duplicadas.'
+      )
+    );
+    return true;
+  }
+
+  validatePendingHedgeConfig({
+    asset,
+    entryPrice,
+    exitPrice,
+    size,
+    leverage,
+    direction = 'short',
+    excludeHedgeId = null,
+  }) {
     const entry = parseFloat(entryPrice);
     const exit = parseFloat(exitPrice);
     const lev = parseInt(leverage, 10);
@@ -135,7 +259,10 @@ class HedgeService extends EventEmitter {
     // Regla: solo una cobertura activa por activo y direccion
     const TERMINAL = ['cancelled', 'error'];
     const duplicate = [...this.hedges.values()].find(
-      (h) => h.asset === assetUp && h.direction === dir && !TERMINAL.includes(h.status)
+      (h) => Number(h.id) !== Number(excludeHedgeId)
+        && h.asset === assetUp
+        && h.direction === dir
+        && !TERMINAL.includes(h.status)
     );
     if (duplicate) {
       throw new ValidationError(
@@ -154,6 +281,45 @@ class HedgeService extends EventEmitter {
     };
   }
 
+  validateCreateRequest(payload) {
+    return this.validatePendingHedgeConfig(payload);
+  }
+
+  validateDynamicExitRequest({
+    asset,
+    direction = 'short',
+    dynamicAnchorPrice,
+    exitPrice,
+    size,
+    leverage,
+  }) {
+    const anchor = parseFloat(dynamicAnchorPrice);
+    const exit = parseFloat(exitPrice);
+    const lev = parseInt(leverage, 10);
+    const sz = parseFloat(size);
+    const dir = direction === 'long' ? 'long' : 'short';
+
+    if (isNaN(anchor) || anchor <= 0) throw new ValidationError('dynamicAnchorPrice invalido');
+    if (isNaN(exit) || exit <= 0) throw new ValidationError('exitPrice invalido');
+    if (isNaN(sz) || sz <= 0) throw new ValidationError('size invalido');
+    if (isNaN(lev) || lev < 1 || lev > 100) throw new ValidationError('leverage debe estar entre 1 y 100');
+    if (dir === 'short' && exit <= anchor) {
+      throw new ValidationError('Para SHORT exitPrice debe ser mayor a dynamicAnchorPrice');
+    }
+    if (dir === 'long' && exit >= anchor) {
+      throw new ValidationError('Para LONG exitPrice debe ser menor a dynamicAnchorPrice');
+    }
+
+    return {
+      asset: String(asset || '').toUpperCase(),
+      direction: dir,
+      dynamicAnchorPrice: anchor,
+      exitPrice: exit,
+      leverage: lev,
+      size: sz,
+    };
+  }
+
   async createHedge({
     asset,
     entryPrice,
@@ -166,7 +332,7 @@ class HedgeService extends EventEmitter {
     protectedPoolId = null,
     protectedRole = null,
   }) {
-    const normalized = this.validateCreateRequest({
+    const normalized = this.validatePendingHedgeConfig({
       asset,
       entryPrice,
       exitPrice,
@@ -189,6 +355,7 @@ class HedgeService extends EventEmitter {
       direction: dir,
       entryPrice: entry,
       exitPrice: exit,
+      dynamicAnchorPrice: entry,
       size: sz,
       leverage: lev,
       label: hedgeLabel,
@@ -219,6 +386,7 @@ class HedgeService extends EventEmitter {
       fundingAccum: 0,
       protectedPoolId,
       protectedRole,
+      partialCoverageInfo: null,
     };
 
     hedge.positionKey = this._nextPositionKey(hedge);
@@ -260,13 +428,14 @@ class HedgeService extends EventEmitter {
     const nextEntryPrice = parseFloat(entryPrice);
     const nextExitPrice = parseFloat(exitPrice);
     const nextLabel = label || hedge.label;
-    this.validateCreateRequest({
+    this.validatePendingHedgeConfig({
       asset: hedge.asset,
       direction: hedge.direction,
       entryPrice: nextEntryPrice,
       exitPrice: nextExitPrice,
       size: hedge.size,
       leverage: hedge.leverage,
+      excludeHedgeId: hedge.id,
     });
 
     await this._ensureEntryConfig(hedge);
@@ -278,6 +447,7 @@ class HedgeService extends EventEmitter {
 
     hedge.entryOid = null;
     hedge.entryPrice = nextEntryPrice;
+    hedge.dynamicAnchorPrice = nextEntryPrice;
     hedge.exitPrice = nextExitPrice;
     hedge.label = nextLabel;
     hedge.status = 'waiting';
@@ -292,16 +462,60 @@ class HedgeService extends EventEmitter {
     const hedge = this.getById(id);
     const nextExitPrice = parseFloat(exitPrice);
 
-    this.validateCreateRequest({
+    this.validateDynamicExitRequest({
       asset: hedge.asset,
       direction: hedge.direction,
-      entryPrice: hedge.entryPrice,
+      dynamicAnchorPrice: this._getDynamicAnchorPrice(hedge),
       exitPrice: nextExitPrice,
       size: hedge.size,
       leverage: hedge.leverage,
     });
 
     hedge.exitPrice = nextExitPrice;
+    hedge.lastReconciledAt = Date.now();
+    hedge.error = null;
+
+    if (!['open', 'open_protected', 'entry_filled_pending_sl'].includes(hedge.status)) {
+      await this._emitUpdated(hedge);
+      return hedge;
+    }
+
+    await this._ensureEntryConfig(hedge);
+    if (hedge.slOid) {
+      await this.hl.cancelOrder(hedge.assetIndex, hedge.slOid).catch((err) => {
+        throw new Error(`No se pudo cancelar el stop actual: ${err.message}`);
+      });
+      hedge.slOid = null;
+      hedge.slPlacedAt = null;
+    }
+
+    hedge.status = 'entry_filled_pending_sl';
+    await this._emitUpdated(hedge);
+    await this._ensureStopLoss(hedge);
+    return hedge;
+  }
+
+  async updateOpenHedgeDynamicAnchor(id, {
+    dynamicAnchorPrice,
+    exitPrice,
+    label,
+  }) {
+    const hedge = this.getById(id);
+    const nextAnchor = parseFloat(dynamicAnchorPrice);
+    const nextExit = parseFloat(exitPrice);
+
+    this.validateDynamicExitRequest({
+      asset: hedge.asset,
+      direction: hedge.direction,
+      dynamicAnchorPrice: nextAnchor,
+      exitPrice: nextExit,
+      size: hedge.size,
+      leverage: hedge.leverage,
+    });
+
+    hedge.dynamicAnchorPrice = nextAnchor;
+    hedge.exitPrice = nextExit;
+    if (label) hedge.label = label;
     hedge.lastReconciledAt = Date.now();
     hedge.error = null;
 
@@ -336,6 +550,10 @@ class HedgeService extends EventEmitter {
   }
 
   _findMatchingEntryOrders(hedge, openOrders = []) {
+    return this._findEntryOrders(hedge, openOrders);
+  }
+
+  _findEntryOrders(hedge, openOrders = [], { relaxedSize = false } = {}) {
     const isBuy = hedge.direction === 'long';
     const sizeEpsilon = Math.pow(10, -(hedge.szDecimals ?? 4));
 
@@ -347,7 +565,7 @@ class HedgeService extends EventEmitter {
       if (orderIsBuy !== null && orderIsBuy !== isBuy) return false;
 
       const orderSize = getOrderSize(order);
-      if (Number.isFinite(orderSize) && !numericEqual(orderSize, hedge.size, sizeEpsilon)) {
+      if (!relaxedSize && Number.isFinite(orderSize) && !numericEqual(orderSize, hedge.size, sizeEpsilon)) {
         return false;
       }
 
@@ -381,21 +599,218 @@ class HedgeService extends EventEmitter {
   }
 
   async _cancelDuplicateEntryOrders(hedge, openOrders = [], keepOid = null) {
-    const matchingEntries = this._findMatchingEntryOrders(hedge, openOrders);
+    return this._cancelEntryOrders(hedge, {
+      openOrders,
+      keepOid,
+      relaxedSize: false,
+      keepFirstWhenNoKeepOid: true,
+    });
+  }
+
+  async _cancelRelatedEntryOrders(hedge, { openOrders = null, keepOid = null } = {}) {
+    return this._cancelEntryOrders(hedge, {
+      openOrders,
+      keepOid,
+      relaxedSize: true,
+      keepFirstWhenNoKeepOid: false,
+    });
+  }
+
+  async _cancelEntryOrders(hedge, {
+    openOrders = null,
+    keepOid = null,
+    relaxedSize = false,
+    keepFirstWhenNoKeepOid = false,
+  } = {}) {
+    let latestOpenOrders = Array.isArray(openOrders) ? openOrders : null;
+    if (!latestOpenOrders) {
+      try {
+        latestOpenOrders = await this.hl.getOpenOrders();
+      } catch (err) {
+        logger.warn('hedge_query_orders_failed', { hedgeId: hedge.id, error: err.message });
+        return null;
+      }
+    }
+
+    const matchingEntries = this._findEntryOrders(hedge, latestOpenOrders, { relaxedSize });
     if (matchingEntries.length === 0) return null;
 
-    const keepOrder = matchingEntries.find((order) => Number(order.oid) === Number(keepOid))
-      || matchingEntries[0];
+    const keepOrder = keepOid != null
+      ? (matchingEntries.find((order) => Number(order.oid) === Number(keepOid)) || null)
+      : (keepFirstWhenNoKeepOid ? matchingEntries[0] : null);
 
     for (const order of matchingEntries) {
       const oid = Number(order.oid);
       if (!oid || oid === Number(keepOrder?.oid)) continue;
       await this.hl.cancelOrder(hedge.assetIndex, oid).catch((err) => {
-        console.warn(`[Hedge] #${hedge.id} No se pudo cancelar entry duplicada #${oid}: ${err.message}`);
+        logger.warn('hedge_cancel_dup_failed', { hedgeId: hedge.id, oid, error: err.message });
       });
     }
 
     return keepOrder || null;
+  }
+
+  async _reconcileTriggeredEntry(hedge, {
+    currentPrice = null,
+    openOrders = null,
+    openOrdersAvailable = false,
+    source = 'unknown',
+  } = {}) {
+    if (!hedge.entryOid || hedge.status !== 'entry_pending') {
+      return { acted: false, reason: 'not_pending' };
+    }
+    if (hedge._entryRescueInProgress) {
+      return { acted: false, reason: 'in_progress' };
+    }
+
+    hedge._entryRescueInProgress = true;
+    try {
+      if (hedge.entryPlacedAt && Date.now() - hedge.entryPlacedAt < ENTRY_RESCUE_GRACE_MS) {
+        return { acted: false, reason: 'grace_period' };
+      }
+
+      let price = Number(currentPrice);
+      if (!Number.isFinite(price) || price <= 0) {
+        const mids = await this.hl.getAllMids().catch(() => null);
+        price = mids ? parseFloat(mids[hedge.asset]) : NaN;
+      }
+      if (!this._isEntryConditionMet(hedge, price)) {
+        return { acted: false, reason: 'condition_not_met' };
+      }
+
+      if (this._isExitBreached(hedge, price)) {
+        hedge.status = 'error';
+        hedge.error = `Precio (${price}) cruzó nivel de salida (${hedge.exitPrice}). Cobertura pausada.`;
+        await this._emitUpdated(hedge);
+        return { acted: false, reason: 'exit_breached' };
+      }
+
+      let latestOpenOrders = Array.isArray(openOrders) ? openOrders : [];
+      let latestOpenOrdersAvailable = openOrdersAvailable;
+      if (!latestOpenOrdersAvailable) {
+        try {
+          latestOpenOrders = await this.hl.getOpenOrders();
+          latestOpenOrdersAvailable = true;
+        } catch (err) {
+          hedge.error = `Entrada pendiente: no se pudo confirmar estado de orden (${err.message})`;
+          await this._emitUpdated(hedge);
+          return { acted: false, reason: 'open_orders_unavailable' };
+        }
+      }
+
+      const posBefore = await this.hl.getPosition(hedge.asset).catch(() => null);
+      if (posBefore && parseFloat(posBefore.szi) !== 0) {
+        if (await this._handleUnexpectedPositionSize(hedge, Math.abs(parseFloat(posBefore.szi)), `${source}:position_open`)) {
+          return { acted: false, reason: 'oversized_position' };
+        }
+        const recovered = await this._recoverEntryFromExchange(hedge);
+        return { acted: false, reason: recovered ? 'recovered_position_open' : 'position_open' };
+      }
+
+      if (hedge.status !== 'entry_pending' || !hedge.entryOid) {
+        return { acted: false, reason: 'state_changed' };
+      }
+
+      const entryStillOpen = this._hasOpenOrder(latestOpenOrders, hedge.entryOid);
+      if (!entryStillOpen) {
+        const recovered = await this._recoverEntryFromExchange(hedge);
+        if (recovered || hedge.status !== 'entry_pending') {
+          return { acted: false, reason: recovered ? 'recovered_missing_order' : 'state_changed' };
+        }
+      } else {
+        try {
+          await this.hl.cancelOrder(hedge.assetIndex, hedge.entryOid);
+        } catch (err) {
+          hedge.error = `Entrada pendiente: cancelacion no confirmada (${err.message})`;
+          await this._emitUpdated(hedge);
+          return { acted: false, reason: 'cancel_failed' };
+        }
+
+        try {
+          latestOpenOrders = await this.hl.getOpenOrders();
+          latestOpenOrdersAvailable = true;
+        } catch (err) {
+          hedge.error = `Entrada pendiente: cancelacion solicitada pero no se pudo confirmar (${err.message})`;
+          await this._emitUpdated(hedge);
+          return { acted: false, reason: 'cancel_unconfirmed' };
+        }
+
+        const posAfterCancel = await this.hl.getPosition(hedge.asset).catch(() => null);
+        if (posAfterCancel && parseFloat(posAfterCancel.szi) !== 0) {
+          if (await this._handleUnexpectedPositionSize(hedge, Math.abs(parseFloat(posAfterCancel.szi)), `${source}:post_cancel_position`)) {
+            return { acted: false, reason: 'oversized_position' };
+          }
+          const recovered = await this._recoverEntryFromExchange(hedge);
+          return { acted: false, reason: recovered ? 'recovered_after_cancel' : 'position_open_after_cancel' };
+        }
+
+        if (hedge.status !== 'entry_pending' || !hedge.entryOid) {
+          return { acted: false, reason: 'state_changed' };
+        }
+
+        if (this._hasOpenOrder(latestOpenOrders, hedge.entryOid)) {
+          hedge.error = 'Entrada pendiente: cancelacion no confirmada; IOC omitida para evitar duplicados.';
+          await this._emitUpdated(hedge);
+          return { acted: false, reason: 'order_still_open' };
+        }
+
+        const recovered = await this._recoverEntryFromExchange(hedge);
+        if (recovered || hedge.status !== 'entry_pending') {
+          return { acted: false, reason: recovered ? 'recovered_after_cancel_check' : 'state_changed' };
+        }
+      }
+
+      if (!latestOpenOrdersAvailable) {
+        return { acted: false, reason: 'open_orders_unconfirmed' };
+      }
+
+      const posBeforeIoc = await this.hl.getPosition(hedge.asset).catch(() => null);
+      if (posBeforeIoc && parseFloat(posBeforeIoc.szi) !== 0) {
+        if (await this._handleUnexpectedPositionSize(hedge, Math.abs(parseFloat(posBeforeIoc.szi)), `${source}:pre_ioc_position`)) {
+          return { acted: false, reason: 'oversized_position' };
+        }
+        const recovered = await this._recoverEntryFromExchange(hedge);
+        return { acted: false, reason: recovered ? 'recovered_pre_ioc' : 'position_open_pre_ioc' };
+      }
+
+      if (hedge.status !== 'entry_pending') {
+        return { acted: false, reason: 'state_changed' };
+      }
+
+      hedge.entryOid = null;
+      hedge.slOid = null;
+      hedge.slPlacedAt = null;
+      hedge.error = null;
+
+      const isBuy = hedge.direction === 'long';
+      const forcePrice = isBuy
+        ? formatPrice(price * (1 + MARKET_ORDER_SLIPPAGE))
+        : formatPrice(price * (1 - MARKET_ORDER_SLIPPAGE));
+
+      try {
+        await this._ensureEntryConfig(hedge);
+        const { oid } = await this.hl.placeOrder({
+          assetIndex: hedge.assetIndex,
+          isBuy,
+          size: formatSize(hedge.size, hedge.szDecimals),
+          price: forcePrice,
+          reduceOnly: false,
+          tif: 'Ioc',
+        });
+        hedge.entryOid = oid || null;
+        hedge.entryPlacedAt = Date.now();
+        await this._emitUpdated(hedge);
+        logger.info('hedge_ioc_sent', { hedgeId: hedge.id, oid: oid ?? null, source });
+        return { acted: true, reason: 'forced_ioc' };
+      } catch (err) {
+        logger.error('hedge_ioc_failed', { hedgeId: hedge.id, source, error: err.message });
+        hedge.error = `Error entrada forzada: ${err.message}`;
+        await this._emitUpdated(hedge);
+        return { acted: false, reason: 'ioc_failed' };
+      }
+    } finally {
+      hedge._entryRescueInProgress = false;
+    }
   }
 
   onFill(fill) {
@@ -418,8 +833,8 @@ class HedgeService extends EventEmitter {
     if (['cancel_pending', 'cancelled', 'closing', 'entry_filled_pending_sl', 'open_protected'].includes(hedge.status)) {
       return { placed: false, reason: 'status_blocked' };
     }
-    if (hedge._entryPlacementInProgress) {
-      return { placed: false, reason: 'in_progress' };
+    if (this._isEntryTransitionInProgress(hedge)) {
+      return { placed: false, reason: 'transition_in_progress' };
     }
 
     hedge._entryPlacementInProgress = true;
@@ -429,6 +844,10 @@ class HedgeService extends EventEmitter {
       const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
       if (pos && parseFloat(pos.szi) !== 0) {
         hedge.positionSize = Math.abs(parseFloat(pos.szi));
+        hedge.dynamicAnchorPrice = this._getDynamicAnchorPrice(hedge);
+        if (await this._handleUnexpectedPositionSize(hedge, hedge.positionSize, 'place_entry_order')) {
+          return { placed: false, reason: 'oversized_position' };
+        }
         if (openOrdersAvailable) {
           await this._cancelDuplicateEntryOrders(hedge, openOrders || [], null);
         }
@@ -465,6 +884,7 @@ class HedgeService extends EventEmitter {
       hedge.positionKey = this._nextPositionKey(hedge);
       hedge.entryOid = null;
       hedge.slOid = null;
+      hedge.dynamicAnchorPrice = hedge.entryPrice;
       hedge.positionSize = null;
       hedge.openedAt = null;
       hedge.closedAt = null;
@@ -478,6 +898,7 @@ class HedgeService extends EventEmitter {
       hedge.entryFillTime = null;
       hedge.entryFeePaid = 0;
       hedge.fundingAccum = 0;
+      hedge.partialCoverageInfo = null;
 
       // ── Stop-market de entrada (sin SL encadenado) ────────────────────────
       const entryOid = await this.hl.placeTriggerEntry({
@@ -491,10 +912,7 @@ class HedgeService extends EventEmitter {
       hedge.slOid         = null;
       hedge.slPlacedAt    = null;
       hedge.entryPlacedAt = Date.now();
-      console.log(
-        `[Hedge] #${hedge.id} ${hedge.direction.toUpperCase()} STOP ENTRY ` +
-        `(oid=${entryOid}) @ ${hedge.entryPrice} [isolated]`
-      );
+      logger.info('hedge_entry_placed', { hedgeId: hedge.id, direction: hedge.direction, oid: entryOid, price: hedge.entryPrice });
 
       hedge.status = 'entry_pending';
       hedge.error  = null;
@@ -513,7 +931,7 @@ class HedgeService extends EventEmitter {
     // Guard contra race condition: fill handler + monitor pueden llamar esto en paralelo.
     // Sin este flag, ambos pasan el check de slOid=null y colocan dos SL simultáneos.
     if (hedge._slPlacementInProgress) {
-      console.log(`[Hedge] #${hedge.id} _ensureStopLoss ya en progreso, omitiendo llamada duplicada`);
+      logger.info('hedge_sl_skip_dup', { hedgeId: hedge.id });
       return { placed: false, transitioned: false };
     }
     hedge._slPlacementInProgress = true;
@@ -533,6 +951,19 @@ class HedgeService extends EventEmitter {
       }
 
       hedge.positionSize = Math.abs(parseFloat(pos.szi));
+      const openOrders = await this.hl.getOpenOrders().catch(() => []);
+      const existingSl = this._findMatchingStopLossOrder(hedge, openOrders);
+      if (existingSl?.oid) {
+        const prevStatus = hedge.status;
+        hedge.slOid = Number(existingSl.oid);
+        hedge.slPlacedAt = hedge.slPlacedAt || Date.now();
+        hedge.status = 'open_protected';
+        hedge.error = null;
+        await this._emitUpdated(hedge);
+        logger.info('hedge_sl_reuse', { hedgeId: hedge.id, slOid: hedge.slOid });
+        return { placed: false, transitioned: prevStatus !== 'open_protected' };
+      }
+
       const prevStatus = hedge.status;
       const protection = await placePositionProtection({
         hl: this.hl,
@@ -559,6 +990,7 @@ class HedgeService extends EventEmitter {
     const fillSize = Math.abs(parseFloat(fill.sz ?? fill.origSz ?? 0));
     hedge.openedAt      = fill.time || Date.now();
     hedge.openPrice     = fillPrice;
+    hedge.dynamicAnchorPrice = this._getDynamicAnchorPrice(hedge);
     hedge.positionSize  = Number.isFinite(fillSize) && fillSize > 0 ? fillSize : hedge.positionSize;
     hedge.entryOid      = null;
     hedge.lastFillAt    = hedge.openedAt;
@@ -569,7 +1001,7 @@ class HedgeService extends EventEmitter {
     hedge.error         = null;
     hedge.slRetryCount  = 0;
 
-    console.log(`[Hedge] #${hedge.id} entrada llena @ ${fillPrice}. Verificando precio antes de asignar SL...`);
+    logger.info('hedge_entry_filled', { hedgeId: hedge.id, fillPrice });
 
     // ── Verificar si el precio ya cruzó el nivel de salida ──────────────────
     // El movimiento fue tan rápido que la posición se abrió pero ya es tarde para SL.
@@ -584,6 +1016,13 @@ class HedgeService extends EventEmitter {
         hedge.openPrice = parseFloat(posAfterFill.entryPx);
       }
     }
+    if (await this._handleUnexpectedPositionSize(hedge, hedge.positionSize || fillSize, 'entry_fill')) {
+      return;
+    }
+    const partialCoverage = await this._notifyPartialCoverage(hedge, hedge.positionSize || fillSize, 'entry_fill');
+    if (partialCoverage) {
+      await this._cancelRelatedEntryOrders(hedge, { keepOid: null });
+    }
     if (mids) {
       const currentMid = parseFloat(mids[hedge.asset]);
       const exitBreached = hedge.direction === 'short'
@@ -591,10 +1030,7 @@ class HedgeService extends EventEmitter {
         : currentMid <= parseFloat(hedge.exitPrice);
 
       if (exitBreached) {
-        console.warn(
-          `[Hedge] #${hedge.id} Precio actual (${currentMid}) ya cruzó exit (${hedge.exitPrice}) ` +
-          `tras el fill. Cerrando posición a mercado y reiniciando ciclo.`
-        );
+        logger.warn('hedge_exit_breached_post_fill', { hedgeId: hedge.id, currentMid, exitPrice: hedge.exitPrice });
         // Notificar apertura antes de cerrar de emergencia
         this.notifier.opened(hedge);
         hedge.status = 'closing';
@@ -604,12 +1040,12 @@ class HedgeService extends EventEmitter {
         const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
         if (pos && parseFloat(pos.szi) !== 0) {
           await this._closePositionReduceOnly(hedge, pos).catch((e) =>
-            console.error(`[Hedge] #${hedge.id} Error cierre emergencia post-fill: ${e.message}`)
+            logger.error('hedge_emergency_close_failed', { hedgeId: hedge.id, error: e.message })
           );
         } else {
           // Posición ya cerrada (muy raro), reiniciar directamente
           await this._placeEntryOrder(hedge).catch((e) =>
-            console.error(`[Hedge] #${hedge.id} Error reentrada post-fill: ${e.message}`)
+            logger.error('hedge_reentry_failed', { hedgeId: hedge.id, error: e.message })
           );
         }
         return;
@@ -629,7 +1065,7 @@ class HedgeService extends EventEmitter {
       hedge.error = `SL pendiente: ${err.message}`;
       await this._emitUpdated(hedge);
       this.notifier.protectionMissing(hedge);
-      console.warn(`[Hedge] #${hedge.id} SL no colocado tras fill: ${err.message}`);
+      logger.warn('hedge_sl_after_fill_failed', { hedgeId: hedge.id, error: err.message });
     }
   }
 
@@ -642,88 +1078,7 @@ class HedgeService extends EventEmitter {
     );
   }
 
-  async _resetAfterCycle(hedge, closePrice, closeTime) {
-    hedge.status = 'waiting';
-    hedge.cycleCount = hedge.cycles.length;
-    hedge.closePrice = closePrice;
-    hedge.closedAt = closeTime;
-    hedge.openedAt = null;
-    hedge.openPrice = null;
-    hedge.positionSize = null;
-    hedge.unrealizedPnl = null;
-    hedge.slOid = null;
-    hedge.entryOid = null;
-    hedge.error = null;
-    hedge.slPlacedAt = null;
-    hedge.closingStartedAt = null;
-    hedge.entryFillOid = null;
-    hedge.entryFillTime = null;
-    hedge.entryFeePaid = 0;
-    hedge.fundingAccum = 0;
-    hedge.slRetryCount = 0;
-    hedge.cancelStartedAt = null;
-    hedge.entryPlacedAt = null;
-    hedge._priceActionInProgress = false;
-  }
-
-  async _finalizeCycle(hedge, cycle) {
-    hedge.cycles.push(cycle);
-    await this._saveCycle(hedge.id, cycle).catch(() => {});
-    await this._resetAfterCycle(hedge, cycle.closePrice ?? null, cycle.closedAt);
-    await this._emitUpdated(hedge);
-    this.notifier.cycleComplete(hedge, cycle);
-    await this._placeEntryOrder(hedge);
-  }
-
-  async _onSlFill(hedge, fill) {
-    const closeTime = fill.time || Date.now();
-    hedge.status = 'closing';
-    hedge.closingStartedAt = Date.now();
-    hedge.lastFillAt = closeTime;
-    await this._emitUpdated(hedge);
-
-    const closedPnl = fill.closedPnl != null ? parseFloat(fill.closedPnl) : null;
-    const entryFee  = hedge.entryFeePaid ?? 0;
-    const exitFee   = parseFloat(fill.fee ?? 0);
-    const funding   = hedge.fundingAccum ?? 0;
-
-    // Slippage: diferencia entre precio esperado (configurado) y precio real del fill
-    const entrySlippage = hedge.openPrice != null
-      ? Math.abs(hedge.openPrice - hedge.entryPrice)
-      : 0;
-    const exitSlippage  = Math.abs(parseFloat(fill.px) - hedge.exitPrice);
-    const trackedSize = getTrackedPositionSize(hedge);
-    const normalizedFillSize = Math.abs(parseFloat(fill.sz ?? trackedSize ?? 0)) || trackedSize;
-    const normalizedTotalSlippage = (entrySlippage + exitSlippage) * normalizedFillSize;
-
-    // netPnl = PnL realizado del exchange - fees + funding recibido
-    const netPnl = closedPnl != null
-      ? closedPnl - entryFee - exitFee + funding
-      : null;
-
-    const cycle = {
-      cycleId: hedge.cycles.length + 1,
-      openedAt: hedge.openedAt,
-      openPrice: hedge.openPrice,
-      closedAt: closeTime,
-      closePrice: parseFloat(fill.px),
-      size: normalizedFillSize,
-      entryFee,
-      exitFee,
-      closedPnl,
-      fundingPaid: funding,
-      entryFillOid: hedge.entryFillOid ?? null,
-      exitFillOid: Number(fill.oid) || hedge.slOid || null,
-      entryFillTime: hedge.entryFillTime ?? hedge.openedAt ?? null,
-      exitFillTime: closeTime,
-      entrySlippage,
-      exitSlippage,
-      totalSlippage: normalizedTotalSlippage,
-      netPnl,
-    };
-
-    await this._finalizeCycle(hedge, cycle);
-  }
+  // _resetAfterCycle, _finalizeCycle, _onSlFill → hedge-cycle.mixin.js
 
   async _closePositionReduceOnly(hedge, pos) {
     if (!pos || parseFloat(pos.szi) === 0) return;
@@ -764,6 +1119,9 @@ class HedgeService extends EventEmitter {
     }
 
     if (pos && parseFloat(pos.szi) !== 0) {
+      if (await this._handleUnexpectedPositionSize(hedge, Math.abs(parseFloat(pos.szi)), 'recover_entry')) {
+        return true;
+      }
       await this._onEntryFill(hedge, {
         oid: hedge.entryOid,
         px: pos.entryPx || hedge.entryPrice,
@@ -788,56 +1146,7 @@ class HedgeService extends EventEmitter {
     return false;
   }
 
-  async _completeCycleWithoutExitFill(hedge) {
-    if (!this._hasConfirmedEntry(hedge)) {
-      console.warn(
-        `[Hedge] #${hedge.id} cierre sin fill ni apertura confirmada. ` +
-        `No se guarda ciclo; rearmando entrada.`
-      );
-      await this._resetAfterCycle(hedge, null, null);
-      await this._emitUpdated(hedge);
-      await this._placeEntryOrder(hedge);
-      return;
-    }
-
-    // Intentar obtener precio de cierre aproximado desde el mercado actual
-    const mids = await this.hl.getAllMids().catch(() => null);
-    const approxClosePrice = mids ? parseFloat(mids[hedge.asset]) : null;
-    const trackedSize = getTrackedPositionSize(hedge);
-
-    // Calcular PnL aproximado si tenemos precios
-    let approxPnl = null;
-    if (approxClosePrice && hedge.openPrice) {
-      approxPnl = hedge.direction === 'short'
-        ? (hedge.openPrice - approxClosePrice) * trackedSize
-        : (approxClosePrice - hedge.openPrice) * trackedSize;
-    }
-
-    const cycle = {
-      cycleId: hedge.cycles.length + 1,
-      openedAt: hedge.openedAt,
-      openPrice: hedge.openPrice,
-      closedAt: Date.now(),
-      closePrice: approxClosePrice,          // precio aproximado (sin fill real)
-      size: trackedSize,
-      entryFee: hedge.entryFeePaid ?? 0,
-      exitFee: 0,
-      closedPnl: approxPnl,                 // PnL aproximado
-      fundingPaid: hedge.fundingAccum ?? 0,
-      entryFillOid: hedge.entryFillOid ?? null,
-      exitFillOid: hedge.slOid ?? null,
-      entryFillTime: hedge.entryFillTime ?? hedge.openedAt ?? null,
-      exitFillTime: null,
-      entrySlippage: 0,
-      exitSlippage: 0,
-      totalSlippage: 0,
-      netPnl: approxPnl != null
-        ? approxPnl - (hedge.entryFeePaid ?? 0) + (hedge.fundingAccum ?? 0)
-        : null,
-    };
-    console.warn(`[Hedge] #${hedge.id} ciclo completado sin fill de salida. Precio aprox: ${approxClosePrice}`);
-    await this._finalizeCycle(hedge, cycle);
-  }
+  // _completeCycleWithoutExitFill → hedge-cycle.mixin.js
 
   async _reconcileCancelPending(hedge) {
     // Timeout de cancelación: si lleva más de 5 minutos sin poder cancelar, forzar error
@@ -846,7 +1155,7 @@ class HedgeService extends EventEmitter {
       hedge.status = 'error';
       hedge.error = 'Cancelación bloqueada por más de 5 min. Intervención manual requerida.';
       await this._emitUpdated(hedge);
-      console.error(`[Hedge] #${hedge.id} cancel_pending timeout. Cambiando a error.`);
+      logger.error('hedge_cancel_timeout', { hedgeId: hedge.id });
       return;
     }
 
@@ -859,19 +1168,19 @@ class HedgeService extends EventEmitter {
 
       if (hedge.entryOid && openOidSet.has(Number(hedge.entryOid))) {
         await this.hl.cancelOrder(hedge.assetIndex, hedge.entryOid).catch((err) => {
-          console.warn(`[Hedge] #${hedge.id} no se pudo cancelar entryOid:`, err.message);
+          logger.warn('hedge_cancel_entry_failed', { hedgeId: hedge.id, error: err.message });
         });
       }
 
       if (hedge.slOid && openOidSet.has(Number(hedge.slOid))) {
         await this.hl.cancelOrder(hedge.assetIndex, hedge.slOid).catch((err) => {
-          console.warn(`[Hedge] #${hedge.id} no se pudo cancelar slOid:`, err.message);
+          logger.warn('hedge_cancel_sl_failed', { hedgeId: hedge.id, error: err.message });
         });
       }
 
       if (pos && parseFloat(pos.szi) !== 0) {
         await this._closePositionReduceOnly(hedge, pos).catch((err) => {
-          console.warn(`[Hedge] #${hedge.id} no se pudo cerrar posicion en cancel_pending:`, err.message);
+          logger.warn('hedge_close_in_cancel_failed', { hedgeId: hedge.id, error: err.message });
         });
         hedge.closingStartedAt = hedge.closingStartedAt || Date.now();
       }
@@ -900,335 +1209,6 @@ class HedgeService extends EventEmitter {
       await this._emitUpdated(hedge);
     } catch (err) {
       await this._setError(hedge, err);
-    }
-  }
-
-  _startMonitor() {
-    this._monitorInterval = setInterval(() => {
-      this._monitorPositions().catch((err) => {
-        console.error(`[Hedge] User ${this.userId} monitor error:`, err.message);
-      });
-    }, MONITOR_INTERVAL_MS);
-  }
-
-  stopMonitor() {
-    if (this._monitorInterval) {
-      clearInterval(this._monitorInterval);
-      this._monitorInterval = null;
-    }
-  }
-
-  async _monitorPositions() {
-    const activeHedges = [...this.hedges.values()].filter((hedge) =>
-      [
-        'entry_pending',
-        'entry_filled_pending_sl',
-        'open_protected',
-        'open',
-        'closing',
-        'cancel_pending',
-      ].includes(hedge.status)
-    );
-    if (activeHedges.length === 0) return;
-
-    let openOrders = [];
-    let openOidSet = new Set();
-    let openOrdersAvailable = true;
-    try {
-      openOrders = await this.hl.getOpenOrders();
-      openOidSet = new Set((openOrders || []).map((order) => Number(order.oid)));
-    } catch (err) {
-      // No abortar el monitor; continuar en modo degradado (sin info de órdenes abiertas)
-      // Las acciones que dependan de openOidSet serán conservadoras (no cancelarán ni re-colocarán)
-      console.warn(`[Hedge] User ${this.userId} openOrders no disponible: ${err.message}. Monitor en modo degradado.`);
-      openOrdersAvailable = false;
-    }
-
-    for (const hedge of activeHedges) {
-      try {
-        hedge.lastReconciledAt = Date.now();
-
-        if (hedge.status === 'cancel_pending') {
-          await this._reconcileCancelPending(hedge);
-          continue;
-        }
-
-        if (hedge.status === 'entry_pending') {
-          if (openOrdersAvailable) {
-            const keepEntry = await this._cancelDuplicateEntryOrders(hedge, openOrders, hedge.entryOid);
-            if (keepEntry?.oid) {
-              hedge.entryOid = Number(keepEntry.oid);
-            }
-          }
-
-          if (!hedge.entryOid) {
-            if (!openOrdersAvailable) {
-              await this._save(hedge).catch(() => {});
-              continue;
-            }
-            await this._placeEntryOrder(hedge, { openOrders, openOrdersAvailable });
-            continue;
-          }
-
-          if (openOrdersAvailable && !openOidSet.has(Number(hedge.entryOid))) {
-            const recovered = await this._recoverEntryFromExchange(hedge);
-            if (!recovered) {
-              console.warn(`[Hedge] #${hedge.id} entryOid desapareció sin fill. Re-colocando GTC...`);
-              hedge.entryOid = null;
-              await this._placeEntryOrder(hedge, { openOrders, openOrdersAvailable });
-            }
-          } else if (openOrdersAvailable) {
-            // GTC sigue abierta — verificar si la condición de entrada ya fue alcanzada
-            const midsEntry = await this.hl.getAllMids().catch(() => null);
-            const midEntry = midsEntry ? parseFloat(midsEntry[hedge.asset]) : null;
-            if (midEntry) {
-              const entryConditionMet = hedge.direction === 'short'
-                ? midEntry <= parseFloat(hedge.entryPrice)   // SHORT: precio cayó a/bajo entry
-                : midEntry >= parseFloat(hedge.entryPrice);  // LONG: precio subió a/sobre entry
-
-              if (entryConditionMet) {
-                console.warn(
-                  `[Hedge] #${hedge.id} condición de entrada alcanzada ` +
-                  `(precio=${midEntry}, entry=${hedge.entryPrice}) pero GTC sin ejecutar. ` +
-                  `Forzando entrada a mercado...`
-                );
-
-                // Cancelar GTC pendiente
-                await this.hl.cancelOrder(hedge.assetIndex, hedge.entryOid).catch((e) =>
-                  console.warn(`[Hedge] #${hedge.id} No se pudo cancelar GTC entry: ${e.message}`)
-                );
-                hedge.entryOid = null;
-
-                // Si el nivel de salida ya también está breacheado, pausar
-                const exitAlreadyBreached = hedge.direction === 'short'
-                  ? midEntry >= parseFloat(hedge.exitPrice)
-                  : midEntry <= parseFloat(hedge.exitPrice);
-                if (exitAlreadyBreached) {
-                  hedge.status = 'error';
-                  hedge.error = `Precio (${midEntry}) ya cruzó nivel de salida (${hedge.exitPrice}). Cobertura pausada.`;
-                  await this._emitUpdated(hedge);
-                  continue;
-                }
-
-                // Forzar entrada IOC al precio de mercado con slippage mínimo
-                const slip = 0.002;
-                const isBuy = hedge.direction === 'long';
-                const forcePrice = isBuy
-                  ? formatPrice(midEntry * (1 + slip))
-                  : formatPrice(midEntry * (1 - slip));
-
-                try {
-                  await this._ensureEntryConfig(hedge);
-                  const { oid } = await this.hl.placeOrder({
-                    assetIndex: hedge.assetIndex,
-                    isBuy,
-                    size: formatSize(hedge.size, hedge.szDecimals),
-                    price: forcePrice,
-                    reduceOnly: false,
-                    tif: 'Ioc',
-                  });
-                  // Guardar oid para que el siguiente ciclo lo recupere via fills
-                  hedge.entryOid = oid;
-                  await this._save(hedge).catch(() => {});
-                  console.log(`[Hedge] #${hedge.id} entrada forzada IOC enviada (oid=${oid})`);
-                } catch (err) {
-                  console.error(`[Hedge] #${hedge.id} Error al forzar entrada: ${err.message}`);
-                  hedge.error = `Error entrada forzada: ${err.message}`;
-                  await this._emitUpdated(hedge);
-                }
-              }
-            }
-          }
-          continue;
-        }
-
-        if (hedge.status === 'entry_filled_pending_sl') {
-          const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
-          if (!pos || parseFloat(pos.szi) === 0) {
-            const recovered = await this._recoverExitFromExchange(hedge);
-            if (!recovered) {
-              await this._completeCycleWithoutExitFill(hedge);
-            }
-            continue;
-          }
-          hedge.positionSize = Math.abs(parseFloat(pos.szi));
-
-          if (openOrdersAvailable) {
-            await this._cancelDuplicateEntryOrders(hedge, openOrders, null);
-          }
-
-          if (openOrdersAvailable && hedge.slOid && openOidSet.has(Number(hedge.slOid))) {
-            hedge.status = 'open_protected';
-            await this._emitUpdated(hedge);
-            this.notifier.opened(hedge);
-            continue;
-          }
-
-          // Si el precio ya cruzó el nivel de salida, cerrar a mercado en lugar de
-          // intentar colocar un SL que el exchange rechazaría por precio inválido.
-          const mids = await this.hl.getAllMids().catch(() => null);
-          const currentPrice = mids ? parseFloat(mids[hedge.asset]) : null;
-          const exitBreached = currentPrice && (
-            hedge.direction === 'short'
-              ? currentPrice >= hedge.exitPrice
-              : currentPrice <= hedge.exitPrice
-          );
-          if (exitBreached) {
-            console.warn(`[Hedge] #${hedge.id} precio (${currentPrice}) ya cruzó SL (${hedge.exitPrice}). Cerrando a mercado...`);
-            hedge.status = 'closing';
-            hedge.closingStartedAt = Date.now();
-            await this._emitUpdated(hedge);
-            await this._closePositionReduceOnly(hedge, pos).catch((err) => {
-              console.warn(`[Hedge] #${hedge.id} cierre forzado falló:`, err.message);
-            });
-            continue;
-          }
-
-          if (!openOrdersAvailable && hedge.slOid) {
-            await this._save(hedge).catch(() => {});
-            continue;
-          }
-
-          // Si el SL fue colocado recientemente (< 30s) pero aún no aparece en open orders,
-          // puede ser lag del exchange. Esperar antes de re-intentar para evitar duplicados.
-          const SL_GRACE_MS = 30_000;
-          if (hedge.slOid && hedge.slPlacedAt && (Date.now() - hedge.slPlacedAt) < SL_GRACE_MS) {
-            console.log(`[Hedge] #${hedge.id} slOid=${hedge.slOid} colocado hace ${Math.round((Date.now() - hedge.slPlacedAt) / 1000)}s, esperando confirmación del exchange`);
-            continue;
-          }
-
-          // Límite de reintentos de SL: máximo 8 intentos (≈80s) antes de error
-          const MAX_SL_RETRIES = 8;
-          hedge.slRetryCount = (hedge.slRetryCount || 0) + 1;
-          if (hedge.slRetryCount > MAX_SL_RETRIES) {
-            hedge.status = 'error';
-            hedge.error = `SL falló ${MAX_SL_RETRIES} veces seguidas. Posición desprotegida — intervención manual requerida.`;
-            await this._emitUpdated(hedge);
-            this.notifier.protectionMissing(hedge);
-            console.error(`[Hedge] #${hedge.id} SL no colocado tras ${MAX_SL_RETRIES} intentos. Pausando.`);
-            continue;
-          }
-
-          try {
-            const { transitioned } = await this._ensureStopLoss(hedge);
-            if (transitioned) {
-              hedge.slRetryCount = 0;
-              this.notifier.opened(hedge);
-            }
-          } catch (err) {
-            hedge.error = `SL pendiente (intento ${hedge.slRetryCount}/${MAX_SL_RETRIES}): ${err.message}`;
-            await this._emitUpdated(hedge);
-            this.notifier.protectionMissing(hedge);
-          }
-          continue;
-        }
-
-        if (hedge.status === 'closing') {
-          const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
-          if (!pos || parseFloat(pos.szi) === 0) {
-            const recovered = await this._recoverExitFromExchange(hedge);
-            if (!recovered) {
-              await this._completeCycleWithoutExitFill(hedge);
-            }
-            continue;
-          }
-          hedge.positionSize = Math.abs(parseFloat(pos.szi));
-
-          if (hedge.closingStartedAt && Date.now() - hedge.closingStartedAt > CLOSING_TIMEOUT_MS) {
-            await this._closePositionReduceOnly(hedge, pos).catch((err) => {
-              console.warn(`[Hedge] #${hedge.id} rescate de cierre falló:`, err.message);
-            });
-          }
-          await this._save(hedge).catch(() => {});
-          continue;
-        }
-
-        if (hedge.status === 'open') {
-          hedge.status = hedge.slOid ? 'open_protected' : 'entry_filled_pending_sl';
-        }
-
-        if (hedge.status === 'open_protected') {
-          const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
-          if (!pos || parseFloat(pos.szi) === 0) {
-            const recovered = await this._recoverExitFromExchange(hedge);
-            if (!recovered) {
-              await this._completeCycleWithoutExitFill(hedge);
-            }
-            continue;
-          }
-          hedge.positionSize = Math.abs(parseFloat(pos.szi));
-
-          if (openOrdersAvailable) {
-            await this._cancelDuplicateEntryOrders(hedge, openOrders, null);
-          }
-
-          const prevPnl = hedge.unrealizedPnl;
-          hedge.unrealizedPnl = parseFloat(pos.unrealizedPnl || 0);
-          if (pos.cumFunding?.sinceOpen !== undefined) {
-            hedge.fundingAccum = parseFloat(pos.cumFunding.sinceOpen || 0);
-          }
-
-          if (prevPnl !== hedge.unrealizedPnl) {
-            await this._emitUpdated(hedge);
-          } else {
-            await this._save(hedge).catch(() => {});
-          }
-
-          // ── Validación en tiempo real: ¿ya cruzó el precio de salida? ────
-          const midsRT = await this.hl.getAllMids().catch(() => null);
-          const currentPriceRT = midsRT ? parseFloat(midsRT[hedge.asset]) : null;
-          if (currentPriceRT && hedge.exitPrice) {
-            const exitBreachedRT = hedge.direction === 'short'
-              ? currentPriceRT >= parseFloat(hedge.exitPrice)
-              : currentPriceRT <= parseFloat(hedge.exitPrice);
-
-            if (exitBreachedRT) {
-              console.warn(`[Hedge] #${hedge.id} precio actual (${currentPriceRT}) ya cruzó nivel de salida (${hedge.exitPrice}). Forzando cierre a mercado...`);
-
-              // Cancelar SL pendiente antes de cerrar
-              if (openOrdersAvailable && hedge.slOid && openOidSet.has(Number(hedge.slOid))) {
-                console.log(`[Hedge] #${hedge.id} Cancelando SL #${hedge.slOid} antes del cierre forzado...`);
-                await this.hl.cancelOrder(hedge.assetIndex, hedge.slOid).catch((e) =>
-                  console.warn(`[Hedge] #${hedge.id} No se pudo cancelar SL: ${e.message}`)
-                );
-                hedge.slOid = null;
-              }
-
-              hedge.status = 'closing';
-              hedge.closingStartedAt = Date.now();
-              await this._emitUpdated(hedge);
-              await this._closePositionReduceOnly(hedge, pos).catch((e) =>
-                console.error(`[Hedge] #${hedge.id} Error al cerrar a mercado: ${e.message}`)
-              );
-              continue;
-            }
-          }
-          // ─────────────────────────────────────────────────────────────────
-
-          if (!openOrdersAvailable) {
-            await this._save(hedge).catch(() => {});
-            continue;
-          }
-
-          if (!hedge.slOid || !openOidSet.has(Number(hedge.slOid))) {
-            const recovered = await this._recoverExitFromExchange(hedge);
-            if (!recovered) {
-              console.warn(`[Hedge] #${hedge.id} SL desapareció. Re-colocando...`);
-              hedge.slOid = null;
-              try {
-                await this._ensureStopLoss(hedge);
-              } catch (err) {
-                hedge.status = 'entry_filled_pending_sl';
-                hedge.error = `SL pendiente: ${err.message}`;
-                await this._emitUpdated(hedge);
-                this.notifier.protectionMissing(hedge);
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`[Hedge] #${hedge.id} error en monitor:`, err.message);
-      }
     }
   }
 
@@ -1282,55 +1262,10 @@ class HedgeService extends EventEmitter {
   async _handleEntryTrigger(hedge, currentPrice) {
     if (!hedge.entryOid || hedge.status !== 'entry_pending') return;
 
-    // Guarda de tiempo: dar 15s al stop-market para que se dispare solo
-    const STOP_GRACE_MS = 15_000;
-    if (hedge.entryPlacedAt && Date.now() - hedge.entryPlacedAt < STOP_GRACE_MS) return;
-
-    // Verificar que el nivel de salida no esté ya breacheado
-    const exitBreached = hedge.direction === 'short'
-      ? currentPrice >= parseFloat(hedge.exitPrice)
-      : currentPrice <= parseFloat(hedge.exitPrice);
-    if (exitBreached) {
-      hedge.status = 'error';
-      hedge.error = `Precio (${currentPrice}) cruzó nivel de salida (${hedge.exitPrice}). Pausada.`;
-      await this._emitUpdated(hedge);
-      return;
-    }
-
-    console.warn(
-      `[Hedge] #${hedge.id} [WS] stop-market no se disparó en ${STOP_GRACE_MS / 1000}s ` +
-      `(precio=${currentPrice} vs entry=${hedge.entryPrice}). Cancelando stop → apertura a mercado...`
-    );
-
-    // Cancelar el stop-market de entrada pendiente
-    await this.hl.cancelOrder(hedge.assetIndex, hedge.entryOid).catch((e) =>
-      console.warn(`[Hedge] #${hedge.id} No se pudo cancelar entry stop: ${e.message}`)
-    );
-    hedge.entryOid   = null;
-    hedge.slOid      = null;
-    hedge.slPlacedAt = null;
-
-    const slip = 0.002;
-    const isBuy = hedge.direction === 'long';
-    try {
-      await this._ensureEntryConfig(hedge);
-      const { oid } = await this.hl.placeOrder({
-        assetIndex: hedge.assetIndex,
-        isBuy,
-        size: formatSize(hedge.size, hedge.szDecimals),
-        price: formatPrice(currentPrice * (isBuy ? 1 + slip : 1 - slip)),
-        reduceOnly: false,
-        tif: 'Ioc',
-      });
-      hedge.entryOid = oid;
-      hedge.entryPlacedAt = Date.now();
-      await this._save(hedge).catch(() => {});
-      console.log(`[Hedge] #${hedge.id} IOC forzado enviado (oid=${oid})`);
-    } catch (err) {
-      console.error(`[Hedge] #${hedge.id} Error al forzar entrada IOC: ${err.message}`);
-      hedge.error = `Error entrada forzada: ${err.message}`;
-      await this._emitUpdated(hedge);
-    }
+    await this._reconcileTriggeredEntry(hedge, {
+      currentPrice,
+      source: 'ws',
+    });
   }
 
   /**
@@ -1340,14 +1275,11 @@ class HedgeService extends EventEmitter {
   async _handleExitTrigger(hedge, currentPrice) {
     if (hedge.status !== 'open_protected') return;
 
-    console.warn(
-      `[Hedge] #${hedge.id} [WS] nivel de salida alcanzado ` +
-      `(precio=${currentPrice}, exit=${hedge.exitPrice}). Cancelando SL + cierre market...`
-    );
+    logger.warn('hedge_exit_trigger_ws', { hedgeId: hedge.id, currentPrice, exitPrice: hedge.exitPrice });
 
     if (hedge.slOid) {
       await this.hl.cancelOrder(hedge.assetIndex, hedge.slOid).catch((e) =>
-        console.warn(`[Hedge] #${hedge.id} No se pudo cancelar SL: ${e.message}`)
+        logger.warn('hedge_cancel_sl_failed', { hedgeId: hedge.id, error: e.message })
       );
       hedge.slOid = null;
     }
@@ -1359,10 +1291,15 @@ class HedgeService extends EventEmitter {
     const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
     if (pos && parseFloat(pos.szi) !== 0) {
       await this._closePositionReduceOnly(hedge, pos).catch((e) =>
-        console.error(`[Hedge] #${hedge.id} Error en cierre WS exit trigger: ${e.message}`)
+        logger.error('hedge_ws_exit_close_failed', { hedgeId: hedge.id, error: e.message })
       );
     }
   }
 }
+
+// Mezclar métodos extraídos en el prototipo
+const { monitorMethods } = require('./hedge-monitor.mixin');
+const { cycleMethods } = require('./hedge-cycle.mixin');
+Object.assign(HedgeService.prototype, monitorMethods, cycleMethods);
 
 module.exports = HedgeService;

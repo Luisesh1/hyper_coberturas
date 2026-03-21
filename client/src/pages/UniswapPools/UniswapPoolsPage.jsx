@@ -36,6 +36,7 @@ export default function UniswapPoolsPage() {
   const [deactivatingId, setDeactivatingId] = useState(null);
   const [applyPool, setApplyPool] = useState(null);
   const [activeTab, setActiveTab] = useState('results');
+  const [showInactiveProtected, setShowInactiveProtected] = useState(false);
   const { dialog, confirm } = useConfirmAction();
 
   const loadProtectedPools = useCallback(async ({ force = false } = {}) => {
@@ -116,6 +117,13 @@ export default function UniswapPoolsPage() {
     [protectedPools]
   );
 
+  const orderedActiveProtectedPools = useMemo(
+    () => orderedProtectedPools.filter((item) => item.status === 'active'),
+    [orderedProtectedPools]
+  );
+
+  const visibleProtectedPools = showInactiveProtected ? orderedProtectedPools : orderedActiveProtectedPools;
+
   // Compute filter counts for toolbar chips
   const filterCounts = useMemo(() => {
     if (!result?.pools) return { all: 0, eligible: 0, protected: 0 };
@@ -189,6 +197,8 @@ export default function UniswapPoolsPage() {
     reentryBufferPct,
     flipCooldownSec,
     maxSequentialFlips,
+    breakoutConfirmDistancePct,
+    breakoutConfirmDurationSec,
   }) => {
     setIsApplyingProtection(true);
     setError('');
@@ -204,6 +214,8 @@ export default function UniswapPoolsPage() {
         reentryBufferPct,
         flipCooldownSec,
         maxSequentialFlips,
+        breakoutConfirmDistancePct,
+        breakoutConfirmDurationSec,
       });
       setApplyPool(null);
       await loadProtectedPools();
@@ -362,25 +374,37 @@ export default function UniswapPoolsPage() {
                 </span>
               )}
             </div>
-            <button
-              type="button"
-              className={styles.refreshBtn}
-              onClick={() => loadProtectedPools({ force: true })}
-              disabled={isLoadingProtected}
-            >
-              {isLoadingProtected ? 'Actualizando...' : 'Refrescar'}
-            </button>
+            <div className={styles.protectedActions}>
+              <label className={styles.checkboxRow}>
+                <input
+                  type="checkbox"
+                  checked={showInactiveProtected}
+                  onChange={(e) => setShowInactiveProtected(e.target.checked)}
+                />
+                <span>Ver pools sin proteccion</span>
+              </label>
+              <button
+                type="button"
+                className={styles.refreshBtn}
+                onClick={() => loadProtectedPools({ force: true })}
+                disabled={isLoadingProtected}
+              >
+                {isLoadingProtected ? 'Actualizando...' : 'Refrescar'}
+              </button>
+            </div>
           </div>
 
-          {protectedPools.length === 0 ? (
+          {visibleProtectedPools.length === 0 ? (
             <EmptyState
               icon="🛡️"
-              title="No tienes pools protegidos todavia."
-              description="Escanea una posicion LP y usa 'Aplicar cobertura'."
+              title={showInactiveProtected ? 'No tienes pools protegidos.' : 'No tienes pools protegidos activos.'}
+              description={showInactiveProtected
+                ? "Escanea una posicion LP y usa 'Aplicar cobertura' para verlos aqui."
+                : "Activa 'Ver pools sin proteccion' si quieres revisar tambien los inactivos."}
             />
           ) : (
             <div className={styles.grid}>
-              {orderedProtectedPools.map((protection) => (
+              {visibleProtectedPools.map((protection) => (
                 <ProtectedPoolCard
                   key={protection.id}
                   protection={protection}

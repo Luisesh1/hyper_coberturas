@@ -309,8 +309,30 @@ test('createProtectedPool guarda configuracion dinamica y defaults operativos', 
   assert.equal(protectionWrites[0].reentryBufferPct, DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT);
   assert.equal(protectionWrites[0].flipCooldownSec, DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC);
   assert.equal(protectionWrites[0].maxSequentialFlips, DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT);
-  assert.equal(protectionWrites[0].dynamicState.phase, 'inside_range');
+  assert.equal(protectionWrites[0].dynamicState.phase, 'neutral');
   assert.equal(protectionWrites[0].dynamicState.upperReentryPrice, 51000 * (1 - DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
+});
+
+test('createProtectedPool rechaza configuracion dinamica insegura por solapamiento wire', async () => {
+  await assert.rejects(() => createProtectedPool({
+    userId: 1,
+    pool: buildPool(),
+    accountId: 5,
+    leverage: 10,
+    configuredNotionalUsd: 1000,
+    protectionMode: 'dynamic',
+    reentryBufferPct: 0.0001,
+    stopLossDifferencePct: 0.05,
+  }, {
+    availableAssets: [{ name: 'BTC', maxLeverage: 30 }],
+    mids: { BTC: '50000' },
+    hyperliquidAccountsService: {
+      resolveAccount: async () => ({ id: 5, alias: 'Cuenta test', address: '0xabc' }),
+    },
+    protectedPoolRepository: {
+      findReusableByIdentity: async () => null,
+    },
+  }), /Configuracion dinamica insegura/i);
 });
 
 test('createProtectedPool rechaza pools que ya tienen proteccion activa', async () => {

@@ -16,6 +16,7 @@
 
 const WebSocket = require('ws');
 const config = require('../config');
+const logger = require('../services/logger.service');
 
 const RECONNECT_DELAY_MS = config.intervals.wsReconnectDelayMs;
 const PING_INTERVAL_MS = config.intervals.wsPingIntervalMs;
@@ -38,12 +39,12 @@ class HyperliquidWsClient {
    * Conecta al WebSocket de Hyperliquid y mantiene la conexion activa.
    */
   connect() {
-    console.log(`[HL WS] Conectando a ${config.hyperliquid.wsUrl}...`);
+    logger.info('hl_ws_connecting', { url: config.hyperliquid.wsUrl });
     this.ws = new WebSocket(config.hyperliquid.wsUrl);
 
     this.ws.on('open', () => {
       this.isConnected = true;
-      console.log('[HL WS] Conexion establecida.');
+      logger.info('hl_ws_connected');
       this._startPing();
       this._restoreSubscriptions();
     });
@@ -61,12 +62,12 @@ class HyperliquidWsClient {
     this.ws.on('close', (code, _reason) => {
       this.isConnected = false;
       this._stopPing();
-      console.warn(`[HL WS] Conexion cerrada (${code}). Reconectando en ${RECONNECT_DELAY_MS}ms...`);
+      logger.warn('hl_ws_closed', { code, reconnectMs: RECONNECT_DELAY_MS });
       this.reconnectTimeout = setTimeout(() => this.connect(), RECONNECT_DELAY_MS);
     });
 
     this.ws.on('error', (err) => {
-      console.error('[HL WS] Error:', err.message);
+      logger.error('hl_ws_error', { error: err.message });
       this.ws.terminate();
     });
   }
@@ -137,7 +138,7 @@ class HyperliquidWsClient {
       try {
         cb(message);
       } catch (err) {
-        console.error('[HL WS] Error en subscriber:', err.message);
+        logger.error('hl_ws_subscriber_error', { error: err.message });
       }
     });
   }
@@ -160,7 +161,7 @@ class HyperliquidWsClient {
   _startWatchdog() {
     this._watchdogInterval = setInterval(() => {
       if (this._lastMessageAt && (Date.now() - this._lastMessageAt) > WATCHDOG_MAX_SILENCE_MS) {
-        console.warn('[HL WS] Watchdog: sin datos por 90s, forzando reconexión...');
+        logger.warn('hl_ws_watchdog_reconnect');
         this.ws.terminate();
       }
     }, WATCHDOG_INTERVAL_MS);

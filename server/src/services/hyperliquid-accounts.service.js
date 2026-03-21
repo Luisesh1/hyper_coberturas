@@ -85,9 +85,7 @@ async function ensureLegacyWalletMigrated(userId) {
   const legacyWallet = await getLegacyWallet(userId);
   if (!legacyWallet?.address) return;
 
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
+  await db.transaction(async (client) => {
     const created = await accountsRepository.create(
       userId,
       {
@@ -102,13 +100,7 @@ async function ensureLegacyWalletMigrated(userId) {
       client
     );
     await accountsRepository.assignLegacyHedges(userId, created.id, client);
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 async function listAccounts(userId) {
@@ -152,34 +144,30 @@ async function createAccount(userId, { alias, address, privateKey, isDefault = f
   await ensureLegacyWalletMigrated(userId);
   const existingCount = await accountsRepository.countByUser(userId);
 
-  const client = await db.pool.connect();
   try {
-    await client.query('BEGIN');
-    const shouldBeDefault = existingCount === 0 || !!isDefault;
-    if (shouldBeDefault) {
-      await accountsRepository.clearDefault(userId, client);
-    }
-    const row = await accountsRepository.create(
-      userId,
-      {
-        alias: normalizedAlias,
-        address: normalizedAddress,
-        privateKeyEncrypted: encryptJson(normalizedPrivateKey),
-        isDefault: shouldBeDefault,
-        createdAt: Date.now(),
-      },
-      client
-    );
-    await client.query('COMMIT');
+    const row = await db.transaction(async (client) => {
+      const shouldBeDefault = existingCount === 0 || !!isDefault;
+      if (shouldBeDefault) {
+        await accountsRepository.clearDefault(userId, client);
+      }
+      return accountsRepository.create(
+        userId,
+        {
+          alias: normalizedAlias,
+          address: normalizedAddress,
+          privateKeyEncrypted: encryptJson(normalizedPrivateKey),
+          isDefault: shouldBeDefault,
+          createdAt: Date.now(),
+        },
+        client
+      );
+    });
     return mapAccountRow(row);
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     if (err?.code === '23505') {
       throw new ValidationError('Ya existe una cuenta con esa wallet');
     }
     throw err;
-  } finally {
-    client.release();
   }
 }
 
@@ -194,36 +182,32 @@ async function updateAccount(userId, accountId, { alias, address, privateKey, is
   const normalizedAlias = normalizeAlias(alias || current.alias, normalizedAddress);
   const normalizedPrivateKey = normalizePrivateKey(privateKey, { required: false });
 
-  const client = await db.pool.connect();
   try {
-    await client.query('BEGIN');
-    if (isDefault) {
-      await accountsRepository.clearDefault(userId, client);
-    }
-    const row = await accountsRepository.update(
-      userId,
-      accountId,
-      {
-        alias: normalizedAlias,
-        address: normalizedAddress,
-        privateKeyEncrypted: normalizedPrivateKey
-          ? encryptJson(normalizedPrivateKey)
-          : current.private_key_encrypted,
-        isDefault: isDefault ? true : !!current.is_default,
-        updatedAt: Date.now(),
-      },
-      client
-    );
-    await client.query('COMMIT');
+    const row = await db.transaction(async (client) => {
+      if (isDefault) {
+        await accountsRepository.clearDefault(userId, client);
+      }
+      return accountsRepository.update(
+        userId,
+        accountId,
+        {
+          alias: normalizedAlias,
+          address: normalizedAddress,
+          privateKeyEncrypted: normalizedPrivateKey
+            ? encryptJson(normalizedPrivateKey)
+            : current.private_key_encrypted,
+          isDefault: isDefault ? true : !!current.is_default,
+          updatedAt: Date.now(),
+        },
+        client
+      );
+    });
     return mapAccountRow(row);
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     if (err?.code === '23505') {
       throw new ValidationError('Ya existe una cuenta con esa wallet');
     }
     throw err;
-  } finally {
-    client.release();
   }
 }
 
@@ -234,19 +218,11 @@ async function setDefaultAccount(userId, accountId) {
     throw new ValidationError('Cuenta de Hyperliquid no encontrada');
   }
 
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
+  const row = await db.transaction(async (client) => {
     await accountsRepository.clearDefault(userId, client);
-    const row = await accountsRepository.setDefault(userId, accountId, client);
-    await client.query('COMMIT');
-    return mapAccountRow(row);
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+    return accountsRepository.setDefault(userId, accountId, client);
+  });
+  return mapAccountRow(row);
 }
 
 async function deleteAccount(userId, accountId) {
@@ -261,25 +237,18 @@ async function deleteAccount(userId, accountId) {
     throw new ValidationError('No se puede eliminar una cuenta con coberturas asociadas');
   }
 
-  const client = await db.pool.connect();
-  try {
-    await client.query('BEGIN');
-    const deleted = await accountsRepository.deleteById(userId, accountId, client);
-    if (deleted?.is_default) {
+  const deleted = await db.transaction(async (client) => {
+    const row = await accountsRepository.deleteById(userId, accountId, client);
+    if (row?.is_default) {
       const remaining = await accountsRepository.listByUser(userId, client);
       if (remaining[0]) {
         await accountsRepository.clearDefault(userId, client);
         await accountsRepository.setDefault(userId, remaining[0].id, client);
       }
     }
-    await client.query('COMMIT');
-    return mapAccountRow(deleted);
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+    return row;
+  });
+  return mapAccountRow(deleted);
 }
 
 async function upsertDefaultWallet(userId, { alias, address, privateKey }) {

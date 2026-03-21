@@ -10,6 +10,14 @@ const STOP_LOSS_DIFFERENCE_DEFAULT_PCT = 0.05;
 const DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT = 0.01;
 const DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC = 15;
 const DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT = 6;
+const DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT = 0.5;
+const DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC = 600;
+
+function formatPercentInputValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '';
+  return String(Number((parsed * 100).toFixed(6)));
+}
 
 export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onClose, onSubmit }) {
   const candidate = pool?.protectionCandidate;
@@ -19,9 +27,11 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
   const [configuredNotionalUsd, setConfiguredNotionalUsd] = useState(String(candidate?.suggestedNotionalUsd || candidate?.baseNotionalUsd || ''));
   const [stopLossDifferencePct, setStopLossDifferencePct] = useState(String(candidate?.stopLossDifferenceDefaultPct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT));
   const [protectionMode, setProtectionMode] = useState('static');
-  const [reentryBufferPct, setReentryBufferPct] = useState(String(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
+  const [reentryBufferPct, setReentryBufferPct] = useState(formatPercentInputValue(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
   const [flipCooldownSec, setFlipCooldownSec] = useState(String(candidate?.flipCooldownSec ?? DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC));
   const [maxSequentialFlips, setMaxSequentialFlips] = useState(String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT));
+  const [breakoutConfirmDistancePct, setBreakoutConfirmDistancePct] = useState(String(candidate?.breakoutConfirmDistancePct ?? DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT));
+  const [breakoutConfirmDurationSec, setBreakoutConfirmDurationSec] = useState(String(candidate?.breakoutConfirmDurationSec ?? DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC));
   const [selectedMultiplier, setSelectedMultiplier] = useState(null);
   const [error, setError] = useState('');
 
@@ -31,21 +41,26 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
     setConfiguredNotionalUsd(String(candidate?.suggestedNotionalUsd || candidate?.baseNotionalUsd || ''));
     setStopLossDifferencePct(String(candidate?.stopLossDifferenceDefaultPct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT));
     setProtectionMode('static');
-    setReentryBufferPct(String(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
+    setReentryBufferPct(formatPercentInputValue(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
     setFlipCooldownSec(String(candidate?.flipCooldownSec ?? DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC));
     setMaxSequentialFlips(String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT));
+    setBreakoutConfirmDistancePct(String(candidate?.breakoutConfirmDistancePct ?? DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT));
+    setBreakoutConfirmDurationSec(String(candidate?.breakoutConfirmDurationSec ?? DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC));
     setSelectedMultiplier(null);
     setError('');
-  }, [pool, defaultAccount, candidate?.defaultLeverage, candidate?.suggestedNotionalUsd, candidate?.baseNotionalUsd, candidate?.stopLossDifferenceDefaultPct, candidate?.reentryBufferPct, candidate?.flipCooldownSec, candidate?.maxSequentialFlips]);
+  }, [pool, defaultAccount, candidate?.defaultLeverage, candidate?.suggestedNotionalUsd, candidate?.baseNotionalUsd, candidate?.stopLossDifferenceDefaultPct, candidate?.reentryBufferPct, candidate?.flipCooldownSec, candidate?.maxSequentialFlips, candidate?.breakoutConfirmDistancePct, candidate?.breakoutConfirmDurationSec]);
 
   if (!pool || !candidate) return null;
 
   const maxLeverage = Number(candidate.maxLeverage || 1);
   const parsedNotionalUsd = Number(configuredNotionalUsd);
   const parsedStopLossDifferencePct = Number(stopLossDifferencePct);
-  const parsedReentryBufferPct = Number(reentryBufferPct);
+  const parsedReentryBufferPctInput = Number(reentryBufferPct);
+  const parsedReentryBufferPct = parsedReentryBufferPctInput / 100;
   const parsedFlipCooldownSec = Number(flipCooldownSec);
   const parsedMaxSequentialFlips = Number(maxSequentialFlips);
+  const parsedBreakoutConfirmDistancePct = Number(breakoutConfirmDistancePct);
+  const parsedBreakoutConfirmDurationSec = Number(breakoutConfirmDurationSec);
   const isDynamic = protectionMode === 'dynamic';
   const estimatedSize = Number.isFinite(parsedNotionalUsd) && parsedNotionalUsd > 0 && Number(candidate.midPrice) > 0
     ? parsedNotionalUsd / Number(candidate.midPrice)
@@ -93,8 +108,8 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       setError('La diferencia de SL debe ser un porcentaje mayor que 0 y menor que 100. Ejemplo: 0.05 = 0.05%.');
       return;
     }
-    if (isDynamic && (!Number.isFinite(parsedReentryBufferPct) || parsedReentryBufferPct <= 0 || parsedReentryBufferPct >= 1)) {
-      setError('La separacion de reentrada debe ser un decimal mayor que 0 y menor que 1.');
+    if (isDynamic && (!Number.isFinite(parsedReentryBufferPctInput) || parsedReentryBufferPctInput <= 0 || parsedReentryBufferPctInput >= 100)) {
+      setError('La separacion de reentrada debe ser un porcentaje mayor que 0 y menor que 100. Ejemplo: 1 = 1%.');
       return;
     }
     if (isDynamic && (!Number.isInteger(parsedFlipCooldownSec) || parsedFlipCooldownSec < 0)) {
@@ -103,6 +118,14 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
     }
     if (isDynamic && (!Number.isInteger(parsedMaxSequentialFlips) || parsedMaxSequentialFlips < 1)) {
       setError('El maximo de flips debe ser un entero positivo.');
+      return;
+    }
+    if (isDynamic && (!Number.isFinite(parsedBreakoutConfirmDistancePct) || parsedBreakoutConfirmDistancePct < 0 || parsedBreakoutConfirmDistancePct >= 100)) {
+      setError('La distancia de confirmacion debe ser un porcentaje entre 0 y menor que 100. Ejemplo: 0.5 = 0.5%.');
+      return;
+    }
+    if (isDynamic && (!Number.isInteger(parsedBreakoutConfirmDurationSec) || parsedBreakoutConfirmDurationSec < 0)) {
+      setError('La duracion de confirmacion debe ser un entero mayor o igual a 0 segundos.');
       return;
     }
 
@@ -118,6 +141,8 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       reentryBufferPct: isDynamic ? parsedReentryBufferPct : undefined,
       flipCooldownSec: isDynamic ? parsedFlipCooldownSec : undefined,
       maxSequentialFlips: isDynamic ? parsedMaxSequentialFlips : undefined,
+      breakoutConfirmDistancePct: isDynamic ? parsedBreakoutConfirmDistancePct : undefined,
+      breakoutConfirmDurationSec: isDynamic ? parsedBreakoutConfirmDurationSec : undefined,
     });
   };
 
@@ -204,8 +229,8 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
                 <>
                   <label className={styles.field}>
                     <span className={styles.fieldLabel}>Separacion reentrada</span>
-                    <input className={styles.input} type="number" min="0.001" max="0.99" step="0.001" value={reentryBufferPct} onChange={(e) => setReentryBufferPct(e.target.value)} />
-                    <span className={styles.hint}>0.01 = 1% hacia dentro del rango.</span>
+                    <input className={styles.input} type="number" min="0.001" max="99.99" step="0.001" value={reentryBufferPct} onChange={(e) => setReentryBufferPct(e.target.value)} />
+                    <span className={styles.hint}>El valor ya esta en porcentaje. 1 = 1% hacia dentro del rango.</span>
                   </label>
 
                   <label className={styles.field}>
@@ -218,6 +243,18 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
                     <span className={styles.fieldLabel}>Max flips seguidos</span>
                     <input className={styles.input} type="number" min="1" step="1" value={maxSequentialFlips} onChange={(e) => setMaxSequentialFlips(e.target.value)} />
                     <span className={styles.hint}>Si se excede, la dinamica se pausa.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Distancia confirmacion breakout</span>
+                    <input className={styles.input} type="number" min="0" max="99.99" step="0.01" value={breakoutConfirmDistancePct} onChange={(e) => setBreakoutConfirmDistancePct(e.target.value)} />
+                    <span className={styles.hint}>0.5 = 0.5% fuera del limite antes de desplazar el rango.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Duracion confirmacion breakout</span>
+                    <input className={styles.input} type="number" min="0" step="1" value={breakoutConfirmDurationSec} onChange={(e) => setBreakoutConfirmDurationSec(e.target.value)} />
+                    <span className={styles.hint}>600 = 10 min continuos fuera de rango para confirmar.</span>
                   </label>
                 </>
               )}
@@ -255,6 +292,7 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
                 <>
                   <div className={styles.previewCard}><span className={styles.previewLabel}>Reentrada alta</span><strong className={styles.previewValue}>SHORT espera en {formatCompactPrice(upperReentry)} y el LONG protege hasta {formatCompactPrice(upperReentry)}</strong></div>
                   <div className={styles.previewCard}><span className={styles.previewLabel}>Reentrada baja</span><strong className={styles.previewValue}>LONG espera en {formatCompactPrice(lowerReentry)} y el SHORT protege hasta {formatCompactPrice(lowerReentry)}</strong></div>
+                  <div className={styles.previewCard}><span className={styles.previewLabel}>Confirmacion breakout</span><strong className={styles.previewValue}>{parsedBreakoutConfirmDistancePct}% y {parsedBreakoutConfirmDurationSec}s fuera de rango</strong></div>
                 </>
               )}
             </div>

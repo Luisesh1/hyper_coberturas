@@ -21,6 +21,29 @@ async function getTelegram(userId) {
   return (await getSetting(userId, 'telegram')) || { token: '', chatId: '' };
 }
 
+async function listTelegramConfigs() {
+  const rows = await settingsRepository.listByKey('telegram');
+
+  return rows
+    .map((row) => {
+      try {
+        const telegram = decryptValue(row.value) || {};
+        const token = String(telegram.token || '').trim();
+        const chatId = String(telegram.chatId || '').trim();
+        return {
+          userId: Number(row.user_id),
+          token,
+          chatId,
+          enabled: !!(token && chatId),
+          updatedAt: row.updated_at != null ? Number(row.updated_at) : null,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((item) => item?.enabled);
+}
+
 async function setTelegram(userId, telegram) {
   await setSetting(userId, 'telegram', telegram);
 }
@@ -53,9 +76,8 @@ module.exports = {
   ENCRYPTED_PREFIX,
   decryptValue,
   encryptJson,
-  getSetting,
-  setSetting,
   getTelegram,
+  listTelegramConfigs,
   setTelegram,
   getWallet,
   setWallet,

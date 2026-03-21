@@ -71,9 +71,6 @@ export const usersApi = {
 // Market
 // ------------------------------------------------------------------
 export const marketApi = {
-  getAllPrices: () => request('GET', '/market/prices'),
-  getPrice:    (asset) => request('GET', `/market/prices/${asset}`),
-  getAssets:   () => request('GET', '/market/assets'),
   getContexts: () => request('GET', '/market/contexts'),
 };
 
@@ -180,6 +177,8 @@ export const uniswapApi = {
     reentryBufferPct,
     flipCooldownSec,
     maxSequentialFlips,
+    breakoutConfirmDistancePct,
+    breakoutConfirmDurationSec,
   }) =>
     request('POST', '/uniswap/protected-pools', {
       pool,
@@ -192,6 +191,8 @@ export const uniswapApi = {
       reentryBufferPct,
       flipCooldownSec,
       maxSequentialFlips,
+      breakoutConfirmDistancePct,
+      breakoutConfirmDurationSec,
     }),
   deactivateProtectedPool: (id) =>
     request('POST', `/uniswap/protected-pools/${id}/deactivate`, {}),

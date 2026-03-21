@@ -6,6 +6,7 @@ const config = require('./config');
 const routes = require('./routes');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const { requestContext } = require('./middleware/request-context.middleware');
+const { requestLogger } = require('./middleware/request-logger.middleware');
 
 const IS_PROD = config.server.nodeEnv === 'production';
 
@@ -26,6 +27,7 @@ app.use(rateLimit({
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => req.user?.userId || req.ip,
   message: { success: false, error: 'Demasiadas peticiones, intenta de nuevo más tarde' },
 }));
 
@@ -50,6 +52,7 @@ app.use(
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(requestContext);
+app.use(requestLogger);
 
 // ------------------------------------------------------------------
 // Rutas

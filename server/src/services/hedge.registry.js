@@ -59,6 +59,7 @@ function destroy(userId, accountId) {
 
 module.exports = {
   destroy,
+  destroyAll: registry.destroyAll,
   get,
   getAll: registry.getAll,
   getOrCreate,

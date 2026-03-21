@@ -2,6 +2,11 @@
  * formatters.js — Shared UI formatting utilities
  */
 
+export function shortAddress(value = '') {
+  if (!value) return '—';
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
 export function formatNumber(value, digits = 2) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '—';

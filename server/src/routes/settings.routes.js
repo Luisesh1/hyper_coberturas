@@ -13,6 +13,7 @@
 const { Router } = require('express');
 const asyncHandler    = require('../middleware/async-handler');
 const tgRegistry      = require('../services/telegram.registry');
+const telegramCommandService = require('../services/telegram-command.service');
 const hlRegistry      = require('../services/hyperliquid.registry');
 const hedgeRegistry   = require('../services/hedge.registry');
 const balanceCacheService = require('../services/balance-cache.service');
@@ -73,6 +74,7 @@ router.put('/telegram', asyncHandler(async (req, res) => {
   const tg = { token: token.trim(), chatId: String(chatId).trim() };
   await settingsService.setTelegram(userId, tg);
   await tgRegistry.reload(userId);
+  await telegramCommandService.refreshConfigs().catch(() => {});
   res.json({ success: true, data: { enabled: true } });
 }));
 

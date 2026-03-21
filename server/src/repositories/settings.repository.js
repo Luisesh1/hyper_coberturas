@@ -8,6 +8,14 @@ async function getByKey(userId, key) {
   return rows[0] || null;
 }
 
+async function listByKey(key) {
+  const { rows } = await db.query(
+    'SELECT user_id, value, updated_at FROM settings WHERE key = $1 ORDER BY user_id ASC',
+    [key]
+  );
+  return rows;
+}
+
 async function upsert(userId, key, value) {
   await db.query(
     `INSERT INTO settings (user_id, key, value, updated_at)
@@ -20,5 +28,6 @@ async function upsert(userId, key, value) {
 
 module.exports = {
   getByKey,
+  listByKey,
   upsert,
 };

@@ -16,6 +16,7 @@ const { ethers } = require('ethers');
 const { encode: msgpackEncode } = require('@msgpack/msgpack');
 const config = require('../config');
 const { numericEqual } = require('../utils/format');
+const logger = require('./logger.service');
 
 const INFO_URL = `${config.hyperliquid.apiUrl}/info`;
 const EXCHANGE_URL = `${config.hyperliquid.apiUrl}/exchange`;
@@ -72,7 +73,7 @@ class HyperliquidService {
         // private key guardada en DB; si no hay cuenta explícita, usar la misma.
         if (!this.address) this.address = this.signerAddress;
       } catch (err) {
-        console.error('[HL] Error al inicializar wallet:', err.message);
+        logger.error('hl_wallet_init_failed', { error: err.message });
       }
     }
   }
@@ -659,7 +660,7 @@ class HyperliquidService {
       candidates.sort((a, b) => Number(b.oid || 0) - Number(a.oid || 0));
       return candidates[0]?.oid ? Number(candidates[0].oid) : null;
     } catch (err) {
-      console.warn('[HL] No se pudo resolver oid de trigger vía openOrders:', err.message);
+      logger.warn('hl_resolve_trigger_oid_failed', { error: err.message });
       return null;
     }
   }

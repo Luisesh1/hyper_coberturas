@@ -1,5 +1,9 @@
 const db = require('../db');
-const { rowToHedge } = require('../services/hedge.state');
+const { rowToHedge } = require('./hedge.mapper');
+
+function exec(executor) {
+  return executor || db;
+}
 
 async function loadAllByUser(userId, accountId = null) {
   const params = [userId];
@@ -36,9 +40,10 @@ async function create(hedge) {
   const { rows } = await db.query(
     `INSERT INTO hedges (
        user_id, hyperliquid_account_id, asset, direction, entry_price, exit_price, size, leverage, label,
-       margin_mode, status, created_at, position_key, last_reconciled_at, protected_pool_id, protected_role
+       margin_mode, status, created_at, position_key, last_reconciled_at, protected_pool_id, protected_role,
+       dynamic_anchor_price
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'entry_pending', $11, $12, $11, $13, $14)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'entry_pending', $11, $12, $11, $13, $14, $15)
      RETURNING id`,
     [
       hedge.userId,
@@ -55,13 +60,14 @@ async function create(hedge) {
       hedge.positionKey,
       hedge.protectedPoolId || null,
       hedge.protectedRole || null,
+      hedge.dynamicAnchorPrice ?? hedge.entryPrice,
     ]
   );
   return rows[0].id;
 }
 
-async function save(hedge) {
-  await db.query(
+async function save(hedge, executor) {
+  await exec(executor).query(
     `UPDATE hedges SET
        status = $2,
        entry_price = $3,
@@ -74,22 +80,23 @@ async function save(hedge) {
        asset_index = $10,
        sz_decimals = $11,
        position_size = $12,
-       open_price = $13,
-       close_price = $14,
-       unrealized_pnl = $15,
-       error = $16,
-       cycle_count = $17,
-       opened_at = $18,
-       closed_at = $19,
-       position_key = $20,
-       closing_started_at = $21,
-       sl_placed_at = $22,
-       last_fill_at = $23,
-       last_reconciled_at = $24,
-       entry_fill_oid = $25,
-       entry_fill_time = $26,
-       entry_fee_paid = $27,
-       funding_accum = $28
+       dynamic_anchor_price = $13,
+       open_price = $14,
+       close_price = $15,
+       unrealized_pnl = $16,
+       error = $17,
+       cycle_count = $18,
+       opened_at = $19,
+       closed_at = $20,
+       position_key = $21,
+       closing_started_at = $22,
+       sl_placed_at = $23,
+       last_fill_at = $24,
+       last_reconciled_at = $25,
+       entry_fill_oid = $26,
+       entry_fill_time = $27,
+       entry_fee_paid = $28,
+       funding_accum = $29
      WHERE id = $1`,
     [
       hedge.id,
@@ -104,6 +111,7 @@ async function save(hedge) {
       hedge.assetIndex,
       hedge.szDecimals,
       hedge.positionSize,
+      hedge.dynamicAnchorPrice,
       hedge.openPrice,
       hedge.closePrice,
       hedge.unrealizedPnl,
@@ -124,8 +132,8 @@ async function save(hedge) {
   );
 }
 
-async function saveCycle(hedgeId, cycle) {
-  await db.query(
+async function saveCycle(hedgeId, cycle, executor) {
+  await exec(executor).query(
     `INSERT INTO cycles (
        hedge_id, cycle_id, open_price, close_price, opened_at, closed_at,
        entry_fee, exit_fee, closed_pnl, funding_paid,
@@ -176,11 +184,23 @@ async function deleteByProtectedPoolIds(protectedPoolIds = []) {
   return rowCount || 0;
 }
 
+/**
+ * Guarda un ciclo + actualiza el hedge en una sola transacción.
+ * Si alguno falla, ambos se revierten.
+ */
+async function saveHedgeWithCycle(hedge, cycle) {
+  await db.transaction(async (client) => {
+    await saveCycle(hedge.id, cycle, client);
+    await save(hedge, client);
+  });
+}
+
 module.exports = {
   deleteByProtectedPoolIds,
   loadAllByUser,
   create,
   save,
   saveCycle,
+  saveHedgeWithCycle,
   unlinkByProtectedPoolId,
 };

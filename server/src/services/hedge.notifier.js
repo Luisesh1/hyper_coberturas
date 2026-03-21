@@ -26,6 +26,11 @@ class HedgeNotifier {
     this.emitter.emit('protection_missing', hedge);
   }
 
+  partialCoverage(hedge, payload) {
+    this.tg.notifyHedgePartialCoverage(hedge, payload);
+    this.emitter.emit('partial_coverage', hedge, payload);
+  }
+
   cycleComplete(hedge, cycle) {
     this.tg.notifyHedgeClosed({
       ...hedge,

@@ -6,12 +6,15 @@ const hyperliquidAccountsService = require('./hyperliquid-accounts.service');
 const hedgeRepository = require('../repositories/hedge.repository');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const logger = require('./logger.service');
+const { formatPrice } = require('../utils/format');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 const SHORTCUT_MULTIPLIERS = [1.25, 1.5, 2, 3, 4];
 const STOP_LOSS_DIFFERENCE_DEFAULT_PCT = 0.05;
 const DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT = 0.01;
 const DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC = 15;
 const DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT = 6;
+const DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT = 0.5;
+const DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC = 600;
 const WRAPPED_TOKEN_EQUIVALENTS = new Map([
   ['WBTC', 'BTC'],
   ['WETH', 'ETH'],
@@ -128,6 +131,8 @@ function buildCandidateFromMarket(pool, availableAssets, mids) {
     shortcutMultipliers: SHORTCUT_MULTIPLIERS,
     hedgeNotionalUsd: baseNotionalUsd,
     stopLossDifferenceDefaultPct: STOP_LOSS_DIFFERENCE_DEFAULT_PCT,
+    breakoutConfirmDistancePct: DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT,
+    breakoutConfirmDurationSec: DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC,
     valueMode: 'usd',
     marginMode: 'isolated',
   };
@@ -253,6 +258,8 @@ async function annotatePoolsWithProtection({ userId, pools }, deps = {}) {
         maxLeverage: null,
         defaultLeverage: null,
         stopLossDifferenceDefaultPct: STOP_LOSS_DIFFERENCE_DEFAULT_PCT,
+        breakoutConfirmDistancePct: DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT,
+        breakoutConfirmDurationSec: DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC,
         marginMode: 'isolated',
       };
     }
@@ -280,6 +287,8 @@ async function annotatePoolsWithProtection({ userId, pools }, deps = {}) {
             reentryBufferPct: protection.reentryBufferPct ?? null,
             flipCooldownSec: protection.flipCooldownSec ?? null,
             maxSequentialFlips: protection.maxSequentialFlips ?? null,
+            breakoutConfirmDistancePct: protection.breakoutConfirmDistancePct ?? null,
+            breakoutConfirmDurationSec: protection.breakoutConfirmDurationSec ?? null,
             dynamicState: protection.dynamicState ?? null,
             valueMode: protection.valueMode,
             leverage: protection.leverage,
@@ -369,6 +378,26 @@ function normalizeMaxSequentialFlips(maxSequentialFlips, protectionMode) {
   return parsed;
 }
 
+function normalizeBreakoutConfirmDistancePct(breakoutConfirmDistancePct, protectionMode) {
+  if (protectionMode !== 'dynamic') return null;
+  if (breakoutConfirmDistancePct == null) return DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT;
+  const parsed = Number(breakoutConfirmDistancePct);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed >= 100) {
+    throw new ValidationError('breakoutConfirmDistancePct debe ser un porcentaje mayor o igual a 0 y menor que 100. Ejemplo: 0.5 = 0.5%');
+  }
+  return parsed;
+}
+
+function normalizeBreakoutConfirmDurationSec(breakoutConfirmDurationSec, protectionMode) {
+  if (protectionMode !== 'dynamic') return null;
+  if (breakoutConfirmDurationSec == null) return DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC;
+  const parsed = Number(breakoutConfirmDurationSec);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new ValidationError('breakoutConfirmDurationSec debe ser un entero mayor o igual a 0');
+  }
+  return parsed;
+}
+
 function roundUsd(value) {
   return Math.round(Number(value) * 100) / 100;
 }
@@ -379,6 +408,44 @@ function buildStopLossExitPrices(snapshot, stopLossDifferencePct) {
     downsideExitPrice: snapshot.rangeLowerPrice * (1 + pctRatio),
     upsideExitPrice: snapshot.rangeUpperPrice * (1 - pctRatio),
   };
+}
+
+function toWireNumber(value) {
+  const wire = formatPrice(Number(value));
+  const parsed = Number(wire);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function validateDynamicSpacing({
+  rangeLowerPrice,
+  rangeUpperPrice,
+  stopLossDifferencePct,
+  reentryBufferPct,
+  protectionMode,
+}) {
+  if (protectionMode !== 'dynamic') return;
+
+  const pctRatio = Number(stopLossDifferencePct) / 100;
+  const lowerCloseWire = toWireNumber(Number(rangeLowerPrice) * (1 + pctRatio));
+  const lowerOpenWire = toWireNumber(Number(rangeLowerPrice) * (1 + Number(reentryBufferPct)));
+  const upperCloseWire = toWireNumber(Number(rangeUpperPrice) * (1 - pctRatio));
+  const upperOpenWire = toWireNumber(Number(rangeUpperPrice) * (1 - Number(reentryBufferPct)));
+
+  if (!Number.isFinite(lowerCloseWire) || !Number.isFinite(lowerOpenWire) ||
+      !Number.isFinite(upperCloseWire) || !Number.isFinite(upperOpenWire)) {
+    throw new ValidationError('No se pudo validar la separacion segura de la proteccion dinamica');
+  }
+
+  if (!(lowerCloseWire < lowerOpenWire)) {
+    throw new ValidationError(
+      'Configuracion dinamica insegura: el cierre SHORT inferior queda demasiado cerca o despues de la apertura LONG rearmada.'
+    );
+  }
+  if (!(upperCloseWire > upperOpenWire)) {
+    throw new ValidationError(
+      'Configuracion dinamica insegura: el cierre LONG superior queda demasiado cerca o antes de la apertura SHORT rearmada.'
+    );
+  }
 }
 
 function buildStoredPoolSnapshot({
@@ -393,6 +460,8 @@ function buildStoredPoolSnapshot({
   reentryBufferPct,
   flipCooldownSec,
   maxSequentialFlips,
+  breakoutConfirmDistancePct,
+  breakoutConfirmDurationSec,
   dynamicState,
   normalizedLeverage,
   hedgeSize,
@@ -412,6 +481,8 @@ function buildStoredPoolSnapshot({
       reentryBufferPct,
       flipCooldownSec,
       maxSequentialFlips,
+      breakoutConfirmDistancePct,
+      breakoutConfirmDurationSec,
       dynamicState,
       valueMode: 'usd',
       leverage: normalizedLeverage,
@@ -426,6 +497,8 @@ function buildStoredPoolSnapshot({
       reentryBufferPct,
       flipCooldownSec,
       maxSequentialFlips,
+      breakoutConfirmDistancePct,
+      breakoutConfirmDurationSec,
       defaultLeverage: Math.min(10, candidate.maxLeverage),
     },
   };
@@ -433,24 +506,25 @@ function buildStoredPoolSnapshot({
 
 function buildInitialDynamicState(snapshot, {
   reentryBufferPct,
-  flipCooldownSec,
-  maxSequentialFlips,
+  breakoutConfirmDistancePct,
+  breakoutConfirmDurationSec,
 }) {
   return {
-    phase: 'inside_range',
+    phase: 'neutral',
+    regime: 'neutral',
     activeSide: null,
-    armedReentrySide: null,
-    lastBrokenEdge: null,
-    currentReentryPrice: null,
-    lastFlipAt: null,
-    sequentialFlipCount: 0,
     recoveryStatus: null,
     transition: null,
     reentryBufferPct,
-    flipCooldownSec,
-    maxSequentialFlips,
+    breakoutConfirmDistancePct,
+    breakoutConfirmDurationSec,
     upperReentryPrice: snapshot.rangeUpperPrice * (1 - reentryBufferPct),
     lowerReentryPrice: snapshot.rangeLowerPrice * (1 + reentryBufferPct),
+    upperBreakoutConfirmPrice: snapshot.rangeUpperPrice * (1 + (breakoutConfirmDistancePct / 100)),
+    lowerBreakoutConfirmPrice: snapshot.rangeLowerPrice * (1 - (breakoutConfirmDistancePct / 100)),
+    pendingBreakoutEdge: null,
+    pendingBreakoutSince: null,
+    pendingBreakoutPrice: null,
     lastEvaluatedPrice: snapshot.priceCurrent != null ? Number(snapshot.priceCurrent) : null,
     lastTransitionAt: Date.now(),
   };
@@ -468,6 +542,8 @@ async function createProtectedPool({
   reentryBufferPct,
   flipCooldownSec,
   maxSequentialFlips,
+  breakoutConfirmDistancePct,
+  breakoutConfirmDurationSec,
 }, deps = {}) {
   const snapshot = normalizePoolSnapshot(pool);
   const candidate = await buildProtectionCandidate(snapshot, deps);
@@ -492,6 +568,21 @@ async function createProtectedPool({
   const normalizedReentryBufferPct = normalizeReentryBufferPct(reentryBufferPct, normalizedProtectionMode);
   const normalizedFlipCooldownSec = normalizeFlipCooldownSec(flipCooldownSec, normalizedProtectionMode);
   const normalizedMaxSequentialFlips = normalizeMaxSequentialFlips(maxSequentialFlips, normalizedProtectionMode);
+  const normalizedBreakoutConfirmDistancePct = normalizeBreakoutConfirmDistancePct(
+    breakoutConfirmDistancePct,
+    normalizedProtectionMode
+  );
+  const normalizedBreakoutConfirmDurationSec = normalizeBreakoutConfirmDurationSec(
+    breakoutConfirmDurationSec,
+    normalizedProtectionMode
+  );
+  validateDynamicSpacing({
+    rangeLowerPrice: snapshot.rangeLowerPrice,
+    rangeUpperPrice: snapshot.rangeUpperPrice,
+    stopLossDifferencePct: normalizedStopLossDifferencePct,
+    reentryBufferPct: normalizedReentryBufferPct,
+    protectionMode: normalizedProtectionMode,
+  });
   const { downsideExitPrice, upsideExitPrice } = buildStopLossExitPrices(
     snapshot,
     normalizedStopLossDifferencePct
@@ -542,8 +633,8 @@ async function createProtectedPool({
   const dynamicState = normalizedProtectionMode === 'dynamic'
     ? buildInitialDynamicState(snapshot, {
         reentryBufferPct: normalizedReentryBufferPct,
-        flipCooldownSec: normalizedFlipCooldownSec,
-        maxSequentialFlips: normalizedMaxSequentialFlips,
+        breakoutConfirmDistancePct: normalizedBreakoutConfirmDistancePct,
+        breakoutConfirmDurationSec: normalizedBreakoutConfirmDurationSec,
       })
     : null;
   const executor = deps.db || db;
@@ -572,6 +663,8 @@ async function createProtectedPool({
     reentryBufferPct: normalizedReentryBufferPct,
     flipCooldownSec: normalizedFlipCooldownSec,
     maxSequentialFlips: normalizedMaxSequentialFlips,
+    breakoutConfirmDistancePct: normalizedBreakoutConfirmDistancePct,
+    breakoutConfirmDurationSec: normalizedBreakoutConfirmDurationSec,
     dynamicState,
     valueMode: 'usd',
     leverage: normalizedLeverage,
@@ -592,6 +685,8 @@ async function createProtectedPool({
     reentryBufferPct: normalizedReentryBufferPct,
     flipCooldownSec: normalizedFlipCooldownSec,
     maxSequentialFlips: normalizedMaxSequentialFlips,
+    breakoutConfirmDistancePct: normalizedBreakoutConfirmDistancePct,
+    breakoutConfirmDurationSec: normalizedBreakoutConfirmDurationSec,
     dynamicState,
     normalizedLeverage,
     hedgeSize,
@@ -629,6 +724,8 @@ async function createProtectedPool({
         reentryBufferPct: normalizedReentryBufferPct,
         flipCooldownSec: normalizedFlipCooldownSec,
         maxSequentialFlips: normalizedMaxSequentialFlips,
+        breakoutConfirmDistancePct: normalizedBreakoutConfirmDistancePct,
+        breakoutConfirmDurationSec: normalizedBreakoutConfirmDurationSec,
         dynamicState,
         normalizedLeverage,
         hedgeSize,

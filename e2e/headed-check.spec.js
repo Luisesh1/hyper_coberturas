@@ -1,22 +1,21 @@
 const { test, expect } = require('@playwright/test');
 
-const BASE = 'http://localhost:5174';
-const USERNAME = 'admin';
-const PASSWORD = 'admin123';
+const hasIntegratedBackend = Boolean(process.env.E2E_API_TARGET);
 
 async function login(page) {
-  await page.goto(BASE);
+  await page.goto('/');
   await page.waitForLoadState('networkidle');
-  await page.getByPlaceholder('admin').fill(USERNAME);
-  await page.getByPlaceholder('••••••••').fill(PASSWORD);
+  await page.getByPlaceholder('admin').fill(process.env.E2E_USERNAME || 'admin');
+  await page.getByPlaceholder('••••••••').fill(process.env.E2E_PASSWORD || 'admin123');
   await page.getByRole('button', { name: 'Entrar' }).click();
-  await page.waitForTimeout(2000);
+  await expect(page.getByRole('button', { name: 'Backtesting' })).toBeVisible({ timeout: 10000 });
 }
 
 test.describe('Platform headed checks', () => {
+  test.skip(!hasIntegratedBackend, 'Define E2E_API_TARGET para ejecutar los headed checks integrados');
 
   test('1 — Login page renders and login works', async ({ page }) => {
-    await page.goto(BASE);
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByPlaceholder('admin')).toBeVisible({ timeout: 10000 });
@@ -36,21 +35,21 @@ test.describe('Platform headed checks', () => {
 
     await login(page);
 
-    const navLinks = page.locator('nav a, [class*="sidebar"] a, [class*="nav"] a');
-    const count = await navLinks.count();
-    console.log(`Found ${count} nav links`);
+    const navButtons = [
+      'Trading Manual',
+      'Coberturas',
+      'Estrategias',
+      'Backtesting',
+      'Bots',
+      '🦄 Uniswap Pools',
+      '⚙ Config',
+    ];
+    console.log(`Found ${navButtons.length} nav buttons`);
 
-    const visited = new Set();
-    for (let i = 0; i < count; i++) {
-      const link = navLinks.nth(i);
-      const href = await link.getAttribute('href').catch(() => null);
-      const text = (await link.textContent().catch(() => '')).trim();
-      if (!href || visited.has(href)) continue;
-      visited.add(href);
-
-      await link.click();
+    for (const label of navButtons) {
+      await page.getByRole('button', { name: label, exact: true }).click();
       await page.waitForTimeout(2000);
-      console.log(`  ${text || href}: ${page.url()} — OK`);
+      console.log(`  ${label}: ${page.url()} — OK`);
     }
 
     if (pageErrors.length) {
@@ -64,7 +63,7 @@ test.describe('Platform headed checks', () => {
     page.on('pageerror', err => errors.push(err.message));
 
     await login(page);
-    await page.goto(`${BASE}/strategies`);
+    await page.goto('/estrategias');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2000);
 
@@ -86,24 +85,21 @@ test.describe('Platform headed checks', () => {
     page.on('pageerror', err => errors.push(err.message));
 
     await login(page);
-    await page.goto(`${BASE}/backtesting`);
+    await page.goto('/backtesting');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2000);
 
-    // Check Backtesting Lab text
     const labText = page.getByText('Backtesting Lab');
-    await expect(labText).toBeVisible({ timeout: 5000 });
+    await expect(labText).toBeVisible({ timeout: 10000 });
     console.log('Backtesting Lab visible');
 
-    // Check config drawer has sizing mode
-    const sizingSelect = page.locator('select').filter({ hasText: /USD fijo/ });
-    const hasSizing = await sizingSelect.count();
-    console.log('Sizing mode selector found:', hasSizing > 0);
+    const strategySelect = page.getByRole('combobox', { name: 'Estrategia' }).first();
+    await expect(strategySelect).toBeVisible({ timeout: 10000 });
+    console.log('Strategy selector visible');
 
-    // Check timeframe options include new ones (4h, 1D, 1W)
-    const timeframeSelects = page.locator('select').filter({ hasText: /4h/ });
-    const has4h = await timeframeSelects.count();
-    console.log('4h timeframe available:', has4h > 0);
+    const configToggle = page.getByRole('button', { name: 'Toggle configuracion' });
+    await expect(configToggle).toBeVisible();
+    console.log('Config toggle visible');
 
     expect(errors).toEqual([]);
   });
@@ -113,7 +109,7 @@ test.describe('Platform headed checks', () => {
     page.on('pageerror', err => errors.push(err.message));
 
     await login(page);
-    await page.goto(`${BASE}/bots`);
+    await page.goto('/bots');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2000);
 
@@ -128,7 +124,7 @@ test.describe('Platform headed checks', () => {
     page.on('pageerror', err => errors.push(err.message));
 
     await login(page);
-    await page.goto(`${BASE}/config`);
+    await page.goto('/config');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2000);
 
@@ -143,7 +139,7 @@ test.describe('Platform headed checks', () => {
     page.on('pageerror', err => errors.push(err.message));
 
     await login(page);
-    await page.goto(`${BASE}/uniswap`);
+    await page.goto('/uniswap-pools');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2000);
 
@@ -159,9 +155,9 @@ test.describe('Platform headed checks', () => {
 
     await login(page);
 
-    const routes = ['/dashboard', '/strategies', '/backtesting', '/bots', '/config', '/uniswap'];
+    const routes = ['/trade', '/estrategias', '/backtesting', '/bots', '/config', '/uniswap-pools'];
     for (const route of routes) {
-      await page.goto(`${BASE}${route}`);
+      await page.goto(route);
       await page.waitForLoadState('networkidle');
       await page.waitForTimeout(1500);
       console.log(`${route}: OK`);

@@ -1,9 +1,6 @@
-import { formatNumber, formatDuration } from '../../../utils/formatters';
+import { formatNumber, formatDuration, shortAddress } from '../../../utils/formatters';
 
-export function shortAddress(value) {
-  if (!value) return '—';
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
+export { shortAddress };
 
 export function formatCompactUsd(value) {
   if (value == null) return 'N/A';

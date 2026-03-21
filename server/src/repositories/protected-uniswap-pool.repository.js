@@ -42,6 +42,7 @@ function mapSummaryHedge(hedge) {
     direction: hedge.direction,
     entryPrice: hedge.entryPrice != null ? Number(hedge.entryPrice) : null,
     exitPrice: hedge.exitPrice != null ? Number(hedge.exitPrice) : null,
+    dynamicAnchorPrice: hedge.dynamicAnchorPrice != null ? Number(hedge.dynamicAnchorPrice) : null,
     size: hedge.size != null ? Number(hedge.size) : null,
     leverage: hedge.leverage != null ? Number(hedge.leverage) : null,
     status: hedge.status,
@@ -82,6 +83,8 @@ function mapIdentityRow(row) {
     reentryBufferPct: row.reentry_buffer_pct != null ? Number(row.reentry_buffer_pct) : null,
     flipCooldownSec: row.flip_cooldown_sec != null ? Number(row.flip_cooldown_sec) : null,
     maxSequentialFlips: row.max_sequential_flips != null ? Number(row.max_sequential_flips) : null,
+    breakoutConfirmDistancePct: row.breakout_confirm_distance_pct != null ? Number(row.breakout_confirm_distance_pct) : null,
+    breakoutConfirmDurationSec: row.breakout_confirm_duration_sec != null ? Number(row.breakout_confirm_duration_sec) : null,
     dynamicState: parseJsonSafe(row.dynamic_state_json, null),
     valueMode: row.value_mode || 'usd',
     leverage: Number(row.leverage),
@@ -130,6 +133,7 @@ async function listByUser(userId, executor) {
                   'direction', h.direction,
                   'entryPrice', h.entry_price,
                   'exitPrice', h.exit_price,
+                  'dynamicAnchorPrice', h.dynamic_anchor_price,
                   'size', h.size,
                   'leverage', h.leverage,
                   'status', h.status,
@@ -170,6 +174,7 @@ async function listActiveDynamic(executor) {
                   'direction', h.direction,
                   'entryPrice', h.entry_price,
                   'exitPrice', h.exit_price,
+                  'dynamicAnchorPrice', h.dynamic_anchor_price,
                   'size', h.size,
                   'leverage', h.leverage,
                   'status', h.status,
@@ -202,7 +207,7 @@ async function listActiveByUser(userId, executor) {
             token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
             price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
             value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-            max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
+            max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
             updated_at, deactivated_at
        FROM protected_uniswap_pools
       WHERE user_id = $1 AND status = 'active'`,
@@ -218,7 +223,7 @@ async function listActiveForRefresh(executor) {
             token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
             price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
             value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-            max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
+            max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
             updated_at, deactivated_at, pool_snapshot_json
        FROM protected_uniswap_pools
       WHERE status = 'active'
@@ -245,6 +250,7 @@ async function getById(userId, id, executor) {
                   'direction', h.direction,
                   'entryPrice', h.entry_price,
                   'exitPrice', h.exit_price,
+                  'dynamicAnchorPrice', h.dynamic_anchor_price,
                   'size', h.size,
                   'leverage', h.leverage,
                   'status', h.status,
@@ -276,7 +282,7 @@ async function findReusableByIdentity(userId, { network, version, walletAddress,
             token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
             price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
             value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-            max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
+            max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
             updated_at, deactivated_at
        FROM protected_uniswap_pools
       WHERE user_id = $1
@@ -299,10 +305,10 @@ async function create(record, executor) {
        token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
        price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
        value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-       max_sequential_flips, dynamic_state_json, value_mode, leverage, margin_mode, status, pool_snapshot_json,
+       max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, pool_snapshot_json,
        created_at, updated_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, 'active', $29, $30, $30)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, 'active', $31, $32, $32)
      RETURNING id`,
     [
       record.userId,
@@ -329,6 +335,8 @@ async function create(record, executor) {
       record.reentryBufferPct ?? null,
       record.flipCooldownSec ?? null,
       record.maxSequentialFlips ?? null,
+      record.breakoutConfirmDistancePct ?? null,
+      record.breakoutConfirmDurationSec ?? null,
       record.dynamicState ? JSON.stringify(record.dynamicState) : null,
       record.valueMode || 'usd',
       record.leverage,
@@ -368,13 +376,15 @@ async function reactivate(userId, id, record, executor) {
             reentry_buffer_pct = $23,
             flip_cooldown_sec = $24,
             max_sequential_flips = $25,
-            dynamic_state_json = $26,
-            value_mode = $27,
-            leverage = $28,
-            margin_mode = $29,
+            breakout_confirm_distance_pct = $26,
+            breakout_confirm_duration_sec = $27,
+            dynamic_state_json = $28,
+            value_mode = $29,
+            leverage = $30,
+            margin_mode = $31,
             status = 'active',
-            pool_snapshot_json = $30,
-            updated_at = $31,
+            pool_snapshot_json = $32,
+            updated_at = $33,
             deactivated_at = NULL
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
@@ -404,6 +414,8 @@ async function reactivate(userId, id, record, executor) {
       record.reentryBufferPct ?? null,
       record.flipCooldownSec ?? null,
       record.maxSequentialFlips ?? null,
+      record.breakoutConfirmDistancePct ?? null,
+      record.breakoutConfirmDurationSec ?? null,
       record.dynamicState ? JSON.stringify(record.dynamicState) : null,
       record.valueMode || 'usd',
       record.leverage,
@@ -471,6 +483,8 @@ async function updateDynamicState(userId, id, {
   reentryBufferPct,
   flipCooldownSec,
   maxSequentialFlips,
+  breakoutConfirmDistancePct,
+  breakoutConfirmDurationSec,
 }, executor) {
   const { rows } = await exec(executor).query(
     `UPDATE protected_uniswap_pools
@@ -478,7 +492,9 @@ async function updateDynamicState(userId, id, {
             reentry_buffer_pct = COALESCE($4, reentry_buffer_pct),
             flip_cooldown_sec = COALESCE($5, flip_cooldown_sec),
             max_sequential_flips = COALESCE($6, max_sequential_flips),
-            updated_at = $7
+            breakout_confirm_distance_pct = COALESCE($7, breakout_confirm_distance_pct),
+            breakout_confirm_duration_sec = COALESCE($8, breakout_confirm_duration_sec),
+            updated_at = $9
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
     [
@@ -488,6 +504,8 @@ async function updateDynamicState(userId, id, {
       reentryBufferPct ?? null,
       flipCooldownSec ?? null,
       maxSequentialFlips ?? null,
+      breakoutConfirmDistancePct ?? null,
+      breakoutConfirmDurationSec ?? null,
       updatedAt,
     ]
   );

@@ -1,7 +1,4 @@
-export function shortAddress(address = '') {
-  if (!address) return '';
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
+export { shortAddress } from './formatters';
 
 export function formatUsd(value) {
   if (value == null || Number.isNaN(Number(value))) return '—';

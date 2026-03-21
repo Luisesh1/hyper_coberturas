@@ -10,6 +10,7 @@
  */
 
 const axios = require('axios');
+const logger = require('./logger.service');
 
 class TelegramService {
   /**
@@ -35,22 +36,53 @@ class TelegramService {
   // Core
   // ------------------------------------------------------------------
 
+  async _request(method, payload) {
+    if (!this.enabled) return null;
+    try {
+      const { data } = await axios.post(
+        `https://api.telegram.org/bot${this.token}/${method}`,
+        payload,
+        { timeout: 5000 }
+      );
+      return data;
+    } catch (err) {
+      logger.error('telegram_api_error', { method, error: err.message });
+      return null;
+    }
+  }
+
   /**
    * Envia un mensaje de texto con formato HTML al chat configurado.
    * No lanza excepciones — los errores se loggean y se ignoran.
    * @param {string} text - Mensaje en formato HTML
    */
-  async send(text) {
-    if (!this.enabled) return;
-    try {
-      await axios.post(
-        `https://api.telegram.org/bot${this.token}/sendMessage`,
-        { chat_id: this.chatId, text, parse_mode: 'HTML' },
-        { timeout: 5000 }
-      );
-    } catch (err) {
-      console.error('[Telegram] Error al enviar notificacion:', err.message);
+  async send(text, options = {}) {
+    return this.sendToChat(this.chatId, text, options);
+  }
+
+  async sendToChat(chatId, text, options = {}) {
+    if (!this.enabled || !chatId) return null;
+
+    const payload = {
+      chat_id: chatId,
+      text,
+      parse_mode: options.parseMode || 'HTML',
+      disable_web_page_preview: options.disableWebPagePreview !== false,
+    };
+    if (options.replyMarkup) {
+      payload.reply_markup = options.replyMarkup;
     }
+
+    return this._request('sendMessage', payload);
+  }
+
+  async answerCallbackQuery(callbackQueryId, options = {}) {
+    if (!this.enabled || !callbackQueryId) return null;
+    return this._request('answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      text: options.text || undefined,
+      show_alert: options.showAlert === true,
+    });
   }
 
   // ------------------------------------------------------------------
@@ -126,6 +158,20 @@ class TelegramService {
       `Precio entrada: $${this._fmtPrice(hedge.openPrice)}`,
       `Tamaño: ${hedge.size} ${hedge.asset} (~$${notional})`,
       hedge.label ? `Cobertura: ${hedge.label}` : null,
+    ];
+    return this.send(lines.filter(Boolean).join('\n'));
+  }
+
+  notifyHedgePartialCoverage(hedge, payload = {}) {
+    const lines = [
+      `🟠 <b>Cobertura parcial</b> #${hedge.id}`,
+      this._fmtAccount(hedge.account),
+      `Activo: <b>${hedge.asset}</b> | Estado: ${hedge.status}`,
+      `Esperado: ${payload.expectedSize} ${hedge.asset}`,
+      `Abierto: ${payload.actualSize} ${hedge.asset}`,
+      `Faltante: ${payload.missingSize} ${hedge.asset}`,
+      payload.message ? `Detalle: ${payload.message}` : null,
+      hedge.label ? `Etiqueta: ${hedge.label}` : null,
     ];
     return this.send(lines.filter(Boolean).join('\n'));
   }
