@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config = require('./config');
 const routes = require('./routes');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
@@ -27,7 +27,7 @@ app.use(rateLimit({
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.user?.userId || req.ip,
+  keyGenerator: (req) => req.user?.userId ? `user:${req.user.userId}` : ipKeyGenerator(req.ip),
   message: { success: false, error: 'Demasiadas peticiones, intenta de nuevo más tarde' },
 }));
 

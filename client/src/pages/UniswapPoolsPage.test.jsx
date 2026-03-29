@@ -75,6 +75,20 @@ function buildPool(overrides = {}) {
       breakoutConfirmDistancePct: 0.5,
       breakoutConfirmDurationSec: 600,
       midPrice: 100500,
+      deltaNeutralEligible: true,
+      deltaNeutralAsset: 'BTC',
+      stableTokenSymbol: 'USDC',
+      volatileTokenSymbol: 'BTC',
+      estimatedInitialHedgeQty: 0.01234,
+      deltaQty: 0.01234,
+      gamma: 0.00001234,
+      bandMode: 'adaptive',
+      baseRebalancePriceMovePct: 3,
+      rebalanceIntervalSec: 21600,
+      targetHedgeRatio: 1,
+      minRebalanceNotionalUsd: 50,
+      maxSlippageBps: 20,
+      twapMinNotionalUsd: 10000,
     },
     ...overrides,
   };
@@ -360,7 +374,7 @@ describe('UniswapPoolsPage', () => {
 
     expect(await screen.findByRole('dialog', { name: 'Aplicar proteccion al pool' })).toBeTruthy();
     expect(screen.getAllByText('Configuracion de cobertura').length).toBeGreaterThan(0);
-    expect(screen.getByText('Resultado estimado')).toBeTruthy();
+    expect(screen.getByText('Vista previa')).toBeTruthy();
     expect(screen.getByDisplayValue('1240')).toBeTruthy();
   });
 
@@ -383,7 +397,7 @@ describe('UniswapPoolsPage', () => {
     await userEvent.type(within(dialog).getByRole('spinbutton', { name: /Distancia confirmacion breakout/i }), '0.75');
     await userEvent.clear(within(dialog).getByRole('spinbutton', { name: /Duracion confirmacion breakout/i }));
     await userEvent.type(within(dialog).getByRole('spinbutton', { name: /Duracion confirmacion breakout/i }), '900');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Aplicar cobertura' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Activar proteccion dinamica' }));
 
     await waitFor(() => expect(uniswapApi.createProtectedPool).toHaveBeenCalled());
     expect(uniswapApi.createProtectedPool).toHaveBeenCalledWith(expect.objectContaining({
@@ -391,6 +405,37 @@ describe('UniswapPoolsPage', () => {
       reentryBufferPct: 0.0125,
       breakoutConfirmDistancePct: 0.75,
       breakoutConfirmDurationSec: 900,
+    }));
+  }, 20000);
+
+  it('envia la configuracion delta-neutral con presets y parametros de overlay', async () => {
+    render(<UniswapPoolsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Escanear' }));
+    await screen.findByText('2 de 2');
+
+    const applyButtons = screen.getAllByRole('button', { name: 'Aplicar cobertura' });
+    await userEvent.click(applyButtons[0]);
+
+    const dialog = screen.getByRole('dialog', { name: 'Aplicar proteccion al pool' });
+    await userEvent.selectOptions(within(dialog).getByRole('combobox', { name: /Modo/i }), 'delta_neutral');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Aggressive' }));
+    await userEvent.clear(within(dialog).getByRole('spinbutton', { name: /Hedge ratio/i }));
+    await userEvent.type(within(dialog).getByRole('spinbutton', { name: /Hedge ratio/i }), '0.9');
+    await userEvent.clear(within(dialog).getByRole('spinbutton', { name: /Drift minimo USD/i }));
+    await userEvent.type(within(dialog).getByRole('spinbutton', { name: /Drift minimo USD/i }), '75');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Activar overlay delta-neutral' }));
+
+    await waitFor(() => expect(uniswapApi.createProtectedPool).toHaveBeenCalled());
+    expect(uniswapApi.createProtectedPool).toHaveBeenCalledWith(expect.objectContaining({
+      protectionMode: 'delta_neutral',
+      bandMode: 'fixed',
+      baseRebalancePriceMovePct: 1,
+      rebalanceIntervalSec: 3600,
+      targetHedgeRatio: 0.9,
+      minRebalanceNotionalUsd: 75,
+      maxSlippageBps: 20,
+      twapMinNotionalUsd: 10000,
     }));
   }, 20000);
 

@@ -64,6 +64,8 @@ const config = {
     hedgeClosingTimeoutMs: parseInt(process.env.HEDGE_CLOSING_TIMEOUT_MS, 10) || 90_000,
     hedgeCancelTimeoutMs: parseInt(process.env.HEDGE_CANCEL_TIMEOUT_MS, 10) || 300_000,
     protectedPoolRefreshMs: parseInt(process.env.PROTECTED_POOL_REFRESH_INTERVAL_MS, 10) || 600_000,
+    deltaNeutralLoopMs: parseInt(process.env.DELTA_NEUTRAL_LOOP_INTERVAL_MS, 10) || 2_000,
+    deltaNeutralEvalMs: parseInt(process.env.DELTA_NEUTRAL_EVAL_INTERVAL_MS, 10) || 30_000,
     telegramPollMs: parseInt(process.env.TELEGRAM_POLL_INTERVAL_MS, 10) || 3_000,
     telegramConfigRefreshMs: parseInt(process.env.TELEGRAM_CONFIG_REFRESH_INTERVAL_MS, 10) || 60_000,
     telegramLongPollTimeoutSec: parseInt(process.env.TELEGRAM_LONG_POLL_TIMEOUT_SEC, 10) || 20,

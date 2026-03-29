@@ -55,6 +55,18 @@ function mapSummaryHedge(hedge) {
   };
 }
 
+const IDENTITY_COLUMNS = `
+  id, user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
+  token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
+  price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
+  initial_configured_hedge_notional_usd, value_multiplier, stop_loss_difference_pct, protection_mode,
+  reentry_buffer_pct, flip_cooldown_sec, max_sequential_flips, breakout_confirm_distance_pct,
+  breakout_confirm_duration_sec, dynamic_state_json, band_mode, base_rebalance_price_move_pct,
+  rebalance_interval_sec, target_hedge_ratio, min_rebalance_notional_usd, max_slippage_bps,
+  twap_min_notional_usd, strategy_state_json, value_mode, leverage, margin_mode, status,
+  created_at, updated_at, deactivated_at
+`.replace(/\n/g, ' ').trim();
+
 function mapIdentityRow(row) {
   if (!row) return null;
   return {
@@ -77,6 +89,9 @@ function mapIdentityRow(row) {
     hedgeSize: Number(row.hedge_size),
     hedgeNotionalUsd: Number(row.hedge_notional_usd),
     configuredHedgeNotionalUsd: Number(row.configured_hedge_notional_usd),
+    initialConfiguredHedgeNotionalUsd: row.initial_configured_hedge_notional_usd != null
+      ? Number(row.initial_configured_hedge_notional_usd)
+      : Number(row.configured_hedge_notional_usd),
     valueMultiplier: row.value_multiplier != null ? Number(row.value_multiplier) : null,
     stopLossDifferencePct: row.stop_loss_difference_pct != null ? Number(row.stop_loss_difference_pct) : 0.05,
     protectionMode: row.protection_mode || 'static',
@@ -86,6 +101,14 @@ function mapIdentityRow(row) {
     breakoutConfirmDistancePct: row.breakout_confirm_distance_pct != null ? Number(row.breakout_confirm_distance_pct) : null,
     breakoutConfirmDurationSec: row.breakout_confirm_duration_sec != null ? Number(row.breakout_confirm_duration_sec) : null,
     dynamicState: parseJsonSafe(row.dynamic_state_json, null),
+    bandMode: row.band_mode || null,
+    baseRebalancePriceMovePct: row.base_rebalance_price_move_pct != null ? Number(row.base_rebalance_price_move_pct) : null,
+    rebalanceIntervalSec: row.rebalance_interval_sec != null ? Number(row.rebalance_interval_sec) : null,
+    targetHedgeRatio: row.target_hedge_ratio != null ? Number(row.target_hedge_ratio) : null,
+    minRebalanceNotionalUsd: row.min_rebalance_notional_usd != null ? Number(row.min_rebalance_notional_usd) : null,
+    maxSlippageBps: row.max_slippage_bps != null ? Number(row.max_slippage_bps) : null,
+    twapMinNotionalUsd: row.twap_min_notional_usd != null ? Number(row.twap_min_notional_usd) : null,
+    strategyState: parseJsonSafe(row.strategy_state_json, null),
     valueMode: row.value_mode || 'usd',
     leverage: Number(row.leverage),
     marginMode: row.margin_mode,
@@ -203,12 +226,7 @@ async function listActiveDynamic(executor) {
 
 async function listActiveByUser(userId, executor) {
   const { rows } = await exec(executor).query(
-    `SELECT id, user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
-            token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
-            price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
-            value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-            max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
-            updated_at, deactivated_at
+    `SELECT ${IDENTITY_COLUMNS}
        FROM protected_uniswap_pools
       WHERE user_id = $1 AND status = 'active'`,
     [userId]
@@ -219,12 +237,7 @@ async function listActiveByUser(userId, executor) {
 
 async function listActiveForRefresh(executor) {
   const { rows } = await exec(executor).query(
-    `SELECT id, user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
-            token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
-            price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
-            value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-            max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
-            updated_at, deactivated_at, pool_snapshot_json
+    `SELECT ${IDENTITY_COLUMNS}, pool_snapshot_json
        FROM protected_uniswap_pools
       WHERE status = 'active'
       ORDER BY user_id, network, version, lower(wallet_address), position_identifier, updated_at DESC, id DESC`
@@ -278,12 +291,7 @@ async function getById(userId, id, executor) {
 
 async function findReusableByIdentity(userId, { network, version, walletAddress, positionIdentifier }, executor) {
   const { rows } = await exec(executor).query(
-    `SELECT id, user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
-            token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
-            price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
-            value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-            max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, created_at,
-            updated_at, deactivated_at
+    `SELECT ${IDENTITY_COLUMNS}
        FROM protected_uniswap_pools
       WHERE user_id = $1
         AND network = $2
@@ -298,17 +306,60 @@ async function findReusableByIdentity(userId, { network, version, walletAddress,
   return rows[0] ? mapIdentityRow(rows[0]) : null;
 }
 
+async function listActiveDeltaNeutral(executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT p.*,
+            a.alias AS account_alias,
+            a.address AS account_address,
+            a.is_default AS account_is_default,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', h.id,
+                  'asset', h.asset,
+                  'direction', h.direction,
+                  'entryPrice', h.entry_price,
+                  'exitPrice', h.exit_price,
+                  'dynamicAnchorPrice', h.dynamic_anchor_price,
+                  'size', h.size,
+                  'leverage', h.leverage,
+                  'status', h.status,
+                  'label', h.label,
+                  'protectedRole', h.protected_role,
+                  'createdAt', h.created_at,
+                  'openedAt', h.opened_at,
+                  'closedAt', h.closed_at,
+                  'error', h.error
+                )
+                ORDER BY h.id
+              ) FILTER (WHERE h.id IS NOT NULL),
+              '[]'
+            ) AS hedges_json
+       FROM protected_uniswap_pools p
+       LEFT JOIN hyperliquid_accounts a ON a.id = p.hyperliquid_account_id
+       LEFT JOIN hedges h ON h.protected_pool_id = p.id
+      WHERE p.status = 'active'
+        AND p.protection_mode = 'delta_neutral'
+      GROUP BY p.id, a.id
+      ORDER BY p.updated_at DESC, p.id DESC`
+  );
+
+  return rows.map(mapRow);
+}
+
 async function create(record, executor) {
   const { rows } = await exec(executor).query(
     `INSERT INTO protected_uniswap_pools (
        user_id, hyperliquid_account_id, network, version, wallet_address, pool_address, position_identifier,
        token0_symbol, token1_symbol, token0_address, token1_address, range_lower_price, range_upper_price,
-       price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd,
+       price_current, inferred_asset, hedge_size, hedge_notional_usd, configured_hedge_notional_usd, initial_configured_hedge_notional_usd,
        value_multiplier, stop_loss_difference_pct, protection_mode, reentry_buffer_pct, flip_cooldown_sec,
-       max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json, value_mode, leverage, margin_mode, status, pool_snapshot_json,
-       created_at, updated_at
+       max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json,
+       band_mode, base_rebalance_price_move_pct, rebalance_interval_sec, target_hedge_ratio,
+       min_rebalance_notional_usd, max_slippage_bps, twap_min_notional_usd, strategy_state_json,
+       value_mode, leverage, margin_mode, status, pool_snapshot_json, created_at, updated_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, 'active', $31, $32, $32)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, 'active', $41, $42, $42)
      RETURNING id`,
     [
       record.userId,
@@ -329,6 +380,7 @@ async function create(record, executor) {
       record.hedgeSize,
       record.hedgeNotionalUsd,
       record.configuredHedgeNotionalUsd,
+      record.initialConfiguredHedgeNotionalUsd ?? record.configuredHedgeNotionalUsd,
       record.valueMultiplier,
       record.stopLossDifferencePct ?? 0.05,
       record.protectionMode || 'static',
@@ -338,6 +390,14 @@ async function create(record, executor) {
       record.breakoutConfirmDistancePct ?? null,
       record.breakoutConfirmDurationSec ?? null,
       record.dynamicState ? JSON.stringify(record.dynamicState) : null,
+      record.bandMode ?? null,
+      record.baseRebalancePriceMovePct ?? null,
+      record.rebalanceIntervalSec ?? null,
+      record.targetHedgeRatio ?? null,
+      record.minRebalanceNotionalUsd ?? null,
+      record.maxSlippageBps ?? null,
+      record.twapMinNotionalUsd ?? null,
+      record.strategyState ? JSON.stringify(record.strategyState) : null,
       record.valueMode || 'usd',
       record.leverage,
       record.marginMode || 'isolated',
@@ -370,21 +430,30 @@ async function reactivate(userId, id, record, executor) {
             hedge_size = $17,
             hedge_notional_usd = $18,
             configured_hedge_notional_usd = $19,
-            value_multiplier = $20,
-            stop_loss_difference_pct = $21,
-            protection_mode = $22,
-            reentry_buffer_pct = $23,
-            flip_cooldown_sec = $24,
-            max_sequential_flips = $25,
-            breakout_confirm_distance_pct = $26,
-            breakout_confirm_duration_sec = $27,
-            dynamic_state_json = $28,
-            value_mode = $29,
-            leverage = $30,
-            margin_mode = $31,
+            initial_configured_hedge_notional_usd = $20,
+            value_multiplier = $21,
+            stop_loss_difference_pct = $22,
+            protection_mode = $23,
+            reentry_buffer_pct = $24,
+            flip_cooldown_sec = $25,
+            max_sequential_flips = $26,
+            breakout_confirm_distance_pct = $27,
+            breakout_confirm_duration_sec = $28,
+            dynamic_state_json = $29,
+            band_mode = $30,
+            base_rebalance_price_move_pct = $31,
+            rebalance_interval_sec = $32,
+            target_hedge_ratio = $33,
+            min_rebalance_notional_usd = $34,
+            max_slippage_bps = $35,
+            twap_min_notional_usd = $36,
+            strategy_state_json = $37,
+            value_mode = $38,
+            leverage = $39,
+            margin_mode = $40,
             status = 'active',
-            pool_snapshot_json = $32,
-            updated_at = $33,
+            pool_snapshot_json = $41,
+            updated_at = $42,
             deactivated_at = NULL
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
@@ -408,6 +477,7 @@ async function reactivate(userId, id, record, executor) {
       record.hedgeSize,
       record.hedgeNotionalUsd,
       record.configuredHedgeNotionalUsd,
+      record.initialConfiguredHedgeNotionalUsd ?? record.configuredHedgeNotionalUsd,
       record.valueMultiplier,
       record.stopLossDifferencePct ?? 0.05,
       record.protectionMode || 'static',
@@ -417,6 +487,14 @@ async function reactivate(userId, id, record, executor) {
       record.breakoutConfirmDistancePct ?? null,
       record.breakoutConfirmDurationSec ?? null,
       record.dynamicState ? JSON.stringify(record.dynamicState) : null,
+      record.bandMode ?? null,
+      record.baseRebalancePriceMovePct ?? null,
+      record.rebalanceIntervalSec ?? null,
+      record.targetHedgeRatio ?? null,
+      record.minRebalanceNotionalUsd ?? null,
+      record.maxSlippageBps ?? null,
+      record.twapMinNotionalUsd ?? null,
+      record.strategyState ? JSON.stringify(record.strategyState) : null,
       record.valueMode || 'usd',
       record.leverage,
       record.marginMode || 'isolated',
@@ -513,16 +591,48 @@ async function updateDynamicState(userId, id, {
   return rows[0]?.id || null;
 }
 
+async function updateStrategyState(userId, id, {
+  strategyState,
+  priceCurrent,
+  hedgeSize,
+  hedgeNotionalUsd,
+  updatedAt = Date.now(),
+}, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET strategy_state_json = $3,
+            price_current = COALESCE($4, price_current),
+            hedge_size = COALESCE($5, hedge_size),
+            hedge_notional_usd = COALESCE($6, hedge_notional_usd),
+            updated_at = $7
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [
+      userId,
+      id,
+      strategyState ? JSON.stringify(strategyState) : null,
+      priceCurrent ?? null,
+      hedgeSize ?? null,
+      hedgeNotionalUsd ?? null,
+      updatedAt,
+    ]
+  );
+
+  return rows[0]?.id || null;
+}
+
 module.exports = {
   create,
   deactivate,
   findReusableByIdentity,
   getById,
   listActiveByUser,
+  listActiveDeltaNeutral,
   listActiveDynamic,
   listActiveForRefresh,
   listByUser,
   reactivate,
   updateDynamicState,
+  updateStrategyState,
   updateSnapshot,
 };

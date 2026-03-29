@@ -1,4 +1,3 @@
-const { z } = require('zod');
 const { ValidationError } = require('../errors/app-error');
 
 /**

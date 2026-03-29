@@ -179,6 +179,13 @@ export const uniswapApi = {
     maxSequentialFlips,
     breakoutConfirmDistancePct,
     breakoutConfirmDurationSec,
+    bandMode,
+    baseRebalancePriceMovePct,
+    rebalanceIntervalSec,
+    targetHedgeRatio,
+    minRebalanceNotionalUsd,
+    maxSlippageBps,
+    twapMinNotionalUsd,
   }) =>
     request('POST', '/uniswap/protected-pools', {
       pool,
@@ -193,6 +200,13 @@ export const uniswapApi = {
       maxSequentialFlips,
       breakoutConfirmDistancePct,
       breakoutConfirmDurationSec,
+      bandMode,
+      baseRebalancePriceMovePct,
+      rebalanceIntervalSec,
+      targetHedgeRatio,
+      minRebalanceNotionalUsd,
+      maxSlippageBps,
+      twapMinNotionalUsd,
     }),
   deactivateProtectedPool: (id) =>
     request('POST', `/uniswap/protected-pools/${id}/deactivate`, {}),

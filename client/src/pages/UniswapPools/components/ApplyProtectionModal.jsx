@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { formatNumber } from '../../../utils/formatters';
 import { formatAccountIdentity } from '../../../utils/hyperliquidAccounts';
-import { formatUsd, formatCompactPrice, formatPercentRatio, roundUsd } from '../utils/pool-formatters';
+import { formatUsd, formatCompactPrice, roundUsd } from '../utils/pool-formatters';
 import RangeTrack from './RangeTrack';
 import styles from './ApplyProtectionModal.module.css';
 
@@ -12,11 +12,31 @@ const DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC = 15;
 const DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT = 6;
 const DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT = 0.5;
 const DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC = 600;
+const DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO = 1;
+const DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD = 50;
+const DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS = 20;
+const DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD = 10000;
+const DELTA_NEUTRAL_PRESETS = [
+  { id: 'adaptive', label: 'Adaptive', bandMode: 'adaptive', baseRebalancePriceMovePct: 3, rebalanceIntervalSec: 21600, annualCostHint: 'Coste intermedio con bandas adaptativas por volatilidad.' },
+  { id: 'balanced', label: 'Balanced', bandMode: 'fixed', baseRebalancePriceMovePct: 3, rebalanceIntervalSec: 21600, annualCostHint: 'Perfil medio de seguimiento y comisiones.' },
+  { id: 'aggressive', label: 'Aggressive', bandMode: 'fixed', baseRebalancePriceMovePct: 1, rebalanceIntervalSec: 3600, annualCostHint: 'Mas seguimiento del delta, mas coste de ejecucion.' },
+  { id: 'conservative', label: 'Conservative', bandMode: 'fixed', baseRebalancePriceMovePct: 5, rebalanceIntervalSec: 43200, annualCostHint: 'Menos rebalanceo, mas drift tolerado.' },
+];
 
 function formatPercentInputValue(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return '';
   return String(Number((parsed * 100).toFixed(6)));
+}
+
+function getEstimatedSize(candidate, protectionMode, parsedNotionalUsd) {
+  if (protectionMode === 'delta_neutral') {
+    const parsed = Number(candidate?.estimatedInitialHedgeQty);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return Number.isFinite(parsedNotionalUsd) && parsedNotionalUsd > 0 && Number(candidate?.midPrice) > 0
+    ? parsedNotionalUsd / Number(candidate.midPrice)
+    : null;
 }
 
 export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onClose, onSubmit }) {
@@ -32,6 +52,14 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
   const [maxSequentialFlips, setMaxSequentialFlips] = useState(String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT));
   const [breakoutConfirmDistancePct, setBreakoutConfirmDistancePct] = useState(String(candidate?.breakoutConfirmDistancePct ?? DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT));
   const [breakoutConfirmDurationSec, setBreakoutConfirmDurationSec] = useState(String(candidate?.breakoutConfirmDurationSec ?? DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC));
+  const [bandMode, setBandMode] = useState(candidate?.bandMode || 'adaptive');
+  const [baseRebalancePriceMovePct, setBaseRebalancePriceMovePct] = useState(String(candidate?.baseRebalancePriceMovePct ?? 3));
+  const [rebalanceIntervalSec, setRebalanceIntervalSec] = useState(String(candidate?.rebalanceIntervalSec ?? 21600));
+  const [targetHedgeRatio, setTargetHedgeRatio] = useState(String(candidate?.targetHedgeRatio ?? DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO));
+  const [minRebalanceNotionalUsd, setMinRebalanceNotionalUsd] = useState(String(candidate?.minRebalanceNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD));
+  const [maxSlippageBps, setMaxSlippageBps] = useState(String(candidate?.maxSlippageBps ?? DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS));
+  const [twapMinNotionalUsd, setTwapMinNotionalUsd] = useState(String(candidate?.twapMinNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD));
+  const [selectedDeltaPreset, setSelectedDeltaPreset] = useState('adaptive');
   const [selectedMultiplier, setSelectedMultiplier] = useState(null);
   const [error, setError] = useState('');
 
@@ -46,12 +74,41 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
     setMaxSequentialFlips(String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT));
     setBreakoutConfirmDistancePct(String(candidate?.breakoutConfirmDistancePct ?? DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT));
     setBreakoutConfirmDurationSec(String(candidate?.breakoutConfirmDurationSec ?? DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC));
+    setBandMode(candidate?.bandMode || 'adaptive');
+    setBaseRebalancePriceMovePct(String(candidate?.baseRebalancePriceMovePct ?? 3));
+    setRebalanceIntervalSec(String(candidate?.rebalanceIntervalSec ?? 21600));
+    setTargetHedgeRatio(String(candidate?.targetHedgeRatio ?? DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO));
+    setMinRebalanceNotionalUsd(String(candidate?.minRebalanceNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD));
+    setMaxSlippageBps(String(candidate?.maxSlippageBps ?? DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS));
+    setTwapMinNotionalUsd(String(candidate?.twapMinNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD));
+    setSelectedDeltaPreset('adaptive');
     setSelectedMultiplier(null);
     setError('');
-  }, [pool, defaultAccount, candidate?.defaultLeverage, candidate?.suggestedNotionalUsd, candidate?.baseNotionalUsd, candidate?.stopLossDifferenceDefaultPct, candidate?.reentryBufferPct, candidate?.flipCooldownSec, candidate?.maxSequentialFlips, candidate?.breakoutConfirmDistancePct, candidate?.breakoutConfirmDurationSec]);
+  }, [
+    pool,
+    defaultAccount,
+    candidate?.defaultLeverage,
+    candidate?.suggestedNotionalUsd,
+    candidate?.baseNotionalUsd,
+    candidate?.stopLossDifferenceDefaultPct,
+    candidate?.reentryBufferPct,
+    candidate?.flipCooldownSec,
+    candidate?.maxSequentialFlips,
+    candidate?.breakoutConfirmDistancePct,
+    candidate?.breakoutConfirmDurationSec,
+    candidate?.bandMode,
+    candidate?.baseRebalancePriceMovePct,
+    candidate?.rebalanceIntervalSec,
+    candidate?.targetHedgeRatio,
+    candidate?.minRebalanceNotionalUsd,
+    candidate?.maxSlippageBps,
+    candidate?.twapMinNotionalUsd,
+  ]);
 
   if (!pool || !candidate) return null;
 
+  const isDynamic = protectionMode === 'dynamic';
+  const isDeltaNeutral = protectionMode === 'delta_neutral';
   const maxLeverage = Number(candidate.maxLeverage || 1);
   const parsedNotionalUsd = Number(configuredNotionalUsd);
   const parsedStopLossDifferencePct = Number(stopLossDifferencePct);
@@ -61,10 +118,13 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
   const parsedMaxSequentialFlips = Number(maxSequentialFlips);
   const parsedBreakoutConfirmDistancePct = Number(breakoutConfirmDistancePct);
   const parsedBreakoutConfirmDurationSec = Number(breakoutConfirmDurationSec);
-  const isDynamic = protectionMode === 'dynamic';
-  const estimatedSize = Number.isFinite(parsedNotionalUsd) && parsedNotionalUsd > 0 && Number(candidate.midPrice) > 0
-    ? parsedNotionalUsd / Number(candidate.midPrice)
-    : null;
+  const parsedBaseRebalancePriceMovePct = Number(baseRebalancePriceMovePct);
+  const parsedRebalanceIntervalSec = Number(rebalanceIntervalSec);
+  const parsedTargetHedgeRatio = Number(targetHedgeRatio);
+  const parsedMinRebalanceNotionalUsd = Number(minRebalanceNotionalUsd);
+  const parsedMaxSlippageBps = Number(maxSlippageBps);
+  const parsedTwapMinNotionalUsd = Number(twapMinNotionalUsd);
+  const estimatedSize = getEstimatedSize(candidate, protectionMode, parsedNotionalUsd);
   const stopLossRatio = parsedStopLossDifferencePct / 100;
   const downsideStopLoss = Number.isFinite(parsedStopLossDifferencePct) && parsedStopLossDifferencePct > 0 && parsedStopLossDifferencePct < 100
     ? Number(pool.rangeLowerPrice) * (1 + stopLossRatio)
@@ -86,6 +146,14 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
     setError('');
   };
 
+  const applyDeltaPreset = (preset) => {
+    setSelectedDeltaPreset(preset.id);
+    setBandMode(preset.bandMode);
+    setBaseRebalancePriceMovePct(String(preset.baseRebalancePriceMovePct));
+    setRebalanceIntervalSec(String(preset.rebalanceIntervalSec));
+    setError('');
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const parsedAccountId = Number(selectedAccountId);
@@ -104,8 +172,12 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       setError('El valor de proteccion debe ser un numero positivo en USD.');
       return;
     }
-    if (!Number.isFinite(parsedStopLossDifferencePct) || parsedStopLossDifferencePct <= 0 || parsedStopLossDifferencePct >= 100) {
+    if (!isDeltaNeutral && (!Number.isFinite(parsedStopLossDifferencePct) || parsedStopLossDifferencePct <= 0 || parsedStopLossDifferencePct >= 100)) {
       setError('La diferencia de SL debe ser un porcentaje mayor que 0 y menor que 100. Ejemplo: 0.05 = 0.05%.');
+      return;
+    }
+    if (isDeltaNeutral && !candidate.deltaNeutralEligible) {
+      setError(candidate.deltaNeutralReason || 'Este pool no es elegible para delta-neutral.');
       return;
     }
     if (isDynamic && (!Number.isFinite(parsedReentryBufferPctInput) || parsedReentryBufferPctInput <= 0 || parsedReentryBufferPctInput >= 100)) {
@@ -128,6 +200,30 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       setError('La duracion de confirmacion debe ser un entero mayor o igual a 0 segundos.');
       return;
     }
+    if (isDeltaNeutral && (!Number.isFinite(parsedBaseRebalancePriceMovePct) || parsedBaseRebalancePriceMovePct <= 0 || parsedBaseRebalancePriceMovePct >= 100)) {
+      setError('La banda base debe ser un porcentaje mayor que 0 y menor que 100.');
+      return;
+    }
+    if (isDeltaNeutral && (!Number.isInteger(parsedRebalanceIntervalSec) || parsedRebalanceIntervalSec < 60)) {
+      setError('El intervalo de rebalance debe ser de al menos 60 segundos.');
+      return;
+    }
+    if (isDeltaNeutral && (!Number.isFinite(parsedTargetHedgeRatio) || parsedTargetHedgeRatio <= 0 || parsedTargetHedgeRatio > 2)) {
+      setError('El hedge ratio debe estar entre 0 y 2.');
+      return;
+    }
+    if (isDeltaNeutral && (!Number.isFinite(parsedMinRebalanceNotionalUsd) || parsedMinRebalanceNotionalUsd <= 0)) {
+      setError('El drift minimo debe ser un USD positivo.');
+      return;
+    }
+    if (isDeltaNeutral && (!Number.isInteger(parsedMaxSlippageBps) || parsedMaxSlippageBps < 1 || parsedMaxSlippageBps > 500)) {
+      setError('El slippage maximo debe estar entre 1 y 500 bps.');
+      return;
+    }
+    if (isDeltaNeutral && (!Number.isFinite(parsedTwapMinNotionalUsd) || parsedTwapMinNotionalUsd <= 0)) {
+      setError('El umbral de TWAP debe ser un USD positivo.');
+      return;
+    }
 
     setError('');
     await onSubmit({
@@ -136,13 +232,20 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       leverage: parsedLeverage,
       configuredNotionalUsd: roundUsd(normalizedNotionalUsd),
       valueMultiplier: selectedMultiplier,
-      stopLossDifferencePct: parsedStopLossDifferencePct,
+      stopLossDifferencePct: isDeltaNeutral ? undefined : parsedStopLossDifferencePct,
       protectionMode,
       reentryBufferPct: isDynamic ? parsedReentryBufferPct : undefined,
       flipCooldownSec: isDynamic ? parsedFlipCooldownSec : undefined,
       maxSequentialFlips: isDynamic ? parsedMaxSequentialFlips : undefined,
       breakoutConfirmDistancePct: isDynamic ? parsedBreakoutConfirmDistancePct : undefined,
       breakoutConfirmDurationSec: isDynamic ? parsedBreakoutConfirmDurationSec : undefined,
+      bandMode: isDeltaNeutral ? bandMode : undefined,
+      baseRebalancePriceMovePct: isDeltaNeutral ? parsedBaseRebalancePriceMovePct : undefined,
+      rebalanceIntervalSec: isDeltaNeutral ? parsedRebalanceIntervalSec : undefined,
+      targetHedgeRatio: isDeltaNeutral ? parsedTargetHedgeRatio : undefined,
+      minRebalanceNotionalUsd: isDeltaNeutral ? parsedMinRebalanceNotionalUsd : undefined,
+      maxSlippageBps: isDeltaNeutral ? parsedMaxSlippageBps : undefined,
+      twapMinNotionalUsd: isDeltaNeutral ? parsedTwapMinNotionalUsd : undefined,
     });
   };
 
@@ -161,9 +264,11 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
             <span className={styles.eyebrow}>Configuracion de cobertura</span>
             <h2 className={styles.title}>Aplicar cobertura al pool</h2>
             <p className={styles.desc}>
-              {isDynamic
-                ? 'La proteccion dinamica mantiene la cobertura del breakout y mueve la cobertura opuesta para monetizar el reingreso al rango.'
-                : 'Se crearan dos coberturas ligadas al rango: una SHORT para ruptura por abajo y una LONG para ruptura por arriba.'}
+              {isDeltaNeutral
+                ? 'Mantiene el LP intacto y ajusta un short en Hyperliquid usando delta efectivo del rango concentrado.'
+                : isDynamic
+                  ? 'La proteccion dinamica mantiene la cobertura del breakout y mueve la cobertura opuesta para monetizar el reingreso al rango.'
+                  : 'Se crearan dos coberturas ligadas al rango: una SHORT para ruptura por abajo y una LONG para ruptura por arriba.'}
             </p>
           </div>
           <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Cerrar">✕</button>
@@ -178,7 +283,7 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
             <div className={styles.summaryTile}><span className={styles.tileLabel}>Pool</span><strong className={styles.tileValue}>{pool.token0.symbol} / {pool.token1.symbol}</strong></div>
             <div className={styles.summaryTile}><span className={styles.tileLabel}>Activo HL</span><strong className={styles.tileValue}>{candidate.inferredAsset}</strong></div>
             <div className={styles.summaryTile}><span className={styles.tileLabel}>Valor base LP</span><strong className={styles.tileValue}>{formatUsd(candidate.baseNotionalUsd)}</strong></div>
-            <div className={styles.summaryTile}><span className={styles.tileLabel}>Tamano estimado</span><strong className={styles.tileValue}>{estimatedSize != null ? `${formatNumber(estimatedSize, 6)} ${candidate.inferredAsset}` : '—'}</strong></div>
+            <div className={styles.summaryTile}><span className={styles.tileLabel}>{isDeltaNeutral ? 'Short inicial' : 'Tamano estimado'}</span><strong className={styles.tileValue}>{estimatedSize != null ? `${formatNumber(estimatedSize, 6)} ${candidate.inferredAsset}` : '—'}</strong></div>
           </div>
         </section>
 
@@ -204,7 +309,11 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
                 <select className={styles.select} value={protectionMode} onChange={(e) => setProtectionMode(e.target.value)}>
                   <option value="static">Proteccion normal</option>
                   <option value="dynamic">Proteccion dinamica</option>
+                  <option value="delta_neutral" disabled={!candidate.deltaNeutralEligible}>Delta neutral</option>
                 </select>
+                {!candidate.deltaNeutralEligible && (
+                  <span className={styles.hint}>{candidate.deltaNeutralReason || 'Delta neutral solo aplica a pools stable + 1 volatil.'}</span>
+                )}
               </label>
 
               <label className={styles.field}>
@@ -216,14 +325,16 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
               <label className={`${styles.field} ${styles.fieldWide}`}>
                 <span className={styles.fieldLabel}>Valor de proteccion (USD)</span>
                 <input className={styles.input} type="number" min="0.01" step="0.01" value={configuredNotionalUsd} onChange={(e) => { setConfiguredNotionalUsd(e.target.value); setSelectedMultiplier(null); }} />
-                <span className={styles.hint}>Cada cobertura se crea con este notional convertido al activo HL.</span>
+                <span className={styles.hint}>{isDeltaNeutral ? 'Se usa como referencia fija para caps y reporting del overlay.' : 'Cada cobertura se crea con este notional convertido al activo HL.'}</span>
               </label>
 
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Diferencia SL</span>
-                <input className={styles.input} type="number" min="0.001" max="99.99" step="0.001" value={stopLossDifferencePct} onChange={(e) => setStopLossDifferencePct(e.target.value)} />
-                <span className={styles.hint}>{isDynamic ? 'En dinamica actua como SL de emergencia. 0.05 = 0.05%.' : 'El valor ya esta en porcentaje. 0.05 = 0.05% desde la entrada.'}</span>
-              </label>
+              {!isDeltaNeutral && (
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>Diferencia SL</span>
+                  <input className={styles.input} type="number" min="0.001" max="99.99" step="0.001" value={stopLossDifferencePct} onChange={(e) => setStopLossDifferencePct(e.target.value)} />
+                  <span className={styles.hint}>{isDynamic ? 'En dinamica actua como SL de emergencia. 0.05 = 0.05%.' : 'El valor ya esta en porcentaje. 0.05 = 0.05% desde la entrada.'}</span>
+                </label>
+              )}
 
               {isDynamic && (
                 <>
@@ -258,56 +369,164 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
                   </label>
                 </>
               )}
+
+              {isDeltaNeutral && (
+                <>
+                  <div className={`${styles.field} ${styles.fieldWide} ${styles.multiplierBlock}`}>
+                    <span className={styles.fieldLabel}>Preset de rebalance</span>
+                    <div className={styles.multiplierBtns}>
+                      {DELTA_NEUTRAL_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className={`${styles.multiplierBtn} ${selectedDeltaPreset === preset.id ? styles.multiplierBtnActive : ''}`}
+                          onClick={() => applyDeltaPreset(preset)}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className={styles.hint}>
+                      {DELTA_NEUTRAL_PRESETS.find((preset) => preset.id === selectedDeltaPreset)?.annualCostHint}
+                    </span>
+                  </div>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Band mode</span>
+                    <select className={styles.select} value={bandMode} onChange={(e) => setBandMode(e.target.value)}>
+                      <option value="adaptive">Adaptive</option>
+                      <option value="fixed">Fixed</option>
+                    </select>
+                    <span className={styles.hint}>Adaptive usa max(rv4h, rv24h) para moverse entre 1/3/5%.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Banda base</span>
+                    <input className={styles.input} type="number" min="0.1" max="99.99" step="0.1" value={baseRebalancePriceMovePct} onChange={(e) => setBaseRebalancePriceMovePct(e.target.value)} />
+                    <span className={styles.hint}>Porcentaje de movimiento antes del trigger por precio.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Intervalo rebalance</span>
+                    <input className={styles.input} type="number" min="60" step="60" value={rebalanceIntervalSec} onChange={(e) => setRebalanceIntervalSec(e.target.value)} />
+                    <span className={styles.hint}>El timer solo actua si ademas el drift supera el minimo USD.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Hedge ratio</span>
+                    <input className={styles.input} type="number" min="0.1" max="2" step="0.05" value={targetHedgeRatio} onChange={(e) => setTargetHedgeRatio(e.target.value)} />
+                    <span className={styles.hint}>1.0 = cubrir el delta completo estimado del LP.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Drift minimo USD</span>
+                    <input className={styles.input} type="number" min="1" step="1" value={minRebalanceNotionalUsd} onChange={(e) => setMinRebalanceNotionalUsd(e.target.value)} />
+                    <span className={styles.hint}>Evita rebalances triviales cuando vence el timer.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Slippage max (bps)</span>
+                    <input className={styles.input} type="number" min="1" max="500" step="1" value={maxSlippageBps} onChange={(e) => setMaxSlippageBps(e.target.value)} />
+                    <span className={styles.hint}>Cap para IOC y fallback defensivo.</span>
+                  </label>
+
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Umbral TWAP USD</span>
+                    <input className={styles.input} type="number" min="100" step="100" value={twapMinNotionalUsd} onChange={(e) => setTwapMinNotionalUsd(e.target.value)} />
+                    <span className={styles.hint}>Ajustes mas grandes se trocean en 5 slices/60s por defecto.</span>
+                  </label>
+                </>
+              )}
+
+              <div className={`${styles.field} ${styles.fieldWide} ${styles.multiplierBlock}`}>
+                <span className={styles.fieldLabel}>Atajos de valor LP</span>
+                <div className={styles.multiplierBtns}>
+                  {SHORTCUT_MULTIPLIERS.map((multiplier) => (
+                    <button
+                      key={multiplier}
+                      type="button"
+                      className={`${styles.multiplierBtn} ${selectedMultiplier === multiplier ? styles.multiplierBtnActive : ''}`}
+                      onClick={() => applyMultiplier(multiplier)}
+                    >
+                      {multiplier}x
+                    </button>
+                  ))}
+                </div>
+                <span className={styles.hint}>Sirve como referencia rapida para el notional protegido/reportado.</span>
+              </div>
             </div>
 
-            <div className={styles.multiplierBlock}>
-              <span className={styles.fieldLabel}>Atajos multiplicadores</span>
-              <div className={styles.multiplierBtns}>
-                {SHORTCUT_MULTIPLIERS.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className={`${styles.multiplierBtn} ${selectedMultiplier === m ? styles.multiplierBtnActive : ''}`}
-                    onClick={() => applyMultiplier(m)}
-                  >
-                    {m}x
-                  </button>
-                ))}
-              </div>
+            {error && <div className={styles.inlineError}>{error}</div>}
+
+            <div className={styles.actions}>
+              <button type="button" className={styles.ghostBtn} onClick={onClose}>Cancelar</button>
+              <button type="submit" className={styles.primaryBtn} disabled={isSubmitting}>
+                {isSubmitting
+                  ? 'Aplicando...'
+                  : isDeltaNeutral
+                    ? 'Activar overlay delta-neutral'
+                    : isDynamic
+                      ? 'Activar proteccion dinamica'
+                      : 'Activar cobertura de rango'}
+              </button>
             </div>
           </section>
 
-          <section className={`${styles.section} ${styles.sectionPreview}`}>
+          <section className={styles.section}>
             <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Resultado estimado</span>
-              <span className={styles.miniMeta}>{formatPercentRatio(parsedStopLossDifferencePct)}</span>
+              <span className={styles.kicker}>Vista previa</span>
+              <span className={styles.miniMeta}>{candidate.inferredAsset}</span>
             </div>
 
             <div className={styles.previewStack}>
-              <div className={styles.previewCard}><span className={styles.previewLabel}>Notional configurado</span><strong className={styles.previewValue}>{formatUsd(parsedNotionalUsd)}</strong></div>
-              <div className={styles.previewCard}><span className={styles.previewLabel}>Tamano por cobertura</span><strong className={styles.previewValue}>{estimatedSize != null ? `${formatNumber(estimatedSize, 6)} ${candidate.inferredAsset}` : '—'}</strong></div>
-              <div className={styles.previewCard}><span className={styles.previewLabel}>SHORT de defensa</span><strong className={styles.previewValue}>Entra {formatCompactPrice(pool.rangeLowerPrice)} · SL {formatCompactPrice(downsideStopLoss)}</strong></div>
-              <div className={styles.previewCard}><span className={styles.previewLabel}>LONG de defensa</span><strong className={styles.previewValue}>Entra {formatCompactPrice(pool.rangeUpperPrice)} · SL {formatCompactPrice(upsideStopLoss)}</strong></div>
+              <div className={styles.summaryTile}>
+                <span className={styles.tileLabel}>Notional seleccionado</span>
+                <strong className={styles.tileValue}>{formatUsd(parsedNotionalUsd)}</strong>
+              </div>
+              <div className={styles.summaryTile}>
+                <span className={styles.tileLabel}>{isDeltaNeutral ? 'Short inicial estimado' : 'Tamano hedge'}</span>
+                <strong className={styles.tileValue}>{estimatedSize != null ? `${formatNumber(estimatedSize, 6)} ${candidate.inferredAsset}` : '—'}</strong>
+              </div>
+              {isDeltaNeutral && (
+                <>
+                  <div className={styles.summaryTile}>
+                    <span className={styles.tileLabel}>Delta estimado</span>
+                    <strong className={styles.tileValue}>{candidate.deltaQty != null ? formatNumber(candidate.deltaQty, 6) : '—'}</strong>
+                  </div>
+                  <div className={styles.summaryTile}>
+                    <span className={styles.tileLabel}>Gamma estimada</span>
+                    <strong className={styles.tileValue}>{candidate.gamma != null ? formatNumber(candidate.gamma, 8) : '—'}</strong>
+                  </div>
+                </>
+              )}
+              {!isDeltaNeutral && (
+                <>
+                  <div className={styles.summaryTile}>
+                    <span className={styles.tileLabel}>SL downside</span>
+                    <strong className={styles.tileValue}>{formatCompactPrice(downsideStopLoss)}</strong>
+                  </div>
+                  <div className={styles.summaryTile}>
+                    <span className={styles.tileLabel}>SL upside</span>
+                    <strong className={styles.tileValue}>{formatCompactPrice(upsideStopLoss)}</strong>
+                  </div>
+                </>
+              )}
               {isDynamic && (
                 <>
-                  <div className={styles.previewCard}><span className={styles.previewLabel}>Reentrada alta</span><strong className={styles.previewValue}>SHORT espera en {formatCompactPrice(upperReentry)} y el LONG protege hasta {formatCompactPrice(upperReentry)}</strong></div>
-                  <div className={styles.previewCard}><span className={styles.previewLabel}>Reentrada baja</span><strong className={styles.previewValue}>LONG espera en {formatCompactPrice(lowerReentry)} y el SHORT protege hasta {formatCompactPrice(lowerReentry)}</strong></div>
-                  <div className={styles.previewCard}><span className={styles.previewLabel}>Confirmacion breakout</span><strong className={styles.previewValue}>{parsedBreakoutConfirmDistancePct}% y {parsedBreakoutConfirmDurationSec}s fuera de rango</strong></div>
+                  <div className={styles.summaryTile}>
+                    <span className={styles.tileLabel}>Reentrada superior</span>
+                    <strong className={styles.tileValue}>{formatCompactPrice(upperReentry)}</strong>
+                  </div>
+                  <div className={styles.summaryTile}>
+                    <span className={styles.tileLabel}>Reentrada inferior</span>
+                    <strong className={styles.tileValue}>{formatCompactPrice(lowerReentry)}</strong>
+                  </div>
                 </>
               )}
             </div>
 
-            <RangeTrack pool={pool} compact />
+            {pool.mode === 'lp_position' && <RangeTrack pool={pool} compact showOpen={false} />}
           </section>
-        </div>
-
-        {error && <div className={styles.inlineError}>{error}</div>}
-
-        <div className={styles.actions}>
-          <button type="button" className={styles.ghostBtn} onClick={onClose}>Cancelar</button>
-          <button type="submit" className={styles.primaryBtn} disabled={isSubmitting}>
-            {isSubmitting ? 'Aplicando...' : 'Aplicar cobertura'}
-          </button>
         </div>
       </form>
     </div>

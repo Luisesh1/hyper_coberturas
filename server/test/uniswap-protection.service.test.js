@@ -3,11 +3,19 @@ const assert = require('node:assert/strict');
 
 const {
   buildProtectionCandidate,
+  buildDeltaNeutralCandidate,
   createProtectedPool,
   deactivateProtectedPool,
   DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT,
   DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC,
   DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT,
+  DEFAULT_BAND_MODE,
+  DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
+  DEFAULT_REBALANCE_INTERVAL_SEC,
+  DEFAULT_TARGET_HEDGE_RATIO,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MAX_SLIPPAGE_BPS,
+  DEFAULT_TWAP_MIN_NOTIONAL_USD,
 } = require('../src/services/uniswap-protection.service');
 
 function buildPool(overrides = {}) {
@@ -30,6 +38,23 @@ function buildPool(overrides = {}) {
     token1: { symbol: 'USDC' },
     ...overrides,
   };
+}
+
+function buildDeltaNeutralPool(overrides = {}) {
+  return buildPool({
+    token0: { symbol: 'ETH', decimals: 18 },
+    token1: { symbol: 'USDC', decimals: 6 },
+    priceCurrent: 2500,
+    rangeLowerPrice: 2000,
+    rangeUpperPrice: 3000,
+    currentValueUsd: 2500,
+    liquidity: '2000000000000',
+    tickLower: 74000,
+    tickUpper: 79000,
+    unclaimedFees0: 0.01,
+    unclaimedFees1: 12,
+    ...overrides,
+  });
 }
 
 test('buildProtectionCandidate infiere el activo HL y deriva size desde currentValueUsd', async () => {
@@ -113,6 +138,23 @@ test('buildProtectionCandidate rechaza pools con inferencia ambigua', async () =
 
   assert.equal(candidate.eligible, false);
   assert.match(candidate.reason, /ambiguo/i);
+});
+
+test('buildDeltaNeutralCandidate detecta pools stable + volatil y deriva delta/gamma', async () => {
+  const candidate = buildDeltaNeutralCandidate(buildDeltaNeutralPool(), [
+    { name: 'ETH', maxLeverage: 25 },
+    { name: 'BTC', maxLeverage: 40 },
+  ], {
+    ETH: '2500',
+  });
+
+  assert.equal(candidate.deltaNeutralEligible, true);
+  assert.equal(candidate.deltaNeutralAsset, 'ETH');
+  assert.equal(candidate.stableTokenSymbol, 'USDC');
+  assert.equal(candidate.volatileTokenSymbol, 'ETH');
+  assert.ok(Number(candidate.estimatedInitialHedgeQty) > 0);
+  assert.ok(Number(candidate.deltaQty) > 0);
+  assert.equal(Number.isFinite(Number(candidate.gamma)), true);
 });
 
 test('createProtectedPool crea dos coberturas ligadas con parametros correctos', async () => {
@@ -313,6 +355,94 @@ test('createProtectedPool guarda configuracion dinamica y defaults operativos', 
   assert.equal(protectionWrites[0].dynamicState.upperReentryPrice, 51000 * (1 - DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
 });
 
+test('createProtectedPool crea una proteccion delta-neutral con defaults y bootstrap', async () => {
+  const protectionWrites = [];
+  const bootstrapCalls = [];
+
+  const created = {
+    id: 120,
+    userId: 1,
+    accountId: 5,
+    status: 'active',
+    protectionMode: 'delta_neutral',
+    inferredAsset: 'ETH',
+    poolSnapshot: buildDeltaNeutralPool(),
+    strategyState: null,
+  };
+
+  const result = await createProtectedPool({
+    userId: 1,
+    pool: buildDeltaNeutralPool(),
+    accountId: 5,
+    leverage: 7,
+    configuredNotionalUsd: 2500,
+    protectionMode: 'delta_neutral',
+  }, {
+    availableAssets: [{ name: 'ETH', maxLeverage: 25 }],
+    mids: { ETH: '2500' },
+    hyperliquidAccountsService: {
+      resolveAccount: async () => ({ id: 5, alias: 'Cuenta test', address: '0xabc' }),
+    },
+    protectedPoolRepository: {
+      findReusableByIdentity: async () => null,
+      listActiveByUser: async () => [],
+      create: async (record) => {
+        protectionWrites.push(record);
+        return 120;
+      },
+      updateSnapshot: async () => 120,
+      getById: async () => created,
+    },
+    protectedPoolDeltaNeutralService: {
+      bootstrapProtection: async (protection) => {
+        bootstrapCalls.push(protection.id);
+      },
+    },
+  });
+
+  assert.equal(result.id, 120);
+  assert.equal(protectionWrites.length, 1);
+  assert.equal(protectionWrites[0].protectionMode, 'delta_neutral');
+  assert.equal(protectionWrites[0].bandMode, DEFAULT_BAND_MODE);
+  assert.equal(protectionWrites[0].baseRebalancePriceMovePct, DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT);
+  assert.equal(protectionWrites[0].rebalanceIntervalSec, DEFAULT_REBALANCE_INTERVAL_SEC);
+  assert.equal(protectionWrites[0].targetHedgeRatio, DEFAULT_TARGET_HEDGE_RATIO);
+  assert.equal(protectionWrites[0].minRebalanceNotionalUsd, DEFAULT_MIN_REBALANCE_NOTIONAL_USD);
+  assert.equal(protectionWrites[0].maxSlippageBps, DEFAULT_MAX_SLIPPAGE_BPS);
+  assert.equal(protectionWrites[0].twapMinNotionalUsd, DEFAULT_TWAP_MIN_NOTIONAL_USD);
+  assert.equal(protectionWrites[0].initialConfiguredHedgeNotionalUsd, 2500);
+  assert.equal(protectionWrites[0].marginMode, 'isolated');
+  assert.ok(protectionWrites[0].strategyState);
+  assert.equal(bootstrapCalls.length, 1);
+  assert.equal(bootstrapCalls[0], 120);
+});
+
+test('createProtectedPool delta-neutral rechaza conflictos por activo en la misma cuenta', async () => {
+  await assert.rejects(() => createProtectedPool({
+    userId: 1,
+    pool: buildDeltaNeutralPool(),
+    accountId: 5,
+    leverage: 7,
+    configuredNotionalUsd: 2500,
+    protectionMode: 'delta_neutral',
+  }, {
+    availableAssets: [{ name: 'ETH', maxLeverage: 25 }],
+    mids: { ETH: '2500' },
+    hyperliquidAccountsService: {
+      resolveAccount: async () => ({ id: 5, alias: 'Cuenta test', address: '0xabc' }),
+    },
+    protectedPoolRepository: {
+      findReusableByIdentity: async () => null,
+      listActiveByUser: async () => [{
+        id: 999,
+        status: 'active',
+        accountId: 5,
+        inferredAsset: 'ETH',
+      }],
+    },
+  }), /otra proteccion activa en ETH/i);
+});
+
 test('createProtectedPool rechaza configuracion dinamica insegura por solapamiento wire', async () => {
   await assert.rejects(() => createProtectedPool({
     userId: 1,
@@ -403,4 +533,29 @@ test('deactivateProtectedPool cancela hedges activos, desvincula hedges y marca 
   assert.deepEqual(cancelled, [201]);
   assert.deepEqual(unlinked, [22]);
   assert.equal(result.status, 'inactive');
+});
+
+test('deactivateProtectedPool delega la desactivacion delta-neutral al servicio dedicado', async () => {
+  const delegated = [];
+
+  const result = await deactivateProtectedPool(1, 33, {
+    protectedPoolRepository: {
+      getById: async () => ({
+        id: 33,
+        accountId: 5,
+        status: 'active',
+        protectionMode: 'delta_neutral',
+        inferredAsset: 'ETH',
+      }),
+    },
+    protectedPoolDeltaNeutralService: {
+      requestDeactivate: async (protection) => {
+        delegated.push(protection.id);
+        return { ...protection, strategyState: { status: 'deactivating' } };
+      },
+    },
+  });
+
+  assert.deepEqual(delegated, [33]);
+  assert.equal(result.strategyState.status, 'deactivating');
 });

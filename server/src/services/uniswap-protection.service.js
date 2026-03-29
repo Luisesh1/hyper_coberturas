@@ -8,6 +8,21 @@ const protectedPoolRepository = require('../repositories/protected-uniswap-pool.
 const logger = require('./logger.service');
 const { formatPrice } = require('../utils/format');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
+const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
+const {
+  computeDeltaNeutralMetrics,
+  resolveDeltaNeutralOrientation,
+} = require('./delta-neutral-math.service');
+const {
+  DEFAULT_BAND_MODE,
+  DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
+  DEFAULT_REBALANCE_INTERVAL_SEC,
+  DEFAULT_TARGET_HEDGE_RATIO,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MAX_SLIPPAGE_BPS,
+  DEFAULT_TWAP_MIN_NOTIONAL_USD,
+  buildInitialStrategyState,
+} = require('./protected-pool-delta-neutral.service');
 const SHORTCUT_MULTIPLIERS = [1.25, 1.5, 2, 3, 4];
 const STOP_LOSS_DIFFERENCE_DEFAULT_PCT = 0.05;
 const DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT = 0.01;
@@ -125,6 +140,7 @@ function resolveMatchingAssets(pool, availableAssets) {
 function buildCandidateFromMarket(pool, availableAssets, mids) {
   const normalizedPool = normalizePoolSnapshot(pool);
   const baseNotionalUsd = normalizedPool.currentValueUsd;
+  const deltaNeutral = buildDeltaNeutralCandidate(normalizedPool, availableAssets, mids);
   const baseCandidate = {
     baseNotionalUsd,
     suggestedNotionalUsd: baseNotionalUsd,
@@ -135,6 +151,21 @@ function buildCandidateFromMarket(pool, availableAssets, mids) {
     breakoutConfirmDurationSec: DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC,
     valueMode: 'usd',
     marginMode: 'isolated',
+    deltaNeutralEligible: deltaNeutral.deltaNeutralEligible,
+    deltaNeutralReason: deltaNeutral.deltaNeutralReason,
+    deltaNeutralAsset: deltaNeutral.deltaNeutralAsset,
+    stableTokenSymbol: deltaNeutral.stableTokenSymbol,
+    volatileTokenSymbol: deltaNeutral.volatileTokenSymbol,
+    estimatedInitialHedgeQty: deltaNeutral.estimatedInitialHedgeQty,
+    deltaQty: deltaNeutral.deltaQty,
+    gamma: deltaNeutral.gamma,
+    bandMode: DEFAULT_BAND_MODE,
+    baseRebalancePriceMovePct: DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
+    rebalanceIntervalSec: DEFAULT_REBALANCE_INTERVAL_SEC,
+    targetHedgeRatio: DEFAULT_TARGET_HEDGE_RATIO,
+    minRebalanceNotionalUsd: DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+    maxSlippageBps: DEFAULT_MAX_SLIPPAGE_BPS,
+    twapMinNotionalUsd: DEFAULT_TWAP_MIN_NOTIONAL_USD,
   };
 
   if (!normalizedPool.inRange) {
@@ -209,6 +240,66 @@ function buildCandidateFromMarket(pool, availableAssets, mids) {
     maxLeverage,
     defaultLeverage: maxLeverage ? Math.min(10, maxLeverage) : 10,
     ...baseCandidate,
+  };
+}
+
+function buildDeltaNeutralCandidate(pool, availableAssets, mids) {
+  const orientation = resolveDeltaNeutralOrientation(pool);
+  if (!orientation.eligible) {
+    return {
+      deltaNeutralEligible: false,
+      deltaNeutralReason: orientation.reason,
+      deltaNeutralAsset: null,
+      stableTokenSymbol: null,
+      volatileTokenSymbol: null,
+      estimatedInitialHedgeQty: null,
+      deltaQty: null,
+      gamma: null,
+    };
+  }
+
+  const asset = availableAssets.find((item) => (
+    String(item?.name || '').trim().toUpperCase() === orientation.volatileTokenSymbol
+  ));
+  if (!asset) {
+    return {
+      deltaNeutralEligible: false,
+      deltaNeutralReason: `El token volatil ${orientation.volatileTokenSymbol} no existe en Hyperliquid.`,
+      deltaNeutralAsset: null,
+      stableTokenSymbol: orientation.stableTokenSymbol,
+      volatileTokenSymbol: orientation.volatileTokenSymbol,
+      estimatedInitialHedgeQty: null,
+      deltaQty: null,
+      gamma: null,
+    };
+  }
+
+  const metrics = computeDeltaNeutralMetrics(pool, {
+    targetHedgeRatio: DEFAULT_TARGET_HEDGE_RATIO,
+  });
+  if (!metrics.eligible) {
+    return {
+      deltaNeutralEligible: false,
+      deltaNeutralReason: metrics.reason,
+      deltaNeutralAsset: asset.name,
+      stableTokenSymbol: orientation.stableTokenSymbol,
+      volatileTokenSymbol: orientation.volatileTokenSymbol,
+      estimatedInitialHedgeQty: null,
+      deltaQty: null,
+      gamma: null,
+    };
+  }
+
+  return {
+    deltaNeutralEligible: true,
+    deltaNeutralReason: null,
+    deltaNeutralAsset: String(asset.name || '').toUpperCase(),
+    stableTokenSymbol: orientation.stableTokenSymbol,
+    volatileTokenSymbol: orientation.volatileTokenSymbol,
+    estimatedInitialHedgeQty: metrics.targetQty,
+    deltaQty: metrics.deltaQty,
+    gamma: metrics.gamma,
+    midPrice: asPositiveNumber(mids?.[String(asset.name || '').toUpperCase()]) || metrics.volatilePriceUsd,
   };
 }
 
@@ -290,6 +381,15 @@ async function annotatePoolsWithProtection({ userId, pools }, deps = {}) {
             breakoutConfirmDistancePct: protection.breakoutConfirmDistancePct ?? null,
             breakoutConfirmDurationSec: protection.breakoutConfirmDurationSec ?? null,
             dynamicState: protection.dynamicState ?? null,
+            bandMode: protection.bandMode ?? null,
+            baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct ?? null,
+            rebalanceIntervalSec: protection.rebalanceIntervalSec ?? null,
+            targetHedgeRatio: protection.targetHedgeRatio ?? null,
+            minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd ?? null,
+            maxSlippageBps: protection.maxSlippageBps ?? null,
+            twapMinNotionalUsd: protection.twapMinNotionalUsd ?? null,
+            strategyState: protection.strategyState ?? null,
+            initialConfiguredHedgeNotionalUsd: protection.initialConfiguredHedgeNotionalUsd ?? null,
             valueMode: protection.valueMode,
             leverage: protection.leverage,
             accountId: protection.accountId,
@@ -342,8 +442,8 @@ function normalizeStopLossDifferencePct(stopLossDifferencePct) {
 function normalizeProtectionMode(protectionMode) {
   if (protectionMode == null || protectionMode === '') return 'static';
   const normalized = String(protectionMode).trim().toLowerCase();
-  if (!['static', 'dynamic'].includes(normalized)) {
-    throw new ValidationError('protectionMode invalido. Usa static o dynamic');
+  if (!['static', 'dynamic', 'delta_neutral'].includes(normalized)) {
+    throw new ValidationError('protectionMode invalido. Usa static, dynamic o delta_neutral');
   }
   return normalized;
 }
@@ -463,6 +563,15 @@ function buildStoredPoolSnapshot({
   breakoutConfirmDistancePct,
   breakoutConfirmDurationSec,
   dynamicState,
+  bandMode,
+  baseRebalancePriceMovePct,
+  rebalanceIntervalSec,
+  targetHedgeRatio,
+  minRebalanceNotionalUsd,
+  maxSlippageBps,
+  twapMinNotionalUsd,
+  strategyState,
+  initialConfiguredHedgeNotionalUsd,
   normalizedLeverage,
   hedgeSize,
 }) {
@@ -484,6 +593,15 @@ function buildStoredPoolSnapshot({
       breakoutConfirmDistancePct,
       breakoutConfirmDurationSec,
       dynamicState,
+      bandMode,
+      baseRebalancePriceMovePct,
+      rebalanceIntervalSec,
+      targetHedgeRatio,
+      minRebalanceNotionalUsd,
+      maxSlippageBps,
+      twapMinNotionalUsd,
+      strategyState,
+      initialConfiguredHedgeNotionalUsd,
       valueMode: 'usd',
       leverage: normalizedLeverage,
       accountId,
@@ -499,6 +617,13 @@ function buildStoredPoolSnapshot({
       maxSequentialFlips,
       breakoutConfirmDistancePct,
       breakoutConfirmDurationSec,
+      bandMode,
+      baseRebalancePriceMovePct,
+      rebalanceIntervalSec,
+      targetHedgeRatio,
+      minRebalanceNotionalUsd,
+      maxSlippageBps,
+      twapMinNotionalUsd,
       defaultLeverage: Math.min(10, candidate.maxLeverage),
     },
   };
@@ -530,6 +655,252 @@ function buildInitialDynamicState(snapshot, {
   };
 }
 
+function normalizeBandMode(bandMode) {
+  if (bandMode == null || bandMode === '') return DEFAULT_BAND_MODE;
+  const normalized = String(bandMode).trim().toLowerCase();
+  if (!['adaptive', 'fixed'].includes(normalized)) {
+    throw new ValidationError('bandMode invalido. Usa adaptive o fixed');
+  }
+  return normalized;
+}
+
+function normalizeBaseRebalancePriceMovePct(value) {
+  if (value == null) return DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= 100) {
+    throw new ValidationError('baseRebalancePriceMovePct debe ser un porcentaje mayor que 0 y menor que 100.');
+  }
+  return parsed;
+}
+
+function normalizeRebalanceIntervalSec(value) {
+  if (value == null) return DEFAULT_REBALANCE_INTERVAL_SEC;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 60) {
+    throw new ValidationError('rebalanceIntervalSec debe ser un entero de al menos 60 segundos.');
+  }
+  return parsed;
+}
+
+function normalizeTargetHedgeRatio(value) {
+  if (value == null) return DEFAULT_TARGET_HEDGE_RATIO;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 2) {
+    throw new ValidationError('targetHedgeRatio debe ser un numero mayor que 0 y menor o igual a 2.');
+  }
+  return parsed;
+}
+
+function normalizeMinRebalanceNotionalUsd(value) {
+  if (value == null) return DEFAULT_MIN_REBALANCE_NOTIONAL_USD;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ValidationError('minRebalanceNotionalUsd debe ser un numero positivo.');
+  }
+  return parsed;
+}
+
+function normalizeMaxSlippageBps(value) {
+  if (value == null) return DEFAULT_MAX_SLIPPAGE_BPS;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 500) {
+    throw new ValidationError('maxSlippageBps debe estar entre 1 y 500 bps.');
+  }
+  return parsed;
+}
+
+function normalizeTwapMinNotionalUsd(value) {
+  if (value == null) return DEFAULT_TWAP_MIN_NOTIONAL_USD;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ValidationError('twapMinNotionalUsd debe ser un numero positivo.');
+  }
+  return parsed;
+}
+
+async function createDeltaNeutralProtectedPool({
+  userId,
+  snapshot,
+  candidate,
+  accountId,
+  leverage,
+  configuredNotionalUsd,
+  valueMultiplier,
+  stopLossDifferencePct,
+  bandMode,
+  baseRebalancePriceMovePct,
+  rebalanceIntervalSec,
+  targetHedgeRatio,
+  minRebalanceNotionalUsd,
+  maxSlippageBps,
+  twapMinNotionalUsd,
+}, deps = {}) {
+  if (!candidate.deltaNeutralEligible) {
+    throw new ValidationError(candidate.deltaNeutralReason || 'El pool no es elegible para delta-neutral');
+  }
+
+  const normalizedNotionalUsd = normalizeConfiguredNotionalUsd(
+    configuredNotionalUsd,
+    candidate.baseNotionalUsd
+  );
+  const normalizedValueMultiplier = normalizeValueMultiplier(valueMultiplier);
+  if (normalizedValueMultiplier != null) {
+    const expectedNotionalUsd = roundUsd(candidate.baseNotionalUsd * normalizedValueMultiplier);
+    if (Math.abs(roundUsd(normalizedNotionalUsd) - expectedNotionalUsd) > 0.01) {
+      throw new ValidationError('configuredNotionalUsd no coincide con el valueMultiplier seleccionado');
+    }
+  }
+
+  const normalizedLeverage = normalizeRequestedLeverage(leverage, candidate.maxLeverage);
+  const normalizedBandMode = normalizeBandMode(bandMode);
+  const normalizedBaseBandPct = normalizeBaseRebalancePriceMovePct(baseRebalancePriceMovePct);
+  const normalizedRebalanceIntervalSec = normalizeRebalanceIntervalSec(rebalanceIntervalSec);
+  const normalizedTargetHedgeRatio = normalizeTargetHedgeRatio(targetHedgeRatio);
+  const normalizedMinRebalanceNotionalUsd = normalizeMinRebalanceNotionalUsd(minRebalanceNotionalUsd);
+  const normalizedMaxSlippageBps = normalizeMaxSlippageBps(maxSlippageBps);
+  const normalizedTwapMinNotionalUsd = normalizeTwapMinNotionalUsd(twapMinNotionalUsd);
+
+  const deltaMetrics = computeDeltaNeutralMetrics(snapshot, {
+    targetHedgeRatio: normalizedTargetHedgeRatio,
+  });
+  if (!deltaMetrics.eligible || !Number.isFinite(Number(deltaMetrics.targetQty))) {
+    throw new ValidationError(deltaMetrics.reason || 'No se pudo calcular el hedge inicial delta-neutral');
+  }
+
+  const account = await (deps.hyperliquidAccountsService || hyperliquidAccountsService)
+    .resolveAccount(userId, accountId);
+  const repository = deps.protectedPoolRepository || protectedPoolRepository;
+  const existing = await repository.findReusableByIdentity(userId, {
+    network: snapshot.network,
+    version: snapshot.version,
+    walletAddress: snapshot.owner,
+    positionIdentifier: snapshot.identifier,
+  });
+  if (existing?.status === 'active') {
+    throw new ValidationError('Este pool ya tiene una proteccion activa');
+  }
+
+  const activeForUser = await repository.listActiveByUser(userId).catch(() => []);
+  const assetConflict = activeForUser.find((item) => (
+    Number(item.accountId) === Number(account.id)
+    && String(item.inferredAsset || '').toUpperCase() === String(candidate.deltaNeutralAsset || '').toUpperCase()
+    && item.status === 'active'
+    && item.id !== existing?.id
+  ));
+  if (assetConflict) {
+    throw new ValidationError(`Ya existe otra proteccion activa en ${candidate.deltaNeutralAsset} para esta cuenta.`);
+  }
+
+  const createdAt = Date.now();
+  const strategyState = buildInitialStrategyState({
+    currentPrice: deltaMetrics.volatilePriceUsd,
+    deltaQty: deltaMetrics.deltaQty,
+    gamma: deltaMetrics.gamma,
+    targetQty: deltaMetrics.targetQty,
+    actualQty: 0,
+    effectiveBandPct: normalizedBaseBandPct,
+  });
+  const baseRecord = {
+    userId,
+    accountId: account.id,
+    network: snapshot.network,
+    version: snapshot.version,
+    walletAddress: snapshot.owner,
+    poolAddress: snapshot.poolAddress,
+    positionIdentifier: snapshot.identifier,
+    token0Symbol: snapshot.token0.symbol,
+    token1Symbol: snapshot.token1.symbol,
+    token0Address: snapshot.token0Address,
+    token1Address: snapshot.token1Address,
+    rangeLowerPrice: snapshot.rangeLowerPrice,
+    rangeUpperPrice: snapshot.rangeUpperPrice,
+    priceCurrent: snapshot.priceCurrent,
+    inferredAsset: candidate.deltaNeutralAsset,
+    hedgeSize: deltaMetrics.targetQty,
+    hedgeNotionalUsd: deltaMetrics.hedgeNotionalUsd,
+    configuredHedgeNotionalUsd: normalizedNotionalUsd,
+    initialConfiguredHedgeNotionalUsd: normalizedNotionalUsd,
+    valueMultiplier: normalizedValueMultiplier,
+    stopLossDifferencePct: stopLossDifferencePct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT,
+    protectionMode: 'delta_neutral',
+    dynamicState: null,
+    bandMode: normalizedBandMode,
+    baseRebalancePriceMovePct: normalizedBaseBandPct,
+    rebalanceIntervalSec: normalizedRebalanceIntervalSec,
+    targetHedgeRatio: normalizedTargetHedgeRatio,
+    minRebalanceNotionalUsd: normalizedMinRebalanceNotionalUsd,
+    maxSlippageBps: normalizedMaxSlippageBps,
+    twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
+    strategyState,
+    valueMode: 'usd',
+    leverage: normalizedLeverage,
+    marginMode: 'isolated',
+    createdAt,
+  };
+
+  let protectionId = existing?.id || null;
+  const snapshotArgs = {
+    snapshot,
+    candidate: {
+      ...candidate,
+      inferredAsset: candidate.deltaNeutralAsset,
+    },
+    accountId: account.id,
+    normalizedNotionalUsd,
+    normalizedValueMultiplier,
+    normalizedStopLossDifferencePct: stopLossDifferencePct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT,
+    protectionMode: 'delta_neutral',
+    reentryBufferPct: null,
+    flipCooldownSec: null,
+    maxSequentialFlips: null,
+    breakoutConfirmDistancePct: null,
+    breakoutConfirmDurationSec: null,
+    dynamicState: null,
+    bandMode: normalizedBandMode,
+    baseRebalancePriceMovePct: normalizedBaseBandPct,
+    rebalanceIntervalSec: normalizedRebalanceIntervalSec,
+    targetHedgeRatio: normalizedTargetHedgeRatio,
+    minRebalanceNotionalUsd: normalizedMinRebalanceNotionalUsd,
+    maxSlippageBps: normalizedMaxSlippageBps,
+    twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
+    strategyState,
+    initialConfiguredHedgeNotionalUsd: normalizedNotionalUsd,
+    normalizedLeverage,
+    hedgeSize: deltaMetrics.targetQty,
+  };
+  const poolSnapshot = buildStoredPoolSnapshot({ ...snapshotArgs, protectionId });
+
+  if (protectionId) {
+    await repository.reactivate(userId, protectionId, {
+      ...baseRecord,
+      poolSnapshot,
+      updatedAt: createdAt,
+    });
+  } else {
+    protectionId = await repository.create({
+      ...baseRecord,
+      poolSnapshot,
+    });
+    await repository.updateSnapshot(userId, protectionId, {
+      poolAddress: snapshot.poolAddress,
+      token0Symbol: snapshot.token0.symbol,
+      token1Symbol: snapshot.token1.symbol,
+      token0Address: snapshot.token0Address,
+      token1Address: snapshot.token1Address,
+      rangeLowerPrice: snapshot.rangeLowerPrice,
+      rangeUpperPrice: snapshot.rangeUpperPrice,
+      priceCurrent: snapshot.priceCurrent,
+      poolSnapshot: buildStoredPoolSnapshot({ ...snapshotArgs, protectionId }),
+      updatedAt: createdAt,
+    });
+  }
+
+  const created = await repository.getById(userId, protectionId);
+  await (deps.protectedPoolDeltaNeutralService || protectedPoolDeltaNeutralService)
+    .bootstrapProtection(created);
+  return repository.getById(userId, protectionId);
+}
+
 async function createProtectedPool({
   userId,
   pool,
@@ -544,6 +915,13 @@ async function createProtectedPool({
   maxSequentialFlips,
   breakoutConfirmDistancePct,
   breakoutConfirmDurationSec,
+  bandMode,
+  baseRebalancePriceMovePct,
+  rebalanceIntervalSec,
+  targetHedgeRatio,
+  minRebalanceNotionalUsd,
+  maxSlippageBps,
+  twapMinNotionalUsd,
 }, deps = {}) {
   const snapshot = normalizePoolSnapshot(pool);
   const candidate = await buildProtectionCandidate(snapshot, deps);
@@ -565,6 +943,25 @@ async function createProtectedPool({
   }
   const normalizedStopLossDifferencePct = normalizeStopLossDifferencePct(stopLossDifferencePct);
   const normalizedProtectionMode = normalizeProtectionMode(protectionMode);
+  if (normalizedProtectionMode === 'delta_neutral') {
+    return createDeltaNeutralProtectedPool({
+      userId,
+      snapshot,
+      candidate,
+      accountId,
+      leverage,
+      configuredNotionalUsd,
+      valueMultiplier,
+      stopLossDifferencePct: normalizedStopLossDifferencePct,
+      bandMode,
+      baseRebalancePriceMovePct,
+      rebalanceIntervalSec,
+      targetHedgeRatio,
+      minRebalanceNotionalUsd,
+      maxSlippageBps,
+      twapMinNotionalUsd,
+    }, deps);
+  }
   const normalizedReentryBufferPct = normalizeReentryBufferPct(reentryBufferPct, normalizedProtectionMode);
   const normalizedFlipCooldownSec = normalizeFlipCooldownSec(flipCooldownSec, normalizedProtectionMode);
   const normalizedMaxSequentialFlips = normalizeMaxSequentialFlips(maxSequentialFlips, normalizedProtectionMode);
@@ -735,7 +1132,6 @@ async function createProtectedPool({
   }
 
   let downside = null;
-  let upside = null;
 
   try {
     const baseLabel = `${snapshot.token0.symbol}/${snapshot.token1.symbol} ${snapshot.version.toUpperCase()} #${snapshot.identifier}`;
@@ -751,7 +1147,7 @@ async function createProtectedPool({
       protectedPoolId: protectionId,
       protectedRole: 'downside',
     });
-    upside = await hedgeSvc.createHedge({
+    await hedgeSvc.createHedge({
       asset: candidate.inferredAsset,
       direction: 'long',
       entryPrice: snapshot.rangeUpperPrice,
@@ -800,6 +1196,11 @@ async function deactivateProtectedPool(userId, protectionId, deps = {}) {
     return protection;
   }
 
+  if (protection.protectionMode === 'delta_neutral') {
+    return (deps.protectedPoolDeltaNeutralService || protectedPoolDeltaNeutralService)
+      .requestDeactivate(protection);
+  }
+
   const hedgeSvc = await (deps.hedgeRegistry || hedgeRegistry).getOrCreate(userId, protection.accountId);
   const linkedHedges = [protection.hedges.downside, protection.hedges.upside].filter(Boolean);
 
@@ -820,9 +1221,17 @@ module.exports = {
   DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT,
   DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC,
   DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT,
+  DEFAULT_BAND_MODE,
+  DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
+  DEFAULT_REBALANCE_INTERVAL_SEC,
+  DEFAULT_TARGET_HEDGE_RATIO,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MAX_SLIPPAGE_BPS,
+  DEFAULT_TWAP_MIN_NOTIONAL_USD,
   annotatePoolsWithProtection,
   buildProtectionCandidate,
   buildProtectionKey,
+  buildDeltaNeutralCandidate,
   createProtectedPool,
   deactivateProtectedPool,
   listProtectedPools,

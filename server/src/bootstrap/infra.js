@@ -5,6 +5,7 @@ const runtimeStatus = require('../runtime/status');
 const logger = require('../services/logger.service');
 const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
 const protectedPoolDynamicService = require('../services/protected-pool-dynamic.service');
+const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
 const telegramCommandService = require('../services/telegram-command.service');
 const etherscanQueueService = require('../services/etherscan-queue.service');
 const backtestQueueService = require('../services/backtest-queue.service');
@@ -35,6 +36,7 @@ async function bootstrapInfra(httpServer) {
   if (bootstrapOk) runtimeStatus.markBootstrapped();
   protectedPoolRefreshService.start();
   protectedPoolDynamicService.start();
+  protectedPoolDeltaNeutralService.start();
   telegramCommandService.start();
   backtestQueueService.start();
 
@@ -43,6 +45,7 @@ async function bootstrapInfra(httpServer) {
     async shutdown() {
       protectedPoolRefreshService.stop();
       protectedPoolDynamicService.stop();
+      protectedPoolDeltaNeutralService.stop();
       telegramCommandService.stop();
       etherscanQueueService.shutdown();
       backtestQueueService.stop();

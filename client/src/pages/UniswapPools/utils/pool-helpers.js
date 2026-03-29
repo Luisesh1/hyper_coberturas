@@ -24,8 +24,13 @@ export function getPoolStatus(pool) {
   return { label: 'Activa', tone: 'neutral', detail: 'Pool detectado y listo para revisar.' };
 }
 
+export function isPoolEligible(pool) {
+  return !!(pool?.protectionCandidate?.eligible || pool?.protectionCandidate?.deltaNeutralEligible);
+}
+
 export function getProtectionButtonState(pool, hasAccounts) {
   const isLpPosition = pool.mode === 'lp_position' || pool.mode === 'lp_positions';
+  const isProtectible = isPoolEligible(pool);
   if (!isLpPosition || !['v3', 'v4'].includes(pool.version)) return null;
   if (pool.protection) {
     return { disabled: true, label: 'Protegido', reason: 'Este pool ya tiene una proteccion activa.' };
@@ -33,8 +38,12 @@ export function getProtectionButtonState(pool, hasAccounts) {
   if (!hasAccounts) {
     return { disabled: true, label: 'Aplicar cobertura', reason: 'Configura una cuenta de Hyperliquid antes de activar protecciones.' };
   }
-  if (!pool.protectionCandidate?.eligible) {
-    return { disabled: true, label: 'Aplicar cobertura', reason: pool.protectionCandidate?.reason || 'Este pool no es elegible para proteccion automatica.' };
+  if (!isProtectible) {
+    return {
+      disabled: true,
+      label: 'Aplicar cobertura',
+      reason: pool.protectionCandidate?.reason || pool.protectionCandidate?.deltaNeutralReason || 'Este pool no es elegible para proteccion automatica.',
+    };
   }
   return { disabled: false, label: 'Aplicar cobertura', reason: null };
 }

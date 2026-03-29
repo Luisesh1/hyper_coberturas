@@ -1,7 +1,6 @@
 const { ethers } = require('ethers');
 const config = require('../config');
 const settingsService = require('./settings.service');
-const { annotatePoolsWithProtection } = require('./uniswap-protection.service');
 const etherscanQueueService = require('./etherscan-queue.service');
 const {
   ValidationError,
@@ -90,6 +89,11 @@ const receiptCache = new Map();
 const blockCache = new Map();
 
 const RPC_DEFAULTS = config.uniswap.rpcUrls;
+
+function annotatePoolsForUser(args) {
+  const { annotatePoolsWithProtection } = require('./uniswap-protection.service');
+  return annotatePoolsWithProtection(args);
+}
 
 const SUPPORTED_NETWORKS = {
   ethereum: {
@@ -1497,6 +1501,50 @@ async function enrichRecord(provider, networkConfig, record) {
   return enrichV4Record(provider, networkConfig, record);
 }
 
+async function getPoolSpotData({
+  network,
+  version,
+  poolAddress,
+  poolId,
+  token0Decimals,
+  token1Decimals,
+}) {
+  const networkConfig = SUPPORTED_NETWORKS[String(network || '').toLowerCase()];
+  if (!networkConfig) {
+    throw new ValidationError(`Red no soportada para spot price: ${network}`);
+  }
+  const normalizedVersion = String(version || '').toLowerCase();
+  const provider = getProvider(networkConfig);
+
+  if (normalizedVersion === 'v3') {
+    const pool = new ethers.Contract(normalizeAddress(poolAddress), V3_POOL_ABI, provider);
+    const slot0 = await pool.slot0();
+    return {
+      version: normalizedVersion,
+      tick: Number(slot0.tick),
+      sqrtPriceX96: String(slot0.sqrtPriceX96),
+      priceCurrent: compactNumber(tickToPrice(slot0.tick, token0Decimals, token1Decimals), 6),
+    };
+  }
+
+  if (normalizedVersion === 'v4') {
+    const stateView = new ethers.Contract(
+      normalizeAddress(networkConfig.deployments.v4.stateView),
+      V4_STATE_VIEW_ABI,
+      provider
+    );
+    const slot0 = await stateView.getSlot0(poolId);
+    return {
+      version: normalizedVersion,
+      tick: Number(slot0.tick),
+      sqrtPriceX96: String(slot0.sqrtPriceX96),
+      priceCurrent: compactNumber(tickToPrice(slot0.tick, token0Decimals, token1Decimals), 6),
+    };
+  }
+
+  throw new ValidationError('Solo v3/v4 soportan spot price on-chain para delta-neutral');
+}
+
 function isRelevantRecord(record) {
   return record.status !== 'empty';
 }
@@ -1595,7 +1643,7 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
     }
   });
 
-  const pools = await annotatePoolsWithProtection({
+  const pools = await annotatePoolsForUser({
     userId,
     pools: enriched.filter(Boolean).filter(isRelevantRecord),
   });
@@ -1690,7 +1738,7 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
     }
   });
 
-  const pools = await annotatePoolsWithProtection({
+  const pools = await annotatePoolsForUser({
     userId,
     pools: enriched.filter(Boolean).filter(isRelevantRecord),
   });
@@ -1779,7 +1827,7 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
   }
 
   pools.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.blockNumber - a.blockNumber);
-  const annotatedPools = await annotatePoolsWithProtection({ userId, pools });
+  const annotatedPools = await annotatePoolsForUser({ userId, pools });
 
   return {
     wallet: normalizedWallet,
@@ -1816,6 +1864,7 @@ module.exports = {
   decodeV4PositionInfo,
   estimateUsdValueFromPair,
   resolveHistoricalSpotPrice,
+  getPoolSpotData,
   sqrtPriceX96ToFloat,
   tickToRawSqrtRatio,
   tickToPrice,

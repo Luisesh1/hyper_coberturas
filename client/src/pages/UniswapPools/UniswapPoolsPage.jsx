@@ -6,6 +6,7 @@ import { useConfirmAction } from '../../hooks/useConfirmAction';
 import { mergeResultProtections } from './utils/pool-sorting';
 import { getPoolSortScore } from './utils/pool-sorting';
 import { sortProtectedPools } from './utils/pool-sorting';
+import { isPoolEligible } from './utils/pool-helpers';
 import ScannerBar from './components/ScannerBar';
 import ResultsToolbar from './components/ResultsToolbar';
 import PoolCard from './components/PoolCard';
@@ -136,7 +137,7 @@ export default function UniswapPoolsPage() {
     });
     return {
       all: searched.length,
-      eligible: searched.filter((p) => p.protectionCandidate?.eligible).length,
+      eligible: searched.filter((p) => isPoolEligible(p)).length,
       protected: searched.filter((p) => p.protection).length,
     };
   }, [result, searchTerm]);
@@ -151,7 +152,7 @@ export default function UniswapPoolsPage() {
             .filter(Boolean).join(' ').toLowerCase();
           if (!haystack.includes(query)) return false;
         }
-        if (resultFilter === 'eligible' && !pool.protectionCandidate?.eligible) return false;
+        if (resultFilter === 'eligible' && !isPoolEligible(pool)) return false;
         if (resultFilter === 'protected' && !pool.protection) return false;
         return true;
       })
@@ -179,8 +180,8 @@ export default function UniswapPoolsPage() {
       setError('Configura una cuenta de Hyperliquid antes de aplicar una cobertura.');
       return;
     }
-    if (!pool?.protectionCandidate?.eligible) {
-      setError(pool?.protectionCandidate?.reason || 'Este pool no es elegible para proteccion automatica.');
+    if (!isPoolEligible(pool)) {
+      setError(pool?.protectionCandidate?.reason || pool?.protectionCandidate?.deltaNeutralReason || 'Este pool no es elegible para proteccion automatica.');
       return;
     }
     setApplyPool(pool);
@@ -199,6 +200,13 @@ export default function UniswapPoolsPage() {
     maxSequentialFlips,
     breakoutConfirmDistancePct,
     breakoutConfirmDurationSec,
+    bandMode,
+    baseRebalancePriceMovePct,
+    rebalanceIntervalSec,
+    targetHedgeRatio,
+    minRebalanceNotionalUsd,
+    maxSlippageBps,
+    twapMinNotionalUsd,
   }) => {
     setIsApplyingProtection(true);
     setError('');
@@ -216,6 +224,13 @@ export default function UniswapPoolsPage() {
         maxSequentialFlips,
         breakoutConfirmDistancePct,
         breakoutConfirmDurationSec,
+        bandMode,
+        baseRebalancePriceMovePct,
+        rebalanceIntervalSec,
+        targetHedgeRatio,
+        minRebalanceNotionalUsd,
+        maxSlippageBps,
+        twapMinNotionalUsd,
       });
       setApplyPool(null);
       await loadProtectedPools();
