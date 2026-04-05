@@ -4,18 +4,31 @@ import { formatUsd, formatCompactUsd, formatSignedUsd, formatPercent, formatPric
 import RangeTrack from './RangeTrack';
 import styles from './PoolCard.module.css';
 
-export default function PoolCard({ pool, hasAccounts, onApplyProtection }) {
+export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletState, onClaimFees }) {
   const isLpPosition = pool.mode === 'lp_position' || pool.mode === 'lp_positions';
   const isV4 = pool.version === 'v4';
   const protectionState = getProtectionButtonState(pool, hasAccounts);
   const status = getPoolStatus(pool);
   const pnlValue = Number(pool.pnlTotalUsd);
   const yieldValue = Number(pool.yieldPct);
+  const timeInRangePct = pool.timeInRangePct != null ? Number(pool.timeInRangePct) : null;
   const ownerValue = pool.owner || pool.creator;
   const creatorLink = getExplorerLink(pool.explorerUrl, 'address', ownerValue);
   const txLink = getExplorerLink(pool.explorerUrl, 'tx', pool.txHash);
   const poolLink = getExplorerLink(pool.explorerUrl, 'address', pool.poolAddress);
   const openPriceLabel = pool.priceAtOpenAccuracy === 'approximate' ? 'Aprox.' : pool.priceAtOpenAccuracy === 'exact' ? 'Exacto' : null;
+  const unclaimedFees = Number(pool.unclaimedFeesUsd);
+  const canClaim = isLpPosition
+    && ['v3', 'v4'].includes(pool.version)
+    && walletState?.isConnected
+    && walletState.chainId === pool.chainId
+    && pool.owner?.toLowerCase() === walletState.address?.toLowerCase()
+    && unclaimedFees > 0;
+  const canManage = isLpPosition
+    && pool.version === 'v3'
+    && walletState?.isConnected
+    && walletState.chainId === pool.chainId
+    && pool.owner?.toLowerCase() === walletState.address?.toLowerCase();
 
   const toneCls = pool.protection
     ? styles.card_protected
@@ -28,6 +41,15 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection }) {
   const pnlTone = Number.isFinite(pnlValue) ? (pnlValue > 0 ? styles.positive : pnlValue < 0 ? styles.negative : '') : '';
   const yieldTone = Number.isFinite(yieldValue) ? (yieldValue > 0 ? styles.positive : yieldValue < 0 ? styles.negative : '') : '';
 
+  // Tooltip for disabled manage buttons
+  const manageTitle = !walletState?.isConnected
+    ? 'Conecta tu wallet para gestionar esta posición'
+    : walletState.chainId !== pool.chainId
+      ? 'Cambia a la red correcta en tu wallet'
+      : pool.owner?.toLowerCase() !== walletState.address?.toLowerCase()
+        ? 'Esta wallet no es la dueña de la posición'
+        : '';
+
   return (
     <article className={`${styles.card} ${toneCls}`}>
       <div className={styles.header}>
@@ -36,13 +58,16 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection }) {
           <span className={styles.badgeVersion}>{pool.version.toUpperCase()}</span>
           <span className={styles.badgeNetwork}>{pool.networkLabel}</span>
           {isV4 && <span className={styles.badgeNeutral}>PoolManager</span>}
-          {pool.protection && <span className={styles.badgeProtected}>Protegido</span>}
+          {pool.protection && <span className={styles.badgeProtected}>✓ Protegido</span>}
         </div>
       </div>
 
       <div className={styles.statusLine}>
         <span className={`${styles.statusDot} ${styles[`dot_${status.tone}`]}`} />
         <span className={styles.statusText}>{status.label}</span>
+        {ownerValue && (
+          <span className={styles.walletAddress} title={ownerValue}>{shortAddress(ownerValue)}</span>
+        )}
       </div>
 
       <div className={styles.metrics}>
@@ -50,114 +75,214 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection }) {
           <span className={styles.metricValue}>
             {isLpPosition ? formatUsd(pool.currentValueUsd) : formatCompactUsd(pool.tvlApproxUsd)}
           </span>
-          <span className={styles.metricLabel}>{isLpPosition ? 'Valor' : 'TVL'}</span>
+          <span className={styles.metricLabel}>{isLpPosition ? 'Valor posición' : 'TVL'}</span>
         </div>
         <div className={styles.metric}>
           <span className={`${styles.metricValue} ${pnlTone}`}>{formatSignedUsd(pool.pnlTotalUsd)}</span>
-          <span className={styles.metricLabel}>P&L</span>
+          <span className={styles.metricLabel}>Ganancia / Pérdida</span>
         </div>
         <div className={styles.metric}>
           <span className={`${styles.metricValue} ${yieldTone}`}>{formatPercent(pool.yieldPct)}</span>
-          <span className={styles.metricLabel}>Yield</span>
+          <span className={styles.metricLabel}>Rendimiento</span>
         </div>
         <div className={styles.metric}>
-          <span className={styles.metricValue}>{formatUsd(pool.unclaimedFeesUsd)}</span>
-          <span className={styles.metricLabel}>Fees</span>
+          <span className={`${styles.metricValue} ${unclaimedFees > 0 ? styles.amber : ''}`}>{formatUsd(pool.unclaimedFeesUsd)}</span>
+          <span className={styles.metricLabel}>Fees acumuladas</span>
         </div>
         {pool.activeForMs != null && (
           <div className={styles.metric}>
             <span className={styles.metricValue}>{formatDuration(pool.activeForMs)}</span>
-            <span className={styles.metricLabel}>En pool</span>
+            <span className={styles.metricLabel}>Tiempo en pool</span>
+          </div>
+        )}
+        {timeInRangePct != null && (
+          <div className={styles.metric}>
+            <span className={styles.metricValue}>{timeInRangePct.toFixed(1)}%</span>
+            <span className={styles.metricLabel}>Tiempo en rango</span>
           </div>
         )}
       </div>
 
       {isLpPosition && <RangeTrack pool={pool} compact />}
 
+      {/* Botón principal: aplicar cobertura */}
       {protectionState && !protectionState.disabled && (
         <button
           type="button"
           className={styles.protectBtn}
           onClick={() => onApplyProtection(pool)}
         >
+          <span className={styles.protectBtnIcon}>🛡</span>
           {protectionState.label}
         </button>
       )}
 
+      {/* Razón por la que no se puede proteger */}
       {protectionState && protectionState.disabled && protectionState.reason && !pool.protection && (
-        <span className={styles.protectHint}>{protectionState.reason}</span>
+        <div className={styles.protectHint}>
+          <span className={styles.protectHintIcon}>ℹ</span>
+          {protectionState.reason}
+        </div>
       )}
 
+      {/* Acciones LP (cobrar fees, gestionar posición) */}
+      {isLpPosition && ['v3', 'v4'].includes(pool.version) && onClaimFees && (
+        <div className={styles.actionGroup}>
+          <button
+            type="button"
+            className={styles.claimBtn}
+            disabled={!canClaim}
+            onClick={() => onClaimFees('collect-fees', pool)}
+            title={
+              !walletState?.isConnected ? 'Conecta tu wallet para cobrar fees'
+                : walletState.chainId !== pool.chainId ? 'Cambia a la red correcta en tu wallet'
+                  : pool.owner?.toLowerCase() !== walletState.address?.toLowerCase() ? 'Esta wallet no es dueña de la posición'
+                    : unclaimedFees <= 0 ? 'No hay fees acumuladas por cobrar'
+                      : `Cobrar ${formatUsd(pool.unclaimedFeesUsd)} en fees acumuladas`
+            }
+          >
+            <span>💰 Cobrar fees</span>
+            {unclaimedFees > 0 && <span className={styles.claimAmount}>{formatUsd(pool.unclaimedFeesUsd)}</span>}
+          </button>
+
+          <div className={styles.manageRow}>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              disabled={!canManage}
+              onClick={() => onClaimFees('increase-liquidity', pool)}
+              title={canManage ? 'Agregar más liquidez a esta posición' : manageTitle}
+            >
+              + Liquidez
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              disabled={!canManage}
+              onClick={() => onClaimFees('decrease-liquidity', pool)}
+              title={canManage ? 'Retirar parte de la liquidez de esta posición' : manageTitle}
+            >
+              − Liquidez
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              disabled={!canManage}
+              onClick={() => onClaimFees('reinvest-fees', pool)}
+              title={canManage ? 'Reinvertir las fees acumuladas en más liquidez' : manageTitle}
+            >
+              ↺ Reinvertir
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              disabled={!canManage}
+              onClick={() => onClaimFees('modify-range', pool)}
+              title={canManage ? 'Cambiar el rango de precios de la posición' : manageTitle}
+            >
+              ⇔ Cambiar rango
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              disabled={!canManage}
+              onClick={() => onClaimFees('rebalance', pool)}
+              title={canManage ? 'Rebalancear los activos de la posición' : manageTitle}
+            >
+              ⇄ Rebalancear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Sección expandible con detalles */}
       <details className={styles.details}>
-        <summary className={styles.detailsToggle}>Mas detalles</summary>
+        <summary className={styles.detailsToggle}>
+          <span>Ver detalles del pool</span>
+          <span className={styles.detailsChevron}>›</span>
+        </summary>
         <div className={styles.detailsContent}>
           {isLpPosition && (
-            <div className={styles.insights}>
-              <div className={styles.insightItem}>
-                <span className={styles.insightLabel}>HL inferido</span>
-                <span className={styles.insightValue}>{pool.protectionCandidate?.inferredAsset || 'No inferible'}</span>
+            <>
+              <p className={styles.insightsTitle}>Datos para la cobertura en Hyperliquid</p>
+              <div className={styles.insights}>
+                <div className={styles.insightItem}>
+                  <span className={styles.insightLabel}>Activo en Hyperliquid</span>
+                  <span className={styles.insightValue}>
+                    {pool.protectionCandidate?.inferredAsset
+                      ? <strong>{pool.protectionCandidate.inferredAsset}</strong>
+                      : <span className={styles.insightMuted}>No se pudo inferir</span>}
+                  </span>
+                </div>
+                <div className={styles.insightItem}>
+                  <span className={styles.insightLabel}>Valor posición LP</span>
+                  <span className={styles.insightValue}>{formatUsd(pool.protectionCandidate?.baseNotionalUsd)}</span>
+                </div>
+                <div className={styles.insightItem}>
+                  <span className={styles.insightLabel}>Distancia al límite del rango</span>
+                  <span className={styles.insightValue}>
+                    {pool.distanceToRangePct === 0
+                      ? <span className={styles.positive}>Dentro del rango activo</span>
+                      : pool.distanceToRangePct != null
+                        ? `${formatNumber(pool.distanceToRangePrice, 4)} · ${formatPercent(pool.distanceToRangePct)}`
+                        : '—'}
+                  </span>
+                </div>
+                <div className={styles.insightItem}>
+                  <span className={styles.insightLabel}>Tamaño estimado de cobertura</span>
+                  <span className={styles.insightValue}>
+                    {pool.protectionCandidate?.hedgeSize != null && pool.protectionCandidate?.inferredAsset
+                      ? `${formatNumber(pool.protectionCandidate.hedgeSize, 6)} ${pool.protectionCandidate.inferredAsset}`
+                      : '—'}
+                  </span>
+                </div>
               </div>
-              <div className={styles.insightItem}>
-                <span className={styles.insightLabel}>Valor base LP</span>
-                <span className={styles.insightValue}>{formatUsd(pool.protectionCandidate?.baseNotionalUsd)}</span>
-              </div>
-              <div className={styles.insightItem}>
-                <span className={styles.insightLabel}>Distancia</span>
-                <span className={styles.insightValue}>
-                  {pool.distanceToRangePct === 0
-                    ? 'Dentro de rango'
-                    : pool.distanceToRangePct != null
-                      ? `${formatNumber(pool.distanceToRangePrice, 4)} · ${formatPercent(pool.distanceToRangePct)}`
-                      : 'No disponible'}
-                </span>
-              </div>
-              <div className={styles.insightItem}>
-                <span className={styles.insightLabel}>Tamano base</span>
-                <span className={styles.insightValue}>
-                  {pool.protectionCandidate?.hedgeSize != null && pool.protectionCandidate?.inferredAsset
-                    ? `${formatNumber(pool.protectionCandidate.hedgeSize, 6)} ${pool.protectionCandidate.inferredAsset}`
-                    : '—'}
-                </span>
-              </div>
-            </div>
+            </>
           )}
 
           {isLpPosition && <RangeTrack pool={pool} />}
 
+          <p className={styles.insightsTitle}>Datos on-chain</p>
           <div className={styles.advancedGrid}>
             <div className={styles.advancedItem}>
-              <span className={styles.advancedLabel}>{isLpPosition ? 'Owner' : 'Creador'}</span>
+              <span className={styles.advancedLabel}>{isLpPosition ? 'Propietario' : 'Creador'}</span>
               {creatorLink ? (
-                <a className={styles.advancedLink} href={creatorLink} target="_blank" rel="noreferrer">{shortAddress(ownerValue)}</a>
+                <a className={styles.advancedLink} href={creatorLink} target="_blank" rel="noreferrer" title={ownerValue}>
+                  {shortAddress(ownerValue)} ↗
+                </a>
               ) : (
                 <span className={styles.advancedValue}>{shortAddress(ownerValue)}</span>
               )}
             </div>
             <div className={styles.advancedItem}>
-              <span className={styles.advancedLabel}>Transaccion</span>
+              <span className={styles.advancedLabel}>Transacción de apertura</span>
               {txLink ? (
-                <a className={styles.advancedLink} href={txLink} target="_blank" rel="noreferrer">{shortAddress(pool.txHash)}</a>
+                <a className={styles.advancedLink} href={txLink} target="_blank" rel="noreferrer" title={pool.txHash}>
+                  {shortAddress(pool.txHash)} ↗
+                </a>
               ) : (
-                <span className={styles.advancedValue}>No cargado</span>
+                <span className={styles.advancedValue}>No disponible</span>
               )}
             </div>
             <div className={styles.advancedItem}>
-              <span className={styles.advancedLabel}>{isV4 ? 'Pool ID' : 'Pool'}</span>
+              <span className={styles.advancedLabel}>{isV4 ? 'ID del pool (V4)' : 'Contrato del pool'}</span>
               {poolLink ? (
-                <a className={styles.advancedLink} href={poolLink} target="_blank" rel="noreferrer">{shortAddress(pool.poolAddress || pool.identifier)}</a>
+                <a className={styles.advancedLink} href={poolLink} target="_blank" rel="noreferrer" title={pool.poolAddress || pool.identifier}>
+                  {shortAddress(pool.poolAddress || pool.identifier)} ↗
+                </a>
               ) : (
                 <span className={styles.advancedValue}>{shortAddress(pool.poolAddress || pool.identifier)}</span>
               )}
             </div>
             <div className={styles.advancedItem}>
-              <span className={styles.advancedLabel}>Fee / Tick</span>
+              <span className={styles.advancedLabel}>Comisión del pool / Tick spacing</span>
               <span className={styles.advancedValue}>
-                {pool.fee != null ? `${pool.fee} bps` : '—'}
+                {pool.fee != null ? `${pool.fee} bps (${(pool.fee / 10000).toFixed(2)}%)` : '—'}
                 {pool.tickSpacing != null ? ` · tick ${pool.tickSpacing}` : ''}
               </span>
             </div>
             <div className={styles.advancedItem}>
-              <span className={styles.advancedLabel}>Reservas</span>
+              <span className={styles.advancedLabel}>Reservas totales del pool</span>
               <span className={styles.advancedValue}>
                 {pool.reserve0 != null || pool.reserve1 != null
                   ? `${formatNumber(pool.reserve0, 4)} ${pool.token0?.symbol ?? '?'} · ${formatNumber(pool.reserve1, 4)} ${pool.token1?.symbol ?? '?'}`
@@ -165,7 +290,7 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection }) {
               </span>
             </div>
             <div className={styles.advancedItem}>
-              <span className={styles.advancedLabel}>Precio</span>
+              <span className={styles.advancedLabel}>Precio actual</span>
               <span className={styles.advancedValue}>
                 {isLpPosition
                   ? formatPrice(pool.priceCurrent ?? pool.priceApprox, pool.priceBaseSymbol, pool.priceQuoteSymbol)
@@ -175,14 +300,14 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection }) {
             {isLpPosition && (
               <>
                 <div className={styles.advancedItem}>
-                  <span className={styles.advancedLabel}>Precio al abrir</span>
+                  <span className={styles.advancedLabel}>Precio al abrir posición</span>
                   <span className={styles.advancedValue}>
                     {formatPrice(pool.priceAtOpen, pool.priceBaseSymbol, pool.priceQuoteSymbol)}
-                    {openPriceLabel ? ` · ${openPriceLabel}` : ''}
+                    {openPriceLabel ? <span className={styles.accuracy}> · {openPriceLabel}</span> : ''}
                   </span>
                 </div>
                 <div className={styles.advancedItem}>
-                  <span className={styles.advancedLabel}>Breakdown</span>
+                  <span className={styles.advancedLabel}>Composición actual de la posición</span>
                   <span className={styles.advancedValue}>
                     {formatNumber(pool.positionAmount0, 6)} {pool.token0?.symbol ?? '?'} · {formatNumber(pool.positionAmount1, 6)} {pool.token1?.symbol ?? '?'}
                   </span>

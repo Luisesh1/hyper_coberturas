@@ -2,6 +2,8 @@ const { ethers } = require('ethers');
 const config = require('../config');
 const settingsService = require('./settings.service');
 const etherscanQueueService = require('./etherscan-queue.service');
+const timeInRangeService = require('./time-in-range.service');
+const logger = require('./logger.service');
 const {
   ValidationError,
 } = require('../errors/app-error');
@@ -1131,8 +1133,8 @@ async function enrichV3Record(provider, networkConfig, record) {
     token1.isNative ? provider.getBalance(record.poolAddress) : token1Contract.balanceOf(record.poolAddress),
     pool.feeGrowthGlobal0X128().catch(() => 0n),
     pool.feeGrowthGlobal1X128().catch(() => 0n),
-    pool.ticks(record.tickLower).catch(() => null),
-    pool.ticks(record.tickUpper).catch(() => null),
+    pool.ticks(record.tickLower).catch((err) => { logger.warn('pool tick read failed', { tick: record.tickLower, error: err.message }); return null; }),
+    pool.ticks(record.tickUpper).catch((err) => { logger.warn('pool tick read failed', { tick: record.tickUpper, error: err.message }); return null; }),
   ]);
 
   const reserve0 = formatTokenAmount(balance0Raw, token0.decimals);
@@ -1580,7 +1582,7 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
     tokenIds.push(String(await positionManager.tokenOfOwnerByIndex(wallet, i)));
   }
 
-  const apiKey = await getUserApiKey(userId).catch(() => null);
+  const apiKey = await getUserApiKey(userId).catch((err) => { logger.warn('getUserApiKey failed', { userId, error: err.message }); return null; });
   let firstInbound = new Map();
   if (apiKey) {
     try {
@@ -1647,6 +1649,7 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
     userId,
     pools: enriched.filter(Boolean).filter(isRelevantRecord),
   });
+  const poolsWithRange = await timeInRangeService.annotatePoolsWithTimeInRange(pools);
   return {
     wallet,
     network: {
@@ -1659,13 +1662,13 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
     mode: 'lp_positions',
     source: 'onchain_position_manager',
     completeness: 'full',
-    count: pools.length,
-    filteredOutCount: records.length - pools.length,
+    count: poolsWithRange.length,
+    filteredOutCount: records.length - poolsWithRange.length,
     inspectedTxCount: records.length,
     totalTxCount: records.length,
     scannedAt: Date.now(),
     warnings: buildWarningsWithDedup(warnings),
-    pools,
+    pools: poolsWithRange,
   };
 }
 
@@ -1691,7 +1694,7 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
   }
 
   const records = await mapConcurrent(tokenIds, 3, async (tokenId) => {
-    const owner = normalizeAddress(await positionManager.ownerOf(tokenId).catch(() => null));
+    const owner = normalizeAddress(await positionManager.ownerOf(tokenId).catch((err) => { logger.warn('ownerOf failed', { tokenId, error: err.message }); return null; }));
     if (lower(owner) !== lower(wallet)) return null;
 
     const [poolKey, positionInfo] = await positionManager.getPoolAndPositionInfo(tokenId);
@@ -1742,6 +1745,7 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
     userId,
     pools: enriched.filter(Boolean).filter(isRelevantRecord),
   });
+  const poolsWithRange = await timeInRangeService.annotatePoolsWithTimeInRange(pools);
   return {
     wallet,
     network: {
@@ -1754,13 +1758,13 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
     mode: 'lp_positions',
     source: 'etherscan+nft_position_manager',
     completeness: truncated ? 'partial' : 'full',
-    count: pools.length,
-    filteredOutCount: records.filter(Boolean).length - pools.length,
+    count: poolsWithRange.length,
+    filteredOutCount: records.filter(Boolean).length - poolsWithRange.length,
     inspectedTxCount: records.filter(Boolean).length,
     totalTxCount: rows.length,
     scannedAt: Date.now(),
     warnings: buildWarningsWithDedup(warnings),
-    pools,
+    pools: poolsWithRange,
   };
 }
 
@@ -1828,6 +1832,7 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
 
   pools.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || b.blockNumber - a.blockNumber);
   const annotatedPools = await annotatePoolsForUser({ userId, pools });
+  const poolsWithRange = await timeInRangeService.annotatePoolsWithTimeInRange(annotatedPools);
 
   return {
     wallet: normalizedWallet,
@@ -1841,13 +1846,13 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
     mode: 'created_pools',
     source: 'etherscan',
     completeness: truncated ? 'partial' : 'full',
-    count: annotatedPools.length,
+    count: poolsWithRange.length,
     filteredOutCount,
     inspectedTxCount: uniqueTxHashes.length,
     totalTxCount: transactions.length,
     scannedAt: Date.now(),
     warnings,
-    pools: annotatedPools,
+    pools: poolsWithRange,
   };
 }
 

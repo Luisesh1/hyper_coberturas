@@ -210,6 +210,28 @@ export const uniswapApi = {
     }),
   deactivateProtectedPool: (id) =>
     request('POST', `/uniswap/protected-pools/${id}/deactivate`, {}),
+  prepareClaimFees: ({ network, version, positionIdentifier, walletAddress }) =>
+    request('POST', '/uniswap/claim-fees/prepare', { network, version, positionIdentifier, walletAddress }),
+  finalizeClaimFees: ({ network, version, positionIdentifier, walletAddress, txHash }) =>
+    request('POST', '/uniswap/claim-fees/finalize', { network, version, positionIdentifier, walletAddress, txHash }),
+  preparePositionAction: (action, payload) =>
+    request('POST', `/uniswap/${action}/prepare`, payload),
+  finalizePositionAction: (action, payload) =>
+    request('POST', `/uniswap/${action}/finalize`, payload),
+  prepareIncreaseLiquidity: (payload) => request('POST', '/uniswap/increase-liquidity/prepare', payload),
+  finalizeIncreaseLiquidity: (payload) => request('POST', '/uniswap/increase-liquidity/finalize', payload),
+  prepareDecreaseLiquidity: (payload) => request('POST', '/uniswap/decrease-liquidity/prepare', payload),
+  finalizeDecreaseLiquidity: (payload) => request('POST', '/uniswap/decrease-liquidity/finalize', payload),
+  prepareCollectFees: (payload) => request('POST', '/uniswap/collect-fees/prepare', payload),
+  finalizeCollectFees: (payload) => request('POST', '/uniswap/collect-fees/finalize', payload),
+  prepareReinvestFees: (payload) => request('POST', '/uniswap/reinvest-fees/prepare', payload),
+  finalizeReinvestFees: (payload) => request('POST', '/uniswap/reinvest-fees/finalize', payload),
+  prepareModifyRange: (payload) => request('POST', '/uniswap/modify-range/prepare', payload),
+  finalizeModifyRange: (payload) => request('POST', '/uniswap/modify-range/finalize', payload),
+  prepareRebalance: (payload) => request('POST', '/uniswap/rebalance/prepare', payload),
+  finalizeRebalance: (payload) => request('POST', '/uniswap/rebalance/finalize', payload),
+  prepareCreatePosition: (payload) => request('POST', '/uniswap/create-position/prepare', payload),
+  finalizeCreatePosition: (payload) => request('POST', '/uniswap/create-position/finalize', payload),
 };
 
 // ------------------------------------------------------------------

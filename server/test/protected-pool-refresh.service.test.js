@@ -18,6 +18,11 @@ test('protected pool refresh actualiza snapshots activos agrupando por wallet/re
         {
           id: 10,
           userId: 1,
+          inferredAsset: 'BTC',
+          rangeLastStateInRange: true,
+          rangeLastStateAt: 1710000000000,
+          timeInRangeMs: 60000,
+          timeTrackedMs: 120000,
           walletAddress: '0xabc',
           network: 'ethereum',
           version: 'v3',
@@ -30,6 +35,11 @@ test('protected pool refresh actualiza snapshots activos agrupando por wallet/re
         {
           id: 11,
           userId: 1,
+          inferredAsset: 'ETH',
+          rangeLastStateInRange: true,
+          rangeLastStateAt: 1710000000000,
+          timeInRangeMs: 60000,
+          timeTrackedMs: 120000,
           walletAddress: '0xabc',
           network: 'ethereum',
           version: 'v3',
@@ -43,6 +53,24 @@ test('protected pool refresh actualiza snapshots activos agrupando por wallet/re
       updateSnapshot: async (userId, id, record) => {
         updates.push({ userId, id, record });
       },
+    },
+    timeInRangeService: {
+      computeIncrementalRangeMetrics: async (_protection, { poolSnapshot }) => ({
+        timeInRangeMs: poolSnapshot.identifier === '123' ? 180000 : 240000,
+        timeTrackedMs: 300000,
+        timeInRangePct: poolSnapshot.identifier === '123' ? 60 : 80,
+        rangeLastStateInRange: poolSnapshot.identifier === '123',
+        rangeLastStateAt: 1710000300000,
+        rangeComputedAt: 1710000300000,
+        rangeFrozenAt: null,
+        rangeResolution: '1m',
+      }),
+      applyRangeMetricsToSnapshot: (snapshot, metrics) => ({
+        ...snapshot,
+        timeInRangePct: metrics.timeInRangePct,
+        timeInRangeMs: metrics.timeInRangeMs,
+        timeTrackedMs: metrics.timeTrackedMs,
+      }),
     },
     uniswapService: {
       scanPoolsCreatedByWallet: async (payload) => {
@@ -97,8 +125,10 @@ test('protected pool refresh actualiza snapshots activos agrupando por wallet/re
   assert.equal(updates.length, 2);
   assert.equal(updates[0].id, 10);
   assert.equal(updates[0].record.poolSnapshot.identifier, '123');
+  assert.equal(updates[0].record.timeInRangePct, 60);
   assert.equal(updates[1].id, 11);
   assert.equal(updates[1].record.poolSnapshot.identifier, '456');
+  assert.equal(updates[1].record.timeInRangePct, 80);
 });
 
 test('protected pool refresh permite forzar solo las protecciones de un usuario', async () => {

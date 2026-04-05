@@ -12,6 +12,7 @@ const config = require('../config');
 const { placePositionProtection } = require('./protection.service');
 const balanceCacheService = require('./balance-cache.service');
 const { formatPrice, formatSize } = require('../utils/format');
+const logger = require('./logger.service');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
 const MARKET_ORDER_SLIPPAGE = config.trading.marketOrderSlippage;
@@ -105,7 +106,7 @@ class TradingService {
       result,
     };
     this.tg.notifyTradeOpen(openResult);
-    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch((err) => logger.warn('balance cache refresh failed', { userId: this.userId, accountId: this.account.id, error: err.message }));
     return openResult;
   }
 
@@ -171,7 +172,7 @@ class TradingService {
       result,
     };
     this.tg.notifyTradeClose(closeResult);
-    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch((err) => logger.warn('balance cache refresh failed', { userId: this.userId, accountId: this.account.id, error: err.message }));
     return closeResult;
   }
 
@@ -206,7 +207,7 @@ class TradingService {
       slPrice,
       tpPrice,
     });
-    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch((err) => logger.warn('balance cache refresh failed', { userId: this.userId, accountId: this.account.id, error: err.message }));
     return {
       account: this.account,
       result,
@@ -216,7 +217,7 @@ class TradingService {
   async cancelOrder(asset, orderId) {
     const assetIndex = await this.hl.getAssetIndex(asset);
     const result = await this.hl.cancelOrder(assetIndex, orderId);
-    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch(() => {});
+    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch((err) => logger.warn('balance cache refresh failed', { userId: this.userId, accountId: this.account.id, error: err.message }));
     return { success: true, account: this.account, result };
   }
 }

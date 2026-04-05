@@ -1,6 +1,7 @@
 const config = require('../config');
 const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
+const timeInRangeService = require('./time-in-range.service');
 const uniswapService = require('./uniswap.service');
 
 function buildGroupKey(item) {
@@ -16,6 +17,7 @@ class ProtectedPoolRefreshService {
   constructor(deps = {}) {
     this.repo = deps.protectedPoolRepository || protectedPoolRepository;
     this.uniswapService = deps.uniswapService || uniswapService;
+    this.timeInRangeService = deps.timeInRangeService || timeInRangeService;
     this.refreshIntervalMs = deps.refreshIntervalMs || config.intervals.protectedPoolRefreshMs;
     this.logger = deps.logger || logger;
     this.interval = null;
@@ -152,6 +154,15 @@ class ProtectedPoolRefreshService {
       }
 
       try {
+        const rangeMetrics = await this.timeInRangeService.computeIncrementalRangeMetrics(protection, {
+          endAt: Date.now(),
+          poolSnapshot: freshPool,
+          asset: protection.inferredAsset,
+        });
+        const poolSnapshot = rangeMetrics
+          ? this.timeInRangeService.applyRangeMetricsToSnapshot(freshPool, rangeMetrics)
+          : freshPool;
+
         await this.repo.updateSnapshot(protection.userId, protection.id, {
           poolAddress: freshPool.poolAddress || null,
           token0Symbol: freshPool.token0?.symbol || protection.token0Symbol,
@@ -161,8 +172,10 @@ class ProtectedPoolRefreshService {
           rangeLowerPrice: freshPool.rangeLowerPrice,
           rangeUpperPrice: freshPool.rangeUpperPrice,
           priceCurrent: freshPool.priceCurrent,
-          poolSnapshot: freshPool,
+          poolSnapshot,
           updatedAt: Date.now(),
+          isCurrentlyInRange: freshPool.inRange === true,
+          ...(rangeMetrics || {}),
         });
       } catch (err) {
         this.logger.warn('protected_pool_snapshot_update_failed', {

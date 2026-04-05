@@ -1,5 +1,6 @@
 const hlRegistry = require('./hyperliquid.registry');
 const config = require('../config');
+const logger = require('./logger.service');
 
 const CACHE_TTL_MS = config.intervals.balanceCacheTtlMs;
 const REFRESH_INTERVAL_MS = config.intervals.balanceRefreshMs;
@@ -19,7 +20,7 @@ function startRefreshLoop() {
       if (!entry.userId || !entry.accountId) continue;
       if (entry.isRefreshing) continue;
       if ((Date.now() - (entry.lastUpdatedAt || 0)) < REFRESH_INTERVAL_MS) continue;
-      refreshSnapshot(entry.userId, entry.accountId).catch(() => {});
+      refreshSnapshot(entry.userId, entry.accountId).catch((err) => logger.warn('background balance refresh failed', { userId: entry.userId, accountId: entry.accountId, error: err.message }));
     }
   }, REFRESH_INTERVAL_MS);
   refreshTimer.unref?.();

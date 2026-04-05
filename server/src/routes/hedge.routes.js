@@ -8,6 +8,7 @@
  */
 
 const { Router } = require('express');
+const rateLimit        = require('express-rate-limit');
 const hedgeRegistry    = require('../services/hedge.registry');
 const { authenticate } = require('../middleware/auth.middleware');
 const { validate } = require('../middleware/validate.middleware');
@@ -16,6 +17,16 @@ const { createHedgeSchema } = require('../schemas/hedge.schema');
 
 const router = Router();
 router.use(authenticate);
+
+// Rate limit para operaciones de hedge: 5 por minuto por usuario
+const hedgeWriteLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `hedge:${req.user?.userId}`,
+  message: { success: false, error: 'Demasiadas operaciones de cobertura, espera un momento' },
+});
 
 router.get('/', asyncHandler(async (req, res) => {
   const accountId = req.query.accountId ? Number(req.query.accountId) : null;
@@ -42,14 +53,14 @@ router.get('/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, data: hedge });
 }));
 
-router.post('/', validate(createHedgeSchema), asyncHandler(async (req, res) => {
+router.post('/', hedgeWriteLimiter, validate(createHedgeSchema), asyncHandler(async (req, res) => {
   const { asset, entryPrice, exitPrice, size, leverage, label, direction, accountId } = req.body;
   const svc   = await hedgeRegistry.getOrCreate(req.user.userId, accountId);
   const hedge = await svc.createHedge({ asset, entryPrice, exitPrice, size, leverage, label, direction });
   res.status(201).json({ success: true, data: hedge });
 }));
 
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', hedgeWriteLimiter, asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ success: false, error: 'ID invalido' });
   const services = await hedgeRegistry.getOrCreateAllForUser(req.user.userId);

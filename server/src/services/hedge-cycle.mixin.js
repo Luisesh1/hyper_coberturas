@@ -103,7 +103,7 @@ const cycleMethods = {
       return;
     }
 
-    const mids = await this.hl.getAllMids().catch(() => null);
+    const mids = await this.hl.getAllMids().catch((err) => { logger.warn('getAllMids failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
     const approxClosePrice = mids ? parseFloat(mids[hedge.asset]) : null;
     const trackedSize = getTrackedPositionSize(hedge);
 

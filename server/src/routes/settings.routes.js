@@ -20,6 +20,7 @@ const balanceCacheService = require('../services/balance-cache.service');
 const hyperliquidAccountsService = require('../services/hyperliquid-accounts.service');
 const settingsService = require('../services/settings.service');
 const uniswapService  = require('../services/uniswap.service');
+const logger = require('../services/logger.service');
 const { authenticate } = require('../middleware/auth.middleware');
 const { ValidationError } = require('../errors/app-error');
 
@@ -74,7 +75,7 @@ router.put('/telegram', asyncHandler(async (req, res) => {
   const tg = { token: token.trim(), chatId: String(chatId).trim() };
   await settingsService.setTelegram(userId, tg);
   await tgRegistry.reload(userId);
-  await telegramCommandService.refreshConfigs().catch(() => {});
+  await telegramCommandService.refreshConfigs().catch((err) => logger.warn('telegram config refresh failed', { error: err.message }));
   res.json({ success: true, data: { enabled: true } });
 }));
 
@@ -159,7 +160,7 @@ router.post('/hyperliquid-accounts', asyncHandler(async (req, res) => {
     isDefault,
   });
   balanceCacheService.invalidateUser(userId);
-  await hlRegistry.reload(userId, account.id).catch(() => {});
+  await hlRegistry.reload(userId, account.id).catch((err) => logger.warn('hlRegistry reload failed', { userId, accountId: account.id, error: err.message }));
   res.status(201).json({ success: true, data: account });
 }));
 

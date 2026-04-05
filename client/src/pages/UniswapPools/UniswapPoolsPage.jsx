@@ -3,6 +3,7 @@ import { settingsApi, uniswapApi } from '../../services/api';
 import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
+import { useWalletConnection } from '../../hooks/useWalletConnection';
 import { mergeResultProtections } from './utils/pool-sorting';
 import { getPoolSortScore } from './utils/pool-sorting';
 import { sortProtectedPools } from './utils/pool-sorting';
@@ -12,6 +13,7 @@ import ResultsToolbar from './components/ResultsToolbar';
 import PoolCard from './components/PoolCard';
 import ProtectedPoolCard from './components/ProtectedPoolCard';
 import ApplyProtectionModal from './components/ApplyProtectionModal';
+import PositionActionModal from './components/PositionActionModal';
 import SkeletonCard from './components/SkeletonCard';
 import styles from './UniswapPoolsPage.module.css';
 
@@ -38,7 +40,16 @@ export default function UniswapPoolsPage() {
   const [applyPool, setApplyPool] = useState(null);
   const [activeTab, setActiveTab] = useState('results');
   const [showInactiveProtected, setShowInactiveProtected] = useState(false);
+  const [activeAction, setActiveAction] = useState(null);
   const { dialog, confirm } = useConfirmAction();
+  const walletConn = useWalletConnection();
+  const walletState = useMemo(() => ({
+    address: walletConn.address,
+    chainId: walletConn.chainId,
+    isConnected: walletConn.isConnected,
+    hasProvider: walletConn.hasProvider,
+    connector: walletConn.connector,
+  }), [walletConn.address, walletConn.chainId, walletConn.isConnected, walletConn.hasProvider]);
 
   const loadProtectedPools = useCallback(async ({ force = false } = {}) => {
     setIsLoadingProtected(true);
@@ -242,11 +253,27 @@ export default function UniswapPoolsPage() {
     }
   };
 
+  const refreshVisibleData = useCallback(async () => {
+    await loadProtectedPools();
+    if (result) {
+      const data = await uniswapApi.scanPools({ wallet, network, version });
+      setResult(mergeResultProtections(data, protectedPools));
+    }
+  }, [loadProtectedPools, network, protectedPools, result, version, wallet]);
+
+  const handleOpenAction = useCallback((action, pool = null) => {
+    setActiveAction({ action, pool });
+  }, []);
+
+  const handleClaimFinalized = useCallback(() => {
+    refreshVisibleData().catch(() => {});
+  }, [refreshVisibleData]);
+
   const handleDeactivate = async (protection) => {
     const ok = await confirm({
-      title: 'Desactivar proteccion',
-      message: `Se cancelaran las dos coberturas ligadas a ${protection.token0Symbol}/${protection.token1Symbol}.`,
-      confirmLabel: 'Desactivar proteccion',
+      title: 'Desactivar protección',
+      message: `Se cancelarán las dos coberturas ligadas a ${protection.token0Symbol}/${protection.token1Symbol}.`,
+      confirmLabel: 'Desactivar protección',
       variant: 'danger',
     });
     if (!ok) return;
@@ -278,14 +305,45 @@ export default function UniswapPoolsPage() {
         onSubmit={handleSubmit}
       />
 
+      <div className={styles.walletBar}>
+        {walletConn.isConnected ? (
+          <>
+            <span className={styles.walletConnected}>
+              <span className={styles.walletDot} />
+              {walletConn.address.slice(0, 6)}...{walletConn.address.slice(-4)}
+              {walletConn.chainId && <span className={styles.walletChain}>Red {walletConn.chainId} · {walletConn.connectorLabel}</span>}
+            </span>
+            <button className={styles.walletBtn} onClick={() => handleOpenAction('create-position', null)}>
+              ＋ Nueva posición LP
+            </button>
+            <button className={styles.walletGhostBtn} onClick={walletConn.disconnect}>
+              ↩ Desconectar wallet
+            </button>
+          </>
+        ) : (
+          <>
+            <button className={styles.walletBtn} onClick={walletConn.connectInjected} disabled={!walletConn.hasInjectedProvider}>
+              🦊 Conectar con MetaMask
+            </button>
+            <button className={styles.walletGhostBtn} onClick={walletConn.connectWalletConnect} disabled={!walletConn.hasWalletConnect}>
+              🔗 WalletConnect
+            </button>
+            {!walletConn.hasInjectedProvider && !walletConn.hasWalletConnect && (
+              <span className={styles.walletHint}>No se detectó ninguna extensión de wallet instalada</span>
+            )}
+          </>
+        )}
+        {walletConn.error && <span className={styles.walletError}>{walletConn.error}</span>}
+      </div>
+
       {!hasApiKey && (
         <div className={styles.notice}>
-          Configura tu API key de Etherscan en Config antes de usar el scanner.
+          ⚠ Necesitas una API key de Etherscan para escanear wallets. Ve a Configuración → Etherscan para añadirla.
         </div>
       )}
       {!accounts.length && (
         <div className={styles.notice}>
-          No hay cuentas de Hyperliquid configuradas. Puedes escanear pools, pero no activar protecciones hasta agregar una cuenta.
+          ℹ Sin cuentas de Hyperliquid — puedes escanear pools, pero no activar protecciones. Ve a Configuración para agregar una.
         </div>
       )}
       {error && (
@@ -304,14 +362,14 @@ export default function UniswapPoolsPage() {
           className={`${styles.tab} ${activeTab === 'results' ? styles.tabActive : ''}`}
           onClick={() => setActiveTab('results')}
         >
-          Resultados
+          🔍 Escaneo
           {result?.count > 0 && <span className={styles.tabCount}>{filteredPools.length}</span>}
         </button>
         <button
           className={`${styles.tab} ${activeTab === 'protected' ? styles.tabActive : ''}`}
           onClick={() => setActiveTab('protected')}
         >
-          Protegidos
+          🛡 Protecciones
           {protectedSummary.active > 0 && (
             <span className={`${styles.tabCount} ${protectedSummary.outside > 0 ? styles.tabCountAlert : ''}`}>
               {protectedSummary.active}
@@ -368,6 +426,8 @@ export default function UniswapPoolsPage() {
                       pool={pool}
                       hasAccounts={accounts.length > 0}
                       onApplyProtection={handleOpenApply}
+                      walletState={walletState}
+                      onClaimFees={handleOpenAction}
                     />
                   ))}
                 </div>
@@ -381,11 +441,11 @@ export default function UniswapPoolsPage() {
         <section className={styles.tabContent}>
           <div className={styles.protectedHeader}>
             <div className={styles.protectedStats}>
-              <span className={styles.protectedStat}><strong>{protectedSummary.active}</strong> Activas</span>
-              <span className={styles.protectedStat}><strong>{protectedSummary.inRange}</strong> En rango</span>
+              <span className={styles.protectedStat}><strong>{protectedSummary.active}</strong> protecciones activas</span>
+              <span className={styles.protectedStat}><strong>{protectedSummary.inRange}</strong> precio en rango</span>
               {protectedSummary.outside > 0 && (
                 <span className={`${styles.protectedStat} ${styles.protectedStatAlert}`}>
-                  <strong>{protectedSummary.outside}</strong> Fuera
+                  ⚠ <strong>{protectedSummary.outside}</strong> fuera de rango
                 </span>
               )}
             </div>
@@ -396,7 +456,7 @@ export default function UniswapPoolsPage() {
                   checked={showInactiveProtected}
                   onChange={(e) => setShowInactiveProtected(e.target.checked)}
                 />
-                <span>Ver pools sin proteccion</span>
+                <span>Incluir inactivas</span>
               </label>
               <button
                 type="button"
@@ -404,7 +464,7 @@ export default function UniswapPoolsPage() {
                 onClick={() => loadProtectedPools({ force: true })}
                 disabled={isLoadingProtected}
               >
-                {isLoadingProtected ? 'Actualizando...' : 'Refrescar'}
+                {isLoadingProtected ? 'Actualizando...' : '↻ Actualizar'}
               </button>
             </div>
           </div>
@@ -425,6 +485,8 @@ export default function UniswapPoolsPage() {
                   protection={protection}
                   isDeactivating={deactivatingId === protection.id}
                   onDeactivate={handleDeactivate}
+                  walletState={walletState}
+                  onClaimFees={handleOpenAction}
                 />
               ))}
             </div>
@@ -439,6 +501,18 @@ export default function UniswapPoolsPage() {
           isSubmitting={isApplyingProtection}
           onClose={() => setApplyPool(null)}
           onSubmit={handleApplyProtection}
+        />
+      )}
+
+      {activeAction && (
+        <PositionActionModal
+          action={activeAction.action}
+          pool={activeAction.pool}
+          wallet={walletState}
+          sendTransaction={walletConn.sendTransaction}
+          defaults={{ network, version: version === 'v4' ? 'v3' : version, walletAddress: walletState.address }}
+          onClose={() => setActiveAction(null)}
+          onFinalized={handleClaimFinalized}
         />
       )}
 

@@ -6,6 +6,7 @@ const hyperliquidAccountsService = require('./hyperliquid-accounts.service');
 const hedgeRepository = require('../repositories/hedge.repository');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const logger = require('./logger.service');
+const timeInRangeService = require('./time-in-range.service');
 const { formatPrice } = require('../utils/format');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
@@ -629,6 +630,59 @@ function buildStoredPoolSnapshot({
   };
 }
 
+async function computeInitialRangeMetrics({ existing, snapshot, asset, computedAt, deps = {} }) {
+  const service = deps.timeInRangeService || timeInRangeService;
+
+  if (existing?.status === 'inactive' && (
+    Number(existing.timeTrackedMs || 0) > 0
+    || existing.timeInRangePct != null
+    || existing.rangeComputedAt != null
+  )) {
+    const timeTrackedMs = Number(existing.timeTrackedMs || 0);
+    const timeInRangeMs = Number(existing.timeInRangeMs || 0);
+    return {
+      timeInRangeMs,
+      timeTrackedMs,
+      timeInRangePct: existing.timeInRangePct != null
+        ? Number(existing.timeInRangePct)
+        : timeTrackedMs > 0
+          ? Number(((timeInRangeMs / timeTrackedMs) * 100).toFixed(4))
+          : null,
+      rangeLastStateInRange: snapshot.inRange === true,
+      rangeLastStateAt: computedAt,
+      rangeComputedAt: computedAt,
+      rangeFrozenAt: null,
+      rangeResolution: null,
+    };
+  }
+
+  const metrics = await service.computeRangeMetricsForPool({
+    ...snapshot,
+    inferredAsset: asset,
+  }, {
+    asset,
+    endAt: computedAt,
+  });
+
+  if (metrics) return metrics;
+
+  return {
+    timeInRangeMs: 0,
+    timeTrackedMs: 0,
+    timeInRangePct: null,
+    rangeLastStateInRange: snapshot.inRange === true,
+    rangeLastStateAt: computedAt,
+    rangeComputedAt: computedAt,
+    rangeFrozenAt: null,
+    rangeResolution: null,
+  };
+}
+
+function applyRangeMetricsToPoolSnapshot(snapshot, metrics, deps = {}) {
+  const service = deps.timeInRangeService || timeInRangeService;
+  return service.applyRangeMetricsToSnapshot(snapshot, metrics);
+}
+
 function buildInitialDynamicState(snapshot, {
   reentryBufferPct,
   breakoutConfirmDistancePct,
@@ -868,18 +922,31 @@ async function createDeltaNeutralProtectedPool({
     normalizedLeverage,
     hedgeSize: deltaMetrics.targetQty,
   };
-  const poolSnapshot = buildStoredPoolSnapshot({ ...snapshotArgs, protectionId });
+  const initialRangeMetrics = await computeInitialRangeMetrics({
+    existing,
+    snapshot,
+    asset: candidate.deltaNeutralAsset,
+    computedAt: createdAt,
+    deps,
+  });
+  const poolSnapshot = applyRangeMetricsToPoolSnapshot(
+    buildStoredPoolSnapshot({ ...snapshotArgs, protectionId }),
+    initialRangeMetrics,
+    deps
+  );
 
   if (protectionId) {
     await repository.reactivate(userId, protectionId, {
       ...baseRecord,
       poolSnapshot,
+      ...initialRangeMetrics,
       updatedAt: createdAt,
     });
   } else {
     protectionId = await repository.create({
       ...baseRecord,
       poolSnapshot,
+      ...initialRangeMetrics,
     });
     await repository.updateSnapshot(userId, protectionId, {
       poolAddress: snapshot.poolAddress,
@@ -890,7 +957,12 @@ async function createDeltaNeutralProtectedPool({
       rangeLowerPrice: snapshot.rangeLowerPrice,
       rangeUpperPrice: snapshot.rangeUpperPrice,
       priceCurrent: snapshot.priceCurrent,
-      poolSnapshot: buildStoredPoolSnapshot({ ...snapshotArgs, protectionId }),
+      poolSnapshot: applyRangeMetricsToPoolSnapshot(
+        buildStoredPoolSnapshot({ ...snapshotArgs, protectionId }),
+        initialRangeMetrics,
+        deps
+      ),
+      ...initialRangeMetrics,
       updatedAt: createdAt,
     });
   }
@@ -1068,9 +1140,16 @@ async function createProtectedPool({
     marginMode: 'isolated',
     createdAt,
   };
+  const initialRangeMetrics = await computeInitialRangeMetrics({
+    existing,
+    snapshot,
+    asset: candidate.inferredAsset,
+    computedAt: createdAt,
+    deps,
+  });
 
   let protectionId = existing?.id || null;
-  const poolSnapshot = buildStoredPoolSnapshot({
+  const baseStoredSnapshot = buildStoredPoolSnapshot({
     snapshot,
     candidate,
     protectionId,
@@ -1088,17 +1167,20 @@ async function createProtectedPool({
     normalizedLeverage,
     hedgeSize,
   });
+  const poolSnapshot = applyRangeMetricsToPoolSnapshot(baseStoredSnapshot, initialRangeMetrics, deps);
 
   if (protectionId) {
     await repository.reactivate(userId, protectionId, {
       ...baseRecord,
       poolSnapshot,
+      ...initialRangeMetrics,
       updatedAt: createdAt,
     }, executor);
   } else {
     protectionId = await repository.create({
       ...baseRecord,
       poolSnapshot,
+      ...initialRangeMetrics,
     }, executor);
     await repository.updateSnapshot(userId, protectionId, {
       poolAddress: snapshot.poolAddress,
@@ -1109,24 +1191,29 @@ async function createProtectedPool({
       rangeLowerPrice: snapshot.rangeLowerPrice,
       rangeUpperPrice: snapshot.rangeUpperPrice,
       priceCurrent: snapshot.priceCurrent,
-      poolSnapshot: buildStoredPoolSnapshot({
-        snapshot,
-        candidate,
-        protectionId,
-        accountId: account.id,
-        normalizedNotionalUsd,
-        normalizedValueMultiplier,
-        normalizedStopLossDifferencePct,
-        protectionMode: normalizedProtectionMode,
-        reentryBufferPct: normalizedReentryBufferPct,
-        flipCooldownSec: normalizedFlipCooldownSec,
-        maxSequentialFlips: normalizedMaxSequentialFlips,
-        breakoutConfirmDistancePct: normalizedBreakoutConfirmDistancePct,
-        breakoutConfirmDurationSec: normalizedBreakoutConfirmDurationSec,
-        dynamicState,
-        normalizedLeverage,
-        hedgeSize,
-      }),
+      poolSnapshot: applyRangeMetricsToPoolSnapshot(
+        buildStoredPoolSnapshot({
+          snapshot,
+          candidate,
+          protectionId,
+          accountId: account.id,
+          normalizedNotionalUsd,
+          normalizedValueMultiplier,
+          normalizedStopLossDifferencePct,
+          protectionMode: normalizedProtectionMode,
+          reentryBufferPct: normalizedReentryBufferPct,
+          flipCooldownSec: normalizedFlipCooldownSec,
+          maxSequentialFlips: normalizedMaxSequentialFlips,
+          breakoutConfirmDistancePct: normalizedBreakoutConfirmDistancePct,
+          breakoutConfirmDurationSec: normalizedBreakoutConfirmDurationSec,
+          dynamicState,
+          normalizedLeverage,
+          hedgeSize,
+        }),
+        initialRangeMetrics,
+        deps
+      ),
+      ...initialRangeMetrics,
       updatedAt: createdAt,
     }, executor);
   }
@@ -1209,7 +1296,20 @@ async function deactivateProtectedPool(userId, protectionId, deps = {}) {
     await hedgeSvc.cancelHedge(hedge.id);
   }
 
-  await repository.deactivate(userId, protectionId, { deactivatedAt: Date.now() });
+  const deactivatedAt = Date.now();
+  const finalRangeMetrics = await (deps.timeInRangeService || timeInRangeService)
+    .computeIncrementalRangeMetrics(protection, {
+      endAt: deactivatedAt,
+      rangeFrozenAt: deactivatedAt,
+    });
+
+  await repository.deactivate(userId, protectionId, {
+    deactivatedAt,
+    ...(finalRangeMetrics ? {
+      ...finalRangeMetrics,
+      poolSnapshot: applyRangeMetricsToPoolSnapshot(protection.poolSnapshot || {}, finalRangeMetrics, deps),
+    } : {}),
+  });
   await linkedHedgeRepository.unlinkByProtectedPoolId(protectionId);
   return repository.getById(userId, protectionId);
 }

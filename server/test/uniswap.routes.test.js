@@ -8,6 +8,7 @@ const config = require('../src/config');
 const authService = require('../src/services/auth.service');
 const uniswapProtectionService = require('../src/services/uniswap-protection.service');
 const protectedPoolRefreshService = require('../src/services/protected-pool-refresh.service');
+const positionActionsService = require('../src/services/uniswap-position-actions.service');
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -177,6 +178,94 @@ test('POST /api/uniswap/protected-pools/:id/deactivate valida el id', async () =
     assert.match(json.error, /ID invalido/i);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/increase-liquidity/prepare delega al coordinador de acciones', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalPrepare = positionActionsService.preparePositionAction;
+  const calls = [];
+
+  authService.validateSessionToken = async () => buildSessionUser();
+  positionActionsService.preparePositionAction = async (payload) => {
+    calls.push(payload);
+    return { action: 'increase-liquidity', txPlan: [] };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/increase-liquidity/prepare`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({
+        network: 'ethereum',
+        version: 'v3',
+        walletAddress: '0x00000000000000000000000000000000000000AA',
+        positionIdentifier: '123',
+        amount0Desired: '0.1',
+        amount1Desired: '100',
+        slippageBps: 100,
+      }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.data.action, 'increase-liquidity');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, 'increase-liquidity');
+    assert.equal(calls[0].payload.positionIdentifier, '123');
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    positionActionsService.preparePositionAction = originalPrepare;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/modify-range/finalize usa userId autenticado al finalizar', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalFinalize = positionActionsService.finalizePositionAction;
+  const calls = [];
+
+  authService.validateSessionToken = async () => buildSessionUser();
+  positionActionsService.finalizePositionAction = async (payload) => {
+    calls.push(payload);
+    return { action: 'modify-range', txHashes: payload.txHashes };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/modify-range/finalize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({
+        network: 'ethereum',
+        version: 'v3',
+        walletAddress: '0x00000000000000000000000000000000000000AA',
+        positionIdentifier: '123',
+        txHashes: ['0xabc'],
+      }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.data.action, 'modify-range');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].userId, 1);
+    assert.deepEqual(calls[0].txHashes, ['0xabc']);
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    positionActionsService.finalizePositionAction = originalFinalize;
     server.close();
   }
 });

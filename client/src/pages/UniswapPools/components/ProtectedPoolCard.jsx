@@ -4,18 +4,27 @@ import { getPoolStatus } from '../utils/pool-helpers';
 import { formatDuration, formatNumber } from '../../../utils/formatters';
 import {
   formatUsd, formatSignedUsd, formatPercent, formatPercentRatio,
-  formatCompactPrice, formatRelativeTimestamp,
+  formatCompactPrice, formatRelativeTimestamp, shortAddress,
 } from '../utils/pool-formatters';
 import RangeTrack from './RangeTrack';
 import styles from './ProtectedPoolCard.module.css';
 
 function ProtectionStatus({ hedge }) {
-  if (!hedge) return <span className={styles.hedgeEmpty}>Sin crear</span>;
+  if (!hedge) return <span className={styles.hedgeEmpty}>Pendiente de crear</span>;
   const statusInfo = STATUS_LABEL[hedge.status] || { text: hedge.status, color: '#94a3b8' };
   return <span className={styles.hedgeStatus} style={{ color: statusInfo.color }}>● {statusInfo.text}</span>;
 }
 
-export default function ProtectedPoolCard({ protection, isDeactivating, onDeactivate }) {
+function MetaChip({ label, value, valueClass }) {
+  return (
+    <div className={styles.metaChip}>
+      <span className={styles.metaChipLabel}>{label}</span>
+      <strong className={`${styles.metaChipValue} ${valueClass || ''}`}>{value}</strong>
+    </div>
+  );
+}
+
+export default function ProtectedPoolCard({ protection, isDeactivating, onDeactivate, walletState, onClaimFees }) {
   const snapshot = protection.poolSnapshot || {};
   const pairLabel = snapshot.token0?.symbol && snapshot.token1?.symbol
     ? `${snapshot.token0.symbol} / ${snapshot.token1.symbol}`
@@ -41,175 +50,299 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
   const isDeltaNeutral = protection.protectionMode === 'delta_neutral';
   const dynamicState = protection.dynamicState || null;
   const strategyState = protection.strategyState || null;
-  const netTone = Number.isFinite(Number(strategyState?.netProtectionPnlUsd))
-    ? (Number(strategyState?.netProtectionPnlUsd) > 0 ? styles.positive : Number(strategyState?.netProtectionPnlUsd) < 0 ? styles.negative : '')
+  const netProtPnl = Number(strategyState?.netProtectionPnlUsd);
+  const netTone = Number.isFinite(netProtPnl)
+    ? (netProtPnl > 0 ? styles.positive : netProtPnl < 0 ? styles.negative : '')
     : '';
   const topUpCap = strategyState?.topUpCapUsd ?? Math.max(300, 0.25 * Number(protection.initialConfiguredHedgeNotionalUsd || protection.configuredHedgeNotionalUsd || 0));
+  const timeInRangePct = protection.timeInRangePct != null
+    ? Number(protection.timeInRangePct)
+    : snapshot.timeInRangePct != null
+      ? Number(snapshot.timeInRangePct)
+      : null;
+  const unclaimedFees = Number(snapshot.unclaimedFeesUsd);
+  const canClaim = ['v3', 'v4'].includes(protection.version)
+    && walletState?.isConnected
+    && walletState.chainId === snapshot.chainId
+    && protection.walletAddress?.toLowerCase() === walletState.address?.toLowerCase()
+    && unclaimedFees > 0;
+  const canManage = ['v3', 'v4'].includes(protection.version)
+    && protection.version === 'v3'
+    && walletState?.isConnected
+    && walletState.chainId === snapshot.chainId
+    && protection.walletAddress?.toLowerCase() === walletState.address?.toLowerCase();
+
+  const manageTitle = !walletState?.isConnected
+    ? 'Conecta tu wallet para gestionar esta posición'
+    : walletState.chainId !== snapshot.chainId
+      ? 'Cambia a la red correcta en tu wallet'
+      : protection.walletAddress?.toLowerCase() !== walletState.address?.toLowerCase()
+        ? 'Esta wallet no es dueña de la posición'
+        : '';
+
+  const modeLabel = isDeltaNeutral ? 'Delta Neutral' : isDynamic ? 'Dinámica' : 'Estática';
+  const modeBadgeCls = isDeltaNeutral ? styles.badgeDeltaNeutral : isDynamic ? styles.badgeDynamic : styles.badgeNeutral;
+
+  const poolPayload = { ...snapshot, network: protection.network, version: protection.version, identifier: protection.positionIdentifier, chainId: snapshot.chainId };
 
   return (
     <article className={`${styles.card} ${toneCls}`}>
+      {/* ─── Cabecera ───────────────────────────── */}
       <div className={styles.header}>
-        <div>
+        <div className={styles.headerLeft}>
           <h3 className={styles.pair}>{pairLabel}</h3>
           <div className={styles.badges}>
             <span className={styles.badgeVersion}>{protection.version.toUpperCase()}</span>
             <span className={styles.badgeNetwork}>{snapshot.networkLabel || protection.network}</span>
-            {isDynamic && <span className={styles.badgeDynamic}>Dinámica</span>}
-            {isDeltaNeutral && <span className={styles.badgeDynamic}>Delta Neutral</span>}
-            <span className={protection.status === 'active' ? styles.badgeProtected : styles.badgeNeutral}>
-              {protection.status === 'active' ? 'Activa' : 'Inactiva'}
+            <span className={modeBadgeCls}>{modeLabel}</span>
+            <span className={protection.status === 'active' ? styles.badgeProtected : styles.badgeInactive}>
+              {protection.status === 'active' ? '● Activa' : '○ Inactiva'}
             </span>
           </div>
         </div>
         <div className={styles.actions}>
-          <span className={styles.refreshMeta}>Act. {formatRelativeTimestamp(protection.updatedAt)}</span>
+          <span className={styles.refreshMeta} title="Última actualización de datos">
+            Act. {formatRelativeTimestamp(protection.updatedAt)}
+          </span>
           {protection.status === 'active' && (
-            <button type="button" className={styles.dangerBtn} onClick={() => onDeactivate(protection)} disabled={isDeactivating}>
-              {isDeactivating ? 'Desactivando...' : 'Desactivar'}
+            <button
+              type="button"
+              className={styles.dangerBtn}
+              onClick={() => onDeactivate(protection)}
+              disabled={isDeactivating}
+              title="Desactivar la protección y cancelar las coberturas asociadas"
+            >
+              {isDeactivating ? '⏳ Desactivando...' : 'Desactivar protección'}
             </button>
           )}
         </div>
       </div>
 
+      {/* ─── Estado del rango ──────────────────── */}
       <div className={styles.statusLine}>
         <span className={`${styles.statusDot} ${styles[`dot_${status.tone}`]}`} />
         <span className={styles.statusText}>{status.label}</span>
+        {protection.walletAddress && (
+          <span className={styles.walletAddress} title={protection.walletAddress}>
+            {shortAddress(protection.walletAddress)}
+          </span>
+        )}
       </div>
 
+      {/* ─── Métricas principales ──────────────── */}
       <div className={styles.metrics}>
         <div className={styles.metric}>
           <span className={styles.metricValue}>{formatUsd(snapshot.initialValueUsd)}</span>
-          <span className={styles.metricLabel}>Inicial</span>
+          <span className={styles.metricLabel}>Valor inicial LP</span>
         </div>
         <div className={styles.metric}>
           <span className={styles.metricValue}>{formatUsd(snapshot.currentValueUsd)}</span>
-          <span className={styles.metricLabel}>Actual</span>
+          <span className={styles.metricLabel}>Valor actual LP</span>
         </div>
         <div className={styles.metric}>
-          <span className={styles.metricValue}>{formatUsd(snapshot.unclaimedFeesUsd)}</span>
-          <span className={styles.metricLabel}>Fees</span>
+          <span className={`${styles.metricValue} ${unclaimedFees > 0 ? styles.amber : ''}`}>{formatUsd(snapshot.unclaimedFeesUsd)}</span>
+          <span className={styles.metricLabel}>Fees acumuladas</span>
         </div>
         <div className={styles.metric}>
           <span className={`${styles.metricValue} ${pnlTone}`}>{formatSignedUsd(snapshot.pnlTotalUsd)}</span>
-          <span className={styles.metricLabel}>P&L</span>
+          <span className={styles.metricLabel}>Ganancia / Pérdida</span>
         </div>
         <div className={styles.metric}>
           <span className={`${styles.metricValue} ${yieldTone}`}>{formatPercent(snapshot.yieldPct)}</span>
-          <span className={styles.metricLabel}>Yield</span>
+          <span className={styles.metricLabel}>Rendimiento</span>
         </div>
         {snapshot.activeForMs != null && (
           <div className={styles.metric}>
             <span className={styles.metricValue}>{formatDuration(snapshot.activeForMs)}</span>
-            <span className={styles.metricLabel}>En pool</span>
+            <span className={styles.metricLabel}>Tiempo en pool</span>
+          </div>
+        )}
+        {timeInRangePct != null && (
+          <div className={styles.metric}>
+            <span className={styles.metricValue}>{timeInRangePct.toFixed(1)}%</span>
+            <span className={styles.metricLabel}>Tiempo en rango</span>
           </div>
         )}
       </div>
 
-      {snapshot.mode === 'lp_position' && <RangeTrack pool={snapshot} compact showOpen={false} />}
+      {/* ─── Visualización del rango ───────────── */}
+      {snapshot.mode === 'lp_position' && <RangeTrack pool={snapshot} compact />}
 
+      {/* ─── Acciones LP ───────────────────────── */}
+      {['v3', 'v4'].includes(protection.version) && onClaimFees && (
+        <div className={styles.actionGroup}>
+          <button
+            type="button"
+            className={styles.claimBtn}
+            disabled={!canClaim}
+            onClick={() => onClaimFees('collect-fees', poolPayload)}
+            title={
+              !walletState?.isConnected ? 'Conecta tu wallet para cobrar fees'
+                : walletState.chainId !== snapshot.chainId ? 'Cambia a la red correcta en tu wallet'
+                  : protection.walletAddress?.toLowerCase() !== walletState.address?.toLowerCase() ? 'Esta wallet no es dueña de la posición'
+                    : unclaimedFees <= 0 ? 'No hay fees acumuladas por cobrar'
+                      : `Cobrar ${formatUsd(snapshot.unclaimedFeesUsd)} en fees`
+            }
+          >
+            <span>💰 Cobrar fees</span>
+            {unclaimedFees > 0 && <span className={styles.claimAmount}>{formatUsd(snapshot.unclaimedFeesUsd)}</span>}
+          </button>
+          <div className={styles.manageRow}>
+            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('increase-liquidity', poolPayload)} title={canManage ? 'Agregar liquidez' : manageTitle}>+ Liquidez</button>
+            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('decrease-liquidity', poolPayload)} title={canManage ? 'Retirar liquidez' : manageTitle}>− Liquidez</button>
+            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('reinvest-fees', poolPayload)} title={canManage ? 'Reinvertir fees en liquidez' : manageTitle}>↺ Reinvertir</button>
+            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('modify-range', poolPayload)} title={canManage ? 'Cambiar rango de precios' : manageTitle}>⇔ Rango</button>
+            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('rebalance', poolPayload)} title={canManage ? 'Rebalancear activos' : manageTitle}>⇄ Rebalancear</button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Sección expandible: configuración y coberturas ── */}
       <details className={styles.details}>
-        <summary className={styles.detailsToggle}>Configuracion y hedges</summary>
+        <summary className={styles.detailsToggle}>
+          <span>Ver configuración y coberturas activas</span>
+          <span className={styles.detailsChevron}>›</span>
+        </summary>
         <div className={styles.detailsContent}>
+
+          {/* Parámetros de configuración */}
+          <p className={styles.sectionTitle}>Parámetros de la protección</p>
           <div className={styles.metaGrid}>
-            <div className={styles.metaChip}><span>Cuenta</span><strong>{formatAccountIdentity(protection.account)}</strong></div>
-            <div className={styles.metaChip}><span>Activo HL</span><strong>{protection.inferredAsset}</strong></div>
-            <div className={styles.metaChip}><span>Notional</span><strong>{formatUsd(protection.configuredHedgeNotionalUsd)}</strong></div>
-            <div className={styles.metaChip}><span>Leverage</span><strong>{protection.leverage}x {protection.marginMode}</strong></div>
-            {!isDeltaNeutral && <div className={styles.metaChip}><span>SL diff</span><strong>{formatPercentRatio(protection.stopLossDifferencePct)}</strong></div>}
-            {isDynamic && <div className={styles.metaChip}><span>Fase dinámica</span><strong>{dynamicState?.phase || 'neutral'}</strong></div>}
-            {isDynamic && <div className={styles.metaChip}><span>Dist. breakout</span><strong>{protection.breakoutConfirmDistancePct != null ? `${protection.breakoutConfirmDistancePct}%` : '0.5%'}</strong></div>}
-            {isDynamic && <div className={styles.metaChip}><span>Tiempo breakout</span><strong>{protection.breakoutConfirmDurationSec != null ? formatDuration(protection.breakoutConfirmDurationSec * 1000) : '10m'}</strong></div>}
-            {isDynamic && <div className={styles.metaChip}><span>Ult. borde</span><strong>{dynamicState?.lastBrokenEdge || '—'}</strong></div>}
-            {isDynamic && <div className={styles.metaChip}><span>Reentrada</span><strong>{formatCompactPrice(dynamicState?.currentReentryPrice)}</strong></div>}
-            {isDynamic && <div className={styles.metaChip}><span>Breakout pendiente</span><strong>{dynamicState?.pendingBreakoutEdge || '—'}</strong></div>}
-            {isDynamic && <div className={styles.metaChip}><span>Recovery</span><strong>{dynamicState?.recoveryStatus || 'OK'}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Estado overlay</span><strong>{strategyState?.status || 'healthy'}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Delta LP</span><strong>{strategyState?.lastDeltaQty != null ? formatNumber(strategyState.lastDeltaQty, 6) : '—'}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Gamma</span><strong>{strategyState?.lastGamma != null ? formatNumber(strategyState.lastGamma, 8) : '—'}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Banda efectiva</span><strong>{strategyState?.effectiveBandPct != null ? `${formatNumber(strategyState.effectiveBandPct, 2)}%` : '—'}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>RV 4h / 24h</span><strong>{strategyState?.rv4hPct != null ? `${formatNumber(strategyState.rv4hPct, 1)} / ${formatNumber(strategyState.rv24hPct, 1)}%` : '—'}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Funding</span><strong>{formatSignedUsd(strategyState?.fundingAccumUsd)}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Dist. liquidación</span><strong>{strategyState?.distanceToLiqPct != null ? `${formatNumber(strategyState.distanceToLiqPct, 2)}%` : '—'}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>P&L neto</span><strong className={netTone}>{formatSignedUsd(strategyState?.netProtectionPnlUsd)}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Top-up auto</span><strong>{`${formatUsd(strategyState?.topUpUsd24h)} / ${formatUsd(topUpCap)}`}</strong></div>}
-            {isDeltaNeutral && <div className={styles.metaChip}><span>Conteo top-up</span><strong>{`${strategyState?.topUpCount24h || 0} / 3`}</strong></div>}
-            <div className={styles.metaChip}>
-              <span>Origen</span>
-              <strong>{protection.valueMultiplier ? `${protection.valueMultiplier}x LP` : 'Manual / base LP'}</strong>
-            </div>
+            <MetaChip label="Cuenta Hyperliquid" value={formatAccountIdentity(protection.account)} />
+            <MetaChip label="Activo cubierto en HL" value={protection.inferredAsset} />
+            <MetaChip label="Notional protegido" value={formatUsd(protection.configuredHedgeNotionalUsd)} />
+            <MetaChip label="Apalancamiento" value={`${protection.leverage}x ${protection.marginMode}`} />
+            {!isDeltaNeutral && (
+              <MetaChip
+                label="Diferencia stop-loss"
+                value={formatPercentRatio(protection.stopLossDifferencePct)}
+              />
+            )}
+            {protection.valueMultiplier && (
+              <MetaChip
+                label="Multiplicador de valor LP"
+                value={`${protection.valueMultiplier}x el LP`}
+              />
+            )}
+
+            {/* Parámetros modo dinámico */}
+            {isDynamic && <>
+              <MetaChip label="Fase actual" value={dynamicState?.phase || 'neutral'} />
+              <MetaChip
+                label="Distancia mín. confirmación breakout"
+                value={protection.breakoutConfirmDistancePct != null ? `${protection.breakoutConfirmDistancePct}%` : '0.5%'}
+              />
+              <MetaChip
+                label="Duración mín. confirmación breakout"
+                value={protection.breakoutConfirmDurationSec != null ? formatDuration(protection.breakoutConfirmDurationSec * 1000) : '10 min'}
+              />
+              <MetaChip label="Último borde roto" value={dynamicState?.lastBrokenEdge || '—'} />
+              <MetaChip label="Precio de reentrada activo" value={formatCompactPrice(dynamicState?.currentReentryPrice)} />
+              <MetaChip label="Breakout pendiente" value={dynamicState?.pendingBreakoutEdge || '—'} />
+              <MetaChip label="Estado de recuperación" value={dynamicState?.recoveryStatus || 'OK'} />
+            </>}
+
+            {/* Parámetros delta-neutral */}
+            {isDeltaNeutral && <>
+              <MetaChip label="Estado de la cobertura" value={strategyState?.status || 'healthy'} />
+              <MetaChip label="Delta efectivo del LP" value={strategyState?.lastDeltaQty != null ? formatNumber(strategyState.lastDeltaQty, 6) : '—'} />
+              <MetaChip label="Gamma del LP" value={strategyState?.lastGamma != null ? formatNumber(strategyState.lastGamma, 8) : '—'} />
+              <MetaChip label="Banda de rebalance efectiva" value={strategyState?.effectiveBandPct != null ? `${formatNumber(strategyState.effectiveBandPct, 2)}%` : '—'} />
+              <MetaChip
+                label="Volatilidad realizada (4h / 24h)"
+                value={strategyState?.rv4hPct != null ? `${formatNumber(strategyState.rv4hPct, 1)}% / ${formatNumber(strategyState.rv24hPct, 1)}%` : '—'}
+              />
+              <MetaChip label="Funding acumulado" value={formatSignedUsd(strategyState?.fundingAccumUsd)} />
+              <MetaChip label="Distancia a liquidación" value={strategyState?.distanceToLiqPct != null ? `${formatNumber(strategyState.distanceToLiqPct, 2)}%` : '—'} />
+              <MetaChip label="P&L neto de cobertura" value={formatSignedUsd(strategyState?.netProtectionPnlUsd)} valueClass={netTone} />
+              <MetaChip label="Capital recargado hoy" value={`${formatUsd(strategyState?.topUpUsd24h)} / ${formatUsd(topUpCap)}`} />
+              <MetaChip label="Recargas automáticas realizadas hoy" value={`${strategyState?.topUpCount24h || 0} de 3`} />
+            </>}
           </div>
 
-          {!isDeltaNeutral && <div className={styles.hedges}>
-            <div className={styles.hedgeRow}>
-              <div>
-                <span className={styles.hedgeRoleDown}>Proteccion baja</span>
-                <p className={styles.hedgeText}>
-                  SHORT entra en {formatCompactPrice(downside?.entryPrice || protection.rangeLowerPrice)} y SL en {formatCompactPrice(downside?.exitPrice)}
-                </p>
-                {isDynamic && (
-                  <p className={styles.hedgeText}>
-                    Ancla dinámica: {formatCompactPrice(downside?.dynamicAnchorPrice || downside?.entryPrice || protection.rangeLowerPrice)}
-                  </p>
-                )}
-              </div>
-              <div className={styles.hedgeSide}>
-                <ProtectionStatus hedge={downside} />
-                {downside?.id && <span className={styles.hedgeId}>#{downside.id}</span>}
-              </div>
-            </div>
+          {/* Coberturas activas — modo estático / dinámico */}
+          {!isDeltaNeutral && (
+            <>
+              <p className={styles.sectionTitle}>Coberturas del rango</p>
+              <div className={styles.hedges}>
+                <div className={styles.hedgeRow}>
+                  <div className={styles.hedgeInfo}>
+                    <span className={styles.hedgeRoleDown}>▼ Cobertura bajista (SHORT)</span>
+                    <p className={styles.hedgeText}>
+                      Entra en <strong>{formatCompactPrice(downside?.entryPrice || protection.rangeLowerPrice)}</strong>
+                      {' · '}Stop-loss en <strong>{formatCompactPrice(downside?.exitPrice)}</strong>
+                    </p>
+                    {isDynamic && downside && (
+                      <p className={styles.hedgeTextMuted}>
+                        Ancla dinámica: {formatCompactPrice(downside?.dynamicAnchorPrice || downside?.entryPrice || protection.rangeLowerPrice)}
+                      </p>
+                    )}
+                  </div>
+                  <div className={styles.hedgeSide}>
+                    <ProtectionStatus hedge={downside} />
+                    {downside?.id && <span className={styles.hedgeId}>#{downside.id}</span>}
+                  </div>
+                </div>
 
-            <div className={styles.hedgeRow}>
-              <div>
-                <span className={styles.hedgeRoleUp}>Proteccion alza</span>
-                <p className={styles.hedgeText}>
-                  LONG entra en {formatCompactPrice(upside?.entryPrice || protection.rangeUpperPrice)} y SL en {formatCompactPrice(upside?.exitPrice)}
-                </p>
-                {isDynamic && (
-                  <p className={styles.hedgeText}>
-                    Ancla dinámica: {formatCompactPrice(upside?.dynamicAnchorPrice || upside?.entryPrice || protection.rangeUpperPrice)}
-                  </p>
-                )}
+                <div className={styles.hedgeRow}>
+                  <div className={styles.hedgeInfo}>
+                    <span className={styles.hedgeRoleUp}>▲ Cobertura alcista (LONG)</span>
+                    <p className={styles.hedgeText}>
+                      Entra en <strong>{formatCompactPrice(upside?.entryPrice || protection.rangeUpperPrice)}</strong>
+                      {' · '}Stop-loss en <strong>{formatCompactPrice(upside?.exitPrice)}</strong>
+                    </p>
+                    {isDynamic && upside && (
+                      <p className={styles.hedgeTextMuted}>
+                        Ancla dinámica: {formatCompactPrice(upside?.dynamicAnchorPrice || upside?.entryPrice || protection.rangeUpperPrice)}
+                      </p>
+                    )}
+                  </div>
+                  <div className={styles.hedgeSide}>
+                    <ProtectionStatus hedge={upside} />
+                    {upside?.id && <span className={styles.hedgeId}>#{upside.id}</span>}
+                  </div>
+                </div>
               </div>
-              <div className={styles.hedgeSide}>
-                <ProtectionStatus hedge={upside} />
-                {upside?.id && <span className={styles.hedgeId}>#{upside.id}</span>}
-              </div>
-            </div>
-          </div>}
+            </>
+          )}
 
+          {/* Overlay delta-neutral */}
           {isDeltaNeutral && (
-            <div className={styles.hedges}>
-              <div className={styles.hedgeRow}>
-                <div>
-                  <span className={styles.hedgeRoleDown}>Overlay delta-neutral</span>
-                  <p className={styles.hedgeText}>
-                    Objetivo short: {strategyState?.lastTargetQty != null ? `${formatNumber(strategyState.lastTargetQty, 6)} ${protection.inferredAsset}` : '—'}
-                  </p>
-                  <p className={styles.hedgeText}>
-                    Short real: {strategyState?.lastActualQty != null ? `${formatNumber(strategyState.lastActualQty, 6)} ${protection.inferredAsset}` : '—'}
-                  </p>
-                  <p className={styles.hedgeText}>
-                    Ult. motivo: {strategyState?.lastRebalanceReason || 'sin rebalance'}
-                  </p>
+            <>
+              <p className={styles.sectionTitle}>Overlay delta-neutral</p>
+              <div className={styles.hedges}>
+                <div className={styles.hedgeRow}>
+                  <div className={styles.hedgeInfo}>
+                    <span className={styles.hedgeRoleDown}>⇄ Posición SHORT en Hyperliquid</span>
+                    <p className={styles.hedgeText}>
+                      Objetivo: <strong>{strategyState?.lastTargetQty != null ? `${formatNumber(strategyState.lastTargetQty, 6)} ${protection.inferredAsset}` : '—'}</strong>
+                      {' · '}Real: <strong>{strategyState?.lastActualQty != null ? `${formatNumber(strategyState.lastActualQty, 6)} ${protection.inferredAsset}` : '—'}</strong>
+                    </p>
+                    <p className={styles.hedgeTextMuted}>
+                      Último rebalance: {strategyState?.lastRebalanceReason || 'sin rebalance aún'}
+                    </p>
+                  </div>
+                  <div className={styles.hedgeSide}>
+                    <span className={styles.hedgeStatus} style={{ color: '#66e1db' }}>● {strategyState?.status || 'healthy'}</span>
+                  </div>
                 </div>
-                <div className={styles.hedgeSide}>
-                  <span className={styles.hedgeStatus} style={{ color: '#66e1db' }}>● {strategyState?.status || 'healthy'}</span>
-                </div>
-              </div>
 
-              <div className={styles.hedgeRow}>
-                <div>
-                  <span className={styles.hedgeRoleUp}>P&L cobertura</span>
-                  <p className={styles.hedgeText}>LP: {formatSignedUsd(strategyState?.lpPnlUsd)}</p>
-                  <p className={styles.hedgeText}>Hedge unrealized: {formatSignedUsd(strategyState?.hedgeUnrealizedPnlUsd)}</p>
-                  <p className={styles.hedgeText}>Hedge realized: {formatSignedUsd(strategyState?.hedgeRealizedPnlUsd)}</p>
-                  <p className={styles.hedgeText}>Fees + slippage: {formatSignedUsd(-((Number(strategyState?.executionFeesUsd || 0)) + Number(strategyState?.slippageUsd || 0)))}</p>
-                </div>
-                <div className={styles.hedgeSide}>
-                  <span className={`${styles.hedgeStatus} ${netTone}`}>Neto {formatSignedUsd(strategyState?.netProtectionPnlUsd)}</span>
+                <div className={styles.hedgeRow}>
+                  <div className={styles.hedgeInfo}>
+                    <span className={styles.hedgeRoleUp}>📊 Desglose de P&L</span>
+                    <p className={styles.hedgeText}>LP: <strong className={Number(strategyState?.lpPnlUsd) >= 0 ? styles.positive : styles.negative}>{formatSignedUsd(strategyState?.lpPnlUsd)}</strong></p>
+                    <p className={styles.hedgeText}>Hedge no realizado: <strong>{formatSignedUsd(strategyState?.hedgeUnrealizedPnlUsd)}</strong></p>
+                    <p className={styles.hedgeText}>Hedge realizado: <strong>{formatSignedUsd(strategyState?.hedgeRealizedPnlUsd)}</strong></p>
+                    <p className={styles.hedgeText}>Costes (fees + slippage): <strong className={styles.negative}>{formatSignedUsd(-((Number(strategyState?.executionFeesUsd || 0)) + Number(strategyState?.slippageUsd || 0)))}</strong></p>
+                  </div>
+                  <div className={styles.hedgeSide}>
+                    <span className={`${styles.hedgeStatus} ${netTone}`}>
+                      Neto {formatSignedUsd(strategyState?.netProtectionPnlUsd)}
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
         </div>
       </details>

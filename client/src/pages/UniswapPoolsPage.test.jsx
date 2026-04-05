@@ -50,6 +50,9 @@ function buildPool(overrides = {}) {
     unclaimedFeesUsd: 32,
     pnlTotalUsd: 140,
     yieldPct: 12.7,
+    timeInRangePct: 66.7,
+    timeInRangeMs: 40_020,
+    timeTrackedMs: 60_000,
     distanceToRangePct: 0,
     distanceToRangePrice: 0,
     rangeLowerPrice: 92000,
@@ -170,6 +173,9 @@ function buildProtectedPool() {
     rangeLowerPrice: snapshot.rangeLowerPrice,
     rangeUpperPrice: snapshot.rangeUpperPrice,
     updatedAt: Date.now() - 5 * 60_000,
+    timeInRangePct: 50,
+    timeInRangeMs: 86_400_000,
+    timeTrackedMs: 172_800_000,
     poolSnapshot: snapshot,
     hedges: {
       downside: {
@@ -263,6 +269,9 @@ function buildInactiveProtectedPool() {
     rangeLowerPrice: snapshot.rangeLowerPrice,
     rangeUpperPrice: snapshot.rangeUpperPrice,
     updatedAt: Date.now() - 58 * 60_000,
+    timeInRangePct: 25,
+    timeInRangeMs: 21_600_000,
+    timeTrackedMs: 86_400_000,
     poolSnapshot: snapshot,
     hedges: {
       downside: null,
@@ -357,6 +366,7 @@ describe('UniswapPoolsPage', () => {
     expect(await screen.findByRole('button', { name: /Resultados/i })).toBeTruthy();
     expect(await screen.findByText('2 de 2')).toBeTruthy();
     expect(await screen.findByText('WBTC / USDC')).toBeTruthy();
+    expect((await screen.findAllByText('66.7%')).length).toBeGreaterThan(0);
   });
 
   it('permite filtrar pools protegibles y abrir el modal de cobertura', async () => {
@@ -446,6 +456,7 @@ describe('UniswapPoolsPage', () => {
     expect(await screen.findByText('Dist. breakout')).toBeTruthy();
     expect(screen.getByText('0.5%')).toBeTruthy();
     expect(screen.getByText('10m')).toBeTruthy();
+    expect(screen.getByText('50.0%')).toBeTruthy();
     expect(screen.queryByText('WETH / USDC')).toBeNull();
 
     await userEvent.click(screen.getByRole('checkbox', { name: /Ver pools sin proteccion/i }));

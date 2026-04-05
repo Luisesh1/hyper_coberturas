@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const rateLimit = require('express-rate-limit');
 const asyncHandler = require('../middleware/async-handler');
 const { authenticate } = require('../middleware/auth.middleware');
 const botsService = require('../services/bots.service');
@@ -6,6 +7,16 @@ const botRegistry = require('../services/bot.registry');
 
 const router = Router();
 router.use(authenticate);
+
+// Rate limit para operaciones de lifecycle de bots: 10 por minuto por usuario
+const botLifecycleLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `bot:${req.user?.userId}`,
+  message: { success: false, error: 'Demasiadas operaciones de bot, espera un momento' },
+});
 
 router.get('/', asyncHandler(async (req, res) => {
   const data = await botsService.listBots(req.user.userId);
@@ -38,19 +49,19 @@ router.post('/:id/duplicate', asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data });
 }));
 
-router.post('/:id/activate', asyncHandler(async (req, res) => {
+router.post('/:id/activate', botLifecycleLimiter, asyncHandler(async (req, res) => {
   await botRegistry.activate(req.user.userId, Number(req.params.id));
   const data = await botsService.getBot(req.user.userId, Number(req.params.id));
   res.json({ success: true, data });
 }));
 
-router.post('/:id/pause', asyncHandler(async (req, res) => {
+router.post('/:id/pause', botLifecycleLimiter, asyncHandler(async (req, res) => {
   await botRegistry.pause(req.user.userId, Number(req.params.id));
   const data = await botsService.getBot(req.user.userId, Number(req.params.id));
   res.json({ success: true, data });
 }));
 
-router.post('/:id/stop', asyncHandler(async (req, res) => {
+router.post('/:id/stop', botLifecycleLimiter, asyncHandler(async (req, res) => {
   await botRegistry.stop(req.user.userId, Number(req.params.id));
   const data = await botsService.getBot(req.user.userId, Number(req.params.id));
   res.json({ success: true, data });

@@ -9,6 +9,7 @@
  */
 
 const { Router } = require('express');
+const rateLimit        = require('express-rate-limit');
 const asyncHandler     = require('../middleware/async-handler');
 const TradingService   = require('../services/trading.service');
 const hlRegistry       = require('../services/hyperliquid.registry');
@@ -18,6 +19,16 @@ const { authenticate } = require('../middleware/auth.middleware');
 
 const router = Router();
 router.use(authenticate);
+
+// Rate limit para operaciones de trading: 10 por minuto por usuario
+const tradingWriteLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `trading:${req.user?.userId}`,
+  message: { success: false, error: 'Demasiadas operaciones de trading, espera un momento' },
+});
 
 async function getTrading(userId, accountId) {
   const [account, hl, tg] = await Promise.all([
@@ -40,7 +51,7 @@ router.get('/orders', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
-router.post('/open', asyncHandler(async (req, res) => {
+router.post('/open', tradingWriteLimiter, asyncHandler(async (req, res) => {
   const { asset, side, size, leverage, marginMode, limitPrice, accountId } = req.body;
   if (!asset || !side || !size) {
     return res.status(400).json({ success: false, error: 'Parametros requeridos: asset, side, size' });
@@ -56,7 +67,7 @@ router.post('/open', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
-router.post('/close', asyncHandler(async (req, res) => {
+router.post('/close', tradingWriteLimiter, asyncHandler(async (req, res) => {
   const { asset, size, accountId } = req.body;
   if (!asset) return res.status(400).json({ success: false, error: "Requerido: 'asset'" });
   const trading = await getTrading(req.user.userId, accountId);
@@ -64,7 +75,7 @@ router.post('/close', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
-router.post('/sltp', asyncHandler(async (req, res) => {
+router.post('/sltp', tradingWriteLimiter, asyncHandler(async (req, res) => {
   const { asset, side, size, slPrice, tpPrice, accountId } = req.body;
   if (!asset || !side || !size) {
     return res.status(400).json({ success: false, error: 'Requeridos: asset, side, size' });

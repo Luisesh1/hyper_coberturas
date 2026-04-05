@@ -58,7 +58,88 @@ const scanPoolsSchema = z.object({
   version: z.string().min(1),
 });
 
+const claimFeesPrepareSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+  walletAddress: z.string().min(1),
+});
+
+const claimFeesFinalizeSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+  walletAddress: z.string().min(1),
+  txHash: z.string().min(1),
+});
+
+const positionActionBaseSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().min(1),
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]).optional(),
+  slippageBps: z.number().int().min(1).max(5000).optional(),
+});
+
+const increaseLiquidityPrepareSchema = positionActionBaseSchema.extend({
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+  amount0Desired: z.union([z.number().min(0), z.string().min(1)]),
+  amount1Desired: z.union([z.number().min(0), z.string().min(1)]),
+});
+
+const decreaseLiquidityPrepareSchema = positionActionBaseSchema.extend({
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+  liquidityPercent: z.number().positive().max(100),
+});
+
+const collectFeesPrepareSchema = claimFeesPrepareSchema;
+
+const reinvestFeesPrepareSchema = positionActionBaseSchema.extend({
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+});
+
+const modifyRangePrepareSchema = positionActionBaseSchema.extend({
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+  rangeLowerPrice: z.number().positive(),
+  rangeUpperPrice: z.number().positive(),
+});
+
+const rebalancePrepareSchema = positionActionBaseSchema.extend({
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+  targetWeightToken0Pct: z.number().gt(0).lt(100),
+  rangeLowerPrice: z.number().positive().optional(),
+  rangeUpperPrice: z.number().positive().optional(),
+});
+
+const createPositionPrepareSchema = positionActionBaseSchema.extend({
+  token0Address: z.string().min(1),
+  token1Address: z.string().min(1),
+  fee: z.number().int().positive(),
+  amount0Desired: z.union([z.number().min(0), z.string().min(1)]),
+  amount1Desired: z.union([z.number().min(0), z.string().min(1)]),
+  rangeLowerPrice: z.number().positive(),
+  rangeUpperPrice: z.number().positive(),
+});
+
+const positionActionFinalizeSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().min(1),
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]).optional(),
+  txHashes: z.array(z.string().min(1)).min(1),
+});
+
 module.exports = {
   createProtectedPoolSchema,
   scanPoolsSchema,
+  claimFeesPrepareSchema,
+  claimFeesFinalizeSchema,
+  increaseLiquidityPrepareSchema,
+  decreaseLiquidityPrepareSchema,
+  collectFeesPrepareSchema,
+  reinvestFeesPrepareSchema,
+  modifyRangePrepareSchema,
+  rebalancePrepareSchema,
+  createPositionPrepareSchema,
+  positionActionFinalizeSchema,
 };

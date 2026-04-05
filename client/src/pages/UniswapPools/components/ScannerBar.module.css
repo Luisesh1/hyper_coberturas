@@ -4,88 +4,130 @@
   z-index: 12;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 14px 16px;
   border-radius: 18px;
   border: 1px solid var(--uni-border);
-  background: rgba(10, 16, 24, 0.95);
-  backdrop-filter: blur(14px);
+  background: rgba(9, 15, 23, 0.97);
+  backdrop-filter: blur(16px);
   box-shadow: var(--uni-shadow);
 }
 
+/* ─── Scan form ───────────────────────────────────────── */
 .form {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.walletInput,
-.select {
+.walletInputWrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.walletIcon {
+  position: absolute;
+  left: 12px;
+  font-size: 0.85rem;
+  color: var(--uni-text-3);
+  pointer-events: none;
+  line-height: 1;
+}
+
+.walletInput {
+  width: 100%;
   border: 1px solid var(--uni-border);
   border-radius: var(--radius-lg);
   background: rgba(8, 12, 18, 0.9);
   color: var(--uni-text-0);
-  padding: 10px 12px;
+  padding: 10px 12px 10px 34px;
   font-size: 0.85rem;
   outline: none;
   transition: border-color 0.16s, box-shadow 0.16s;
-}
-
-.walletInput {
-  flex: 1;
-  min-width: 0;
-}
-
-.select {
-  width: 140px;
-  flex-shrink: 0;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 }
 
 .walletInput::placeholder {
-  color: #67829c;
+  color: var(--uni-text-3);
+  font-family: inherit;
 }
 
-.walletInput:focus,
+.walletInput:focus {
+  border-color: rgba(102, 225, 219, 0.5);
+  box-shadow: 0 0 0 3px rgba(102, 225, 219, 0.1);
+}
+
+.select {
+  width: 130px;
+  flex-shrink: 0;
+  border: 1px solid var(--uni-border);
+  border-radius: var(--radius-lg);
+  background: rgba(8, 12, 18, 0.9);
+  color: var(--uni-text-0);
+  padding: 10px 10px;
+  font-size: 0.82rem;
+  outline: none;
+  transition: border-color 0.16s, box-shadow 0.16s;
+  cursor: pointer;
+}
+
 .select:focus {
-  border-color: rgba(102, 225, 219, 0.48);
-  box-shadow: 0 0 0 3px rgba(102, 225, 219, 0.12);
+  border-color: rgba(102, 225, 219, 0.5);
+  box-shadow: 0 0 0 3px rgba(102, 225, 219, 0.1);
 }
 
 .scanBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   border: none;
   border-radius: var(--radius-lg);
   padding: 10px 20px;
   background: linear-gradient(135deg, #1fc9c6, #2f7dff);
   color: #fff;
-  font-size: 0.85rem;
+  font-size: 0.84rem;
   font-weight: 800;
   cursor: pointer;
   white-space: nowrap;
-  transition: transform 0.16s, opacity 0.16s;
-  box-shadow: 0 8px 20px rgba(31, 201, 198, 0.18);
+  transition: transform 0.16s, opacity 0.16s, box-shadow 0.16s;
+  box-shadow: 0 6px 18px rgba(31, 201, 198, 0.2);
 }
 
 .scanBtn:hover:not(:disabled) {
   transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(31, 201, 198, 0.28);
 }
 
 .scanBtn:disabled {
-  opacity: 0.55;
+  opacity: 0.48;
   cursor: not-allowed;
   transform: none;
+  box-shadow: none;
+}
+
+/* ─── Stats + status row ──────────────────────────────── */
+.statsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .stats {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   flex-wrap: wrap;
 }
 
 .stat {
-  font-size: 0.74rem;
+  font-size: 0.73rem;
   color: var(--uni-text-2);
-  padding: 3px 10px;
+  padding: 4px 10px;
   border-radius: var(--radius-pill);
   background: rgba(6, 12, 18, 0.7);
   border: 1px solid var(--uni-border);
@@ -93,23 +135,24 @@
 
 .stat strong {
   color: var(--uni-text-0);
-  margin-right: 3px;
+  font-weight: 800;
+  margin-right: 2px;
 }
 
 .statAlert {
-  border-color: rgba(255, 143, 77, 0.25);
+  border-color: rgba(255, 143, 77, 0.28);
   color: var(--uni-orange);
+  background: rgba(60, 24, 8, 0.3);
 }
 
-.statAlert strong {
-  color: var(--uni-orange);
-}
+.statAlert strong { color: var(--uni-orange); }
 
 .statMuted {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   color: var(--uni-text-3);
 }
 
+/* ─── System status indicators ────────────────────────── */
 .status {
   display: flex;
   gap: 8px;
@@ -118,50 +161,36 @@
   flex-wrap: wrap;
 }
 
-.dot {
-  color: var(--uni-text-3);
+.dot { color: var(--uni-text-3); }
+.statusOk   { color: var(--uni-green); font-weight: 700; }
+.statusWarn { color: var(--uni-amber); font-weight: 700; }
+.statusNeutral { color: var(--uni-text-2); }
+
+/* ─── Spinner ─────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
 }
 
-.statusOk {
-  color: var(--uni-green);
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
-.statusWarn {
-  color: var(--uni-amber);
-}
-
-.statusNeutral {
-  color: var(--uni-text-2);
-}
-
+/* ─── Responsive ──────────────────────────────────────── */
 @media (max-width: 900px) {
-  .form {
-    flex-wrap: wrap;
-  }
-
-  .walletInput {
-    width: 100%;
-    flex: none;
-  }
-
-  .select {
-    flex: 1;
-    width: auto;
-    min-width: 0;
-  }
-
-  .scanBtn {
-    flex: 1;
-  }
+  .form { flex-wrap: wrap; }
+  .walletInputWrap { width: 100%; flex: none; }
+  .select { flex: 1; width: auto; min-width: 0; }
+  .scanBtn { flex: 1; justify-content: center; }
 }
 
 @media (max-width: 680px) {
-  .bar {
-    position: static;
-    border-radius: 14px;
-  }
-
-  .stats {
-    gap: 6px;
-  }
+  .bar { position: static; border-radius: 14px; }
+  .statsRow { flex-direction: column; align-items: flex-start; }
+  .stats { gap: 6px; }
 }

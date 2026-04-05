@@ -64,6 +64,9 @@ const IDENTITY_COLUMNS = `
   breakout_confirm_duration_sec, dynamic_state_json, band_mode, base_rebalance_price_move_pct,
   rebalance_interval_sec, target_hedge_ratio, min_rebalance_notional_usd, max_slippage_bps,
   twap_min_notional_usd, strategy_state_json, value_mode, leverage, margin_mode, status,
+  last_onchain_action, last_tx_hash, last_tx_at, replaced_by_position_identifier,
+  in_range_checks, in_range_hits, time_in_range_ms, time_tracked_ms, time_in_range_pct,
+  range_last_state_in_range, range_last_state_at, range_computed_at, range_frozen_at,
   created_at, updated_at, deactivated_at
 `.replace(/\n/g, ' ').trim();
 
@@ -113,6 +116,19 @@ function mapIdentityRow(row) {
     leverage: Number(row.leverage),
     marginMode: row.margin_mode,
     status: row.status,
+    lastOnchainAction: row.last_onchain_action || null,
+    lastTxHash: row.last_tx_hash || null,
+    lastTxAt: row.last_tx_at != null ? Number(row.last_tx_at) : null,
+    replacedByPositionIdentifier: row.replaced_by_position_identifier || null,
+    inRangeChecks: Number(row.in_range_checks) || 0,
+    inRangeHits: Number(row.in_range_hits) || 0,
+    timeInRangeMs: row.time_in_range_ms != null ? Number(row.time_in_range_ms) : null,
+    timeTrackedMs: row.time_tracked_ms != null ? Number(row.time_tracked_ms) : null,
+    timeInRangePct: row.time_in_range_pct != null ? Number(row.time_in_range_pct) : null,
+    rangeLastStateInRange: row.range_last_state_in_range == null ? null : row.range_last_state_in_range === true,
+    rangeLastStateAt: row.range_last_state_at != null ? Number(row.range_last_state_at) : null,
+    rangeComputedAt: row.range_computed_at != null ? Number(row.range_computed_at) : null,
+    rangeFrozenAt: row.range_frozen_at != null ? Number(row.range_frozen_at) : null,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     deactivatedAt: row.deactivated_at ? Number(row.deactivated_at) : null,
@@ -357,9 +373,12 @@ async function create(record, executor) {
        max_sequential_flips, breakout_confirm_distance_pct, breakout_confirm_duration_sec, dynamic_state_json,
        band_mode, base_rebalance_price_move_pct, rebalance_interval_sec, target_hedge_ratio,
        min_rebalance_notional_usd, max_slippage_bps, twap_min_notional_usd, strategy_state_json,
-       value_mode, leverage, margin_mode, status, pool_snapshot_json, created_at, updated_at
+       value_mode, leverage, margin_mode, status, last_onchain_action, last_tx_hash, last_tx_at,
+       replaced_by_position_identifier, pool_snapshot_json, time_in_range_ms, time_tracked_ms,
+       time_in_range_pct, range_last_state_in_range, range_last_state_at, range_computed_at, range_frozen_at,
+       created_at, updated_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $41)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $52)
      RETURNING id`,
     [
       record.userId,
@@ -401,7 +420,18 @@ async function create(record, executor) {
       record.valueMode || 'usd',
       record.leverage,
       record.marginMode || 'isolated',
+      record.lastOnchainAction || null,
+      record.lastTxHash || null,
+      record.lastTxAt ?? null,
+      record.replacedByPositionIdentifier || null,
       JSON.stringify(record.poolSnapshot),
+      record.timeInRangeMs ?? 0,
+      record.timeTrackedMs ?? 0,
+      record.timeInRangePct ?? null,
+      record.rangeLastStateInRange ?? null,
+      record.rangeLastStateAt ?? null,
+      record.rangeComputedAt ?? null,
+      record.rangeFrozenAt ?? null,
       record.createdAt,
     ]
   );
@@ -451,9 +481,20 @@ async function reactivate(userId, id, record, executor) {
             value_mode = $38,
             leverage = $39,
             margin_mode = $40,
+            last_onchain_action = $41,
+            last_tx_hash = $42,
+            last_tx_at = $43,
+            replaced_by_position_identifier = $44,
             status = 'active',
-            pool_snapshot_json = $41,
-            updated_at = $42,
+            pool_snapshot_json = $45,
+            time_in_range_ms = COALESCE($46, time_in_range_ms),
+            time_tracked_ms = COALESCE($47, time_tracked_ms),
+            time_in_range_pct = COALESCE($48, time_in_range_pct),
+            range_last_state_in_range = COALESCE($49, range_last_state_in_range),
+            range_last_state_at = COALESCE($50, range_last_state_at),
+            range_computed_at = COALESCE($51, range_computed_at),
+            updated_at = $52,
+            range_frozen_at = NULL,
             deactivated_at = NULL
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
@@ -498,7 +539,17 @@ async function reactivate(userId, id, record, executor) {
       record.valueMode || 'usd',
       record.leverage,
       record.marginMode || 'isolated',
+      record.lastOnchainAction || null,
+      record.lastTxHash || null,
+      record.lastTxAt ?? null,
+      record.replacedByPositionIdentifier || null,
       JSON.stringify(record.poolSnapshot),
+      record.timeInRangeMs ?? null,
+      record.timeTrackedMs ?? null,
+      record.timeInRangePct ?? null,
+      record.rangeLastStateInRange ?? null,
+      record.rangeLastStateAt ?? null,
+      record.rangeComputedAt ?? null,
       updatedAt,
     ]
   );
@@ -519,7 +570,16 @@ async function updateSnapshot(userId, id, record, executor) {
             range_upper_price = $9,
             price_current = $10,
             pool_snapshot_json = $11,
-            updated_at = $12
+            updated_at = $12,
+            in_range_checks = in_range_checks + 1,
+            in_range_hits = in_range_hits + CASE WHEN $13 THEN 1 ELSE 0 END,
+            time_in_range_ms = COALESCE($14, time_in_range_ms),
+            time_tracked_ms = COALESCE($15, time_tracked_ms),
+            time_in_range_pct = COALESCE($16, time_in_range_pct),
+            range_last_state_in_range = COALESCE($17, range_last_state_in_range),
+            range_last_state_at = COALESCE($18, range_last_state_at),
+            range_computed_at = COALESCE($19, range_computed_at),
+            range_frozen_at = COALESCE($20, range_frozen_at)
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
     [
@@ -535,21 +595,59 @@ async function updateSnapshot(userId, id, record, executor) {
       record.priceCurrent,
       JSON.stringify(record.poolSnapshot),
       updatedAt,
+      record.isCurrentlyInRange === true,
+      record.timeInRangeMs ?? null,
+      record.timeTrackedMs ?? null,
+      record.timeInRangePct ?? null,
+      record.rangeLastStateInRange ?? null,
+      record.rangeLastStateAt ?? null,
+      record.rangeComputedAt ?? null,
+      record.rangeFrozenAt ?? null,
     ]
   );
 
   return rows[0]?.id || null;
 }
 
-async function deactivate(userId, id, { deactivatedAt = Date.now() } = {}, executor) {
+async function deactivate(userId, id, {
+  deactivatedAt = Date.now(),
+  poolSnapshot = null,
+  timeInRangeMs = null,
+  timeTrackedMs = null,
+  timeInRangePct = null,
+  rangeLastStateInRange = null,
+  rangeLastStateAt = null,
+  rangeComputedAt = null,
+  rangeFrozenAt = deactivatedAt,
+} = {}, executor) {
   const { rows } = await exec(executor).query(
     `UPDATE protected_uniswap_pools
         SET status = 'inactive',
             updated_at = $3,
-            deactivated_at = $3
+            deactivated_at = $3,
+            pool_snapshot_json = COALESCE($4, pool_snapshot_json),
+            time_in_range_ms = COALESCE($5, time_in_range_ms),
+            time_tracked_ms = COALESCE($6, time_tracked_ms),
+            time_in_range_pct = COALESCE($7, time_in_range_pct),
+            range_last_state_in_range = COALESCE($8, range_last_state_in_range),
+            range_last_state_at = COALESCE($9, range_last_state_at),
+            range_computed_at = COALESCE($10, range_computed_at),
+            range_frozen_at = COALESCE($11, range_frozen_at, $3)
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
-    [userId, id, deactivatedAt]
+    [
+      userId,
+      id,
+      deactivatedAt,
+      poolSnapshot ? JSON.stringify(poolSnapshot) : null,
+      timeInRangeMs,
+      timeTrackedMs,
+      timeInRangePct,
+      rangeLastStateInRange,
+      rangeLastStateAt,
+      rangeComputedAt,
+      rangeFrozenAt,
+    ]
   );
 
   return rows[0]?.id || null;
@@ -621,9 +719,120 @@ async function updateStrategyState(userId, id, {
   return rows[0]?.id || null;
 }
 
+async function updateOnchainOperation(userId, id, {
+  lastOnchainAction,
+  lastTxHash,
+  lastTxAt = Date.now(),
+  replacedByPositionIdentifier,
+  updatedAt = lastTxAt,
+}, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET last_onchain_action = COALESCE($3, last_onchain_action),
+            last_tx_hash = COALESCE($4, last_tx_hash),
+            last_tx_at = COALESCE($5, last_tx_at),
+            replaced_by_position_identifier = COALESCE($6, replaced_by_position_identifier),
+            updated_at = $7
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [
+      userId,
+      id,
+      lastOnchainAction ?? null,
+      lastTxHash ?? null,
+      lastTxAt ?? null,
+      replacedByPositionIdentifier ?? null,
+      updatedAt,
+    ]
+  );
+
+  return rows[0]?.id || null;
+}
+
+async function migratePositionIdentity(userId, id, {
+  network,
+  version,
+  walletAddress,
+  poolAddress,
+  positionIdentifier,
+  token0Address,
+  token1Address,
+  token0Symbol,
+  token1Symbol,
+  rangeLowerPrice,
+  rangeUpperPrice,
+  priceCurrent,
+  poolSnapshot,
+  lastOnchainAction,
+  lastTxHash,
+  lastTxAt = Date.now(),
+}, executor) {
+  const updatedAt = lastTxAt || Date.now();
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET network = COALESCE($3, network),
+            version = COALESCE($4, version),
+            wallet_address = COALESCE($5, wallet_address),
+            pool_address = COALESCE($6, pool_address),
+            position_identifier = COALESCE($7, position_identifier),
+            token0_address = COALESCE($8, token0_address),
+            token1_address = COALESCE($9, token1_address),
+            token0_symbol = COALESCE($10, token0_symbol),
+            token1_symbol = COALESCE($11, token1_symbol),
+            range_lower_price = COALESCE($12, range_lower_price),
+            range_upper_price = COALESCE($13, range_upper_price),
+            price_current = COALESCE($14, price_current),
+            pool_snapshot_json = COALESCE($15, pool_snapshot_json),
+            last_onchain_action = COALESCE($16, last_onchain_action),
+            last_tx_hash = COALESCE($17, last_tx_hash),
+            last_tx_at = COALESCE($18, last_tx_at),
+            replaced_by_position_identifier = NULL,
+            updated_at = $19
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [
+      userId,
+      id,
+      network ?? null,
+      version ?? null,
+      walletAddress ?? null,
+      poolAddress ?? null,
+      positionIdentifier ?? null,
+      token0Address ?? null,
+      token1Address ?? null,
+      token0Symbol ?? null,
+      token1Symbol ?? null,
+      rangeLowerPrice ?? null,
+      rangeUpperPrice ?? null,
+      priceCurrent ?? null,
+      poolSnapshot ? JSON.stringify(poolSnapshot) : null,
+      lastOnchainAction ?? null,
+      lastTxHash ?? null,
+      lastTxAt ?? null,
+      updatedAt,
+    ]
+  );
+
+  return rows[0]?.id || null;
+}
+
+async function findByPositionIdentifier(positionIdentifier, network, version, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT ${IDENTITY_COLUMNS}
+       FROM protected_uniswap_pools
+      WHERE position_identifier = $1
+        AND network = $2
+        AND version = $3
+        AND status = 'active'`,
+    [String(positionIdentifier), network, version]
+  );
+  return rows.map(mapIdentityRow);
+}
+
 module.exports = {
   create,
   deactivate,
+  findByPositionIdentifier,
   findReusableByIdentity,
   getById,
   listActiveByUser,
@@ -631,7 +840,9 @@ module.exports = {
   listActiveDynamic,
   listActiveForRefresh,
   listByUser,
+  migratePositionIdentity,
   reactivate,
+  updateOnchainOperation,
   updateDynamicState,
   updateStrategyState,
   updateSnapshot,

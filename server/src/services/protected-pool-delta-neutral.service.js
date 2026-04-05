@@ -2,6 +2,7 @@ const config = require('../config');
 const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const deltaRebalanceLogRepository = require('../repositories/protected-pool-delta-rebalance.repository');
+const timeInRangeService = require('./time-in-range.service');
 const uniswapService = require('./uniswap.service');
 const hlRegistry = require('./hyperliquid.registry');
 const { getTradingService } = require('./trading.factory');
@@ -337,7 +338,7 @@ class ProtectedPoolDeltaNeutralService {
 
     const rvStats = await this._getVolatilityStats(hl, current.inferredAsset);
     const band = deriveBandSettings(current, rvStats, metrics, currentPrice);
-    const position = await hl.getPosition(current.inferredAsset).catch(() => null);
+    const position = await hl.getPosition(current.inferredAsset).catch((err) => { logger.warn('getPosition failed in rebalance check', { poolId: current.id, asset: current.inferredAsset, error: err.message }); return null; });
     const actualQty = position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
     const currentBoundarySide = getCurrentBoundarySide(current, currentPrice);
     const marginModeVerified = position ? isIsolatedPosition(position) : true;
@@ -524,7 +525,7 @@ class ProtectedPoolDeltaNeutralService {
       throw err;
     }
 
-    const refreshedPosition = await hl.getPosition(protection.inferredAsset).catch(() => null);
+    const refreshedPosition = await hl.getPosition(protection.inferredAsset).catch((err) => { logger.warn('getPosition failed after rebalance', { poolId: protection.id, asset: protection.inferredAsset, error: err.message }); return null; });
     const actualQtyAfter = refreshedPosition && Number(refreshedPosition.szi) < 0 ? Math.abs(Number(refreshedPosition.szi)) : 0;
     const realizedDelta = this._estimateRealizedPnl(position, executionSummary, driftQty);
     const updatedState = {
@@ -730,20 +731,31 @@ class ProtectedPoolDeltaNeutralService {
     const hl = context.hl || await this.hlRegistry.getOrCreate(protection.userId, protection.accountId);
     const position = context.actualQty != null
       ? { szi: String(-Math.abs(context.actualQty)) }
-      : await hl.getPosition(protection.inferredAsset).catch(() => null);
+      : await hl.getPosition(protection.inferredAsset).catch((err) => { logger.warn('getPosition failed in deactivation', { poolId: protection.id, asset: protection.inferredAsset, error: err.message }); return null; });
     const actualQty = context.actualQty != null
       ? context.actualQty
       : position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
 
     if (actualQty <= 0) {
-      await this.repo.deactivate(protection.userId, protection.id, { deactivatedAt: Date.now() });
+      const deactivatedAt = Date.now();
+      const finalRangeMetrics = await timeInRangeService.computeIncrementalRangeMetrics(protection, {
+        endAt: deactivatedAt,
+        rangeFrozenAt: deactivatedAt,
+      });
+      await this.repo.deactivate(protection.userId, protection.id, {
+        deactivatedAt,
+        ...(finalRangeMetrics ? {
+          ...finalRangeMetrics,
+          poolSnapshot: timeInRangeService.applyRangeMetricsToSnapshot(protection.poolSnapshot || {}, finalRangeMetrics),
+        } : {}),
+      });
       await this.repo.updateStrategyState(protection.userId, protection.id, {
         strategyState: {
           ...strategyState,
           status: 'deactivating',
           lastActualQty: 0,
         },
-      }).catch(() => {});
+      }).catch((err) => logger.warn('updateStrategyState on deactivation failed', { poolId: protection.id, error: err.message }));
       return this.repo.getById(protection.userId, protection.id);
     }
 
@@ -752,7 +764,18 @@ class ProtectedPoolDeltaNeutralService {
         asset: protection.inferredAsset,
         size: actualQty,
       });
-      await this.repo.deactivate(protection.userId, protection.id, { deactivatedAt: Date.now() });
+      const deactivatedAt = Date.now();
+      const finalRangeMetrics = await timeInRangeService.computeIncrementalRangeMetrics(protection, {
+        endAt: deactivatedAt,
+        rangeFrozenAt: deactivatedAt,
+      });
+      await this.repo.deactivate(protection.userId, protection.id, {
+        deactivatedAt,
+        ...(finalRangeMetrics ? {
+          ...finalRangeMetrics,
+          poolSnapshot: timeInRangeService.applyRangeMetricsToSnapshot(protection.poolSnapshot || {}, finalRangeMetrics),
+        } : {}),
+      });
       return this.repo.getById(protection.userId, protection.id);
     } catch (err) {
       const nextState = {
@@ -784,7 +807,7 @@ class ProtectedPoolDeltaNeutralService {
     const notionalUsd = Math.abs(qtyToAdd) * currentPrice;
     const marginUsd = Math.ceil((notionalUsd / Math.max(Number(protection.leverage || 1), 1)) * 1.2);
     if (marginUsd > 0) {
-      await hl.updateIsolatedMargin(assetMeta.index, false, marginUsd).catch(() => {});
+      await hl.updateIsolatedMargin(assetMeta.index, false, marginUsd).catch((err) => logger.warn('updateIsolatedMargin failed', { poolId: protection.id, asset: protection.inferredAsset, marginUsd, error: err.message }));
     }
   }
 

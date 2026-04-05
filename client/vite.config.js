@@ -7,6 +7,9 @@ const wsProxyTarget = process.env.VITE_PROXY_WS_TARGET || 'ws://localhost:3001';
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ['@walletconnect/ethereum-provider'],
+  },
   server: {
     host: '0.0.0.0',
     port: devPort,

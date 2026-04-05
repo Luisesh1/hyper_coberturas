@@ -8,6 +8,7 @@ const strategyEngine = require('./strategy-engine.service');
 const balanceCacheService = require('./balance-cache.service');
 const { getTradingService } = require('./trading.factory');
 const config = require('../config');
+const logger = require('./logger.service');
 
 const INLINE_READ_RETRIES = 2;
 const STRATEGY_RETRIES = 1;
@@ -167,7 +168,7 @@ class BotRuntime extends EventEmitter {
   startLoop() {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      this.evaluateLatest().catch(() => {});
+      this.evaluateLatest().catch((err) => logger.warn('bot evaluateLatest loop error', { botId: this.bot?.id, error: err.message }));
     }, config.intervals.botEvalMs);
     this.timer.unref?.();
   }
@@ -352,14 +353,14 @@ class BotRuntime extends EventEmitter {
         lastRecoveryAction: details.action || 'fallback_cache_used',
         context: nextContext,
       },
-    }).catch(() => {});
+    }).catch((err) => logger.warn('bot persistRuntime failed', { botId: this.bot?.id, error: err.message }));
     await this.appendRun('warning', details.action || 'fallback_cache_used', null, candle, {
       stage,
       message,
       actionTaken: details.actionTaken || 'Usando respaldo en cache',
       recoveryResult: details.recoveryResult || 'fallback_applied',
       ...details,
-    }).catch(() => {});
+    }).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
     this._emitRuntimeEvent('runtime_fallback_applied', {
       stage,
       message,
@@ -464,7 +465,7 @@ class BotRuntime extends EventEmitter {
   async _attemptExecutionRecovery(error) {
     if (!['execution', 'protection'].includes(error.stage) || !error.signal) return null;
 
-    const snapshot = await balanceCacheService.getSnapshot(this.userId, this.bot.accountId, { force: true }).catch(() => null);
+    const snapshot = await balanceCacheService.getSnapshot(this.userId, this.bot.accountId, { force: true }).catch((err) => { logger.warn('bot getSnapshot failed', { botId: this.bot?.id, error: err.message }); return null; });
     if (!snapshot) return null;
 
     const position = this._findPosition(snapshot);
@@ -479,7 +480,7 @@ class BotRuntime extends EventEmitter {
     if (error.signal.type === 'close') {
       if (!position) {
         details.recoveryResult = 'position_already_closed';
-        await this.appendRun('warning', 'execution_reconciled', error.signal, error.candle, details).catch(() => {});
+        await this.appendRun('warning', 'execution_reconciled', error.signal, error.candle, details).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
         this._emitRuntimeEvent('runtime_fallback_applied', details);
         return {
           action: 'close_recovered',
@@ -503,14 +504,14 @@ class BotRuntime extends EventEmitter {
         size: Math.abs(Number(position.size)),
         slPrice,
         tpPrice,
-      }).catch(() => null);
+      }).catch((err) => { logger.warn('bot setSLTP recovery failed', { botId: this.bot?.id, error: err.message }); return null; });
       if (!protectionResult) return null;
     }
 
     details.recoveryResult = error.stage === 'protection'
       ? 'position_detected_and_protected'
       : 'position_detected_on_exchange';
-    await this.appendRun('warning', 'execution_reconciled', error.signal, error.candle, details).catch(() => {});
+    await this.appendRun('warning', 'execution_reconciled', error.signal, error.candle, details).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
     this._emitRuntimeEvent('runtime_fallback_applied', details);
     return {
       action: error.signal.type === 'long' ? 'open_long' : 'open_short',
@@ -538,7 +539,7 @@ class BotRuntime extends EventEmitter {
       message: error.message,
       actionTaken: shouldPause ? 'system_paused' : 'retry_pending',
       consecutiveFailures: nextFailureCount,
-    }).catch(() => {});
+    }).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
     this.emit('runtime_error', this.bot, error);
 
     if (shouldPause) {
@@ -562,13 +563,13 @@ class BotRuntime extends EventEmitter {
             message: error.message,
           },
         },
-      }).catch(() => {});
+      }).catch((err) => logger.warn('bot persistRuntime failed', { botId: this.bot?.id, error: err.message }));
       await this.appendRun('paused', 'system_paused', signal, candle, {
         stage: error.stage || 'runtime',
         message: error.message,
         actionTaken: 'Bot pausado automaticamente por seguridad',
         consecutiveFailures: nextFailureCount,
-      }).catch(() => {});
+      }).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
       this.emit('status', this.bot);
       this._emitRuntimeEvent('runtime_paused', {
         stage: error.stage || 'runtime',
@@ -598,7 +599,7 @@ class BotRuntime extends EventEmitter {
           message: error.message,
         },
       },
-    }).catch(() => {});
+    }).catch((err) => logger.warn('bot persistRuntime failed', { botId: this.bot?.id, error: err.message }));
     this._emitRuntimeEvent('runtime_warning', {
       stage: error.stage || 'runtime',
       message: error.message,
@@ -611,7 +612,7 @@ class BotRuntime extends EventEmitter {
       actionTaken: 'Reintento programado',
       nextRetryAt,
       consecutiveFailures: nextFailureCount,
-    }).catch(() => {});
+    }).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
     this._emitRuntimeEvent('runtime_retry_scheduled', {
       stage: error.stage || 'runtime',
       message: error.message,
@@ -647,7 +648,7 @@ class BotRuntime extends EventEmitter {
         message: 'Bot recuperado y de vuelta en healthy',
         actionTaken: recoveryAction || 'runtime_recovered',
         recoveryResult: 'healthy',
-      }).catch(() => {});
+      }).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
       this._emitRuntimeEvent('runtime_recovered', {
         stage: 'runtime',
         message: 'Bot recuperado y de vuelta en healthy',
@@ -716,14 +717,14 @@ class BotRuntime extends EventEmitter {
         ...error,
         signal: error.signal || signal,
         candle: error.candle || latestCandle,
-      }).catch(() => null);
+      }).catch((err) => { logger.warn('bot execution recovery failed', { botId: this.bot?.id, error: err.message }); return null; });
 
       if (recoveredExecution) {
         await this._markHealthy({ signal, signalHash, latestCandle });
         await this.appendRun('success', recoveredExecution.action, signal, latestCandle, {
           ...recoveredExecution.details,
           recoveredFromError: error.message,
-        }).catch(() => {});
+        }).catch((err) => logger.warn('bot appendRun failed', { botId: this.bot?.id, error: err.message }));
         this.emit('evaluated', this.bot, {
           candle: latestCandle,
           signal,

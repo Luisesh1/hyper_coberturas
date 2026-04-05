@@ -57,6 +57,41 @@ function buildDeltaNeutralPool(overrides = {}) {
   });
 }
 
+function buildTimeInRangeService(overrides = {}) {
+  return {
+    computeRangeMetricsForPool: async () => ({
+      timeInRangeMs: 86_400_000,
+      timeTrackedMs: 172_800_000,
+      timeInRangePct: 50,
+      rangeLastStateInRange: true,
+      rangeLastStateAt: 1710000000000,
+      rangeComputedAt: 1710000000000,
+      rangeFrozenAt: null,
+      rangeResolution: '5m',
+    }),
+    computeIncrementalRangeMetrics: async () => ({
+      timeInRangeMs: 90_000_000,
+      timeTrackedMs: 180_000_000,
+      timeInRangePct: 50,
+      rangeLastStateInRange: false,
+      rangeLastStateAt: 1710000900000,
+      rangeComputedAt: 1710000900000,
+      rangeFrozenAt: 1710000900000,
+      rangeResolution: '5m',
+    }),
+    applyRangeMetricsToSnapshot: (snapshot, metrics) => ({
+      ...snapshot,
+      timeInRangePct: metrics.timeInRangePct,
+      timeInRangeMs: metrics.timeInRangeMs,
+      timeTrackedMs: metrics.timeTrackedMs,
+      rangeComputedAt: metrics.rangeComputedAt,
+      rangeResolution: metrics.rangeResolution,
+      rangeFrozenAt: metrics.rangeFrozenAt,
+    }),
+    ...overrides,
+  };
+}
+
 test('buildProtectionCandidate infiere el activo HL y deriva size desde currentValueUsd', async () => {
   const candidate = await buildProtectionCandidate(buildPool(), {
     availableAssets: [
@@ -200,6 +235,7 @@ test('createProtectedPool crea dos coberturas ligadas con parametros correctos',
         },
       }),
     },
+    timeInRangeService: buildTimeInRangeService(),
   });
 
   assert.equal(result.id, 77);
@@ -258,6 +294,7 @@ test('createProtectedPool usa 0.05 como diferencia SL por defecto', async () => 
         },
       }),
     },
+    timeInRangeService: buildTimeInRangeService(),
   });
 
   assert.equal(createdHedges[0].exitPrice, 49024.5);
@@ -301,6 +338,7 @@ test('createProtectedPool reactiva un pool inactivo sin duplicar el registro', a
         },
       }),
     },
+    timeInRangeService: buildTimeInRangeService(),
   });
 
   assert.equal(result.id, 55);
@@ -344,6 +382,7 @@ test('createProtectedPool guarda configuracion dinamica y defaults operativos', 
         createHedge: async (payload) => ({ id: payload.direction === 'short' ? 1 : 2, status: 'entry_pending' }),
       }),
     },
+    timeInRangeService: buildTimeInRangeService(),
   });
 
   assert.equal(protectionWrites.length, 1);
@@ -398,6 +437,7 @@ test('createProtectedPool crea una proteccion delta-neutral con defaults y boots
         bootstrapCalls.push(protection.id);
       },
     },
+    timeInRangeService: buildTimeInRangeService(),
   });
 
   assert.equal(result.id, 120);
@@ -528,6 +568,7 @@ test('deactivateProtectedPool cancela hedges activos, desvincula hedges y marca 
         },
       }),
     },
+    timeInRangeService: buildTimeInRangeService(),
   });
 
   assert.deepEqual(cancelled, [201]);

@@ -1,0 +1,341 @@
+const { ethers } = require('ethers');
+const { ValidationError, ExternalServiceError } = require('../errors/app-error');
+const uniswapService = require('./uniswap.service');
+const protectedPoolRefreshService = require('./protected-pool-refresh.service');
+const protectedPoolRepo = require('../repositories/protected-uniswap-pool.repository');
+const logger = require('./logger.service');
+
+const { SUPPORTED_NETWORKS } = uniswapService;
+
+// --- ABI fragments for write operations ---------------------------------
+
+const V3_COLLECT_ABI = [
+  'function collect(tuple(uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max) params) payable returns (uint128 amount0, uint128 amount1)',
+  'function ownerOf(uint256 tokenId) view returns (address)',
+  'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
+];
+
+const V4_POSITION_MANAGER_WRITE_ABI = [
+  'function ownerOf(uint256 tokenId) view returns (address)',
+  'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks), uint256)',
+  'function getPositionLiquidity(uint256 tokenId) view returns (uint128 liquidity)',
+  'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
+];
+
+const ERC20_ABI = [
+  'function symbol() view returns (string)',
+  'function decimals() view returns (uint8)',
+];
+
+// V4 action constants
+const Actions = {
+  DECREASE_LIQUIDITY: 1,
+  INCREASE_LIQUIDITY: 2,
+  // No specific "collect" action in V4 — decreasing by 0 triggers fee settlement
+  // then TAKE_PAIR sends the tokens to the caller.
+  TAKE_PAIR: 18,
+  SETTLE_PAIR: 20,
+  CLOSE_CURRENCY: 21,
+};
+
+const MAX_UINT128 = (1n << 128n) - 1n;
+
+// --- Helpers -----------------------------------------------------------
+
+function normalizeAddress(address) {
+  if (!address) return null;
+  try {
+    return ethers.getAddress(address);
+  } catch {
+    return null;
+  }
+}
+
+function lower(a) {
+  return a?.toLowerCase?.() ?? '';
+}
+
+function getProviderCached(networkConfig) {
+  // Re-use the same caching pattern as uniswap.service
+  if (!getProviderCached._cache) getProviderCached._cache = new Map();
+  if (getProviderCached._cache.has(networkConfig.id)) {
+    return getProviderCached._cache.get(networkConfig.id);
+  }
+  const provider = new ethers.JsonRpcProvider(networkConfig.rpcUrl, networkConfig.chainId, {
+    staticNetwork: true,
+  });
+  getProviderCached._cache.set(networkConfig.id, provider);
+  return provider;
+}
+
+async function getTokenInfo(provider, address, networkConfig) {
+  const normalized = normalizeAddress(address);
+  if (!normalized || normalized === ethers.ZeroAddress) {
+    return { symbol: networkConfig.nativeSymbol, decimals: 18, address: ethers.ZeroAddress };
+  }
+  const contract = new ethers.Contract(normalized, ERC20_ABI, provider);
+  const [symbol, decimals] = await Promise.all([
+    contract.symbol().catch(() => 'UNKNOWN'),
+    contract.decimals().catch(() => 18),
+  ]);
+  return { symbol, decimals: Number(decimals), address: normalized };
+}
+
+function formatTokenAmount(raw, decimals) {
+  try {
+    return Number(ethers.formatUnits(raw, decimals));
+  } catch {
+    return 0;
+  }
+}
+
+// --- Validate inputs ---------------------------------------------------
+
+function validateClaimInput({ network, version, positionIdentifier, walletAddress }) {
+  if (!network || !version || !positionIdentifier || !walletAddress) {
+    throw new ValidationError('network, version, positionIdentifier y walletAddress son requeridos');
+  }
+
+  if (!['v3', 'v4'].includes(version)) {
+    throw new ValidationError('Claim de fees solo soportado para v3 y v4');
+  }
+
+  const networkConfig = SUPPORTED_NETWORKS[network];
+  if (!networkConfig) {
+    throw new ValidationError(`network no soportada: ${network}`);
+  }
+
+  if (!networkConfig.versions.includes(version)) {
+    throw new ValidationError(`${version.toUpperCase()} no soportada en ${networkConfig.label}`);
+  }
+
+  let normalizedWallet;
+  try {
+    normalizedWallet = ethers.getAddress(walletAddress);
+  } catch {
+    throw new ValidationError('walletAddress invalida');
+  }
+
+  return { networkConfig, normalizedWallet, tokenId: String(positionIdentifier) };
+}
+
+// --- V3 Prepare --------------------------------------------------------
+
+async function prepareV3Collect({ networkConfig, normalizedWallet, tokenId }) {
+  const provider = getProviderCached(networkConfig);
+  const positionManagerAddress = normalizeAddress(networkConfig.deployments.v3.positionManager);
+  const pm = new ethers.Contract(positionManagerAddress, V3_COLLECT_ABI, provider);
+
+  // Verify ownership
+  const owner = normalizeAddress(await pm.ownerOf(tokenId));
+  if (lower(owner) !== lower(normalizedWallet)) {
+    throw new ValidationError('La wallet proporcionada no es dueña de esta posición');
+  }
+
+  // Read position data to get token addresses
+  const position = await pm.positions(tokenId);
+  const [token0Info, token1Info] = await Promise.all([
+    getTokenInfo(provider, position.token0, networkConfig),
+    getTokenInfo(provider, position.token1, networkConfig),
+  ]);
+
+  // Encode the collect call — max amounts to collect everything
+  const collectParams = {
+    tokenId: BigInt(tokenId),
+    recipient: normalizedWallet,
+    amount0Max: MAX_UINT128,
+    amount1Max: MAX_UINT128,
+  };
+
+  const iface = new ethers.Interface(V3_COLLECT_ABI);
+  const data = iface.encodeFunctionData('collect', [collectParams]);
+
+  return {
+    tx: {
+      to: positionManagerAddress,
+      data,
+      value: '0x0',
+      chainId: networkConfig.chainId,
+    },
+    claimSummary: {
+      recipient: normalizedWallet,
+      token0: token0Info,
+      token1: token1Info,
+      positionIdentifier: tokenId,
+      version: 'v3',
+      network: networkConfig.id,
+      networkLabel: networkConfig.label,
+    },
+  };
+}
+
+// --- V4 Prepare --------------------------------------------------------
+
+async function prepareV4Collect({ networkConfig, normalizedWallet, tokenId }) {
+  const provider = getProviderCached(networkConfig);
+  const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
+  const pm = new ethers.Contract(positionManagerAddress, V4_POSITION_MANAGER_WRITE_ABI, provider);
+
+  // Verify ownership
+  const owner = normalizeAddress(await pm.ownerOf(tokenId));
+  if (lower(owner) !== lower(normalizedWallet)) {
+    throw new ValidationError('La wallet proporcionada no es dueña de esta posición');
+  }
+
+  // Get pool key and position info
+  const [poolKey] = await pm.getPoolAndPositionInfo(tokenId);
+
+  const [token0Info, token1Info] = await Promise.all([
+    getTokenInfo(provider, poolKey.currency0, networkConfig),
+    getTokenInfo(provider, poolKey.currency1, networkConfig),
+  ]);
+
+  // V4 fee collection: DECREASE_LIQUIDITY with 0 amount (triggers fee settlement)
+  // followed by TAKE_PAIR to send tokens to recipient.
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+
+  // Action: DECREASE_LIQUIDITY(tokenId, 0 liquidity, 0 min0, 0 min1, hookData)
+  const decreaseParams = coder.encode(
+    ['uint256', 'uint256', 'uint128', 'uint128', 'bytes'],
+    [BigInt(tokenId), 0n, 0n, 0n, '0x']
+  );
+
+  // Action: TAKE_PAIR(currency0, currency1, recipient)
+  const takeParams = coder.encode(
+    ['address', 'address', 'address'],
+    [poolKey.currency0, poolKey.currency1, normalizedWallet]
+  );
+
+  // Combine actions: [DECREASE_LIQUIDITY, TAKE_PAIR]
+  const actions = new Uint8Array([Actions.DECREASE_LIQUIDITY, Actions.TAKE_PAIR]);
+  const params = [decreaseParams, takeParams];
+
+  // Encode the unlock data
+  const unlockData = coder.encode(
+    ['bytes', 'bytes[]'],
+    [actions, params]
+  );
+
+  // Deadline: 30 minutes from now
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 1800);
+
+  const iface = new ethers.Interface(V4_POSITION_MANAGER_WRITE_ABI);
+  const data = iface.encodeFunctionData('modifyLiquidities', [unlockData, deadline]);
+
+  return {
+    tx: {
+      to: positionManagerAddress,
+      data,
+      value: '0x0',
+      chainId: networkConfig.chainId,
+    },
+    claimSummary: {
+      recipient: normalizedWallet,
+      token0: token0Info,
+      token1: token1Info,
+      positionIdentifier: tokenId,
+      version: 'v4',
+      network: networkConfig.id,
+      networkLabel: networkConfig.label,
+    },
+  };
+}
+
+// --- Public: prepare ---------------------------------------------------
+
+async function prepareClaimFees({ network, version, positionIdentifier, walletAddress }) {
+  const { networkConfig, normalizedWallet, tokenId } = validateClaimInput({
+    network, version, positionIdentifier, walletAddress,
+  });
+
+  if (version === 'v3') {
+    return prepareV3Collect({ networkConfig, normalizedWallet, tokenId });
+  }
+
+  return prepareV4Collect({ networkConfig, normalizedWallet, tokenId });
+}
+
+// --- Public: finalize --------------------------------------------------
+
+async function finalizeClaimFees({ network, version, positionIdentifier, walletAddress, txHash }) {
+  if (!txHash) {
+    throw new ValidationError('txHash es requerido');
+  }
+
+  const { networkConfig, normalizedWallet, tokenId } = validateClaimInput({
+    network, version, positionIdentifier, walletAddress,
+  });
+
+  const provider = getProviderCached(networkConfig);
+
+  // Wait for receipt (up to 60s)
+  let receipt;
+  try {
+    receipt = await provider.waitForTransaction(txHash, 1, 60_000);
+  } catch (err) {
+    throw new ExternalServiceError(`No se pudo obtener el receipt de ${txHash}: ${err.message}`);
+  }
+
+  if (!receipt) {
+    throw new ExternalServiceError(`Timeout esperando receipt de ${txHash}`);
+  }
+
+  if (receipt.status !== 1) {
+    throw new ValidationError('La transacción falló on-chain (status 0)');
+  }
+
+  // Verify the tx was sent to the expected contract
+  const expectedTo = version === 'v3'
+    ? normalizeAddress(networkConfig.deployments.v3.positionManager)
+    : normalizeAddress(networkConfig.deployments.v4.positionManager);
+
+  if (lower(receipt.to) !== lower(expectedTo)) {
+    throw new ValidationError('El txHash no corresponde a una operación de claim en el contrato esperado');
+  }
+
+  // Refresh any protected pool that matches this position
+  let updatedProtection = null;
+  try {
+    const protections = await protectedPoolRepo.findByPositionIdentifier(
+      tokenId, network, version
+    );
+    if (protections.length > 0) {
+      // Trigger a refresh for each matching protection's user
+      const userIds = [...new Set(protections.map((p) => p.userId))];
+      for (const uid of userIds) {
+        await protectedPoolRefreshService.refreshUser(uid).catch((err) => {
+          logger.warn('claim_fees_refresh_protection_failed', {
+            userId: uid,
+            positionIdentifier: tokenId,
+            error: err.message,
+          });
+        });
+      }
+      // Re-fetch after refresh
+      const refreshed = await protectedPoolRepo.findByPositionIdentifier(
+        tokenId, network, version
+      );
+      updatedProtection = refreshed[0] || null;
+    }
+  } catch (err) {
+    logger.warn('claim_fees_protection_lookup_failed', {
+      positionIdentifier: tokenId,
+      error: err.message,
+    });
+  }
+
+  return {
+    txHash,
+    receipt: {
+      status: receipt.status,
+      blockNumber: receipt.blockNumber,
+      gasUsed: receipt.gasUsed?.toString(),
+    },
+    updatedProtection,
+  };
+}
+
+module.exports = {
+  prepareClaimFees,
+  finalizeClaimFees,
+};

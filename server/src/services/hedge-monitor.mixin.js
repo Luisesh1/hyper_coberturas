@@ -54,39 +54,41 @@ const monitorMethods = {
     }
 
     for (const hedge of activeHedges) {
-      try {
-        hedge.lastReconciledAt = Date.now();
+      await this._hedgeMutex.runExclusive(hedge.id, async () => {
+        try {
+          hedge.lastReconciledAt = Date.now();
 
-        if (hedge.status === 'cancel_pending') {
-          await this._reconcileCancelPending(hedge);
-          continue;
-        }
+          if (hedge.status === 'cancel_pending') {
+            await this._reconcileCancelPending(hedge);
+            return;
+          }
 
-        if (hedge.status === 'entry_pending') {
-          await this._monitorEntryPending(hedge, { openOrders, openOidSet, openOrdersAvailable });
-          continue;
-        }
+          if (hedge.status === 'entry_pending') {
+            await this._monitorEntryPending(hedge, { openOrders, openOidSet, openOrdersAvailable });
+            return;
+          }
 
-        if (hedge.status === 'entry_filled_pending_sl') {
-          await this._monitorPendingSl(hedge, { openOrders, openOidSet, openOrdersAvailable });
-          continue;
-        }
+          if (hedge.status === 'entry_filled_pending_sl') {
+            await this._monitorPendingSl(hedge, { openOrders, openOidSet, openOrdersAvailable });
+            return;
+          }
 
-        if (hedge.status === 'closing') {
-          await this._monitorClosing(hedge);
-          continue;
-        }
+          if (hedge.status === 'closing') {
+            await this._monitorClosing(hedge);
+            return;
+          }
 
-        if (hedge.status === 'open') {
-          hedge.status = hedge.slOid ? 'open_protected' : 'entry_filled_pending_sl';
-        }
+          if (hedge.status === 'open') {
+            hedge.status = hedge.slOid ? 'open_protected' : 'entry_filled_pending_sl';
+          }
 
-        if (hedge.status === 'open_protected') {
-          await this._monitorOpenProtected(hedge, { openOrders, openOidSet, openOrdersAvailable });
+          if (hedge.status === 'open_protected') {
+            await this._monitorOpenProtected(hedge, { openOrders, openOidSet, openOrdersAvailable });
+          }
+        } catch (err) {
+          logger.error('hedge_monitor_item_error', { hedgeId: hedge.id, error: err.message });
         }
-      } catch (err) {
-        logger.error('hedge_monitor_item_error', { hedgeId: hedge.id, error: err.message });
-      }
+      });
     }
   },
 
@@ -120,7 +122,7 @@ const monitorMethods = {
         await this._placeEntryOrder(hedge, { openOrders, openOrdersAvailable });
       }
     } else if (openOrdersAvailable) {
-      const midsEntry = await this.hl.getAllMids().catch(() => null);
+      const midsEntry = await this.hl.getAllMids().catch((err) => { logger.warn('getAllMids failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
       const midEntry = midsEntry ? parseFloat(midsEntry[hedge.asset]) : null;
       if (this._isEntryConditionMet(hedge, midEntry)) {
         logger.warn('hedge_entry_condition_met', { hedgeId: hedge.id, price: midEntry, entryPrice: hedge.entryPrice });
@@ -135,7 +137,7 @@ const monitorMethods = {
   },
 
   async _monitorPendingSl(hedge, { openOrders, openOidSet, openOrdersAvailable }) {
-    const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
+    const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
     if (!pos || parseFloat(pos.szi) === 0) {
       const recovered = await this._recoverExitFromExchange(hedge);
       if (!recovered) {
@@ -159,7 +161,7 @@ const monitorMethods = {
       return;
     }
 
-    const mids = await this.hl.getAllMids().catch(() => null);
+    const mids = await this.hl.getAllMids().catch((err) => { logger.warn('getAllMids failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
     const currentPrice = mids ? parseFloat(mids[hedge.asset]) : null;
     const exitBreached = currentPrice && (
       hedge.direction === 'short'
@@ -213,7 +215,7 @@ const monitorMethods = {
   },
 
   async _monitorClosing(hedge) {
-    const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
+    const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
     if (!pos || parseFloat(pos.szi) === 0) {
       const recovered = await this._recoverExitFromExchange(hedge);
       if (!recovered) {
@@ -232,7 +234,7 @@ const monitorMethods = {
   },
 
   async _monitorOpenProtected(hedge, { openOrders, openOidSet, openOrdersAvailable }) {
-    const pos = await this.hl.getPosition(hedge.asset).catch(() => null);
+    const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
     if (!pos || parseFloat(pos.szi) === 0) {
       const recovered = await this._recoverExitFromExchange(hedge);
       if (!recovered) {
@@ -262,7 +264,7 @@ const monitorMethods = {
     }
 
     // Validación en tiempo real: ¿ya cruzó el precio de salida?
-    const midsRT = await this.hl.getAllMids().catch(() => null);
+    const midsRT = await this.hl.getAllMids().catch((err) => { logger.warn('getAllMids failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
     const currentPriceRT = midsRT ? parseFloat(midsRT[hedge.asset]) : null;
     if (currentPriceRT && hedge.exitPrice) {
       const exitBreachedRT = hedge.direction === 'short'

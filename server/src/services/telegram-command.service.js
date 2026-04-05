@@ -396,7 +396,7 @@ class TelegramCommandService {
       return;
     }
 
-    await Promise.resolve(tg.answerCallbackQuery(callbackQuery.id)).catch(() => {});
+    await Promise.resolve(tg.answerCallbackQuery(callbackQuery.id)).catch((err) => logger.warn('answerCallbackQuery failed', { error: err.message }));
     await this._handleActionRequest(cfg.userId, chatId, parsed);
   }
 
