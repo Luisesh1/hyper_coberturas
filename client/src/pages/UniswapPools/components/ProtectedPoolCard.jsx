@@ -61,16 +61,20 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
       ? Number(snapshot.timeInRangePct)
       : null;
   const unclaimedFees = Number(snapshot.unclaimedFeesUsd);
+  const hasUnsupportedV4Hooks = protection.version === 'v4'
+    && snapshot.hooks
+    && snapshot.hooks !== '0x0000000000000000000000000000000000000000';
   const canClaim = ['v3', 'v4'].includes(protection.version)
     && walletState?.isConnected
     && walletState.chainId === snapshot.chainId
     && protection.walletAddress?.toLowerCase() === walletState.address?.toLowerCase()
+    && !hasUnsupportedV4Hooks
     && unclaimedFees > 0;
   const canManage = ['v3', 'v4'].includes(protection.version)
-    && protection.version === 'v3'
     && walletState?.isConnected
     && walletState.chainId === snapshot.chainId
-    && protection.walletAddress?.toLowerCase() === walletState.address?.toLowerCase();
+    && protection.walletAddress?.toLowerCase() === walletState.address?.toLowerCase()
+    && !hasUnsupportedV4Hooks;
 
   const manageTitle = !walletState?.isConnected
     ? 'Conecta tu wallet para gestionar esta posición'
@@ -78,6 +82,8 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
       ? 'Cambia a la red correcta en tu wallet'
       : protection.walletAddress?.toLowerCase() !== walletState.address?.toLowerCase()
         ? 'Esta wallet no es dueña de la posición'
+        : hasUnsupportedV4Hooks
+          ? 'Hooks no soportados en gestión V4'
         : '';
 
   const modeLabel = isDeltaNeutral ? 'Delta Neutral' : isDynamic ? 'Dinámica' : 'Estática';
@@ -94,6 +100,7 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
           <div className={styles.badges}>
             <span className={styles.badgeVersion}>{protection.version.toUpperCase()}</span>
             <span className={styles.badgeNetwork}>{snapshot.networkLabel || protection.network}</span>
+            {hasUnsupportedV4Hooks && <span className={styles.badgeNeutral}>Hooks no soportados</span>}
             <span className={modeBadgeCls}>{modeLabel}</span>
             <span className={protection.status === 'active' ? styles.badgeProtected : styles.badgeInactive}>
               {protection.status === 'active' ? '● Activa' : '○ Inactiva'}
@@ -171,6 +178,12 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
       {/* ─── Acciones LP ───────────────────────── */}
       {['v3', 'v4'].includes(protection.version) && onClaimFees && (
         <div className={styles.actionGroup}>
+          {hasUnsupportedV4Hooks && (
+            <div className={styles.protectHint}>
+              <span className={styles.protectHintIcon}>ℹ</span>
+              Hooks no soportados en gestión V4
+            </div>
+          )}
           <button
             type="button"
             className={styles.claimBtn}
@@ -205,10 +218,21 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
         </summary>
         <div className={styles.detailsContent}>
 
+          {/* Cuenta HL usada para la protección */}
+          {protection.account && (
+            <div className={styles.hlAccountRow}>
+              <span className={styles.hlAccountIcon}>🔒</span>
+              <span className={styles.hlAccountLabel}>Cuenta HL:</span>
+              <span className={styles.hlAccountValue}>{formatAccountIdentity(protection.account)}</span>
+              {protection.account.isDefault && (
+                <span className={styles.hlAccountDefault}>predeterminada</span>
+              )}
+            </div>
+          )}
+
           {/* Parámetros de configuración */}
           <p className={styles.sectionTitle}>Parámetros de la protección</p>
           <div className={styles.metaGrid}>
-            <MetaChip label="Cuenta Hyperliquid" value={formatAccountIdentity(protection.account)} />
             <MetaChip label="Activo cubierto en HL" value={protection.inferredAsset} />
             <MetaChip label="Notional protegido" value={formatUsd(protection.configuredHedgeNotionalUsd)} />
             <MetaChip label="Apalancamiento" value={`${protection.leverage}x ${protection.marginMode}`} />
