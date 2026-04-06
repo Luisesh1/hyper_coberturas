@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { formatUsd } from '../../utils/pool-formatters';
 import { formatNumber } from '../../../../utils/formatters';
 import { pctToPrice, priceToPct } from './form-state';
@@ -32,6 +32,23 @@ export default function ModifyRangeFields({ pool, formState, setFormState }) {
   const lowerPctDisplay = priceCurrent > 0 && lowerPrice > 0 ? priceToPct(priceCurrent, lowerPrice) : 0;
   const upperPctDisplay = priceCurrent > 0 && upperPrice > 0 ? priceToPct(priceCurrent, upperPrice) : 0;
   const rangeWidth = upperPrice > 0 && lowerPrice > 0 ? ((upperPrice - lowerPrice) / priceCurrent) * 100 : 0;
+
+  // Keep the percent inputs in sync with the underlying form price if it ever
+  // changes externally (e.g. parent re-init). Without this, the input could
+  // show a stale value while the calculated price below shows a different one.
+  useEffect(() => {
+    if (priceCurrent <= 0 || lowerPrice <= 0) return;
+    const expected = priceToPct(priceCurrent, lowerPrice).toFixed(2);
+    if (Number(expected) !== Number(lowerPct)) setLowerPct(expected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lowerPrice, priceCurrent]);
+
+  useEffect(() => {
+    if (priceCurrent <= 0 || upperPrice <= 0) return;
+    const expected = priceToPct(priceCurrent, upperPrice).toFixed(2);
+    if (Number(expected) !== Number(upperPct)) setUpperPct(expected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upperPrice, priceCurrent]);
 
   const handleLowerPctChange = (event) => {
     const val = event.target.value;

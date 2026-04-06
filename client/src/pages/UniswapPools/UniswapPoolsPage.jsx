@@ -52,6 +52,10 @@ export default function UniswapPoolsPage() {
     hasProvider: walletConn.hasProvider,
     connector: walletConn.connector,
   }), [walletConn.address, walletConn.chainId, walletConn.isConnected, walletConn.hasProvider]);
+  const positionActionDefaults = useMemo(
+    () => ({ network, version, walletAddress: walletState.address }),
+    [network, version, walletState.address],
+  );
 
   const loadProtectedPools = useCallback(async ({ force = false } = {}) => {
     setIsLoadingProtected(true);
@@ -561,12 +565,13 @@ export default function UniswapPoolsPage() {
 
       {activeAction && (
         <PositionActionModal
+          key={`${activeAction.action}-${activeAction.pool?.identifier ?? activeAction.pool?.positionIdentifier ?? 'new'}`}
           action={activeAction.action}
           pool={activeAction.pool}
           wallet={walletState}
           sendTransaction={walletConn.sendTransaction}
           waitForTransactionReceipt={walletConn.waitForTransactionReceipt}
-          defaults={{ network, version, walletAddress: walletState.address }}
+          defaults={positionActionDefaults}
           onClose={() => setActiveAction(null)}
           onFinalized={handleClaimFinalized}
         />
