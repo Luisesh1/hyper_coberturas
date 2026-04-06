@@ -4,6 +4,15 @@ const uniswapService = require('./uniswap.service');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
 const protectedPoolRepo = require('../repositories/protected-uniswap-pool.repository');
 const logger = require('./logger.service');
+const {
+  V4_ACTIONS,
+  V4_POSITION_MANAGER_ABI,
+  buildV4ModifyLiquiditiesCalldata,
+  encodeV4CloseCurrencyParams,
+  encodeV4ModifyLiquidityParams,
+  hasHooks,
+  normalizeHooksAddress,
+} = require('./uniswap-v4-helpers.service');
 
 const { SUPPORTED_NETWORKS } = uniswapService;
 
@@ -15,28 +24,10 @@ const V3_COLLECT_ABI = [
   'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
 ];
 
-const V4_POSITION_MANAGER_WRITE_ABI = [
-  'function ownerOf(uint256 tokenId) view returns (address)',
-  'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks), uint256)',
-  'function getPositionLiquidity(uint256 tokenId) view returns (uint128 liquidity)',
-  'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
-];
-
 const ERC20_ABI = [
   'function symbol() view returns (string)',
   'function decimals() view returns (uint8)',
 ];
-
-// V4 action constants
-const Actions = {
-  DECREASE_LIQUIDITY: 1,
-  INCREASE_LIQUIDITY: 2,
-  // No specific "collect" action in V4 — decreasing by 0 triggers fee settlement
-  // then TAKE_PAIR sends the tokens to the caller.
-  TAKE_PAIR: 18,
-  SETTLE_PAIR: 20,
-  CLOSE_CURRENCY: 21,
-};
 
 const MAX_UINT128 = (1n << 128n) - 1n;
 
@@ -174,7 +165,7 @@ async function prepareV3Collect({ networkConfig, normalizedWallet, tokenId }) {
 async function prepareV4Collect({ networkConfig, normalizedWallet, tokenId }) {
   const provider = getProviderCached(networkConfig);
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
-  const pm = new ethers.Contract(positionManagerAddress, V4_POSITION_MANAGER_WRITE_ABI, provider);
+  const pm = new ethers.Contract(positionManagerAddress, V4_POSITION_MANAGER_ABI, provider);
 
   // Verify ownership
   const owner = normalizeAddress(await pm.ownerOf(tokenId));
@@ -184,43 +175,34 @@ async function prepareV4Collect({ networkConfig, normalizedWallet, tokenId }) {
 
   // Get pool key and position info
   const [poolKey] = await pm.getPoolAndPositionInfo(tokenId);
+  if (hasHooks(normalizeHooksAddress(poolKey.hooks))) {
+    throw new ValidationError('Los pools v4 con hooks no estan soportados en gestion on-chain por ahora');
+  }
 
   const [token0Info, token1Info] = await Promise.all([
     getTokenInfo(provider, poolKey.currency0, networkConfig),
     getTokenInfo(provider, poolKey.currency1, networkConfig),
   ]);
 
-  // V4 fee collection: DECREASE_LIQUIDITY with 0 amount (triggers fee settlement)
-  // followed by TAKE_PAIR to send tokens to recipient.
-  const coder = ethers.AbiCoder.defaultAbiCoder();
-
-  // Action: DECREASE_LIQUIDITY(tokenId, 0 liquidity, 0 min0, 0 min1, hookData)
-  const decreaseParams = coder.encode(
-    ['uint256', 'uint256', 'uint128', 'uint128', 'bytes'],
-    [BigInt(tokenId), 0n, 0n, 0n, '0x']
-  );
-
-  // Action: TAKE_PAIR(currency0, currency1, recipient)
-  const takeParams = coder.encode(
-    ['address', 'address', 'address'],
-    [poolKey.currency0, poolKey.currency1, normalizedWallet]
-  );
-
-  // Combine actions: [DECREASE_LIQUIDITY, TAKE_PAIR]
-  const actions = new Uint8Array([Actions.DECREASE_LIQUIDITY, Actions.TAKE_PAIR]);
-  const params = [decreaseParams, takeParams];
-
-  // Encode the unlock data
-  const unlockData = coder.encode(
-    ['bytes', 'bytes[]'],
-    [actions, params]
-  );
-
-  // Deadline: 30 minutes from now
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 1800);
-
-  const iface = new ethers.Interface(V4_POSITION_MANAGER_WRITE_ABI);
-  const data = iface.encodeFunctionData('modifyLiquidities', [unlockData, deadline]);
+  const data = buildV4ModifyLiquiditiesCalldata({
+    actions: [
+      V4_ACTIONS.DECREASE_LIQUIDITY,
+      V4_ACTIONS.CLOSE_CURRENCY,
+      V4_ACTIONS.CLOSE_CURRENCY,
+    ],
+    params: [
+      encodeV4ModifyLiquidityParams({
+        tokenId,
+        liquidity: 0n,
+        amount0Limit: 0n,
+        amount1Limit: 0n,
+      }),
+      encodeV4CloseCurrencyParams(poolKey.currency0),
+      encodeV4CloseCurrencyParams(poolKey.currency1),
+    ],
+    deadline,
+  });
 
   return {
     tx: {

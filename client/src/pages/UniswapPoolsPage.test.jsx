@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import UniswapPoolsPage from './UniswapPools/UniswapPoolsPage';
 
-const { settingsApi, uniswapApi } = vi.hoisted(() => ({
+const { settingsApi, uniswapApi, tradingApi } = vi.hoisted(() => ({
   settingsApi: {
     getWallet: vi.fn(),
     getEtherscan: vi.fn(),
@@ -16,11 +16,16 @@ const { settingsApi, uniswapApi } = vi.hoisted(() => ({
     createProtectedPool: vi.fn(),
     deactivateProtectedPool: vi.fn(),
   },
+  tradingApi: {
+    getAccount: vi.fn(),
+    getAccountBalance: vi.fn(),
+  },
 }));
 
 vi.mock('../services/api', () => ({
   settingsApi,
   uniswapApi,
+  tradingApi,
 }));
 
 function buildPool(overrides = {}) {
@@ -295,6 +300,12 @@ describe('UniswapPoolsPage', () => {
       shortAddress: '0x0000...00cc',
       isDefault: true,
     }]);
+    tradingApi.getAccount.mockResolvedValue({
+      accountValue: 1250,
+      totalMarginUsed: 0,
+      withdrawable: 1250,
+      lastUpdatedAt: Date.now(),
+    });
     uniswapApi.getMeta.mockResolvedValue({
       networks: [{
         id: 'ethereum',
@@ -352,18 +363,17 @@ describe('UniswapPoolsPage', () => {
   it('carga el panel protegido y muestra resultados despues de escanear', async () => {
     render(<UniswapPoolsPage />);
 
-    expect(await screen.findByRole('button', { name: /Protegidos/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Protecciones/i })).toBeTruthy();
     expect(await screen.findByText('Listo para escanear una wallet')).toBeTruthy();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Escanear' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Escanear wallet/i }));
 
     await waitFor(() => expect(uniswapApi.scanPools).toHaveBeenCalledWith({
       wallet: '0x00000000000000000000000000000000000000ff',
-      network: 'ethereum',
+      network: 'arbitrum',
       version: 'v3',
     }));
 
-    expect(await screen.findByRole('button', { name: /Resultados/i })).toBeTruthy();
     expect(await screen.findByText('2 de 2')).toBeTruthy();
     expect(await screen.findByText('WBTC / USDC')).toBeTruthy();
     expect((await screen.findAllByText('66.7%')).length).toBeGreaterThan(0);
@@ -372,14 +382,14 @@ describe('UniswapPoolsPage', () => {
   it('permite filtrar pools protegibles y abrir el modal de cobertura', async () => {
     render(<UniswapPoolsPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Escanear' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Escanear wallet/i }));
     await screen.findByText('2 de 2');
 
     await userEvent.click(screen.getByRole('button', { name: /Protegibles/i }));
 
     expect(await screen.findByText('1 de 2')).toBeTruthy();
 
-    const applyButtons = screen.getAllByRole('button', { name: 'Aplicar cobertura' });
+    const applyButtons = screen.getAllByRole('button', { name: /Aplicar cobertura/i });
     await userEvent.click(applyButtons[0]);
 
     expect(await screen.findByRole('dialog', { name: 'Aplicar proteccion al pool' })).toBeTruthy();
@@ -391,10 +401,10 @@ describe('UniswapPoolsPage', () => {
   it('envia la confirmacion dinamica por distancia y tiempo al crear la proteccion', async () => {
     render(<UniswapPoolsPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Escanear' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Escanear wallet/i }));
     await screen.findByText('2 de 2');
 
-    const applyButtons = screen.getAllByRole('button', { name: 'Aplicar cobertura' });
+    const applyButtons = screen.getAllByRole('button', { name: /Aplicar cobertura/i });
     await userEvent.click(applyButtons[0]);
 
     const dialog = screen.getByRole('dialog', { name: 'Aplicar proteccion al pool' });
@@ -421,10 +431,10 @@ describe('UniswapPoolsPage', () => {
   it('envia la configuracion delta-neutral con presets y parametros de overlay', async () => {
     render(<UniswapPoolsPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Escanear' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Escanear wallet/i }));
     await screen.findByText('2 de 2');
 
-    const applyButtons = screen.getAllByRole('button', { name: 'Aplicar cobertura' });
+    const applyButtons = screen.getAllByRole('button', { name: /Aplicar cobertura/i });
     await userEvent.click(applyButtons[0]);
 
     const dialog = screen.getByRole('dialog', { name: 'Aplicar proteccion al pool' });
@@ -452,16 +462,17 @@ describe('UniswapPoolsPage', () => {
   it('muestra la configuracion dinamica extra en la tarjeta del pool protegido', async () => {
     render(<UniswapPoolsPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: /Protegidos/i }));
-    expect(await screen.findByText('Dist. breakout')).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: /Protecciones/i }));
+    await userEvent.click(await screen.findByText(/Ver configuración y coberturas activas/i));
+    expect(await screen.findByText(/Distancia mín\. confirmación breakout/i)).toBeTruthy();
     expect(screen.getByText('0.5%')).toBeTruthy();
     expect(screen.getByText('10m')).toBeTruthy();
     expect(screen.getByText('50.0%')).toBeTruthy();
     expect(screen.queryByText('WETH / USDC')).toBeNull();
 
-    await userEvent.click(screen.getByRole('checkbox', { name: /Ver pools sin proteccion/i }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Incluir inactivas/i }));
 
     expect(await screen.findByText('WETH / USDC')).toBeTruthy();
-    expect(screen.getByText('Inactiva')).toBeTruthy();
+    expect(screen.getByText('○ Inactiva')).toBeTruthy();
   });
 });

@@ -5,6 +5,7 @@ const { validate } = require('../middleware/validate.middleware');
 const uniswapService = require('../services/uniswap.service');
 const uniswapProtectionService = require('../services/uniswap-protection.service');
 const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
+const smartPoolCreatorService = require('../services/smart-pool-creator.service');
 const {
   createProtectedPoolSchema,
   scanPoolsSchema,
@@ -17,7 +18,11 @@ const {
   modifyRangePrepareSchema,
   rebalancePrepareSchema,
   createPositionPrepareSchema,
+  closeToUsdcPrepareSchema,
+  closeKeepAssetsPrepareSchema,
   positionActionFinalizeSchema,
+  smartCreateSuggestSchema,
+  smartCreateFundingPlanSchema,
 } = require('../schemas/uniswap.schema');
 const claimFeesService = require('../services/uniswap-claim-fees.service');
 const positionActionsService = require('../services/uniswap-position-actions.service');
@@ -33,6 +38,8 @@ const ACTION_SCHEMAS = {
   'modify-range': modifyRangePrepareSchema,
   'rebalance': rebalancePrepareSchema,
   'create-position': createPositionPrepareSchema,
+  'close-to-usdc': closeToUsdcPrepareSchema,
+  'close-keep-assets': closeKeepAssetsPrepareSchema,
 };
 
 router.get('/meta', (req, res) => {
@@ -52,9 +59,31 @@ router.get('/protected-pools', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+async function handleProtectedPoolDiagnostics(req, res) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    return res.status(400).json({ success: false, error: 'ID invalido' });
+  }
+  const diagnostics = await uniswapProtectionService.diagnoseDeltaNeutral(req.user.userId, id);
+  res.json({ success: true, data: diagnostics });
+}
+
+router.get('/protected-pools/:id/diagnose', asyncHandler(handleProtectedPoolDiagnostics));
+router.get('/protected-pools/:id/diagnostics', asyncHandler(handleProtectedPoolDiagnostics));
+
+
 router.post('/protected-pools/refresh', asyncHandler(async (req, res) => {
   await protectedPoolRefreshService.refreshUser(req.user.userId);
   const data = await uniswapProtectionService.listProtectedPools(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.post('/protected-pools/:id/refresh-snapshot', asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    return res.status(400).json({ success: false, error: 'ID invalido' });
+  }
+  const data = await protectedPoolRefreshService.refreshProtection(req.user.userId, id);
   res.json({ success: true, data });
 }));
 
@@ -73,6 +102,42 @@ router.post('/protected-pools/:id/deactivate', asyncHandler(async (req, res) => 
   }
 
   const data = await uniswapProtectionService.deactivateProtectedPool(req.user.userId, id);
+  res.json({ success: true, data });
+}));
+
+// --- Smart Pool Creation -------------------------------------------------------
+
+router.post('/smart-create/suggest', validate(smartCreateSuggestSchema), asyncHandler(async (req, res) => {
+  const data = await smartPoolCreatorService.getSuggestions(req.body);
+  res.json({ success: true, data });
+}));
+
+router.get('/smart-create/token-list', asyncHandler(async (req, res) => {
+  const network = req.query.network || 'ethereum';
+  const list = smartPoolCreatorService.getKnownTokens(network);
+  res.json({ success: true, data: list });
+}));
+
+router.get('/smart-create/assets', asyncHandler(async (req, res) => {
+  const network = String(req.query.network || 'ethereum');
+  const walletAddress = String(req.query.walletAddress || '').trim();
+  if (!walletAddress) {
+    return res.status(400).json({ success: false, error: 'walletAddress es requerido' });
+  }
+  const importTokenAddresses = String(req.query.importTokenAddresses || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const data = await smartPoolCreatorService.getWalletAssets({
+    network,
+    walletAddress,
+    importTokenAddresses,
+  });
+  res.json({ success: true, data });
+}));
+
+router.post('/smart-create/funding-plan', validate(smartCreateFundingPlanSchema), asyncHandler(async (req, res) => {
+  const data = await smartPoolCreatorService.buildFundingPlan(req.body);
   res.json({ success: true, data });
 }));
 

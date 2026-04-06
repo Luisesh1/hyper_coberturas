@@ -292,6 +292,7 @@ module.exports = {
   buildBandPreset,
   computeDeltaNeutralMetrics,
   getCurrentVolatilePriceUsd,
+  isStableSymbol,
   networkSentinelIntervalMs,
   normalizeSymbol,
   resolveDeltaNeutralOrientation,

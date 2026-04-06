@@ -206,6 +206,8 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
             <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('reinvest-fees', poolPayload)} title={canManage ? 'Reinvertir fees en liquidez' : manageTitle}>↺ Reinvertir</button>
             <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('modify-range', poolPayload)} title={canManage ? 'Cambiar rango de precios' : manageTitle}>⇔ Rango</button>
             <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('rebalance', poolPayload)} title={canManage ? 'Rebalancear activos' : manageTitle}>⇄ Rebalancear</button>
+            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('close-to-usdc', poolPayload)} title={canManage ? 'Cerrar la posición y convertir los fondos a USDC' : manageTitle}>⇢ Cerrar a USDC</button>
+            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('close-keep-assets', poolPayload)} title={canManage ? 'Cerrar la posición y conservar token0/token1 en la wallet' : manageTitle}>⨯ Cerrar LP</button>
           </div>
         </div>
       )}

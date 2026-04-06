@@ -15,10 +15,12 @@ client/.env
 client/dist/
 client/dist-temp/
 client/build/
+client/build-verify/
 server/dist/
 
 # ── Datos persistentes generados en runtime ──────────────────────────────────
 server/data/
+server/db.sqlite
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log

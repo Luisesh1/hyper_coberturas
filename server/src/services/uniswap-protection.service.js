@@ -10,10 +10,16 @@ const timeInRangeService = require('./time-in-range.service');
 const { formatPrice } = require('../utils/format');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
+const { getTradingService } = require('./trading.factory');
 const {
   computeDeltaNeutralMetrics,
   resolveDeltaNeutralOrientation,
 } = require('./delta-neutral-math.service');
+const {
+  computeSnapshotHash,
+  normalizeProtectionSnapshot,
+  validateNormalizedProtectionSnapshot,
+} = require('./delta-neutral-snapshot.service');
 const {
   DEFAULT_BAND_MODE,
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
@@ -31,6 +37,12 @@ const DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC = 15;
 const DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT = 6;
 const DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT = 0.5;
 const DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC = 600;
+const DEFAULT_EXECUTION_MODE = 'auto';
+const DEFAULT_MAX_SPREAD_BPS = 30;
+const DEFAULT_MAX_EXECUTION_FEE_USD = 25;
+const DEFAULT_MIN_ORDER_NOTIONAL_USD = 25;
+const DEFAULT_TWAP_SLICES = 5;
+const DEFAULT_TWAP_DURATION_SEC = 60;
 const WRAPPED_TOKEN_EQUIVALENTS = new Map([
   ['WBTC', 'BTC'],
   ['WETH', 'ETH'],
@@ -98,6 +110,15 @@ function normalizePoolSnapshot(pool) {
     throw new ValidationError('El pool no contiene metadata suficiente de tokens');
   }
 
+  // Calcular priceCurrent si no se proporciona (usa el punto medio del rango como aproximación)
+  let priceCurrent = null;
+  if (pool.priceCurrent != null) {
+    priceCurrent = Number(pool.priceCurrent);
+  } else if (Number.isFinite(rangeLowerPrice) && Number.isFinite(rangeUpperPrice)) {
+    // Aproximación: punto medio del rango
+    priceCurrent = (rangeLowerPrice + rangeUpperPrice) / 2;
+  }
+
   return {
     ...pool,
     owner,
@@ -108,9 +129,29 @@ function normalizePoolSnapshot(pool) {
     poolAddress: normalizeMaybeAddress(pool.poolAddress),
     rangeLowerPrice,
     rangeUpperPrice,
-    priceCurrent: pool.priceCurrent != null ? Number(pool.priceCurrent) : null,
+    priceCurrent,
     currentValueUsd,
     inRange: pool.inRange === true,
+  };
+}
+
+function buildSnapshotMetadata(snapshot) {
+  const normalizedSnapshot = normalizeProtectionSnapshot(snapshot, {
+    network: snapshot.network,
+    version: snapshot.version,
+    positionIdentifier: snapshot.identifier,
+    poolAddress: snapshot.poolAddress,
+    poolId: snapshot.poolId,
+    owner: snapshot.owner || snapshot.creator,
+    snapshotFreshAt: Date.now(),
+  });
+  const validation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
+  return {
+    normalizedSnapshot,
+    snapshotStatus: validation.status,
+    snapshotValidation: validation,
+    snapshotFreshAt: normalizedSnapshot.snapshotFreshAt,
+    snapshotHash: computeSnapshotHash(normalizedSnapshot),
   };
 }
 
@@ -846,6 +887,7 @@ async function createDeltaNeutralProtectedPool({
   }
 
   const createdAt = Date.now();
+  const snapshotMeta = buildSnapshotMetadata(snapshot);
   const strategyState = buildInitialStrategyState({
     currentPrice: deltaMetrics.volatilePriceUsd,
     deltaQty: deltaMetrics.deltaQty,
@@ -854,6 +896,21 @@ async function createDeltaNeutralProtectedPool({
     actualQty: 0,
     effectiveBandPct: normalizedBaseBandPct,
   });
+  strategyState.status = snapshotMeta.snapshotValidation.valid
+    ? 'bootstrapping'
+    : snapshotMeta.snapshotStatus === 'unsupported_pool_shape'
+      ? 'snapshot_invalid'
+      : 'snapshot_invalid';
+  strategyState.lastDecision = snapshotMeta.snapshotValidation.valid ? 'bootstrap' : 'refresh_snapshot';
+  strategyState.lastDecisionReason = snapshotMeta.snapshotValidation.valid
+    ? 'initial_delta_neutral_bootstrap'
+    : `snapshot_${snapshotMeta.snapshotValidation.reasons.join(',')}`;
+  strategyState.lastExecutionOutcome = null;
+  strategyState.lastExecutionAttemptAt = null;
+  strategyState.nextEligibleAttemptAt = null;
+  strategyState.cooldownReason = null;
+  strategyState.trackingErrorQty = Number(deltaMetrics.targetQty);
+  strategyState.trackingErrorUsd = Number(deltaMetrics.targetQty) * Number(snapshot.priceCurrent || deltaMetrics.volatilePriceUsd || 0);
   const baseRecord = {
     userId,
     accountId: account.id,
@@ -885,6 +942,20 @@ async function createDeltaNeutralProtectedPool({
     minRebalanceNotionalUsd: normalizedMinRebalanceNotionalUsd,
     maxSlippageBps: normalizedMaxSlippageBps,
     twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
+    strategyEngineVersion: 'v2',
+    snapshotStatus: snapshotMeta.snapshotStatus,
+    snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+    snapshotHash: snapshotMeta.snapshotHash,
+    lastDecision: strategyState.lastDecision,
+    lastDecisionReason: strategyState.lastDecisionReason,
+    trackingErrorQty: strategyState.trackingErrorQty,
+    trackingErrorUsd: strategyState.trackingErrorUsd,
+    executionMode: DEFAULT_EXECUTION_MODE,
+    maxSpreadBps: DEFAULT_MAX_SPREAD_BPS,
+    maxExecutionFeeUsd: DEFAULT_MAX_EXECUTION_FEE_USD,
+    minOrderNotionalUsd: DEFAULT_MIN_ORDER_NOTIONAL_USD,
+    twapSlices: DEFAULT_TWAP_SLICES,
+    twapDurationSec: DEFAULT_TWAP_DURATION_SEC,
     strategyState,
     valueMode: 'usd',
     leverage: normalizedLeverage,
@@ -962,14 +1033,19 @@ async function createDeltaNeutralProtectedPool({
         initialRangeMetrics,
         deps
       ),
+      snapshotStatus: snapshotMeta.snapshotStatus,
+      snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+      snapshotHash: snapshotMeta.snapshotHash,
       ...initialRangeMetrics,
       updatedAt: createdAt,
     });
   }
 
   const created = await repository.getById(userId, protectionId);
-  await (deps.protectedPoolDeltaNeutralService || protectedPoolDeltaNeutralService)
-    .bootstrapProtection(created);
+  if (snapshotMeta.snapshotValidation.valid) {
+    await (deps.protectedPoolDeltaNeutralService || protectedPoolDeltaNeutralService)
+      .bootstrapProtection(created);
+  }
   return repository.getById(userId, protectionId);
 }
 
@@ -1138,6 +1214,17 @@ async function createProtectedPool({
     valueMode: 'usd',
     leverage: normalizedLeverage,
     marginMode: 'isolated',
+    strategyEngineVersion: normalizedProtectionMode === 'delta_neutral' ? 'v2' : 'v1',
+    snapshotStatus: 'ready',
+    snapshotFreshAt: Date.now(),
+    snapshotHash: computeSnapshotHash(normalizeProtectionSnapshot(snapshot, {
+      network: snapshot.network,
+      version: snapshot.version,
+      positionIdentifier: snapshot.identifier,
+      poolAddress: snapshot.poolAddress,
+      poolId: snapshot.poolId,
+      owner: snapshot.owner,
+    })),
     createdAt,
   };
   const initialRangeMetrics = await computeInitialRangeMetrics({
@@ -1314,6 +1401,229 @@ async function deactivateProtectedPool(userId, protectionId, deps = {}) {
   return repository.getById(userId, protectionId);
 }
 
+async function diagnoseDeltaNeutral(userId, protectionId, deps = {}) {
+  const repo = deps.protectedPoolRepository || protectedPoolRepository;
+  const decisionLogRepository = deps.protectionDecisionLogRepository || require('../repositories/protection-decision-log.repository');
+  const deltaLogRepository = deps.deltaRebalanceLogRepository || require('../repositories/protected-pool-delta-rebalance.repository');
+  const protection = await repo.getById(userId, protectionId);
+
+  if (!protection) {
+    throw new NotFoundError('Proteccion no encontrada');
+  }
+  if (protection.protectionMode !== 'delta_neutral') {
+    throw new ValidationError('Esta proteccion no es delta-neutral');
+  }
+
+  const diagnostics = {
+    id: protection.id,
+    protectionMode: protection.protectionMode,
+    status: protection.status,
+    createdAt: protection.createdAt,
+    strategyState: protection.strategyState || {},
+    snapshot: {
+      status: protection.snapshotStatus || 'unknown',
+      freshAt: protection.snapshotFreshAt,
+      hash: protection.snapshotHash,
+      engineVersion: protection.strategyEngineVersion || 'v1',
+    },
+    hedge: {
+      size: protection.hedgeSize || 0,
+      notionalUsd: protection.hedgeNotionalUsd || 0,
+      leverage: protection.leverage,
+      marginMode: protection.marginMode,
+    },
+    pool: {
+      asset: protection.inferredAsset,
+      network: protection.network,
+      version: protection.version,
+      token0: protection.token0Symbol,
+      token1: protection.token1Symbol,
+      rangeLowerPrice: protection.rangeLowerPrice,
+      rangeUpperPrice: protection.rangeUpperPrice,
+      priceCurrent: protection.priceCurrent,
+    },
+    configuration: {
+      bandMode: protection.bandMode,
+      baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct,
+      rebalanceIntervalSec: protection.rebalanceIntervalSec,
+      targetHedgeRatio: protection.targetHedgeRatio,
+      minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd,
+      maxSlippageBps: protection.maxSlippageBps,
+      twapMinNotionalUsd: protection.twapMinNotionalUsd,
+      configuredNotionalUsd: protection.configuredHedgeNotionalUsd,
+      executionMode: protection.executionMode || DEFAULT_EXECUTION_MODE,
+      maxSpreadBps: protection.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS,
+      maxExecutionFeeUsd: protection.maxExecutionFeeUsd ?? DEFAULT_MAX_EXECUTION_FEE_USD,
+      minOrderNotionalUsd: protection.minOrderNotionalUsd ?? DEFAULT_MIN_ORDER_NOTIONAL_USD,
+      twapSlices: protection.twapSlices ?? DEFAULT_TWAP_SLICES,
+      twapDurationSec: protection.twapDurationSec ?? DEFAULT_TWAP_DURATION_SEC,
+    },
+    checks: {},
+    warnings: [],
+  };
+
+  // Check: Pool snapshot validity
+  const normalizedSnapshot = normalizeProtectionSnapshot(protection.poolSnapshot || {}, {
+    network: protection.network,
+    version: protection.version,
+    positionIdentifier: protection.positionIdentifier,
+    poolAddress: protection.poolAddress,
+    poolId: protection.poolSnapshot?.poolId,
+    owner: protection.walletAddress,
+    snapshotFreshAt: protection.snapshotFreshAt || protection.updatedAt,
+  });
+  const snapshotValidation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
+  diagnostics.checks.poolSnapshot = {
+    exists: !!protection.poolSnapshot,
+    hasPriceCurrent: !!protection.poolSnapshot?.priceCurrent,
+    liquidity: protection.poolSnapshot?.liquidity,
+    status: protection.snapshotStatus || snapshotValidation.status,
+    valid: snapshotValidation.valid,
+    reasons: snapshotValidation.reasons,
+    freshAt: protection.snapshotFreshAt,
+  };
+
+  // Check: Strategy state
+  const strategyState = protection.strategyState || {};
+  diagnostics.checks.strategyState = {
+    status: strategyState.status || 'unknown',
+    lastRebalanceAt: strategyState.lastRebalanceAt,
+    lastTargetQty: strategyState.lastTargetQty,
+    lastActualQty: strategyState.lastActualQty,
+    lastError: strategyState.lastError,
+    distanceToLiqPct: strategyState.distanceToLiqPct,
+    marginModeVerified: strategyState.marginModeVerified,
+    lastDecision: protection.lastDecision || strategyState.lastDecision || null,
+    lastDecisionReason: protection.lastDecisionReason || strategyState.lastDecisionReason || null,
+    nextEligibleAttemptAt: protection.nextEligibleAttemptAt || strategyState.nextEligibleAttemptAt || null,
+    cooldownReason: protection.cooldownReason || strategyState.cooldownReason || null,
+    lastSpotFailureAt: strategyState.lastSpotFailureAt || null,
+    lastSpotFailureReason: strategyState.lastSpotFailureReason || null,
+  };
+
+  // Check: Metrics computation
+  if (protection.poolSnapshot) {
+    try {
+      const metrics = computeDeltaNeutralMetrics(protection.poolSnapshot, {
+        targetHedgeRatio: protection.targetHedgeRatio || DEFAULT_TARGET_HEDGE_RATIO,
+      });
+      diagnostics.checks.metrics = {
+        eligible: metrics.eligible,
+        reason: metrics.reason,
+        targetQty: metrics.targetQty,
+        deltaQty: metrics.deltaQty,
+        gamma: metrics.gamma,
+        volatilePriceUsd: metrics.volatilePriceUsd,
+        poolValueUsd: metrics.poolValueUsd,
+      };
+    } catch (err) {
+      diagnostics.checks.metrics = {
+        eligible: false,
+        error: err.message,
+      };
+    }
+  }
+
+  diagnostics.recentRebalances = await deltaLogRepository
+    .listByProtectedPoolId(protection.id, { limit: 5 })
+    .catch(() => []);
+  diagnostics.recentDecisions = await decisionLogRepository
+    .listByProtectedPoolId(protection.id, { limit: 10 })
+    .catch(() => []);
+
+  const latestDecision = diagnostics.recentDecisions[0] || null;
+  const snapshotFreshAt = Number(protection.snapshotFreshAt || 0) || null;
+  diagnostics.spot = {
+    source: latestDecision?.spotSource
+      || (strategyState.lastSpotFailureReason ? 'unavailable' : 'chain'),
+    snapshotFreshnessMs: snapshotFreshAt ? Math.max(Date.now() - snapshotFreshAt, 0) : null,
+    lastSpotFailureAt: strategyState.lastSpotFailureAt || null,
+    lastSpotFailureReason: strategyState.lastSpotFailureReason || null,
+  };
+  diagnostics.checks.riskGate = {
+    triggered: latestDecision?.riskGateTriggered === true
+      || ['risk_paused', 'margin_pending'].includes(strategyState.status || ''),
+    finalStrategyStatus: latestDecision?.finalStrategyStatus || strategyState.status || null,
+    liquidationDistancePct: latestDecision?.liquidationDistancePct ?? strategyState.distanceToLiqPct ?? null,
+  };
+
+  // Check: Hyperliquid account and position
+  const tradingFactory = deps.getTradingService || getTradingService;
+  try {
+    const hl = await (deps.hyperliquidRegistry || require('./hyperliquid.registry'))
+      .getOrCreate(userId, protection.accountId);
+    const trading = await tradingFactory(userId, protection.accountId);
+    const [accountStateResult, openOrdersResult, positionResult] = await Promise.allSettled([
+      trading.getAccountState({ force: true }),
+      trading.getOpenOrders({ force: true }),
+      hl.getPosition(protection.inferredAsset),
+    ]);
+
+    const hyperliquidWarnings = [];
+    const accountState = accountStateResult.status === 'fulfilled' ? accountStateResult.value : null;
+    const openOrdersState = openOrdersResult.status === 'fulfilled' ? openOrdersResult.value : null;
+    let position = null;
+
+    if (accountState?.positions?.length) {
+      position = accountState.positions.find((item) => (
+        String(item.asset || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase()
+      )) || null;
+    }
+    if (!position && positionResult.status === 'fulfilled') {
+      position = positionResult.value || null;
+    }
+
+    if (accountStateResult.status === 'rejected') {
+      hyperliquidWarnings.push(`account_state_unavailable: ${accountStateResult.reason?.message || accountStateResult.reason}`);
+    }
+    if (openOrdersResult.status === 'rejected') {
+      hyperliquidWarnings.push(`open_orders_unavailable: ${openOrdersResult.reason?.message || openOrdersResult.reason}`);
+    }
+    if (positionResult.status === 'rejected') {
+      hyperliquidWarnings.push(`position_unavailable: ${positionResult.reason?.message || positionResult.reason}`);
+    }
+
+    diagnostics.warnings.push(...hyperliquidWarnings);
+    diagnostics.checks.hyperliquid = {
+      account: accountState ? {
+        alias: accountState.account?.alias || null,
+        accountValue: accountState.accountValue,
+        totalMarginUsed: accountState.totalMarginUsed,
+        totalNotionalUsd: accountState.totalNtlPos,
+        marginAvailable: accountState.withdrawable,
+        lastUpdatedAt: accountState.lastUpdatedAt,
+      } : null,
+      openOrders: openOrdersState ? {
+        count: Array.isArray(openOrdersState.orders) ? openOrdersState.orders.length : 0,
+        orders: Array.isArray(openOrdersState.orders) ? openOrdersState.orders : [],
+        lastUpdatedAt: openOrdersState.lastUpdatedAt,
+      } : null,
+      position: position ? {
+        asset: position.asset || protection.inferredAsset,
+        szi: position.szi ?? position.size ?? null,
+        side: position.side || (Number(position.szi ?? position.size ?? 0) < 0 ? 'short' : 'long'),
+        leverage: position.leverage,
+        marginMode: position.marginMode || position.leverage?.type || null,
+        liquidationPx: position.liquidationPx ?? position.liquidationPrice ?? null,
+        unrealizedPnl: position.unrealizedPnl ?? null,
+        marginUsed: position.marginUsed ?? null,
+      } : null,
+      warnings: hyperliquidWarnings,
+    };
+  } catch (err) {
+    const warning = `hyperliquid_diagnostics_unavailable: ${err.message}`;
+    diagnostics.warnings.push(warning);
+    diagnostics.checks.hyperliquid = {
+      account: null,
+      openOrders: null,
+      position: null,
+      warnings: [warning],
+    };
+  }
+
+  return diagnostics;
+}
+
 module.exports = {
   ACTIVE_HEDGE_STATUSES,
   SHORTCUT_MULTIPLIERS,
@@ -1328,6 +1638,7 @@ module.exports = {
   DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
+  DEFAULT_EXECUTION_MODE,
   annotatePoolsWithProtection,
   buildProtectionCandidate,
   buildProtectionKey,
@@ -1335,4 +1646,5 @@ module.exports = {
   createProtectedPool,
   deactivateProtectedPool,
   listProtectedPools,
+  diagnoseDeltaNeutral,
 };

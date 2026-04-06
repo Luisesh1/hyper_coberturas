@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { settingsApi, uniswapApi } from '../../services/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { settingsApi, uniswapApi, tradingApi } from '../../services/api';
 import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
@@ -14,6 +14,7 @@ import PoolCard from './components/PoolCard';
 import ProtectedPoolCard from './components/ProtectedPoolCard';
 import ApplyProtectionModal from './components/ApplyProtectionModal';
 import PositionActionModal from './components/PositionActionModal';
+import SmartCreatePoolModal from './components/SmartCreatePoolModal';
 import SkeletonCard from './components/SkeletonCard';
 import styles from './UniswapPoolsPage.module.css';
 
@@ -22,7 +23,7 @@ const PROTECTED_POOLS_REFRESH_INTERVAL_MS = 600000;
 export default function UniswapPoolsPage() {
   const [meta, setMeta] = useState(null);
   const [wallet, setWallet] = useState('');
-  const [network, setNetwork] = useState('ethereum');
+  const [network, setNetwork] = useState('arbitrum');
   const [version, setVersion] = useState('v3');
   const [result, setResult] = useState(null);
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -41,6 +42,7 @@ export default function UniswapPoolsPage() {
   const [activeTab, setActiveTab] = useState('results');
   const [showInactiveProtected, setShowInactiveProtected] = useState(false);
   const [activeAction, setActiveAction] = useState(null);
+  const [showSmartCreate, setShowSmartCreate] = useState(false);
   const { dialog, confirm } = useConfirmAction();
   const walletConn = useWalletConnection();
   const walletState = useMemo(() => ({
@@ -77,9 +79,29 @@ export default function UniswapPoolsPage() {
           settingsApi.getHyperliquidAccounts().catch(() => []),
           uniswapApi.listProtectedPools().catch(() => []),
         ]);
+
+        // Cargar balances en vivo de cada cuenta
+        const accountsWithBalances = await Promise.all(
+          (accountsData || []).map(async (account) => {
+            try {
+              const accountData = await tradingApi.getAccount({ accountId: account.id });
+              return {
+                ...account,
+                balanceUsd: accountData.accountValue || 0,
+                totalMarginUsed: accountData.totalMarginUsed || 0,
+                withdrawable: accountData.withdrawable || 0,
+                lastUpdatedAt: accountData.lastUpdatedAt,
+              };
+            } catch (err) {
+              console.warn(`Failed to load balance for account ${account.id}:`, err.message);
+              return account;
+            }
+          })
+        );
+
         setMeta(metaData);
         setHasApiKey(etherscanData?.hasApiKey || false);
-        setAccounts(accountsData || []);
+        setAccounts(accountsWithBalances);
         setProtectedPools(protectedData || []);
         setProtectedRefreshedAt(Date.now());
         if (walletData?.address) setWallet(walletData.address);
@@ -89,6 +111,39 @@ export default function UniswapPoolsPage() {
     }
     loadInitial().catch(() => {});
   }, []);
+
+  // Refrescar saldos de cuentas cada 30 segundos
+  // Usamos ref para evitar que el intervalo se reinicie cada vez que accounts cambia
+  const accountsRef = useRef(accounts);
+  useEffect(() => { accountsRef.current = accounts; }, [accounts]);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (!accountsRef.current.length) return;
+      try {
+        const updatedAccounts = await Promise.all(
+          accountsRef.current.map(async (account) => {
+            try {
+              const accountData = await tradingApi.getAccount({ accountId: account.id });
+              return {
+                ...account,
+                balanceUsd: accountData.accountValue || 0,
+                totalMarginUsed: accountData.totalMarginUsed || 0,
+                withdrawable: accountData.withdrawable || 0,
+                lastUpdatedAt: accountData.lastUpdatedAt,
+              };
+            } catch (err) {
+              return account;
+            }
+          })
+        );
+        setAccounts(updatedAccounts);
+      } catch (err) {
+        console.error('Error refreshing account balances:', err);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []); // deps vacío — el intervalo no se reinicia
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -313,7 +368,7 @@ export default function UniswapPoolsPage() {
               {walletConn.address.slice(0, 6)}...{walletConn.address.slice(-4)}
               {walletConn.chainId && <span className={styles.walletChain}>Red {walletConn.chainId} · {walletConn.connectorLabel}</span>}
             </span>
-            <button className={styles.walletBtn} onClick={() => handleOpenAction('create-position', null)}>
+            <button className={styles.walletBtn} onClick={() => setShowSmartCreate(true)}>
               ＋ Nueva posición LP
             </button>
             <button className={styles.walletGhostBtn} onClick={walletConn.disconnect}>
@@ -510,9 +565,25 @@ export default function UniswapPoolsPage() {
           pool={activeAction.pool}
           wallet={walletState}
           sendTransaction={walletConn.sendTransaction}
-          defaults={{ network, version: version === 'v4' ? 'v3' : version, walletAddress: walletState.address }}
+          waitForTransactionReceipt={walletConn.waitForTransactionReceipt}
+          defaults={{ network, version, walletAddress: walletState.address }}
           onClose={() => setActiveAction(null)}
           onFinalized={handleClaimFinalized}
+        />
+      )}
+
+      {showSmartCreate && (
+        <SmartCreatePoolModal
+          wallet={walletState}
+          sendTransaction={walletConn.sendTransaction}
+          waitForTransactionReceipt={walletConn.waitForTransactionReceipt}
+          defaults={{ network, version }}
+          meta={meta}
+          onClose={() => setShowSmartCreate(false)}
+          onFinalized={() => {
+            setShowSmartCreate(false);
+            refreshVisibleData().catch(() => {});
+          }}
         />
       )}
 

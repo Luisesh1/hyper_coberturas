@@ -7,6 +7,7 @@ import styles from './PoolCard.module.css';
 export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletState, onClaimFees }) {
   const isLpPosition = pool.mode === 'lp_position' || pool.mode === 'lp_positions';
   const isV4 = pool.version === 'v4';
+  const hasUnsupportedV4Hooks = isV4 && pool.hooks && pool.hooks !== '0x0000000000000000000000000000000000000000';
   const protectionState = getProtectionButtonState(pool, hasAccounts);
   const status = getPoolStatus(pool);
   const pnlValue = Number(pool.pnlTotalUsd);
@@ -23,12 +24,14 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
     && walletState?.isConnected
     && walletState.chainId === pool.chainId
     && pool.owner?.toLowerCase() === walletState.address?.toLowerCase()
+    && !hasUnsupportedV4Hooks
     && unclaimedFees > 0;
   const canManage = isLpPosition
-    && pool.version === 'v3'
+    && ['v3', 'v4'].includes(pool.version)
     && walletState?.isConnected
     && walletState.chainId === pool.chainId
-    && pool.owner?.toLowerCase() === walletState.address?.toLowerCase();
+    && pool.owner?.toLowerCase() === walletState.address?.toLowerCase()
+    && !hasUnsupportedV4Hooks;
 
   const toneCls = pool.protection
     ? styles.card_protected
@@ -48,6 +51,8 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
       ? 'Cambia a la red correcta en tu wallet'
       : pool.owner?.toLowerCase() !== walletState.address?.toLowerCase()
         ? 'Esta wallet no es la dueña de la posición'
+        : hasUnsupportedV4Hooks
+          ? 'Hooks no soportados en gestión V4'
         : '';
 
   return (
@@ -58,6 +63,7 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
           <span className={styles.badgeVersion}>{pool.version.toUpperCase()}</span>
           <span className={styles.badgeNetwork}>{pool.networkLabel}</span>
           {isV4 && <span className={styles.badgeNeutral}>PoolManager</span>}
+          {hasUnsupportedV4Hooks && <span className={styles.badgeNeutral}>Hooks no soportados</span>}
           {pool.protection && <span className={styles.badgeProtected}>✓ Protegido</span>}
         </div>
       </div>
@@ -128,6 +134,12 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
       {/* Acciones LP (cobrar fees, gestionar posición) */}
       {isLpPosition && ['v3', 'v4'].includes(pool.version) && onClaimFees && (
         <div className={styles.actionGroup}>
+          {hasUnsupportedV4Hooks && (
+            <div className={styles.protectHint}>
+              <span className={styles.protectHintIcon}>ℹ</span>
+              Hooks no soportados en gestión V4
+            </div>
+          )}
           <button
             type="button"
             className={styles.claimBtn}
@@ -190,6 +202,24 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
               title={canManage ? 'Rebalancear los activos de la posición' : manageTitle}
             >
               ⇄ Rebalancear
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              disabled={!canManage}
+              onClick={() => onClaimFees('close-to-usdc', pool)}
+              title={canManage ? 'Cerrar la posición y convertir los fondos a USDC' : manageTitle}
+            >
+              ⇢ Cerrar a USDC
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              disabled={!canManage}
+              onClick={() => onClaimFees('close-keep-assets', pool)}
+              title={canManage ? 'Cerrar la posición y conservar token0/token1 en la wallet' : manageTitle}
+            >
+              ⨯ Cerrar LP
             </button>
           </div>
         </div>

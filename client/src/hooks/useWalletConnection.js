@@ -16,6 +16,193 @@ function getInjectedProvider() {
   return window.ethereum || null;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function normalizeReceiptStatus(status) {
+  if (status == null) return null;
+  if (typeof status === 'number') return status;
+  if (typeof status === 'string') {
+    if (status.startsWith('0x')) return Number.parseInt(status, 16);
+    return Number.parseInt(status, 10);
+  }
+  return null;
+}
+
+export function extractTxHash(value, seen = new Set()) {
+  if (!value || seen.has(value)) return null;
+  if (typeof value === 'string') {
+    return /^0x[a-fA-F0-9]{64}$/.test(value) ? value : null;
+  }
+  if (typeof value !== 'object') return null;
+  seen.add(value);
+
+  const directCandidates = [
+    value.hash,
+    value.txHash,
+    value.transactionHash,
+    value?.data?.hash,
+    value?.data?.txHash,
+    value?.data?.transactionHash,
+    value?.error?.hash,
+    value?.error?.txHash,
+    value?.error?.transactionHash,
+    value?.error?.data?.hash,
+    value?.error?.data?.txHash,
+    value?.error?.data?.transactionHash,
+  ];
+  for (const candidate of directCandidates) {
+    const hash = extractTxHash(candidate, seen);
+    if (hash) return hash;
+  }
+
+  for (const nested of Object.values(value)) {
+    const hash = extractTxHash(nested, seen);
+    if (hash) return hash;
+  }
+
+  return null;
+}
+
+export function buildTransactionParams({ address, tx, includeGas = true }) {
+  const txParams = {
+    from: address,
+    to: tx.to,
+    data: tx.data,
+    value: tx.value || '0x0',
+  };
+
+  if (includeGas) {
+    if (tx.gas) txParams.gas = tx.gas;
+    else if (tx.gasEstimate) txParams.gas = tx.gasEstimate;
+    else if (tx.gasLimit) txParams.gas = tx.gasLimit;
+  }
+
+  return txParams;
+}
+
+function addGasBuffer(hexGas, multiplier = 1.2) {
+  try {
+    const numeric = BigInt(hexGas);
+    return `0x${(((numeric * BigInt(Math.round(multiplier * 100))) + 99n) / 100n).toString(16)}`;
+  } catch {
+    return hexGas;
+  }
+}
+
+async function estimateTransactionGas(provider, txParams) {
+  if (!provider?.request) return null;
+  try {
+    const estimatedGas = await provider.request({
+      method: 'eth_estimateGas',
+      params: [txParams],
+    });
+    if (typeof estimatedGas === 'string' && estimatedGas.startsWith('0x')) {
+      return addGasBuffer(estimatedGas);
+    }
+  } catch {
+    // Best-effort estimation only; fall back to wallet defaults.
+  }
+  return null;
+}
+
+export async function waitForBroadcastedHash(provider, txHash, { attempts = 6, pollMs = 500 } = {}) {
+  if (!provider?.request || !txHash) return false;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const tx = await provider.request({
+        method: 'eth_getTransactionByHash',
+        params: [txHash],
+      });
+      if (tx) return true;
+    } catch {
+      // Best-effort verification only.
+    }
+
+    if (attempt < attempts - 1) {
+      await sleep(pollMs);
+    }
+  }
+
+  return false;
+}
+
+export async function sendWalletTransaction({
+  provider,
+  address,
+  chainId,
+  tx,
+  switchChain,
+  setError,
+}) {
+  setError?.(null);
+  if (!provider?.request) {
+    setError?.('No hay una wallet conectada.');
+    return null;
+  }
+
+  const hasExplicitGas = !!(tx?.gas || tx?.gasEstimate || tx?.gasLimit);
+
+  try {
+    if (tx?.chainId && chainId && Number(tx.chainId) !== Number(chainId)) {
+      const switched = await switchChain(Number(tx.chainId));
+      if (!switched) return null;
+    }
+
+    const baseTxParams = buildTransactionParams({ address, tx, includeGas: false });
+    const shouldPreferEstimatedGas = tx?.kind === 'mint_position' || tx?.kind === 'wrap_native';
+    const estimatedGas = shouldPreferEstimatedGas ? await estimateTransactionGas(provider, baseTxParams) : null;
+    const txHash = await provider.request({
+      method: 'eth_sendTransaction',
+      params: [{
+        ...buildTransactionParams({
+          address,
+          tx,
+          includeGas: !shouldPreferEstimatedGas,
+        }),
+        ...(estimatedGas ? { gas: estimatedGas } : {}),
+      }],
+    });
+    const extractedHash = extractTxHash(txHash);
+    if (extractedHash) return extractedHash;
+    if (typeof txHash === 'string') return txHash;
+    if (typeof txHash?.hash === 'string') return txHash.hash;
+    if (typeof txHash?.transactionHash === 'string') return txHash.transactionHash;
+    return null;
+  } catch (err) {
+    if (hasExplicitGas) {
+      try {
+        const retryHash = await provider.request({
+          method: 'eth_sendTransaction',
+          params: [buildTransactionParams({ address, tx, includeGas: false })],
+        });
+        const extractedRetryHash = extractTxHash(retryHash);
+        if (extractedRetryHash) return extractedRetryHash;
+        if (typeof retryHash === 'string') return retryHash;
+        if (typeof retryHash?.hash === 'string') return retryHash.hash;
+        if (typeof retryHash?.transactionHash === 'string') return retryHash.transactionHash;
+      } catch (retryErr) {
+        err = retryErr;
+      }
+    }
+
+    const hashFromError = extractTxHash(err);
+    if (hashFromError) {
+      const wasBroadcasted = await waitForBroadcastedHash(provider, hashFromError);
+      if (wasBroadcasted) {
+        return hashFromError;
+      }
+    }
+
+    setError?.(err?.code === 4001 ? 'Firma rechazada por el usuario.' : (err?.message || 'No se pudo enviar la transacción.'));
+    return null;
+  }
+}
+
 function useWalletConnectionController() {
   const [provider, setProvider] = useState(null);
   const [connector, setConnector] = useState(null);
@@ -172,32 +359,56 @@ function useWalletConnectionController() {
   }, []);
 
   const sendTransaction = useCallback(async (tx) => {
+    return sendWalletTransaction({
+      provider: providerRef.current,
+      address,
+      chainId,
+      tx,
+      switchChain,
+      setError,
+    });
+  }, [address, chainId, switchChain]);
+
+  const waitForTransactionReceipt = useCallback(async (txHash, { timeoutMs = 180000, pollMs = 1500 } = {}) => {
     setError(null);
     if (!providerRef.current?.request) {
-      setError('No hay una wallet conectada.');
-      return null;
+      const message = 'No hay una wallet conectada.';
+      setError(message);
+      throw new Error(message);
+    }
+    if (!txHash) {
+      throw new Error('txHash es requerido para esperar confirmación.');
     }
 
-    try {
-      if (tx?.chainId && chainId && Number(tx.chainId) !== Number(chainId)) {
-        const switched = await switchChain(Number(tx.chainId));
-        if (!switched) return null;
+    const deadline = Date.now() + timeoutMs;
+    let consecutiveErrors = 0;
+    while (Date.now() < deadline) {
+      try {
+        const receipt = await providerRef.current.request({
+          method: 'eth_getTransactionReceipt',
+          params: [txHash],
+        });
+        consecutiveErrors = 0;
+        if (receipt) {
+          return {
+            ...receipt,
+            status: normalizeReceiptStatus(receipt.status),
+          };
+        }
+      } catch (err) {
+        consecutiveErrors++;
+        // Retry up to 5 times on transient RPC errors before giving up
+        if (consecutiveErrors >= 5) {
+          const message = err?.message || `No se pudo obtener el receipt de ${txHash}.`;
+          setError(message);
+          throw new Error(message);
+        }
       }
-      const txHash = await providerRef.current.request({
-        method: 'eth_sendTransaction',
-        params: [{
-          from: address,
-          to: tx.to,
-          data: tx.data,
-          value: tx.value || '0x0',
-        }],
-      });
-      return txHash;
-    } catch (err) {
-      setError(err?.code === 4001 ? 'Firma rechazada por el usuario.' : (err?.message || 'No se pudo enviar la transacción.'));
-      return null;
+      await sleep(pollMs * Math.min(consecutiveErrors + 1, 3));
     }
-  }, [address, chainId, switchChain]);
+
+    throw new Error(`Timeout esperando confirmación de ${txHash}.`);
+  }, []);
 
   useEffect(() => {
     const injected = getInjectedProvider();
@@ -244,6 +455,7 @@ function useWalletConnectionController() {
     disconnect,
     switchChain,
     sendTransaction,
+    waitForTransactionReceipt,
     error,
     clearError: () => setError(null),
   }), [
@@ -258,6 +470,7 @@ function useWalletConnectionController() {
     disconnect,
     switchChain,
     sendTransaction,
+    waitForTransactionReceipt,
     error,
   ]);
 }

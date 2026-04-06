@@ -23,12 +23,14 @@ function errorHandler(err, req, res, _next) {
     ? 'Error interno del servidor'
     : rawMessage;
 
+  const shouldExposeDetails = Boolean(err.details) && (!IS_PROD || status < 500);
+
   res.status(status).json({
     success: false,
     error: safeMessage,
     code: err.code || 'UNHANDLED_ERROR',
     requestId: req.requestId,
-    ...(err.details && !IS_PROD ? { details: err.details } : {}),
+    ...(shouldExposeDetails ? { details: err.details } : {}),
     ...(!IS_PROD && { stack: err.stack }),
   });
 }

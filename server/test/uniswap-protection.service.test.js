@@ -6,6 +6,7 @@ const {
   buildDeltaNeutralCandidate,
   createProtectedPool,
   deactivateProtectedPool,
+  diagnoseDeltaNeutral,
   DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT,
   DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC,
   DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT,
@@ -457,6 +458,60 @@ test('createProtectedPool crea una proteccion delta-neutral con defaults y boots
   assert.equal(bootstrapCalls[0], 120);
 });
 
+test('createProtectedPool delta-neutral deja snapshot_invalid y no bootstrappea si el snapshot no es operativo', async () => {
+  const protectionWrites = [];
+  const bootstrapCalls = [];
+
+  await createProtectedPool({
+    userId: 1,
+    pool: buildDeltaNeutralPool({
+      token0: { symbol: 'ETH' },
+      token1: { symbol: 'USDC' },
+    }),
+    accountId: 5,
+    leverage: 7,
+    configuredNotionalUsd: 2500,
+    protectionMode: 'delta_neutral',
+  }, {
+    availableAssets: [{ name: 'ETH', maxLeverage: 25 }],
+    mids: { ETH: '2500' },
+    hyperliquidAccountsService: {
+      resolveAccount: async () => ({ id: 5, alias: 'Cuenta test', address: '0xabc' }),
+    },
+    protectedPoolRepository: {
+      findReusableByIdentity: async () => null,
+      listActiveByUser: async () => [],
+      create: async (record) => {
+        protectionWrites.push(record);
+        return 120;
+      },
+      updateSnapshot: async () => 120,
+      getById: async () => ({
+        id: 120,
+        userId: 1,
+        accountId: 5,
+        status: 'active',
+        protectionMode: 'delta_neutral',
+        inferredAsset: 'ETH',
+        poolSnapshot: protectionWrites[0]?.poolSnapshot || null,
+        strategyState: protectionWrites[0]?.strategyState || null,
+      }),
+    },
+    protectedPoolDeltaNeutralService: {
+      bootstrapProtection: async (protection) => {
+        bootstrapCalls.push(protection.id);
+      },
+    },
+    timeInRangeService: buildTimeInRangeService(),
+  });
+
+  assert.equal(protectionWrites.length, 1);
+  assert.equal(protectionWrites[0].snapshotStatus, 'invalid');
+  assert.equal(protectionWrites[0].strategyEngineVersion, 'v2');
+  assert.equal(protectionWrites[0].strategyState.status, 'snapshot_invalid');
+  assert.equal(bootstrapCalls.length, 0);
+});
+
 test('createProtectedPool delta-neutral rechaza conflictos por activo en la misma cuenta', async () => {
   await assert.rejects(() => createProtectedPool({
     userId: 1,
@@ -481,6 +536,122 @@ test('createProtectedPool delta-neutral rechaza conflictos por activo en la mism
       }],
     },
   }), /otra proteccion activa en ETH/i);
+});
+
+test('diagnoseDeltaNeutral usa trading service real y devuelve warnings parciales', async () => {
+  const protection = {
+    id: 5,
+    userId: 1,
+    accountId: 8,
+    status: 'active',
+    protectionMode: 'delta_neutral',
+    createdAt: 1710000000000,
+    network: 'arbitrum',
+    version: 'v3',
+    inferredAsset: 'ETH',
+    leverage: 7,
+    marginMode: 'isolated',
+    hedgeSize: 0.0174,
+    hedgeNotionalUsd: 45,
+    bandMode: DEFAULT_BAND_MODE,
+    baseRebalancePriceMovePct: DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
+    rebalanceIntervalSec: DEFAULT_REBALANCE_INTERVAL_SEC,
+    targetHedgeRatio: DEFAULT_TARGET_HEDGE_RATIO,
+    minRebalanceNotionalUsd: DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+    maxSlippageBps: DEFAULT_MAX_SLIPPAGE_BPS,
+    twapMinNotionalUsd: DEFAULT_TWAP_MIN_NOTIONAL_USD,
+    executionMode: 'auto',
+    maxSpreadBps: 30,
+    maxExecutionFeeUsd: 25,
+    minOrderNotionalUsd: 25,
+    twapSlices: 5,
+    twapDurationSec: 60,
+    rangeLowerPrice: 2000,
+    rangeUpperPrice: 3000,
+    priceCurrent: 2500,
+    walletAddress: '0x00000000000000000000000000000000000000AA',
+    poolAddress: '0x00000000000000000000000000000000000000BB',
+    token0Symbol: 'WETH',
+    token1Symbol: 'USDC',
+    snapshotStatus: 'ready',
+    snapshotFreshAt: Date.now(),
+    snapshotHash: 'hash-1',
+    strategyEngineVersion: 'v2',
+    strategyState: {
+      status: 'tracking',
+      lastActualQty: 0.0174,
+      lastTargetQty: 0.0175,
+      distanceToLiqPct: 8.5,
+      lastDecision: 'hold',
+      lastDecisionReason: 'within_cost_aware_band',
+      lastSpotFailureAt: 1710000001234,
+      lastSpotFailureReason: 'request timeout',
+    },
+    poolSnapshot: buildDeltaNeutralPool(),
+  };
+
+  const diagnostics = await diagnoseDeltaNeutral(1, 5, {
+    protectedPoolRepository: {
+      getById: async () => protection,
+    },
+    protectionDecisionLogRepository: {
+      listByProtectedPoolId: async () => ([{
+        decision: 'hold',
+        reason: 'within_cost_aware_band',
+        spotSource: 'snapshot',
+        finalStrategyStatus: 'tracking',
+        riskGateTriggered: false,
+        liquidationDistancePct: 8.5,
+      }]),
+    },
+    deltaRebalanceLogRepository: {
+      listByProtectedPoolId: async () => ([{
+        reason: 'restart_reconcile',
+      }]),
+    },
+    getTradingService: async () => ({
+      getAccountState: async () => ({
+        account: { alias: 'Cuenta test' },
+        accountValue: 150,
+        totalMarginUsed: 20,
+        totalNtlPos: 45,
+        withdrawable: 120,
+        positions: [{
+          asset: 'ETH',
+          size: '-0.0174',
+          side: 'short',
+          leverage: { type: 'isolated', value: 7 },
+          liquidationPrice: 2710,
+          unrealizedPnl: 1.25,
+          marginUsed: 7,
+        }],
+        lastUpdatedAt: 1710000002000,
+      }),
+      getOpenOrders: async () => {
+        throw new Error('orders timeout');
+      },
+    }),
+    hyperliquidRegistry: {
+      getOrCreate: async () => ({
+        getPosition: async () => ({
+          asset: 'ETH',
+          szi: '-0.0174',
+          leverage: { type: 'isolated', value: 7 },
+          liquidationPx: 2710,
+          unrealizedPnl: 1.25,
+          marginUsed: 7,
+        }),
+      }),
+    },
+  });
+
+  assert.equal(diagnostics.checks.hyperliquid.account.accountValue, 150);
+  assert.equal(diagnostics.checks.hyperliquid.position.asset, 'ETH');
+  assert.equal(diagnostics.checks.hyperliquid.position.side, 'short');
+  assert.equal(diagnostics.checks.hyperliquid.openOrders, null);
+  assert.equal(diagnostics.spot.source, 'snapshot');
+  assert.ok(Array.isArray(diagnostics.warnings));
+  assert.match(diagnostics.warnings[0], /open_orders_unavailable/i);
 });
 
 test('createProtectedPool rechaza configuracion dinamica insegura por solapamiento wire', async () => {

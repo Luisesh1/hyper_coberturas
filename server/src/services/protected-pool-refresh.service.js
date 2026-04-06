@@ -3,6 +3,11 @@ const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const timeInRangeService = require('./time-in-range.service');
 const uniswapService = require('./uniswap.service');
+const {
+  computeSnapshotHash,
+  normalizeProtectionSnapshot,
+  validateNormalizedProtectionSnapshot,
+} = require('./delta-neutral-snapshot.service');
 
 function buildGroupKey(item) {
   return [
@@ -98,6 +103,22 @@ class ProtectedPoolRefreshService {
     }
   }
 
+  async refreshProtection(userId, protectionId) {
+    const protection = await this.repo.getById(userId, protectionId);
+    if (!protection) return null;
+    if (protection.status !== 'active') return protection;
+
+    await this.refreshGroup({
+      userId: protection.userId,
+      walletAddress: protection.walletAddress,
+      network: protection.network,
+      version: protection.version,
+      items: [protection],
+    });
+
+    return this.repo.getById(userId, protectionId);
+  }
+
   _buildGroups(activePools) {
     const groups = new Map();
     for (const item of activePools) {
@@ -162,6 +183,16 @@ class ProtectedPoolRefreshService {
         const poolSnapshot = rangeMetrics
           ? this.timeInRangeService.applyRangeMetricsToSnapshot(freshPool, rangeMetrics)
           : freshPool;
+        const normalizedSnapshot = normalizeProtectionSnapshot(poolSnapshot, {
+          network: protection.network,
+          version: protection.version,
+          positionIdentifier: protection.positionIdentifier,
+          poolAddress: freshPool.poolAddress || protection.poolAddress,
+          poolId: freshPool.poolId || protection.positionIdentifier,
+          owner: freshPool.owner || freshPool.creator || protection.walletAddress,
+          snapshotFreshAt: Date.now(),
+        });
+        const snapshotValidation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
 
         await this.repo.updateSnapshot(protection.userId, protection.id, {
           poolAddress: freshPool.poolAddress || null,
@@ -173,6 +204,9 @@ class ProtectedPoolRefreshService {
           rangeUpperPrice: freshPool.rangeUpperPrice,
           priceCurrent: freshPool.priceCurrent,
           poolSnapshot,
+          snapshotStatus: snapshotValidation.status,
+          snapshotFreshAt: normalizedSnapshot.snapshotFreshAt,
+          snapshotHash: computeSnapshotHash(normalizedSnapshot),
           updatedAt: Date.now(),
           isCurrentlyInRange: freshPool.inRange === true,
           ...(rangeMetrics || {}),

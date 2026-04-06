@@ -1,5 +1,13 @@
 const { z } = require('zod');
 
+const optionalStringField = z.preprocess((value) => (
+  value == null || value === '' ? undefined : value
+), z.string().min(1).optional());
+
+const optionalPositiveIntField = z.preprocess((value) => (
+  value == null || value === '' ? undefined : value
+), z.number().int().positive().optional());
+
 const scannedPoolSchema = z.object({
   mode: z.string(),
   version: z.string(),
@@ -79,6 +87,9 @@ const positionActionBaseSchema = z.object({
   walletAddress: z.string().min(1),
   positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]).optional(),
   slippageBps: z.number().int().min(1).max(5000).optional(),
+  poolId: optionalStringField,
+  tickSpacing: optionalPositiveIntField,
+  hooks: optionalStringField,
 });
 
 const increaseLiquidityPrepareSchema = positionActionBaseSchema.extend({
@@ -115,10 +126,42 @@ const createPositionPrepareSchema = positionActionBaseSchema.extend({
   token0Address: z.string().min(1),
   token1Address: z.string().min(1),
   fee: z.number().int().positive(),
-  amount0Desired: z.union([z.number().min(0), z.string().min(1)]),
-  amount1Desired: z.union([z.number().min(0), z.string().min(1)]),
+  amount0Desired: z.union([z.number().min(0), z.string().min(1)]).optional(),
+  amount1Desired: z.union([z.number().min(0), z.string().min(1)]).optional(),
   rangeLowerPrice: z.number().positive(),
   rangeUpperPrice: z.number().positive(),
+  totalUsdTarget: z.number().positive().optional(),
+  targetWeightToken0Pct: z.number().gt(0).lt(100).optional(),
+  maxSlippageBps: z.number().int().positive().max(1000).optional(),
+  tickSpacing: optionalPositiveIntField,
+  hooks: optionalStringField,
+  poolId: optionalStringField,
+  importTokenAddresses: z.array(z.string().min(1)).optional(),
+  fundingSelections: z.array(z.object({
+    assetId: z.string().min(1),
+    amount: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+  })).optional(),
+}).refine(
+  (data) => data.rangeLowerPrice < data.rangeUpperPrice,
+  { message: 'rangeLowerPrice debe ser menor que rangeUpperPrice' },
+).refine(
+  (data) => data.token0Address.toLowerCase() !== data.token1Address.toLowerCase(),
+  { message: 'token0Address y token1Address deben ser distintos' },
+);
+
+const closeToUsdcPrepareSchema = positionActionBaseSchema.extend({
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+});
+
+const closeKeepAssetsPrepareSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().min(1),
+  positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+  poolId: optionalStringField,
+  tickSpacing: optionalPositiveIntField,
+  hooks: optionalStringField,
 });
 
 const positionActionFinalizeSchema = z.object({
@@ -128,6 +171,49 @@ const positionActionFinalizeSchema = z.object({
   positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]).optional(),
   txHashes: z.array(z.string().min(1)).min(1),
 });
+
+const smartCreateSuggestSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().min(1),
+  token0Address: z.string().min(1),
+  token1Address: z.string().min(1),
+  fee: z.number().int().positive(),
+  totalUsdHint: z.number().positive().optional(),
+  totalUsdTarget: z.number().positive().optional(),
+  tickSpacing: optionalPositiveIntField,
+  hooks: optionalStringField,
+  poolId: optionalStringField,
+});
+
+const smartCreateFundingPlanSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().min(1),
+  token0Address: z.string().min(1),
+  token1Address: z.string().min(1),
+  fee: z.number().int().positive(),
+  totalUsdTarget: z.number().positive(),
+  targetWeightToken0Pct: z.number().gt(0).lt(100),
+  rangeLowerPrice: z.number().positive(),
+  rangeUpperPrice: z.number().positive(),
+  maxSlippageBps: z.number().int().positive().max(1000).optional(),
+  tickSpacing: optionalPositiveIntField,
+  hooks: optionalStringField,
+  poolId: optionalStringField,
+  importTokenAddresses: z.array(z.string().min(1)).optional(),
+  fundingSelections: z.array(z.object({
+    assetId: z.string().min(1),
+    amount: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+  })).optional(),
+}).refine(
+  (data) => data.rangeLowerPrice < data.rangeUpperPrice,
+  { message: 'rangeLowerPrice debe ser menor que rangeUpperPrice' },
+).refine(
+  (data) => data.token0Address.toLowerCase() !== data.token1Address.toLowerCase(),
+  { message: 'token0Address y token1Address deben ser distintos' },
+);
 
 module.exports = {
   createProtectedPoolSchema,
@@ -141,5 +227,9 @@ module.exports = {
   modifyRangePrepareSchema,
   rebalancePrepareSchema,
   createPositionPrepareSchema,
+  closeToUsdcPrepareSchema,
+  closeKeepAssetsPrepareSchema,
   positionActionFinalizeSchema,
+  smartCreateSuggestSchema,
+  smartCreateFundingPlanSchema,
 };

@@ -2,16 +2,23 @@ const config = require('../config');
 const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const deltaRebalanceLogRepository = require('../repositories/protected-pool-delta-rebalance.repository');
+const decisionLogRepository = require('../repositories/protection-decision-log.repository');
 const timeInRangeService = require('./time-in-range.service');
 const uniswapService = require('./uniswap.service');
 const hlRegistry = require('./hyperliquid.registry');
 const { getTradingService } = require('./trading.factory');
+const marketService = require('./market.service');
 const {
   asFiniteNumber,
   buildBandPreset,
   computeDeltaNeutralMetrics,
   networkSentinelIntervalMs,
 } = require('./delta-neutral-math.service');
+const {
+  computeSnapshotHash,
+  normalizeProtectionSnapshot,
+  validateNormalizedProtectionSnapshot,
+} = require('./delta-neutral-snapshot.service');
 
 const DEFAULT_BAND_MODE = 'adaptive';
 const DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT = 3;
@@ -20,22 +27,39 @@ const DEFAULT_TARGET_HEDGE_RATIO = 1;
 const DEFAULT_MIN_REBALANCE_NOTIONAL_USD = 50;
 const DEFAULT_MAX_SLIPPAGE_BPS = 20;
 const DEFAULT_TWAP_MIN_NOTIONAL_USD = 10_000;
+const DEFAULT_EXECUTION_MODE = 'auto';
+const DEFAULT_MAX_SPREAD_BPS = 30;
+const DEFAULT_MAX_EXECUTION_FEE_USD = 25;
+const DEFAULT_MIN_ORDER_NOTIONAL_USD = 25;
 const DEFAULT_TWAP_SLICES = 5;
 const DEFAULT_TWAP_DURATION_SEC = 60;
 const DEFAULT_EMERGENCY_IOC_NOTIONAL_USD = 250;
 const DEFAULT_GAMMA_TIGHTEN_THRESHOLD = 0.2;
 const DEFAULT_MAX_AUTO_TOPUPS_PER_24H = 3;
+const MAX_SNAPSHOT_FALLBACK_AGE_MS = 2 * 60_000;
 const DELTA_NEUTRAL_STATUSES = new Set([
+  'bootstrapping',
   'healthy',
+  'tracking',
+  'rebalance_pending',
+  'executing',
   'boundary_watch',
   'partial_hedge_warning',
   'degraded_partial',
+  'rate_limited',
+  'margin_pending',
+  'spot_stale',
+  'snapshot_invalid',
   'risk_paused',
   'reconciling',
   'deactivating',
   'deactivation_pending',
+  'inactive',
 ]);
 const ESTIMATED_TAKER_FEE_RATE = 0.0005;
+const RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
+const STALE_SPOT_COOLDOWN_MS = 60_000;
+const MARGIN_COOLDOWN_MS = 2 * 60_000;
 
 function clampNonNegative(value, fallback = 0) {
   const parsed = Number(value);
@@ -108,7 +132,7 @@ function buildInitialStrategyState({
   rv24hPct = 0,
 } = {}) {
   return {
-    status: 'reconciling',
+    status: 'bootstrapping',
     lastSnapshotPrice: currentPrice ?? null,
     lastDeltaQty: deltaQty ?? null,
     lastGamma: gamma ?? null,
@@ -135,20 +159,149 @@ function buildInitialStrategyState({
     topUpWindowStartedAt: Date.now(),
     lastError: null,
     deactivationRequestedAt: null,
+    lastDecision: null,
+    lastDecisionReason: null,
+    lastExecutionAttemptAt: null,
+    lastExecutionOutcome: null,
+    nextEligibleAttemptAt: null,
+    cooldownReason: null,
+    trackingErrorQty: null,
+    trackingErrorUsd: null,
   };
 }
 
 function normalizeStrategyState(state = {}) {
-  const topUpWindowStartedAt = Number(state.topUpWindowStartedAt || Date.now());
+  const safeState = state || {};
+  const topUpWindowStartedAt = Number(safeState.topUpWindowStartedAt || Date.now());
   return {
     ...buildInitialStrategyState(),
-    ...state,
-    status: normalizeStatus(state.status),
-    topUpCount24h: clampNonNegative(state.topUpCount24h),
-    topUpUsd24h: clampNonNegative(state.topUpUsd24h),
+    ...safeState,
+    status: normalizeStatus(safeState.status),
+    topUpCount24h: clampNonNegative(safeState.topUpCount24h),
+    topUpUsd24h: clampNonNegative(safeState.topUpUsd24h),
     topUpWindowStartedAt,
-    marginModeVerified: state.marginModeVerified !== false,
+    marginModeVerified: safeState.marginModeVerified !== false,
+    nextEligibleAttemptAt: safeState.nextEligibleAttemptAt != null ? Number(safeState.nextEligibleAttemptAt) : null,
   };
+}
+
+function isCooldownActive(protection, strategyState, now = Date.now()) {
+  const nextEligibleAttemptAt = Number(
+    protection?.nextEligibleAttemptAt
+    ?? strategyState?.nextEligibleAttemptAt
+    ?? 0
+  );
+  return Number.isFinite(nextEligibleAttemptAt) && nextEligibleAttemptAt > now;
+}
+
+function estimateExecutionCostUsd(qty, currentPrice) {
+  const size = Math.abs(Number(qty) || 0);
+  const price = Number(currentPrice) || 0;
+  return size * price * ESTIMATED_TAKER_FEE_RATE;
+}
+
+function buildTrackingMetrics(metrics, actualQty, currentPrice) {
+  const targetQty = Number(metrics?.targetQty || 0);
+  const actual = Number(actualQty || 0);
+  const trackingErrorQty = targetQty - actual;
+  return {
+    trackingErrorQty,
+    trackingErrorUsd: Math.abs(trackingErrorQty) * Number(currentPrice || 0),
+    lpDeltaUsd: Number(metrics?.deltaQty || 0) * Number(currentPrice || 0),
+    hedgeDeltaUsd: -actual * Number(currentPrice || 0),
+    netProtectedExposureUsd: trackingErrorQty * Number(currentPrice || 0),
+  };
+}
+
+function deriveDecisionBandUsd(protection, metrics, currentPrice) {
+  const minRebalanceUsd = Number(
+    protection?.minOrderNotionalUsd
+    ?? protection?.minRebalanceNotionalUsd
+    ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD
+  );
+  const targetQty = Number(metrics?.targetQty || 0);
+  const estimatedCost = estimateExecutionCostUsd(targetQty, currentPrice);
+  const floor = Math.max(minRebalanceUsd, estimatedCost * 3);
+  return {
+    holdBandUsd: floor,
+    fullBandUsd: floor * 2,
+    estimatedCostUsd: estimatedCost,
+  };
+}
+
+function resolveRebalanceDecision({ protection, metrics, actualQty, currentPrice, forceReason, forceRebalance }) {
+  const tracking = buildTrackingMetrics(metrics, actualQty, currentPrice);
+  const bands = deriveDecisionBandUsd(protection, metrics, currentPrice);
+  const absoluteDriftUsd = Math.abs(tracking.trackingErrorUsd);
+
+  if (forceRebalance || forceReason === 'boundary_cross') {
+    return { decision: 'rebalance_full', tracking, bands };
+  }
+  if (absoluteDriftUsd < bands.holdBandUsd) {
+    return { decision: 'hold', tracking, bands };
+  }
+  if (absoluteDriftUsd < bands.fullBandUsd) {
+    return { decision: 'rebalance_partial', tracking, bands };
+  }
+  return { decision: 'rebalance_full', tracking, bands };
+}
+
+function buildCooldown(error, strategyState, {
+  fallbackMs = RATE_LIMIT_COOLDOWN_MS,
+} = {}) {
+  const message = String(error?.message || error || '').trim();
+  if (!message) {
+    return {
+      nextEligibleAttemptAt: null,
+      cooldownReason: null,
+      status: strategyState?.status || 'partial_hedge_warning',
+    };
+  }
+
+  const lowered = message.toLowerCase();
+  if (lowered.includes('too many cumulative requests sent') || lowered.includes('rate limit')) {
+    return {
+      nextEligibleAttemptAt: Date.now() + RATE_LIMIT_COOLDOWN_MS,
+      cooldownReason: message,
+      status: 'rate_limited',
+    };
+  }
+  if (lowered.includes('margen insuficiente')) {
+    return {
+      nextEligibleAttemptAt: Date.now() + MARGIN_COOLDOWN_MS,
+      cooldownReason: message,
+      status: 'margin_pending',
+    };
+  }
+  if (lowered.includes('precio actual del pool') || lowered.includes('spot')) {
+    return {
+      nextEligibleAttemptAt: Date.now() + STALE_SPOT_COOLDOWN_MS,
+      cooldownReason: message,
+      status: 'spot_stale',
+    };
+  }
+  return {
+    nextEligibleAttemptAt: Date.now() + fallbackMs,
+    cooldownReason: message,
+    status: strategyState?.status || 'partial_hedge_warning',
+  };
+}
+
+function normalizeEvaluationStatus({
+  decision,
+  trackingErrorUsd,
+  riskStatus,
+  preflightStatus,
+  shouldRebalance,
+  preflightOk,
+}) {
+  if (riskStatus) return riskStatus;
+  if (preflightStatus && preflightStatus !== 'tracking') return preflightStatus;
+  if (shouldRebalance && decision !== 'hold' && preflightOk) return 'rebalance_pending';
+  if (decision === 'hold') {
+    return Math.abs(Number(trackingErrorUsd || 0)) > 0 ? 'tracking' : 'healthy';
+  }
+  return 'tracking';
 }
 
 function deriveBandSettings(protection, rvStats, metrics, currentPrice) {
@@ -211,9 +364,11 @@ class ProtectedPoolDeltaNeutralService {
   constructor(deps = {}) {
     this.repo = deps.protectedPoolRepository || protectedPoolRepository;
     this.deltaLogRepo = deps.deltaRebalanceLogRepository || deltaRebalanceLogRepository;
+    this.decisionLogRepo = deps.protectionDecisionLogRepository || decisionLogRepository;
     this.uniswapService = deps.uniswapService || uniswapService;
     this.hlRegistry = deps.hlRegistry || hlRegistry;
     this.getTradingService = deps.getTradingService || getTradingService;
+    this.marketService = deps.marketService || marketService;
     this.logger = deps.logger || logger;
     this.loopMs = deps.loopMs || config.intervals.deltaNeutralLoopMs || 2_000;
     this.fullEvalMs = deps.fullEvalMs || config.intervals.deltaNeutralEvalMs || 30_000;
@@ -241,6 +396,138 @@ class ProtectedPoolDeltaNeutralService {
     this.interval = null;
   }
 
+  _normalizeSnapshot(protection, snapshot = null) {
+    const source = snapshot || protection?.poolSnapshot || {};
+    const normalizedSnapshot = normalizeProtectionSnapshot(source, {
+      network: protection?.network || source.network,
+      version: protection?.version || source.version,
+      positionIdentifier: protection?.positionIdentifier || source.positionIdentifier || source.identifier,
+      poolAddress: source.poolAddress || protection?.poolAddress,
+      poolId: source.poolId || protection?.positionIdentifier,
+      owner: source.owner || source.creator || protection?.walletAddress,
+      snapshotFreshAt: source.snapshotFreshAt || protection?.snapshotFreshAt || Date.now(),
+    });
+    const validation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
+    return {
+      normalizedSnapshot,
+      validation,
+      snapshotFreshAt: normalizedSnapshot.snapshotFreshAt,
+      snapshotHash: computeSnapshotHash(normalizedSnapshot),
+    };
+  }
+
+  async _persistDecision(protection, payload) {
+    await this.decisionLogRepo.create({
+      protectedPoolId: protection.id,
+      ...payload,
+    }).catch((err) => {
+      this.logger.warn('protected_pool_delta_decision_log_write_failed', {
+        protectionId: protection.id,
+        error: err.message,
+      });
+    });
+  }
+
+  async _refreshProtectionSnapshot(protection) {
+    const scanResult = await this.uniswapService.scanPoolsCreatedByWallet({
+      userId: protection.userId,
+      wallet: protection.walletAddress,
+      network: protection.network,
+      version: protection.version,
+    });
+    const freshPool = (scanResult?.pools || []).find((pool) => (
+      String(pool.identifier || '').trim() === String(protection.positionIdentifier || '').trim()
+    ));
+    if (!freshPool) return null;
+
+    const rangeMetrics = await timeInRangeService.computeIncrementalRangeMetrics(protection, {
+      endAt: Date.now(),
+      poolSnapshot: freshPool,
+      asset: protection.inferredAsset,
+    }).catch(() => null);
+    const poolSnapshot = rangeMetrics
+      ? timeInRangeService.applyRangeMetricsToSnapshot(freshPool, rangeMetrics)
+      : freshPool;
+    const snapshotMeta = this._normalizeSnapshot(protection, poolSnapshot);
+
+    await this.repo.updateSnapshot(protection.userId, protection.id, {
+      poolAddress: freshPool.poolAddress || protection.poolAddress,
+      token0Symbol: freshPool.token0?.symbol || protection.token0Symbol,
+      token1Symbol: freshPool.token1?.symbol || protection.token1Symbol,
+      token0Address: freshPool.token0Address || protection.token0Address,
+      token1Address: freshPool.token1Address || protection.token1Address,
+      rangeLowerPrice: freshPool.rangeLowerPrice,
+      rangeUpperPrice: freshPool.rangeUpperPrice,
+      priceCurrent: freshPool.priceCurrent,
+      poolSnapshot,
+      snapshotStatus: snapshotMeta.validation.status,
+      snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+      snapshotHash: snapshotMeta.snapshotHash,
+      updatedAt: Date.now(),
+      isCurrentlyInRange: freshPool.inRange === true,
+      ...(rangeMetrics || {}),
+    });
+
+    return this.repo.getById(protection.userId, protection.id);
+  }
+
+  async _buildPreflight({ protection, hl, strategyState, actualQty, currentPrice, tracking, bands, decision }) {
+    const accountState = await hl.getClearinghouseState().catch(() => null);
+    const withdrawable = Number(accountState?.withdrawable || 0);
+    const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
+    const increaseNotionalUsd = targetIncreaseQty * currentPrice;
+    const requiredMarginUsd = increaseNotionalUsd / Math.max(Number(protection.leverage || 1), 1);
+    const cooldownActive = isCooldownActive(protection, strategyState);
+    const snapshotStatus = protection.snapshotStatus || 'ready';
+    const priceContext = await this.marketService.getAssetContexts().catch(() => []);
+    const assetContext = Array.isArray(priceContext)
+      ? priceContext.find((item) => String(item.name || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase())
+      : null;
+
+    if (snapshotStatus !== 'ready') {
+      return {
+        ok: false,
+        status: 'snapshot_invalid',
+        reason: `snapshot_${snapshotStatus}`,
+        executionSkippedBecause: `snapshot_${snapshotStatus}`,
+      };
+    }
+    if (cooldownActive) {
+      return {
+        ok: false,
+        status: strategyState.status || 'tracking',
+        reason: 'cooldown_active',
+        executionSkippedBecause: protection.cooldownReason || strategyState.cooldownReason || 'cooldown_active',
+      };
+    }
+    if (decision !== 'hold' && tracking.trackingErrorUsd < Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD)) {
+      return {
+        ok: false,
+        status: 'tracking',
+        reason: 'below_min_order_notional',
+        executionSkippedBecause: 'below_min_order_notional',
+      };
+    }
+    if (targetIncreaseQty > 0 && requiredMarginUsd > withdrawable) {
+      return {
+        ok: false,
+        status: 'margin_pending',
+        reason: 'insufficient_margin',
+        executionSkippedBecause: 'insufficient_margin',
+      };
+    }
+
+    return {
+      ok: true,
+      status: 'rebalance_pending',
+      reason: 'preflight_ok',
+      executionSkippedBecause: null,
+      withdrawable,
+      fundingRate: assetContext?.fundingRate != null ? Number(assetContext.fundingRate) : null,
+      estimatedExecutionCostUsd: bands.estimatedCostUsd,
+    };
+  }
+
   async evaluateAll() {
     if (this.running) return;
     this.running = true;
@@ -265,7 +552,21 @@ class ProtectedPoolDeltaNeutralService {
       ? protection
       : await this.repo.getById(protection.userId, protection.id);
     if (!current || current.protectionMode !== 'delta_neutral') return current;
-    await this.evaluateProtection(current, { forceReason: 'restart_reconcile', forceRebalance: true });
+    if (current.status !== 'active') {
+      this.logger.warn('protected_pool_delta_neutral_bootstrap_inactive', {
+        protectionId: current.id,
+        status: current.status,
+      });
+      return current;
+    }
+    try {
+      await this.evaluateProtection(current, { forceReason: 'restart_reconcile', forceRebalance: true });
+    } catch (err) {
+      this.logger.error('protected_pool_delta_neutral_bootstrap_failed', {
+        protectionId: current.id,
+        error: err.message,
+      });
+    }
     return this.repo.getById(current.userId, current.id);
   }
 
@@ -314,33 +615,154 @@ class ProtectedPoolDeltaNeutralService {
       return null;
     }
 
-    const hl = await this.hlRegistry.getOrCreate(current.userId, current.accountId);
-    const tradingService = await this.getTradingService(current.userId, current.accountId);
     const strategyState = normalizeStrategyState(current.strategyState);
-    const liveSpot = spot || await this._fetchSpot(current);
-    const currentPrice = Number(liveSpot?.priceCurrent ?? current.poolSnapshot?.priceCurrent ?? current.priceCurrent);
-    const snapshot = {
-      ...(safeJsonClone(current.poolSnapshot) || {}),
-      priceCurrent: currentPrice,
-    };
-    const metrics = computeDeltaNeutralMetrics(snapshot, {
-      targetHedgeRatio: current.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
-    });
-    if (!metrics.eligible) {
-      strategyState.status = 'degraded_partial';
-      strategyState.lastError = metrics.reason;
+    let activeProtection = current;
+    if ((current.snapshotStatus && current.snapshotStatus !== 'ready') || !current.poolSnapshot) {
+      activeProtection = await this._refreshProtectionSnapshot(current).catch(() => current);
+    }
+
+    let snapshotMeta = this._normalizeSnapshot(activeProtection, activeProtection.poolSnapshot);
+    if (!snapshotMeta.validation.valid) {
+      const invalidState = {
+        ...strategyState,
+        status: 'snapshot_invalid',
+        lastError: `Snapshot invalido: ${snapshotMeta.validation.reasons.join(', ')}`,
+        lastDecision: 'refresh_snapshot',
+        lastDecisionReason: 'snapshot_invalid',
+      };
       await this.repo.updateStrategyState(current.userId, current.id, {
-        strategyState,
-        priceCurrent: currentPrice,
+        strategyState: invalidState,
+        snapshotStatus: snapshotMeta.validation.status,
+        snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+        snapshotHash: snapshotMeta.snapshotHash,
+        lastDecision: invalidState.lastDecision,
+        lastDecisionReason: invalidState.lastDecisionReason,
+      });
+      await this._persistDecision(current, {
+        decision: 'refresh_snapshot',
+        reason: 'snapshot_invalid',
+        strategyStatus: invalidState.status,
+        spotSource: 'snapshot',
+        snapshotStatus: snapshotMeta.validation.status,
+        executionSkippedBecause: invalidState.lastError,
+        finalStrategyStatus: invalidState.status,
+        riskGateTriggered: false,
+        createdAt: Date.now(),
       });
       return null;
     }
 
-    const rvStats = await this._getVolatilityStats(hl, current.inferredAsset);
-    const band = deriveBandSettings(current, rvStats, metrics, currentPrice);
-    const position = await hl.getPosition(current.inferredAsset).catch((err) => { logger.warn('getPosition failed in rebalance check', { poolId: current.id, asset: current.inferredAsset, error: err.message }); return null; });
+    const hl = await this.hlRegistry.getOrCreate(activeProtection.userId, activeProtection.accountId);
+    const tradingService = await this.getTradingService(activeProtection.userId, activeProtection.accountId);
+    let liveSpot = spot || await this._fetchSpot(activeProtection).catch((err) => {
+      logger.warn('_fetchSpot failed in evaluateProtection', { poolId: activeProtection.id, error: err.message });
+      return null;
+    });
+    let spotSource = liveSpot ? 'chain' : 'unavailable';
+    let currentPrice = Number(liveSpot?.priceCurrent);
+    let spotFailureReason = null;
+
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      const refreshedProtection = await this._refreshProtectionSnapshot(activeProtection).catch(() => null);
+      if (refreshedProtection) {
+        activeProtection = refreshedProtection;
+        snapshotMeta = this._normalizeSnapshot(activeProtection, activeProtection.poolSnapshot);
+      }
+      const snapshotAgeMs = Math.max(
+        Date.now() - Number(snapshotMeta.snapshotFreshAt || activeProtection.snapshotFreshAt || activeProtection.updatedAt || Date.now()),
+        0
+      );
+      const snapshotPrice = Number(activeProtection.poolSnapshot?.priceCurrent ?? activeProtection.priceCurrent);
+      if (Number.isFinite(snapshotPrice) && snapshotPrice > 0 && snapshotAgeMs <= MAX_SNAPSHOT_FALLBACK_AGE_MS) {
+        currentPrice = snapshotPrice;
+        spotSource = 'snapshot';
+        spotFailureReason = liveSpot ? null : 'chain_spot_unavailable_using_fresh_snapshot';
+      } else {
+        spotFailureReason = 'No se pudo obtener el precio actual del pool.';
+      }
+    }
+
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      const cooldown = buildCooldown('No se pudo obtener el precio actual del pool.', strategyState);
+      const staleState = {
+        ...strategyState,
+        status: cooldown.status,
+        lastError: 'No se pudo obtener el precio actual del pool.',
+        lastDecision: 'refresh_snapshot',
+        lastDecisionReason: 'spot_stale',
+        nextEligibleAttemptAt: cooldown.nextEligibleAttemptAt,
+        cooldownReason: cooldown.cooldownReason,
+        lastSpotFailureAt: Date.now(),
+        lastSpotFailureReason: 'No se pudo obtener el precio actual del pool.',
+      };
+      await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
+        strategyState: staleState,
+        snapshotStatus: snapshotMeta.validation.status,
+        snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+        snapshotHash: snapshotMeta.snapshotHash,
+        nextEligibleAttemptAt: cooldown.nextEligibleAttemptAt,
+        cooldownReason: cooldown.cooldownReason,
+        lastDecision: staleState.lastDecision,
+        lastDecisionReason: staleState.lastDecisionReason,
+      });
+      await this._persistDecision(activeProtection, {
+        decision: 'refresh_snapshot',
+        reason: 'spot_stale',
+        strategyStatus: staleState.status,
+        spotSource,
+        snapshotStatus: snapshotMeta.validation.status,
+        executionSkippedBecause: staleState.lastError,
+        finalStrategyStatus: staleState.status,
+        riskGateTriggered: false,
+        createdAt: Date.now(),
+      });
+      return null;
+    }
+
+    const snapshot = {
+      ...(safeJsonClone(activeProtection.poolSnapshot) || {}),
+      ...snapshotMeta.normalizedSnapshot,
+      priceCurrent: currentPrice,
+    };
+    const metrics = computeDeltaNeutralMetrics(snapshot, {
+      targetHedgeRatio: activeProtection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
+    });
+    if (!metrics.eligible) {
+      const degradedState = {
+        ...strategyState,
+        status: 'degraded_partial',
+        lastError: metrics.reason,
+        lastDecision: 'hold',
+        lastDecisionReason: 'metrics_ineligible',
+      };
+      await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
+        strategyState: degradedState,
+        priceCurrent: currentPrice,
+        snapshotStatus: snapshotMeta.validation.status,
+        snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+        snapshotHash: snapshotMeta.snapshotHash,
+        lastDecision: degradedState.lastDecision,
+        lastDecisionReason: degradedState.lastDecisionReason,
+      });
+      await this._persistDecision(activeProtection, {
+        decision: 'hold',
+        reason: 'metrics_ineligible',
+        strategyStatus: degradedState.status,
+        spotSource,
+        snapshotStatus: snapshotMeta.validation.status,
+        executionSkippedBecause: metrics.reason,
+        currentPrice,
+        finalStrategyStatus: degradedState.status,
+        riskGateTriggered: false,
+      });
+      return null;
+    }
+
+    const rvStats = await this._getVolatilityStats(hl, activeProtection.inferredAsset);
+    const band = deriveBandSettings(activeProtection, rvStats, metrics, currentPrice);
+    const position = await hl.getPosition(activeProtection.inferredAsset).catch((err) => { logger.warn('getPosition failed in rebalance check', { poolId: activeProtection.id, asset: activeProtection.inferredAsset, error: err.message }); return null; });
     const actualQty = position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
-    const currentBoundarySide = getCurrentBoundarySide(current, currentPrice);
+    const currentBoundarySide = getCurrentBoundarySide(activeProtection, currentPrice);
     const marginModeVerified = position ? isIsolatedPosition(position) : true;
     const distanceToLiqPct = computeLiquidationDistancePct(position, currentPrice);
     const fundingAccumUsd = position?.cumFunding?.sinceOpen != null ? Number(position.cumFunding.sinceOpen) : clampNonNegative(strategyState.fundingAccumUsd, 0);
@@ -351,7 +773,7 @@ class ProtectedPoolDeltaNeutralService {
     const nextState = {
       ...strategyState,
       ...topUpState,
-      status: strategyState.status === 'deactivation_pending' ? 'deactivation_pending' : 'healthy',
+      status: strategyState.status === 'deactivation_pending' ? 'deactivation_pending' : 'tracking',
       lastSnapshotPrice: referencePrice,
       lastDeltaQty: metrics.deltaQty,
       lastGamma: metrics.gamma,
@@ -365,7 +787,7 @@ class ProtectedPoolDeltaNeutralService {
       lpPnlUsd,
       distanceToLiqPct,
       marginModeVerified,
-      topUpCapUsd: Math.max(300, 0.25 * Number(current.initialConfiguredHedgeNotionalUsd || current.configuredHedgeNotionalUsd || 0)),
+      topUpCapUsd: Math.max(300, 0.25 * Number(activeProtection.initialConfiguredHedgeNotionalUsd || activeProtection.configuredHedgeNotionalUsd || 0)),
       lastObservedBoundarySide: currentBoundarySide,
       netProtectionPnlUsd:
         lpPnlUsd
@@ -375,45 +797,97 @@ class ProtectedPoolDeltaNeutralService {
         - Number(strategyState.executionFeesUsd || 0)
         - Number(strategyState.slippageUsd || 0),
       lastError: null,
+      cooldownReason: null,
     };
+
+    const rebalanceDecision = resolveRebalanceDecision({
+      protection: activeProtection,
+      metrics,
+      actualQty,
+      currentPrice,
+      forceReason,
+      forceRebalance,
+    });
+    const tracking = rebalanceDecision.tracking;
+    nextState.trackingErrorQty = tracking.trackingErrorQty;
+    nextState.trackingErrorUsd = tracking.trackingErrorUsd;
+    nextState.lastSpotFailureAt = spotFailureReason ? Date.now() : (strategyState.lastSpotFailureAt || null);
+    nextState.lastSpotFailureReason = spotFailureReason || null;
+
+    let riskGateTriggered = false;
+    let riskGateReason = null;
+    let forcedStatus = null;
 
     if (!marginModeVerified || (position && Number(position.szi) > 0)) {
       nextState.status = 'risk_paused';
       nextState.lastError = !marginModeVerified
         ? 'La posicion dejo de estar en isolated margin.'
         : 'Se detecto una posicion long manual en el activo cubierto.';
-      await this.repo.updateStrategyState(current.userId, current.id, {
+      nextState.lastDecision = 'hold';
+      nextState.lastDecisionReason = 'risk_paused';
+      riskGateTriggered = true;
+      riskGateReason = nextState.lastError;
+      await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
         strategyState: nextState,
         priceCurrent: currentPrice,
         hedgeSize: actualQty,
         hedgeNotionalUsd: actualQty * currentPrice,
+        snapshotStatus: snapshotMeta.validation.status,
+        snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+        snapshotHash: snapshotMeta.snapshotHash,
+        lastDecision: nextState.lastDecision,
+        lastDecisionReason: nextState.lastDecisionReason,
+        trackingErrorQty: tracking.trackingErrorQty,
+        trackingErrorUsd: tracking.trackingErrorUsd,
+      });
+      await this._persistDecision(activeProtection, {
+        decision: nextState.lastDecision,
+        reason: nextState.lastDecisionReason,
+        strategyStatus: nextState.status,
+        spotSource,
+        snapshotStatus: snapshotMeta.validation.status,
+        executionSkippedBecause: nextState.lastError,
+        targetQty: metrics.targetQty,
+        actualQty,
+        trackingErrorQty: tracking.trackingErrorQty,
+        trackingErrorUsd: tracking.trackingErrorUsd,
+        currentPrice,
+        finalStrategyStatus: nextState.status,
+        riskGateTriggered,
+        liquidationDistancePct: distanceToLiqPct,
       });
       return nextState;
     }
 
     if (nextState.status === 'deactivating' || nextState.status === 'deactivation_pending') {
-      return this._continueDeactivation({ ...current, strategyState: nextState }, { tradingService, hl, actualQty, currentPrice });
+      return this._continueDeactivation({ ...activeProtection, strategyState: nextState }, { tradingService, hl, actualQty, currentPrice });
     }
 
     if (Number.isFinite(distanceToLiqPct)) {
       if (distanceToLiqPct <= 7) {
-        nextState.status = 'risk_paused';
+        forcedStatus = 'risk_paused';
         nextState.lastError = 'La distancia a liquidacion es demasiado baja.';
+        riskGateTriggered = true;
+        riskGateReason = nextState.lastError;
       } else if (distanceToLiqPct <= 10) {
         const toppedUp = await this._maybeTopUpMargin({
-          protection: current,
+          protection: activeProtection,
           hl,
           currentPrice,
           actualQty,
           strategyState: nextState,
         });
         if (!toppedUp.allowed && !toppedUp.success) {
-          nextState.status = 'risk_paused';
+          forcedStatus = 'risk_paused';
           nextState.lastError = toppedUp.reason;
+          riskGateTriggered = true;
+          riskGateReason = toppedUp.reason;
         } else if (!toppedUp.success) {
-          nextState.status = 'boundary_watch';
+          forcedStatus = 'margin_pending';
           nextState.lastError = toppedUp.reason || 'Top-up no ejecutado; distancia a liquidacion baja.';
           Object.assign(nextState, toppedUp.strategyState);
+          riskGateTriggered = true;
+          riskGateReason = nextState.lastError;
         } else {
           Object.assign(nextState, toppedUp.strategyState);
         }
@@ -430,24 +904,93 @@ class ProtectedPoolDeltaNeutralService {
     const shouldRebalance = forceRebalance
       || forceReason === 'boundary_cross'
       || priceMovePct >= band.effectiveBandPct
-      || (timerDue && driftUsd >= (current.minRebalanceNotionalUsd ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD))
+      || (timerDue && driftUsd >= (activeProtection.minRebalanceNotionalUsd ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD))
       || (!position && metrics.targetQty > 0.0000001);
 
-    await this.repo.updateStrategyState(current.userId, current.id, {
+    const preflight = await this._buildPreflight({
+      protection: activeProtection,
+      hl,
+      strategyState: nextState,
+      actualQty,
+      currentPrice,
+      tracking,
+      bands: rebalanceDecision.bands,
+      decision: rebalanceDecision.decision,
+    });
+
+    nextState.status = normalizeEvaluationStatus({
+      decision: rebalanceDecision.decision,
+      trackingErrorUsd: tracking.trackingErrorUsd,
+      riskStatus: forcedStatus,
+      preflightStatus: preflight.ok ? null : preflight.status,
+      shouldRebalance,
+      preflightOk: preflight.ok,
+    });
+    nextState.lastDecision = rebalanceDecision.decision;
+    nextState.lastDecisionReason = forceReason
+      || (rebalanceDecision.decision === 'hold' ? 'within_cost_aware_band' : 'drift_exceeds_cost_aware_band');
+    if (forcedStatus === 'margin_pending') {
+      nextState.nextEligibleAttemptAt = Date.now() + MARGIN_COOLDOWN_MS;
+      nextState.cooldownReason = riskGateReason;
+    } else if (preflight.ok) {
+      nextState.nextEligibleAttemptAt = null;
+      nextState.cooldownReason = null;
+    } else {
+      nextState.nextEligibleAttemptAt = preflight.status === 'margin_pending'
+        ? Date.now() + MARGIN_COOLDOWN_MS
+        : strategyState.nextEligibleAttemptAt;
+      nextState.cooldownReason = preflight.executionSkippedBecause;
+    }
+    if (forcedStatus) {
+      nextState.lastDecision = 'hold';
+      nextState.lastDecisionReason = forcedStatus === 'risk_paused' ? 'risk_paused' : 'margin_pending';
+    }
+
+    await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
       strategyState: nextState,
       priceCurrent: currentPrice,
       hedgeSize: actualQty,
       hedgeNotionalUsd: actualQty * currentPrice,
+      snapshotStatus: snapshotMeta.validation.status,
+      snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+      snapshotHash: snapshotMeta.snapshotHash,
+      nextEligibleAttemptAt: nextState.nextEligibleAttemptAt,
+      cooldownReason: nextState.cooldownReason,
+      lastDecision: nextState.lastDecision,
+      lastDecisionReason: nextState.lastDecisionReason,
+      trackingErrorQty: tracking.trackingErrorQty,
+      trackingErrorUsd: tracking.trackingErrorUsd,
+      executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
     });
 
-    if (!shouldRebalance) {
+    await this._persistDecision(activeProtection, {
+      decision: nextState.lastDecision,
+      reason: nextState.lastDecisionReason,
+      strategyStatus: nextState.status,
+      spotSource,
+      snapshotStatus: snapshotMeta.validation.status,
+      snapshotFreshnessMs: Math.max(Date.now() - Number(snapshotMeta.snapshotFreshAt || Date.now()), 0),
+      executionSkippedBecause: forcedStatus ? riskGateReason : (preflight.ok ? null : preflight.executionSkippedBecause),
+      executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
+      estimatedCostUsd: rebalanceDecision.bands.estimatedCostUsd,
+      targetQty: metrics.targetQty,
+      actualQty,
+      trackingErrorQty: tracking.trackingErrorQty,
+      trackingErrorUsd: tracking.trackingErrorUsd,
+      currentPrice,
+      finalStrategyStatus: nextState.status,
+      riskGateTriggered,
+      liquidationDistancePct: distanceToLiqPct,
+    });
+
+    if (forcedStatus || !shouldRebalance || rebalanceDecision.decision === 'hold' || !preflight.ok) {
       return nextState;
     }
 
     const reason = forceReason
       || (!position && metrics.targetQty > 0.0000001 ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
     return this._executeRebalance({
-      protection: current,
+      protection: activeProtection,
       tradingService,
       hl,
       position,
@@ -481,9 +1024,14 @@ class ProtectedPoolDeltaNeutralService {
       return strategyState;
     }
 
-    const executionMode = driftUsd >= (protection.twapMinNotionalUsd ?? DEFAULT_TWAP_MIN_NOTIONAL_USD)
+    const configuredMode = String(protection.executionMode || DEFAULT_EXECUTION_MODE).toLowerCase();
+    const executionMode = configuredMode === 'twap'
       ? 'TWAP'
-      : 'IOC';
+      : configuredMode === 'ioc'
+        ? 'IOC'
+        : driftUsd >= (protection.twapMinNotionalUsd ?? DEFAULT_TWAP_MIN_NOTIONAL_USD)
+          ? 'TWAP'
+          : 'IOC';
 
     const beforeState = {
       actualQtyBefore: actualQty,
@@ -495,6 +1043,16 @@ class ProtectedPoolDeltaNeutralService {
 
     let executionSummary;
     try {
+      await this.repo.updateStrategyState(protection.userId, protection.id, {
+        strategyState: {
+          ...strategyState,
+          status: 'executing',
+          lastExecutionAttemptAt: Date.now(),
+          lastExecutionOutcome: 'pending',
+        },
+        priceCurrent: currentPrice,
+        executionMode,
+      });
       if (executionMode === 'TWAP') {
         executionSummary = await this._runTwap({
           protection,
@@ -502,6 +1060,7 @@ class ProtectedPoolDeltaNeutralService {
           hl,
           currentPrice,
           driftQty,
+          actualQty,
         });
       } else {
         executionSummary = await this._runSingleAdjustment({
@@ -510,6 +1069,7 @@ class ProtectedPoolDeltaNeutralService {
           hl,
           currentPrice,
           driftQty,
+          actualQty,
         });
       }
     } catch (err) {
@@ -517,10 +1077,39 @@ class ProtectedPoolDeltaNeutralService {
         ...strategyState,
         status: executionMode === 'TWAP' ? 'degraded_partial' : 'partial_hedge_warning',
         lastError: err.message,
+        lastExecutionAttemptAt: Date.now(),
+        lastExecutionOutcome: 'failed',
       };
+      const cooldown = buildCooldown(err, failedState);
+      failedState.status = cooldown.status;
+      failedState.nextEligibleAttemptAt = cooldown.nextEligibleAttemptAt;
+      failedState.cooldownReason = cooldown.cooldownReason;
       await this.repo.updateStrategyState(protection.userId, protection.id, {
         strategyState: failedState,
         priceCurrent: currentPrice,
+        nextEligibleAttemptAt: cooldown.nextEligibleAttemptAt,
+        cooldownReason: cooldown.cooldownReason,
+        lastDecision: strategyState.lastDecision || 'rebalance_full',
+        lastDecisionReason: strategyState.lastDecisionReason || reason,
+        trackingErrorQty: Number(metrics.targetQty) - Number(actualQty),
+        trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQty)) * currentPrice,
+        executionMode,
+      });
+      await this._persistDecision(protection, {
+        decision: strategyState.lastDecision || 'rebalance_full',
+        reason,
+        strategyStatus: failedState.status,
+        snapshotStatus: protection.snapshotStatus || 'ready',
+        executionSkippedBecause: err.message,
+        executionMode,
+        estimatedCostUsd: estimateExecutionCostUsd(driftQty, currentPrice),
+        targetQty: metrics.targetQty,
+        actualQty,
+        trackingErrorQty: Number(metrics.targetQty) - Number(actualQty),
+        trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQty)) * currentPrice,
+        currentPrice,
+        finalStrategyStatus: failedState.status,
+        riskGateTriggered: false,
       });
       throw err;
     }
@@ -540,6 +1129,10 @@ class ProtectedPoolDeltaNeutralService {
       lastTargetQty: Number(metrics.targetQty),
       lastSnapshotPrice: currentPrice,
       lastError: executionSummary.partial ? 'El rebalance TWAP quedo parcial.' : null,
+      lastExecutionAttemptAt: Date.now(),
+      lastExecutionOutcome: executionSummary.partial ? 'partial' : 'success',
+      nextEligibleAttemptAt: null,
+      cooldownReason: null,
     };
 
     updatedState.netProtectionPnlUsd =
@@ -555,6 +1148,13 @@ class ProtectedPoolDeltaNeutralService {
       priceCurrent: currentPrice,
       hedgeSize: actualQtyAfter,
       hedgeNotionalUsd: actualQtyAfter * currentPrice,
+      nextEligibleAttemptAt: null,
+      cooldownReason: null,
+      lastDecision: strategyState.lastDecision || 'rebalance_full',
+      lastDecisionReason: strategyState.lastDecisionReason || reason,
+      trackingErrorQty: Number(metrics.targetQty) - Number(actualQtyAfter),
+      trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQtyAfter)) * currentPrice,
+      executionMode,
     });
 
     await this.deltaLogRepo.create({
@@ -586,12 +1186,30 @@ class ProtectedPoolDeltaNeutralService {
       });
     });
 
+    await this._persistDecision(protection, {
+      decision: strategyState.lastDecision || 'rebalance_full',
+      reason,
+      strategyStatus: updatedState.status,
+      snapshotStatus: protection.snapshotStatus || 'ready',
+      executionMode,
+      estimatedCostUsd: estimateExecutionCostUsd(driftQty, currentPrice),
+      realizedCostUsd: Number(executionSummary.executionFeeUsd || 0) + Number(executionSummary.slippageUsd || 0),
+      targetQty: metrics.targetQty,
+      actualQty: actualQtyAfter,
+      trackingErrorQty: Number(metrics.targetQty) - Number(actualQtyAfter),
+      trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQtyAfter)) * currentPrice,
+      currentPrice,
+      finalStrategyStatus: updatedState.status,
+      riskGateTriggered: false,
+      liquidationDistancePct: updatedState.distanceToLiqPct,
+    });
+
     return updatedState;
   }
 
-  async _runSingleAdjustment({ protection, tradingService, hl, currentPrice, driftQty }) {
+  async _runSingleAdjustment({ protection, tradingService, hl, currentPrice, driftQty, actualQty = 0 }) {
     if (driftQty > 0) {
-      await this._ensureIsolatedMarginBuffer(protection, hl, currentPrice, driftQty);
+      await this._ensureIsolatedMarginBuffer(protection, hl, currentPrice, driftQty, actualQty);
       const result = await tradingService.openPosition({
         asset: protection.inferredAsset,
         side: 'short',
@@ -624,7 +1242,7 @@ class ProtectedPoolDeltaNeutralService {
     };
   }
 
-  async _runTwap({ protection, tradingService, hl, currentPrice, driftQty }) {
+  async _runTwap({ protection, tradingService, hl, currentPrice, driftQty, actualQty = 0 }) {
     const direction = driftQty > 0 ? 'increase' : 'decrease';
     const totalQty = Math.abs(driftQty);
     const slicesPlanned = DEFAULT_TWAP_SLICES;
@@ -652,7 +1270,7 @@ class ProtectedPoolDeltaNeutralService {
         const remainingQty = totalQty - (completed * sliceQty);
         const qty = index === slicesPlanned - 1 ? remainingQty : sliceQty;
         if (direction === 'increase') {
-          await this._ensureIsolatedMarginBuffer(protection, hl, currentPrice, qty);
+          await this._ensureIsolatedMarginBuffer(protection, hl, currentPrice, qty, actualQty + (completed * sliceQty));
         }
         const sliceResult = direction === 'increase'
           ? await tradingService.openPosition({
@@ -683,6 +1301,7 @@ class ProtectedPoolDeltaNeutralService {
             hl,
             currentPrice,
             driftQty: direction === 'increase' ? remainingQty : -remainingQty,
+            actualQty: actualQty + completedQty,
           });
           totalFees += Number(emergency.executionFeeUsd || 0);
           totalSlippage += Number(emergency.slippageUsd || 0);
@@ -801,9 +1420,12 @@ class ProtectedPoolDeltaNeutralService {
     return (entryPrice - fillPrice) * executedQty;
   }
 
-  async _ensureIsolatedMarginBuffer(protection, hl, currentPrice, qtyToAdd) {
+  async _ensureIsolatedMarginBuffer(protection, hl, currentPrice, qtyToAdd, actualQty = 0) {
     const assetMeta = await hl.getAssetMeta(protection.inferredAsset);
     await hl.updateLeverage(assetMeta.index, false, protection.leverage);
+    if (Number(actualQty || 0) <= 0) {
+      return;
+    }
     const notionalUsd = Math.abs(qtyToAdd) * currentPrice;
     const marginUsd = Math.ceil((notionalUsd / Math.max(Number(protection.leverage || 1), 1)) * 1.2);
     if (marginUsd > 0) {
@@ -940,6 +1562,8 @@ module.exports.DEFAULT_MIN_REBALANCE_NOTIONAL_USD = DEFAULT_MIN_REBALANCE_NOTION
 module.exports.DEFAULT_MAX_SLIPPAGE_BPS = DEFAULT_MAX_SLIPPAGE_BPS;
 module.exports.DEFAULT_TWAP_MIN_NOTIONAL_USD = DEFAULT_TWAP_MIN_NOTIONAL_USD;
 module.exports.DEFAULT_MAX_AUTO_TOPUPS_PER_24H = DEFAULT_MAX_AUTO_TOPUPS_PER_24H;
+module.exports.DEFAULT_EXECUTION_MODE = DEFAULT_EXECUTION_MODE;
 module.exports.buildInitialStrategyState = buildInitialStrategyState;
 module.exports.computeVolatilityStats = computeVolatilityStats;
 module.exports.deriveBandSettings = deriveBandSettings;
+module.exports.normalizeStrategyState = normalizeStrategyState;

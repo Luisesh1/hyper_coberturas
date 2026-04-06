@@ -11,8 +11,12 @@ import { clearSession, getToken } from './sessionStore';
 const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 async function request(method, path, body) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
   const options = {
     method,
+    signal: controller.signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${getToken()}`,
@@ -22,29 +26,38 @@ async function request(method, path, body) {
     options.body = JSON.stringify(body);
   }
 
-  const res  = await fetch(`${BASE_URL}${path}`, options);
-  const text = await res.text();
-  let data = null;
-
   try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+    const res  = await fetch(`${BASE_URL}${path}`, options);
+    const text = await res.text();
+    let data = null;
+
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      throw new Error('Respuesta invalida del servidor');
     }
-    throw new Error('Respuesta invalida del servidor');
-  }
 
-  if (res.status === 401) {
-    clearSession();
-    throw new Error('Sesión expirada');
-  }
+    if (res.status === 401) {
+      clearSession();
+      throw new Error('Sesión expirada');
+    }
 
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || `HTTP ${res.status}`);
-  }
+    if (!res.ok || !data.success) {
+      const error = new Error(data.error || `HTTP ${res.status}`);
+      error.code = data.code || 'HTTP_ERROR';
+      error.details = data.details || null;
+      error.requestId = data.requestId || null;
+      error.status = res.status;
+      throw error;
+    }
 
-  return data.data;
+    return data.data;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -232,6 +245,39 @@ export const uniswapApi = {
   finalizeRebalance: (payload) => request('POST', '/uniswap/rebalance/finalize', payload),
   prepareCreatePosition: (payload) => request('POST', '/uniswap/create-position/prepare', payload),
   finalizeCreatePosition: (payload) => request('POST', '/uniswap/create-position/finalize', payload),
+  smartCreateSuggest: ({
+    network,
+    version,
+    walletAddress,
+    token0Address,
+    token1Address,
+    fee,
+    totalUsdHint,
+    totalUsdTarget,
+  }) =>
+    request('POST', '/uniswap/smart-create/suggest', {
+      network,
+      version,
+      walletAddress,
+      token0Address,
+      token1Address,
+      fee,
+      ...(totalUsdHint != null ? { totalUsdHint } : {}),
+      ...(totalUsdTarget != null ? { totalUsdTarget } : {}),
+    }),
+  getSmartCreateTokenList: (network) =>
+    request('GET', `/uniswap/smart-create/token-list?network=${encodeURIComponent(network)}`),
+  getSmartCreateAssets: ({ network, walletAddress, importTokenAddresses = [] }) => {
+    const params = new URLSearchParams();
+    params.set('network', network);
+    params.set('walletAddress', walletAddress);
+    if (importTokenAddresses.length) {
+      params.set('importTokenAddresses', importTokenAddresses.join(','));
+    }
+    return request('GET', `/uniswap/smart-create/assets?${params.toString()}`);
+  },
+  smartCreateFundingPlan: (payload) =>
+    request('POST', '/uniswap/smart-create/funding-plan', payload),
 };
 
 // ------------------------------------------------------------------

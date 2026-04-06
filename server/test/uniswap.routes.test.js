@@ -9,6 +9,8 @@ const authService = require('../src/services/auth.service');
 const uniswapProtectionService = require('../src/services/uniswap-protection.service');
 const protectedPoolRefreshService = require('../src/services/protected-pool-refresh.service');
 const positionActionsService = require('../src/services/uniswap-position-actions.service');
+const smartPoolCreatorService = require('../src/services/smart-pool-creator.service');
+const { AppError } = require('../src/errors/app-error');
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -102,6 +104,38 @@ test('POST /api/uniswap/protected-pools/refresh fuerza refresh y devuelve la lis
   }
 });
 
+test('POST /api/uniswap/protected-pools/:id/refresh-snapshot refresca una proteccion puntual', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalRefreshProtection = protectedPoolRefreshService.refreshProtection;
+  authService.validateSessionToken = async () => buildSessionUser();
+  const calls = [];
+
+  protectedPoolRefreshService.refreshProtection = async (userId, protectionId) => {
+    calls.push([userId, protectionId]);
+    return { id: protectionId, userId, snapshotStatus: 'ready' };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/protected-pools/55/refresh-snapshot`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${buildToken()}` },
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, [[1, 55]]);
+    assert.equal(json.data.id, 55);
+    assert.equal(json.data.snapshotStatus, 'ready');
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    protectedPoolRefreshService.refreshProtection = originalRefreshProtection;
+    server.close();
+  }
+});
+
 test('POST /api/uniswap/protected-pools crea la proteccion con el userId autenticado', async () => {
   const originalValidateSessionToken = authService.validateSessionToken;
   const originalCreate = uniswapProtectionService.createProtectedPool;
@@ -157,6 +191,172 @@ test('POST /api/uniswap/protected-pools crea la proteccion con el userId autenti
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
     uniswapProtectionService.createProtectedPool = originalCreate;
+    server.close();
+  }
+});
+
+test('GET /api/uniswap/protected-pools/:id/diagnostics delega al diagnostico delta-neutral', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalDiagnose = uniswapProtectionService.diagnoseDeltaNeutral;
+  authService.validateSessionToken = async () => buildSessionUser();
+  const calls = [];
+  uniswapProtectionService.diagnoseDeltaNeutral = async (userId, id) => {
+    calls.push([userId, id]);
+    return { id, snapshot: { status: 'ready' } };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/protected-pools/9/diagnostics`, {
+      headers: { Authorization: `Bearer ${buildToken()}` },
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, [[1, 9]]);
+    assert.equal(json.data.id, 9);
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    uniswapProtectionService.diagnoseDeltaNeutral = originalDiagnose;
+    server.close();
+  }
+});
+
+test('GET /api/uniswap/smart-create/assets devuelve activos detectados para la wallet', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalGetWalletAssets = smartPoolCreatorService.getWalletAssets;
+  authService.validateSessionToken = async () => buildSessionUser();
+  const calls = [];
+  smartPoolCreatorService.getWalletAssets = async (payload) => {
+    calls.push(payload);
+    return {
+      network: payload.network,
+      walletAddress: payload.walletAddress,
+      gasReserve: { symbol: 'ETH', reservedAmount: '0.002' },
+      assets: [{ id: 'native', symbol: 'ETH', balance: '0.5' }],
+    };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/smart-create/assets?network=arbitrum&walletAddress=0x00000000000000000000000000000000000000AA`, {
+      headers: { Authorization: `Bearer ${buildToken()}` },
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].network, 'arbitrum');
+    assert.equal(json.data.assets[0].symbol, 'ETH');
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    smartPoolCreatorService.getWalletAssets = originalGetWalletAssets;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/smart-create/funding-plan delega al planner de fondeo', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalBuildFundingPlan = smartPoolCreatorService.buildFundingPlan;
+  authService.validateSessionToken = async () => buildSessionUser();
+  const calls = [];
+  smartPoolCreatorService.buildFundingPlan = async (payload) => {
+    calls.push(payload);
+    return {
+      fundingPlan: { totalUsdTarget: 1000 },
+      swapPlan: [{ tokenIn: { symbol: 'USDC' }, tokenOut: { symbol: 'WETH' } }],
+    };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/smart-create/funding-plan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({
+        network: 'arbitrum',
+        version: 'v3',
+        walletAddress: '0x00000000000000000000000000000000000000AA',
+        token0Address: '0x00000000000000000000000000000000000000BB',
+        token1Address: '0x00000000000000000000000000000000000000CC',
+        fee: 3000,
+        totalUsdTarget: 1000,
+        targetWeightToken0Pct: 50,
+        rangeLowerPrice: 2000,
+        rangeUpperPrice: 3000,
+      }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(json.data.fundingPlan.totalUsdTarget, 1000);
+    assert.equal(json.data.swapPlan.length, 1);
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    smartPoolCreatorService.buildFundingPlan = originalBuildFundingPlan;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/smart-create/funding-plan propaga code y details cuando el planner rechaza el fondeo', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalBuildFundingPlan = smartPoolCreatorService.buildFundingPlan;
+  authService.validateSessionToken = async () => buildSessionUser();
+  smartPoolCreatorService.buildFundingPlan = async () => {
+    throw new AppError('No hay capital suficiente en Ethereum después de reservar 0.01 ETH para gas.', {
+      status: 400,
+      code: 'INSUFFICIENT_BALANCE_AFTER_GAS_RESERVE',
+      details: {
+        network: 'ethereum',
+        gasReserve: { symbol: 'ETH', reservedAmount: '0.01' },
+        deployableUsd: 0,
+        missingUsd: 20,
+      },
+    });
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/smart-create/funding-plan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({
+        network: 'ethereum',
+        version: 'v3',
+        walletAddress: '0x00000000000000000000000000000000000000AA',
+        token0Address: '0x0000000000000000000000000000000000000011',
+        token1Address: '0x0000000000000000000000000000000000000022',
+        fee: 3000,
+        totalUsdTarget: 20,
+        targetWeightToken0Pct: 50,
+        rangeLowerPrice: 2000,
+        rangeUpperPrice: 2200,
+      }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 400);
+    assert.equal(json.code, 'INSUFFICIENT_BALANCE_AFTER_GAS_RESERVE');
+    assert.equal(json.details.network, 'ethereum');
+    assert.equal(json.details.gasReserve.reservedAmount, '0.01');
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    smartPoolCreatorService.buildFundingPlan = originalBuildFundingPlan;
     server.close();
   }
 });
@@ -260,6 +460,92 @@ test('POST /api/uniswap/modify-range/finalize usa userId autenticado al finaliza
 
     assert.equal(res.status, 200);
     assert.equal(json.data.action, 'modify-range');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].userId, 1);
+    assert.deepEqual(calls[0].txHashes, ['0xabc']);
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    positionActionsService.finalizePositionAction = originalFinalize;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/close-to-usdc/prepare delega al coordinador de acciones', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalPrepare = positionActionsService.preparePositionAction;
+  const calls = [];
+
+  authService.validateSessionToken = async () => buildSessionUser();
+  positionActionsService.preparePositionAction = async (payload) => {
+    calls.push(payload);
+    return { action: 'close-to-usdc', txPlan: [] };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/close-to-usdc/prepare`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({
+        network: 'arbitrum',
+        version: 'v3',
+        walletAddress: '0x00000000000000000000000000000000000000AA',
+        positionIdentifier: '123',
+        slippageBps: 150,
+      }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.data.action, 'close-to-usdc');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, 'close-to-usdc');
+    assert.equal(calls[0].payload.positionIdentifier, '123');
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    positionActionsService.preparePositionAction = originalPrepare;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/close-keep-assets/finalize usa userId autenticado al finalizar', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalFinalize = positionActionsService.finalizePositionAction;
+  const calls = [];
+
+  authService.validateSessionToken = async () => buildSessionUser();
+  positionActionsService.finalizePositionAction = async (payload) => {
+    calls.push(payload);
+    return { action: 'close-keep-assets', txHashes: payload.txHashes };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/close-keep-assets/finalize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({
+        network: 'arbitrum',
+        version: 'v4',
+        walletAddress: '0x00000000000000000000000000000000000000AA',
+        positionIdentifier: '123',
+        txHashes: ['0xabc'],
+      }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.data.action, 'close-keep-assets');
     assert.equal(calls.length, 1);
     assert.equal(calls[0].userId, 1);
     assert.deepEqual(calls[0].txHashes, ['0xabc']);
