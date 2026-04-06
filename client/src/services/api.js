@@ -1,64 +1,12 @@
-/**
- * api.js
- *
- * Cliente HTTP para comunicarse con el backend del bot.
- * Incluye Authorization header con el JWT del usuario autenticado.
- * Si el servidor responde 401, limpia el storage y recarga la página (→ login).
- */
-
 import { clearSession, getToken } from './sessionStore';
+import { createHttpClient } from '../shared/api/httpClient';
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api';
-
-async function request(method, path, body) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-  const options = {
-    method,
-    signal: controller.signal,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken()}`,
-    },
-  };
-  if (body !== undefined) {
-    options.body = JSON.stringify(body);
-  }
-
-  try {
-    const res  = await fetch(`${BASE_URL}${path}`, options);
-    const text = await res.text();
-    let data = null;
-
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      throw new Error('Respuesta invalida del servidor');
-    }
-
-    if (res.status === 401) {
-      clearSession();
-      throw new Error('Sesión expirada');
-    }
-
-    if (!res.ok || !data.success) {
-      const error = new Error(data.error || `HTTP ${res.status}`);
-      error.code = data.code || 'HTTP_ERROR';
-      error.details = data.details || null;
-      error.requestId = data.requestId || null;
-      error.status = res.status;
-      throw error;
-    }
-
-    return data.data;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
+const request = createHttpClient({
+  baseUrl: BASE_URL,
+  getToken,
+  onUnauthorized: clearSession,
+});
 
 // ------------------------------------------------------------------
 // Auth

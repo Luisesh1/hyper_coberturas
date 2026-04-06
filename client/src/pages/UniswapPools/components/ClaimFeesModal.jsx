@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { uniswapApi } from '../../../services/api';
 import { formatUsd, formatCompactPrice } from '../utils/pool-formatters';
 import styles from './ClaimFeesModal.module.css';
@@ -49,7 +49,10 @@ export default function ClaimFeesModal({
   }, [network, version, positionIdentifier, wallet]);
 
   // Auto-prepare on mount
-  useState(() => { handlePrepare(); });
+  useEffect(() => {
+    handlePrepare();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Step 2: sign & send
   const handleSign = useCallback(async () => {

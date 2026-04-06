@@ -1,6 +1,15 @@
 import { formatNumber, formatTimestamp, formatDuration } from '../../../utils/formatters';
 import { getPoolStatus, getProtectionButtonState, getExplorerLink, getPoolValue } from '../utils/pool-helpers';
-import { formatUsd, formatCompactUsd, formatSignedUsd, formatPercent, formatPrice, shortAddress } from '../utils/pool-formatters';
+import {
+  formatUsd,
+  formatCompactUsd,
+  formatSignedUsd,
+  formatPercent,
+  formatPrice,
+  getValuationAccuracyBadge,
+  getValuationSourceLabel,
+  shortAddress,
+} from '../utils/pool-formatters';
 import RangeTrack from './RangeTrack';
 import styles from './PoolCard.module.css';
 
@@ -17,7 +26,10 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
   const creatorLink = getExplorerLink(pool.explorerUrl, 'address', ownerValue);
   const txLink = getExplorerLink(pool.explorerUrl, 'tx', pool.txHash);
   const poolLink = getExplorerLink(pool.explorerUrl, 'address', pool.poolAddress);
-  const openPriceLabel = pool.priceAtOpenAccuracy === 'approximate' ? 'Aprox.' : pool.priceAtOpenAccuracy === 'exact' ? 'Exacto' : null;
+  const openPriceLabel = getValuationAccuracyBadge(pool.priceAtOpenAccuracy);
+  const initialValueLabel = getValuationAccuracyBadge(pool.initialValueUsdAccuracy);
+  const initialValueSource = getValuationSourceLabel(pool.initialValueUsdSource);
+  const openPriceSource = getValuationSourceLabel(pool.priceAtOpenSource);
   const unclaimedFees = Number(pool.unclaimedFeesUsd);
   const canClaim = isLpPosition
     && ['v3', 'v4'].includes(pool.version)
@@ -55,6 +67,16 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
           ? 'Hooks no soportados en gestión V4'
         : '';
 
+  const lpActionButtons = [
+    { action: 'increase-liquidity', label: 'Liquidez', icon: '➕', title: 'Agregar más liquidez a esta posición' },
+    { action: 'decrease-liquidity', label: 'Liquidez', icon: '➖', title: 'Retirar parte de la liquidez de esta posición' },
+    { action: 'reinvest-fees', label: 'Reinvertir', icon: '↻', title: 'Reinvertir las fees acumuladas en más liquidez' },
+    { action: 'modify-range', label: 'Rango', icon: '↔', title: 'Cambiar el rango de precios de la posición' },
+    { action: 'rebalance', label: 'Rebalancear', icon: '⚖', title: 'Rebalancear los activos de la posición' },
+    { action: 'close-to-usdc', label: 'Cerrar a USDC', icon: '💵', title: 'Cerrar la posición y convertir los fondos a USDC' },
+    { action: 'close-keep-assets', label: 'Cerrar LP', icon: '📦', title: 'Cerrar la posición y conservar token0/token1 en la wallet' },
+  ];
+
   return (
     <article className={`${styles.card} ${toneCls}`}>
       <div className={styles.header}>
@@ -77,11 +99,22 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
       </div>
 
       <div className={styles.metrics}>
+        {isLpPosition && (
+          <div className={styles.metric}>
+            <span className={styles.metricValueRow}>
+              <span className={styles.metricValue}>{formatUsd(pool.initialValueUsd)}</span>
+              {initialValueLabel && pool.initialValueUsd != null && (
+                <span className={styles.metricBadge}>{initialValueLabel}</span>
+              )}
+            </span>
+            <span className={styles.metricLabel}>Valor inicial LP</span>
+          </div>
+        )}
         <div className={styles.metric}>
           <span className={styles.metricValue}>
             {isLpPosition ? formatUsd(pool.currentValueUsd) : formatCompactUsd(pool.tvlApproxUsd)}
           </span>
-          <span className={styles.metricLabel}>{isLpPosition ? 'Valor posición' : 'TVL'}</span>
+          <span className={styles.metricLabel}>{isLpPosition ? 'Valor actual LP' : 'TVL'}</span>
         </div>
         <div className={styles.metric}>
           <span className={`${styles.metricValue} ${pnlTone}`}>{formatSignedUsd(pool.pnlTotalUsd)}</span>
@@ -158,69 +191,19 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
           </button>
 
           <div className={styles.manageRow}>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              disabled={!canManage}
-              onClick={() => onClaimFees('increase-liquidity', pool)}
-              title={canManage ? 'Agregar más liquidez a esta posición' : manageTitle}
-            >
-              + Liquidez
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              disabled={!canManage}
-              onClick={() => onClaimFees('decrease-liquidity', pool)}
-              title={canManage ? 'Retirar parte de la liquidez de esta posición' : manageTitle}
-            >
-              − Liquidez
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              disabled={!canManage}
-              onClick={() => onClaimFees('reinvest-fees', pool)}
-              title={canManage ? 'Reinvertir las fees acumuladas en más liquidez' : manageTitle}
-            >
-              ↺ Reinvertir
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              disabled={!canManage}
-              onClick={() => onClaimFees('modify-range', pool)}
-              title={canManage ? 'Cambiar el rango de precios de la posición' : manageTitle}
-            >
-              ⇔ Cambiar rango
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              disabled={!canManage}
-              onClick={() => onClaimFees('rebalance', pool)}
-              title={canManage ? 'Rebalancear los activos de la posición' : manageTitle}
-            >
-              ⇄ Rebalancear
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              disabled={!canManage}
-              onClick={() => onClaimFees('close-to-usdc', pool)}
-              title={canManage ? 'Cerrar la posición y convertir los fondos a USDC' : manageTitle}
-            >
-              ⇢ Cerrar a USDC
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryBtn}
-              disabled={!canManage}
-              onClick={() => onClaimFees('close-keep-assets', pool)}
-              title={canManage ? 'Cerrar la posición y conservar token0/token1 en la wallet' : manageTitle}
-            >
-              ⨯ Cerrar LP
-            </button>
+            {lpActionButtons.map((item) => (
+              <button
+                key={item.action}
+                type="button"
+                className={styles.secondaryBtn}
+                disabled={!canManage}
+                onClick={() => onClaimFees(item.action, pool)}
+                title={canManage ? item.title : manageTitle}
+              >
+                <span className={styles.secondaryBtnIcon} aria-hidden="true">{item.icon}</span>
+                <span className={styles.secondaryBtnLabel}>{item.label}</span>
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -337,6 +320,14 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
                   </span>
                 </div>
                 <div className={styles.advancedItem}>
+                  <span className={styles.advancedLabel}>Origen del valor inicial</span>
+                  <span className={styles.advancedValue}>{initialValueSource}</span>
+                </div>
+                <div className={styles.advancedItem}>
+                  <span className={styles.advancedLabel}>Origen del precio de apertura</span>
+                  <span className={styles.advancedValue}>{openPriceSource}</span>
+                </div>
+                <div className={styles.advancedItem}>
                   <span className={styles.advancedLabel}>Composición actual de la posición</span>
                   <span className={styles.advancedValue}>
                     {formatNumber(pool.positionAmount0, 6)} {pool.token0?.symbol ?? '?'} · {formatNumber(pool.positionAmount1, 6)} {pool.token1?.symbol ?? '?'}
@@ -345,6 +336,16 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
               </>
             )}
           </div>
+          {Array.isArray(pool.valuationWarnings) && pool.valuationWarnings.length > 0 && (
+            <>
+              <p className={styles.insightsTitle}>Notas de valuación</p>
+              <div className={styles.warningList}>
+                {pool.valuationWarnings.map((warning) => (
+                  <p key={warning} className={styles.warningItem}>{warning}</p>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </details>
     </article>

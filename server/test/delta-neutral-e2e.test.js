@@ -5,11 +5,11 @@
 
 const { describe, it, before } = require('node:test');
 const assert = require('assert');
-const db = require('../db');
-const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
-const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
-const uniswapProtectionService = require('../services/uniswap-protection.service');
-const { computeDeltaNeutralMetrics } = require('../services/delta-neutral-math.service');
+const db = require('../src/db');
+const protectedPoolRepository = require('../src/repositories/protected-uniswap-pool.repository');
+const protectedPoolDeltaNeutralService = require('../src/services/protected-pool-delta-neutral.service');
+const uniswapProtectionService = require('../src/services/uniswap-protection.service');
+const { computeDeltaNeutralMetrics } = require('../src/services/delta-neutral-math.service');
 
 function priceToTick(price, token0Decimals = 18, token1Decimals = 6) {
   return Math.round(Math.log(price / (10 ** (token0Decimals - token1Decimals))) / Math.log(1.0001));
@@ -76,7 +76,7 @@ describe('Delta-Neutral Protection E2E', () => {
     });
 
     it('should have correct initial strategy state', async () => {
-      const { buildInitialStrategyState } = require('../services/protected-pool-delta-neutral.service');
+      const { buildInitialStrategyState } = require('../src/services/protected-pool-delta-neutral.service');
 
       const state = buildInitialStrategyState({
         currentPrice: 2000,
@@ -138,7 +138,7 @@ describe('Delta-Neutral Protection E2E', () => {
 
   describe('Strategy State Management', () => {
     it('should normalize strategy state correctly', () => {
-      const { normalizeStrategyState } = require('../services/protected-pool-delta-neutral.service');
+      const { normalizeStrategyState } = require('../src/services/protected-pool-delta-neutral.service');
 
       const invalid = null;
       const normalized = normalizeStrategyState(invalid);

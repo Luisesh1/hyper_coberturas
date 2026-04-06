@@ -39,6 +39,30 @@ function getEstimatedSize(candidate, protectionMode, parsedNotionalUsd) {
     : null;
 }
 
+function buildInitialFormState(candidate, defaultAccount) {
+  return {
+    selectedAccountId: defaultAccount?.id ? String(defaultAccount.id) : '',
+    leverage: String(candidate?.defaultLeverage || 10),
+    configuredNotionalUsd: String(candidate?.suggestedNotionalUsd || candidate?.baseNotionalUsd || ''),
+    stopLossDifferencePct: String(candidate?.stopLossDifferenceDefaultPct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT),
+    protectionMode: 'static',
+    reentryBufferPct: formatPercentInputValue(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT),
+    flipCooldownSec: String(candidate?.flipCooldownSec ?? DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC),
+    maxSequentialFlips: String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT),
+    breakoutConfirmDistancePct: String(candidate?.breakoutConfirmDistancePct ?? DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT),
+    breakoutConfirmDurationSec: String(candidate?.breakoutConfirmDurationSec ?? DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC),
+    bandMode: candidate?.bandMode || 'adaptive',
+    baseRebalancePriceMovePct: String(candidate?.baseRebalancePriceMovePct ?? 3),
+    rebalanceIntervalSec: String(candidate?.rebalanceIntervalSec ?? 21600),
+    targetHedgeRatio: String(candidate?.targetHedgeRatio ?? DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO),
+    minRebalanceNotionalUsd: String(candidate?.minRebalanceNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD),
+    maxSlippageBps: String(candidate?.maxSlippageBps ?? DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS),
+    twapMinNotionalUsd: String(candidate?.twapMinNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD),
+    selectedDeltaPreset: 'adaptive',
+    selectedMultiplier: null,
+  };
+}
+
 export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onClose, onSubmit }) {
   const candidate = pool?.protectionCandidate;
   const defaultAccount = accounts.find((a) => a.isDefault) || accounts[0] || null;
@@ -63,47 +87,32 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
   const [selectedMultiplier, setSelectedMultiplier] = useState(null);
   const [error, setError] = useState('');
 
+  // Reset form state when the pool identity changes (a different pool was selected).
+  // We only depend on pool.id to avoid re-resetting on every minor candidate update.
   useEffect(() => {
-    setSelectedAccountId(defaultAccount?.id ? String(defaultAccount.id) : '');
-    setLeverage(String(candidate?.defaultLeverage || 10));
-    setConfiguredNotionalUsd(String(candidate?.suggestedNotionalUsd || candidate?.baseNotionalUsd || ''));
-    setStopLossDifferencePct(String(candidate?.stopLossDifferenceDefaultPct ?? STOP_LOSS_DIFFERENCE_DEFAULT_PCT));
-    setProtectionMode('static');
-    setReentryBufferPct(formatPercentInputValue(candidate?.reentryBufferPct ?? DYNAMIC_REENTRY_BUFFER_DEFAULT_PCT));
-    setFlipCooldownSec(String(candidate?.flipCooldownSec ?? DYNAMIC_FLIP_COOLDOWN_DEFAULT_SEC));
-    setMaxSequentialFlips(String(candidate?.maxSequentialFlips ?? DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT));
-    setBreakoutConfirmDistancePct(String(candidate?.breakoutConfirmDistancePct ?? DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT));
-    setBreakoutConfirmDurationSec(String(candidate?.breakoutConfirmDurationSec ?? DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC));
-    setBandMode(candidate?.bandMode || 'adaptive');
-    setBaseRebalancePriceMovePct(String(candidate?.baseRebalancePriceMovePct ?? 3));
-    setRebalanceIntervalSec(String(candidate?.rebalanceIntervalSec ?? 21600));
-    setTargetHedgeRatio(String(candidate?.targetHedgeRatio ?? DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO));
-    setMinRebalanceNotionalUsd(String(candidate?.minRebalanceNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD));
-    setMaxSlippageBps(String(candidate?.maxSlippageBps ?? DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS));
-    setTwapMinNotionalUsd(String(candidate?.twapMinNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD));
-    setSelectedDeltaPreset('adaptive');
-    setSelectedMultiplier(null);
+    const initial = buildInitialFormState(candidate, defaultAccount);
+    setSelectedAccountId(initial.selectedAccountId);
+    setLeverage(initial.leverage);
+    setConfiguredNotionalUsd(initial.configuredNotionalUsd);
+    setStopLossDifferencePct(initial.stopLossDifferencePct);
+    setProtectionMode(initial.protectionMode);
+    setReentryBufferPct(initial.reentryBufferPct);
+    setFlipCooldownSec(initial.flipCooldownSec);
+    setMaxSequentialFlips(initial.maxSequentialFlips);
+    setBreakoutConfirmDistancePct(initial.breakoutConfirmDistancePct);
+    setBreakoutConfirmDurationSec(initial.breakoutConfirmDurationSec);
+    setBandMode(initial.bandMode);
+    setBaseRebalancePriceMovePct(initial.baseRebalancePriceMovePct);
+    setRebalanceIntervalSec(initial.rebalanceIntervalSec);
+    setTargetHedgeRatio(initial.targetHedgeRatio);
+    setMinRebalanceNotionalUsd(initial.minRebalanceNotionalUsd);
+    setMaxSlippageBps(initial.maxSlippageBps);
+    setTwapMinNotionalUsd(initial.twapMinNotionalUsd);
+    setSelectedDeltaPreset(initial.selectedDeltaPreset);
+    setSelectedMultiplier(initial.selectedMultiplier);
     setError('');
-  }, [
-    pool,
-    defaultAccount,
-    candidate?.defaultLeverage,
-    candidate?.suggestedNotionalUsd,
-    candidate?.baseNotionalUsd,
-    candidate?.stopLossDifferenceDefaultPct,
-    candidate?.reentryBufferPct,
-    candidate?.flipCooldownSec,
-    candidate?.maxSequentialFlips,
-    candidate?.breakoutConfirmDistancePct,
-    candidate?.breakoutConfirmDurationSec,
-    candidate?.bandMode,
-    candidate?.baseRebalancePriceMovePct,
-    candidate?.rebalanceIntervalSec,
-    candidate?.targetHedgeRatio,
-    candidate?.minRebalanceNotionalUsd,
-    candidate?.maxSlippageBps,
-    candidate?.twapMinNotionalUsd,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pool?.id, defaultAccount?.id]);
 
   if (!pool || !candidate) return null;
 

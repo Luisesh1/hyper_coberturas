@@ -1,4 +1,5 @@
 const logger = require('../services/logger.service');
+const { buildErrorEnvelope } = require('../shared/platform/http/response-envelope');
 
 /**
  * Middleware global de manejo de errores para Express.
@@ -25,14 +26,13 @@ function errorHandler(err, req, res, _next) {
 
   const shouldExposeDetails = Boolean(err.details) && (!IS_PROD || status < 500);
 
-  res.status(status).json({
-    success: false,
-    error: safeMessage,
+  res.status(status).json(buildErrorEnvelope({
+    message: safeMessage,
     code: err.code || 'UNHANDLED_ERROR',
     requestId: req.requestId,
-    ...(shouldExposeDetails ? { details: err.details } : {}),
-    ...(!IS_PROD && { stack: err.stack }),
-  });
+    details: shouldExposeDetails ? err.details : null,
+    stack: !IS_PROD ? err.stack : null,
+  }));
 }
 
 /**

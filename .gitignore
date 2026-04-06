@@ -16,6 +16,8 @@ client/dist/
 client/dist-temp/
 client/build/
 client/build-verify/
+client/build-tmp/
+client/build-check/
 server/dist/
 
 # ── Datos persistentes generados en runtime ──────────────────────────────────

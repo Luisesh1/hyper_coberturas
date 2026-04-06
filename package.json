@@ -7,11 +7,13 @@
     "seed:strategy:ma-cross": "npm --prefix server run seed:strategy:ma-cross",
     "seed:indicator:sqzmom-lb": "npm --prefix server run seed:indicator:sqzmom-lb",
     "optimize:strategy:sqzmom": "npm --prefix server run optimize:strategy:sqzmom",
+    "check:architecture": "node scripts/check-architecture-boundaries.mjs",
+    "check:hotspots": "node scripts/check-hotspot-sizes.mjs",
     "lint": "npm --prefix server run lint",
     "test": "npm --prefix server run test",
     "test:client": "npm --prefix client run test",
     "test:e2e": "playwright test",
-    "check": "npm run lint && npm run test && npm run test:client && npm --prefix client run build"
+    "check": "npm run check:architecture && npm run check:hotspots && npm run lint && npm run test && npm run test:client && npm --prefix client run build"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2"

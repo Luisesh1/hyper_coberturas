@@ -51,6 +51,8 @@ function buildPool(overrides = {}) {
     reserve1: 38000,
     liquiditySummary: { text: '0.4 WBTC · 38,000 USDC' },
     initialValueUsd: 1100,
+    initialValueUsdAccuracy: 'estimated',
+    initialValueUsdSource: 'tx_input_estimated',
     currentValueUsd: 1240,
     unclaimedFeesUsd: 32,
     pnlTotalUsd: 140,
@@ -63,6 +65,8 @@ function buildPool(overrides = {}) {
     rangeLowerPrice: 92000,
     rangeUpperPrice: 106000,
     priceAtOpen: 99000,
+    priceAtOpenAccuracy: 'estimated',
+    priceAtOpenSource: 'tx_input_estimated',
     priceCurrent: 100500,
     priceApprox: 100500,
     priceBaseSymbol: 'BTC',
@@ -71,6 +75,7 @@ function buildPool(overrides = {}) {
     positionAmount1: 17000,
     inRange: true,
     currentOutOfRangeSide: null,
+    valuationWarnings: ['El valor inicial se estimo desde los montos declarados en el calldata del tx de apertura.'],
     protectionCandidate: {
       eligible: true,
       inferredAsset: 'BTC',
@@ -113,18 +118,23 @@ function buildProtectedPool() {
     poolAddress: '0x0000000000000000000000000000000000000bbb',
     currentValueUsd: 1880,
     initialValueUsd: 1750,
+    initialValueUsdAccuracy: 'approximate',
+    initialValueUsdSource: 'rpc_prior_block',
     unclaimedFeesUsd: 48,
     pnlTotalUsd: 130,
     yieldPct: 7.42,
     rangeLowerPrice: 3000,
     rangeUpperPrice: 3500,
     priceAtOpen: 3250,
+    priceAtOpenAccuracy: 'approximate',
+    priceAtOpenSource: 'rpc_prior_block',
     priceCurrent: 3580,
     priceApprox: 3580,
     positionAmount0: 0.32,
     positionAmount1: 710,
     currentOutOfRangeSide: 'above',
     inRange: false,
+    valuationWarnings: ['El precio de apertura usa el bloque histórico anterior mas cercano disponible del RPC.'],
     protectionCandidate: {
       eligible: false,
       inferredAsset: 'ETH',
@@ -375,8 +385,18 @@ describe('UniswapPoolsPage', () => {
     }));
 
     expect(await screen.findByText('2 de 2')).toBeTruthy();
-    expect(await screen.findByText('WBTC / USDC')).toBeTruthy();
+    const pairHeading = await screen.findByText('WBTC / USDC');
+    const poolCard = pairHeading.closest('article');
+    expect(poolCard).toBeTruthy();
     expect((await screen.findAllByText('66.7%')).length).toBeGreaterThan(0);
+    expect(within(poolCard).getByText('Valor inicial LP')).toBeTruthy();
+    expect(within(poolCard).getByText('$1,100')).toBeTruthy();
+    expect(within(poolCard).getByText('Est.')).toBeTruthy();
+    expect(within(poolCard).getByText('Valor actual LP')).toBeTruthy();
+    expect(within(poolCard).getAllByText('$1,240').length).toBeGreaterThan(0);
+    await userEvent.click(within(poolCard).getByText(/Ver detalles del pool/i));
+    expect(within(poolCard).getByText('Origen del valor inicial')).toBeTruthy();
+    expect(within(poolCard).getAllByText('Calldata de apertura').length).toBeGreaterThan(0);
   });
 
   it('permite filtrar pools protegibles y abrir el modal de cobertura', async () => {
@@ -468,6 +488,8 @@ describe('UniswapPoolsPage', () => {
     expect(screen.getByText('0.5%')).toBeTruthy();
     expect(screen.getByText('10m')).toBeTruthy();
     expect(screen.getByText('50.0%')).toBeTruthy();
+    expect(screen.getAllByText('RPC bloque previo').length).toBeGreaterThan(0);
+    expect(screen.getByText('El precio de apertura usa el bloque histórico anterior mas cercano disponible del RPC.')).toBeTruthy();
     expect(screen.queryByText('WETH / USDC')).toBeNull();
 
     await userEvent.click(screen.getByRole('checkbox', { name: /Incluir inactivas/i }));

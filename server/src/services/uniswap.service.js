@@ -1,3 +1,4 @@
+const axios = require('axios');
 const { ethers } = require('ethers');
 const config = require('../config');
 const settingsService = require('./settings.service');
@@ -5,8 +6,33 @@ const etherscanQueueService = require('./etherscan-queue.service');
 const timeInRangeService = require('./time-in-range.service');
 const logger = require('./logger.service');
 const {
+  UNIVERSAL_ROUTER_ABI,
+  V4_ACTIONS,
+  getUniversalRouterAddress,
+} = require('./uniswap-v4-helpers.service');
+const {
   ValidationError,
 } = require('../errors/app-error');
+const {
+  Q96,
+  compactNumber,
+  tickToPrice,
+  tickToRawSqrtRatio,
+  sqrtPriceX96ToFloat,
+  liquidityToTokenAmounts,
+  computeDistanceToRange,
+  computePnlMetrics,
+} = require('./uniswap/pool-math');
+const {
+  STABLE_SYMBOLS,
+  isStableSymbol,
+  estimateTvlApproxUsd,
+  estimateUsdValueFromPair,
+} = require('./uniswap/pricing');
+const {
+  computeV3UnclaimedFees,
+  computeV4UnclaimedFees,
+} = require('./uniswap/fee-calculator');
 
 const ERC20_ABI = [
   'function symbol() view returns (string)',
@@ -40,6 +66,7 @@ const V3_POSITION_MANAGER_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
   'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
   'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
+  'function mint(tuple(address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline) params) payable returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)',
 ];
 
 const V4_STATE_VIEW_ABI = [
@@ -53,6 +80,7 @@ const V4_POSITION_MANAGER_ABI = [
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks), uint256)',
   'function getPositionLiquidity(uint256 tokenId) view returns (uint128 liquidity)',
+  'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
 ];
 
 const EVENT_ABIS = {
@@ -62,29 +90,25 @@ const EVENT_ABIS = {
   v4: 'event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)',
 };
 
-const STABLE_SYMBOLS = new Set([
-  'USDC',
-  'USDC.E',
-  'USDBC',
-  'USDT',
-  'USDT0',
-  'USD₮0',
-  'DAI',
-  'LUSD',
-  'FDUSD',
-  'USDE',
-]);
-
 const DEFAULT_TIMEOUT_MS = config.uniswap.scanTimeoutMs;
 const TXLIST_PAGE_SIZE = 1000;
 const MAX_TXLIST_PAGES = 5;
 const NFT_PAGE_SIZE = 100;
 const MAX_NFT_PAGES = 5;
-const HISTORICAL_PRICE_BLOCK_OFFSETS = [0, 50, 250, 1000, 5000, 50000, 500000];
-const Q96 = 2 ** 96;
-const Q128 = 2n ** 128n;
-const MAX_UINT256 = (1n << 256n) - 1n;
-
+const HISTORICAL_PRICE_BLOCK_OFFSETS = [0, -1, -5, -25, -100, -500, -5000];
+const ETHERSCAN_PROXY_API_URL = 'https://api.etherscan.io/v2/api';
+const TRANSFER_EVENT_TOPIC = ethers.id('Transfer(address,address,uint256)');
+const V4_PLAN_DECODER = ethers.AbiCoder.defaultAbiCoder();
+const V4_MINT_PARAM_TYPES = [
+  'tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks)',
+  'int24',
+  'int24',
+  'uint256',
+  'uint128',
+  'uint128',
+  'address',
+  'bytes',
+];
 const providerCache = new Map();
 const tokenCache = new Map();
 const receiptCache = new Map();
@@ -255,18 +279,16 @@ function normalizeAddress(address) {
   try {
     return ethers.getAddress(address);
   } catch {
-    return null;
+    try {
+      return ethers.getAddress(String(address).toLowerCase());
+    } catch {
+      return null;
+    }
   }
 }
 
 function lower(value) {
   return String(value || '').toLowerCase();
-}
-
-function compactNumber(value, digits = 6) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return null;
-  return Number(numeric.toFixed(digits));
 }
 
 function formatTokenAmount(value, decimals) {
@@ -275,41 +297,6 @@ function formatTokenAmount(value, decimals) {
   } catch {
     return '0';
   }
-}
-
-function tickToPrice(tick, token0Decimals, token1Decimals) {
-  const decimalDelta = token0Decimals - token1Decimals;
-  return Math.pow(1.0001, Number(tick)) * Math.pow(10, decimalDelta);
-}
-
-function tickToRawSqrtRatio(tick) {
-  return Math.pow(1.0001, Number(tick) / 2);
-}
-
-function sqrtPriceX96ToFloat(sqrtPriceX96) {
-  const numeric = Number(sqrtPriceX96);
-  if (!Number.isFinite(numeric) || numeric <= 0) return null;
-  return numeric / Q96;
-}
-
-function isStableSymbol(symbol) {
-  return STABLE_SYMBOLS.has(String(symbol || '').toUpperCase());
-}
-
-function estimateTvlApproxUsd(token0, amount0, token1, amount1) {
-  const reserve0 = Number(amount0);
-  const reserve1 = Number(amount1);
-
-  if (!Number.isFinite(reserve0) || !Number.isFinite(reserve1)) return null;
-  if (reserve0 <= 0 && reserve1 <= 0) return null;
-
-  const stable0 = isStableSymbol(token0.symbol);
-  const stable1 = isStableSymbol(token1.symbol);
-
-  if (stable0 && stable1) return compactNumber(reserve0 + reserve1, 2);
-  if (stable0) return compactNumber(reserve0 * 2, 2);
-  if (stable1) return compactNumber(reserve1 * 2, 2);
-  return null;
 }
 
 function buildLiquiditySummary(status, parts) {
@@ -321,6 +308,627 @@ function buildLiquiditySummary(status, parts) {
 
 function buildWarningsWithDedup(warnings) {
   return [...new Set(warnings.filter(Boolean))];
+}
+
+function getAccuracyFromSource(source) {
+  if (source === 'rpc_exact') return 'exact';
+  if (source === 'rpc_prior_block') return 'approximate';
+  if (source === 'tx_receipt_actual' || source === 'tx_receipt_transfers' || source === 'tx_input_estimated') {
+    return 'estimated';
+  }
+  return 'unavailable';
+}
+
+function getHistoricalPriceSource(accuracy) {
+  if (accuracy === 'exact') return 'rpc_exact';
+  if (accuracy === 'approximate') return 'rpc_prior_block';
+  return 'unavailable';
+}
+
+function getOpeningSourceLabel(source) {
+  switch (source) {
+    case 'rpc_exact':
+      return 'RPC bloque exacto';
+    case 'rpc_prior_block':
+      return 'RPC bloque previo';
+    case 'tx_receipt_actual':
+    case 'tx_receipt_transfers':
+      return 'Tx de apertura';
+    case 'tx_input_estimated':
+      return 'Calldata de apertura';
+    default:
+      return 'No disponible';
+  }
+}
+
+function toNumberOrNull(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function topicToAddress(topic) {
+  if (!topic || typeof topic !== 'string' || topic.length < 42) return null;
+  try {
+    return ethers.getAddress(`0x${topic.slice(-40)}`);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTxValue(value) {
+  if (typeof value === 'bigint') return value;
+  if (value == null) return 0n;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function normalizeBlockNumber(value) {
+  if (typeof value === 'number') return value;
+  if (value == null) return null;
+  try {
+    return Number(BigInt(value));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTransactionShape(tx) {
+  if (!tx) return null;
+  return {
+    hash: tx.hash || null,
+    to: normalizeAddress(tx.to),
+    from: normalizeAddress(tx.from),
+    data: tx.data || tx.input || '0x',
+    value: normalizeTxValue(tx.value),
+    blockNumber: normalizeBlockNumber(tx.blockNumber),
+  };
+}
+
+function normalizeReceiptShape(receipt) {
+  if (!receipt) return null;
+  return {
+    blockNumber: normalizeBlockNumber(receipt.blockNumber),
+    logs: Array.isArray(receipt.logs) ? receipt.logs : [],
+  };
+}
+
+function derivePriceFromAmounts(amount0, amount1) {
+  const baseAmount = Number(amount0);
+  const quoteAmount = Number(amount1);
+  if (!Number.isFinite(baseAmount) || !Number.isFinite(quoteAmount) || baseAmount <= 0 || quoteAmount <= 0) return null;
+  return compactNumber(quoteAmount / baseAmount, 6);
+}
+
+function inferSpotPriceFromLpAmounts({
+  liquidity,
+  amount0,
+  amount1,
+  tickLower,
+  tickUpper,
+  token0Decimals,
+  token1Decimals,
+}) {
+  const liquidityFloat = Number(liquidity);
+  const amount0Float = Number(amount0);
+  const amount1Float = Number(amount1);
+
+  if (
+    !Number.isFinite(liquidityFloat) ||
+    liquidityFloat <= 0 ||
+    !Number.isFinite(amount0Float) ||
+    !Number.isFinite(amount1Float) ||
+    amount0Float <= 0 ||
+    amount1Float <= 0 ||
+    tickLower == null ||
+    tickUpper == null
+  ) {
+    return null;
+  }
+
+  const sqrtLower = tickToRawSqrtRatio(tickLower);
+  const sqrtUpper = tickToRawSqrtRatio(tickUpper);
+  if (!Number.isFinite(sqrtLower) || !Number.isFinite(sqrtUpper) || sqrtLower <= 0 || sqrtUpper <= 0) {
+    return null;
+  }
+
+  const lower = Math.min(sqrtLower, sqrtUpper);
+  const upper = Math.max(sqrtLower, sqrtUpper);
+  const amount0Raw = amount0Float * (10 ** token0Decimals);
+  const amount1Raw = amount1Float * (10 ** token1Decimals);
+
+  if (!Number.isFinite(amount0Raw) || !Number.isFinite(amount1Raw) || amount0Raw <= 0 || amount1Raw <= 0) {
+    return null;
+  }
+
+  const sqrtFromAmount1 = lower + (amount1Raw / liquidityFloat);
+  const sqrtFromAmount0 = (liquidityFloat * upper) / ((amount0Raw * upper) + liquidityFloat);
+
+  if (
+    !Number.isFinite(sqrtFromAmount0) ||
+    !Number.isFinite(sqrtFromAmount1) ||
+    sqrtFromAmount0 <= lower ||
+    sqrtFromAmount0 >= upper ||
+    sqrtFromAmount1 <= lower ||
+    sqrtFromAmount1 >= upper
+  ) {
+    return null;
+  }
+
+  const mean = (sqrtFromAmount0 + sqrtFromAmount1) / 2;
+  const relativeDiff = Math.abs(sqrtFromAmount0 - sqrtFromAmount1) / mean;
+  if (!Number.isFinite(relativeDiff) || relativeDiff > 0.05) {
+    return null;
+  }
+
+  return compactNumber((mean ** 2) * (10 ** (token0Decimals - token1Decimals)), 6);
+}
+
+function extractOutgoingTokenTransfers({ receipt, tx, walletAddress, token0, token1 }) {
+  const normalizedWallet = lower(walletAddress);
+  if (!normalizedWallet || !receipt) return null;
+
+  let amount0Raw = 0n;
+  let amount1Raw = 0n;
+
+  for (const log of receipt.logs || []) {
+    if (String(log?.topics?.[0] || '').toLowerCase() !== TRANSFER_EVENT_TOPIC.toLowerCase()) continue;
+    const from = topicToAddress(log.topics?.[1]);
+    if (lower(from) !== normalizedWallet) continue;
+    const logAddress = normalizeAddress(log.address);
+    const amountRaw = normalizeTxValue(log.data);
+
+    if (token0?.isNative !== true && logAddress && lower(logAddress) === lower(token0?.address)) {
+      amount0Raw += amountRaw;
+    }
+    if (token1?.isNative !== true && logAddress && lower(logAddress) === lower(token1?.address)) {
+      amount1Raw += amountRaw;
+    }
+  }
+
+  if (token0?.isNative) amount0Raw += normalizeTxValue(tx?.value);
+  if (token1?.isNative) amount1Raw += normalizeTxValue(tx?.value);
+
+  if (amount0Raw <= 0n && amount1Raw <= 0n) return null;
+
+  return {
+    amount0: compactNumber(formatTokenAmount(amount0Raw, token0?.decimals ?? 18), 8),
+    amount1: compactNumber(formatTokenAmount(amount1Raw, token1?.decimals ?? 18), 8),
+    source: 'tx_receipt_transfers',
+  };
+}
+
+function decodeV4Plan(unlockData) {
+  if (!unlockData || unlockData === '0x') return null;
+  try {
+    const [actionsRaw, paramsRaw] = V4_PLAN_DECODER.decode(['bytes', 'bytes[]'], unlockData);
+    return {
+      actions: Array.from(ethers.getBytes(actionsRaw)),
+      params: Array.from(paramsRaw || []),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decodeV4MintActionParam(param) {
+  if (!param || param === '0x') return null;
+  try {
+    const decoded = V4_PLAN_DECODER.decode(V4_MINT_PARAM_TYPES, param);
+    return {
+      poolKey: decoded[0],
+      tickLower: Number(decoded[1]),
+      tickUpper: Number(decoded[2]),
+      liquidity: normalizeTxValue(decoded[3]),
+      amount0Max: normalizeTxValue(decoded[4]),
+      amount1Max: normalizeTxValue(decoded[5]),
+      owner: normalizeAddress(decoded[6]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractV4MintInputFromPlan(unlockData, token0, token1) {
+  const plan = decodeV4Plan(unlockData);
+  if (!plan || plan.actions.length !== plan.params.length) return null;
+
+  for (let index = 0; index < plan.actions.length; index += 1) {
+    if (plan.actions[index] !== V4_ACTIONS.MINT_POSITION) continue;
+    const mint = decodeV4MintActionParam(plan.params[index]);
+    if (!mint) continue;
+    if (token0?.address && lower(mint.poolKey?.currency0) !== lower(token0.address)) continue;
+    if (token1?.address && lower(mint.poolKey?.currency1) !== lower(token1.address)) continue;
+    return {
+      amount0: compactNumber(formatTokenAmount(mint.amount0Max, token0?.decimals ?? 18), 8),
+      amount1: compactNumber(formatTokenAmount(mint.amount1Max, token1?.decimals ?? 18), 8),
+      source: 'tx_input_estimated',
+    };
+  }
+
+  return null;
+}
+
+function extractV3MintInput(tx, networkConfig, token0, token1) {
+  const positionManagerAddress = normalizeAddress(networkConfig?.deployments?.v3?.positionManager);
+  if (!positionManagerAddress || lower(tx?.to) !== lower(positionManagerAddress)) return null;
+
+  try {
+    const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
+    const parsed = iface.parseTransaction({ data: tx.data, value: tx.value });
+    if (!parsed || parsed.name !== 'mint') return null;
+    const params = parsed.args?.[0];
+    if (!params) return null;
+    if (token0?.address && lower(params.token0) !== lower(token0.address)) return null;
+    if (token1?.address && lower(params.token1) !== lower(token1.address)) return null;
+    return {
+      amount0: compactNumber(formatTokenAmount(params.amount0Desired, token0?.decimals ?? 18), 8),
+      amount1: compactNumber(formatTokenAmount(params.amount1Desired, token1?.decimals ?? 18), 8),
+      source: 'tx_input_estimated',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractV4MintInput(tx, networkConfig, token0, token1) {
+  const positionManagerAddress = normalizeAddress(networkConfig?.deployments?.v4?.positionManager);
+  const universalRouterAddress = normalizeAddress(getUniversalRouterAddress(networkConfig?.id));
+
+  try {
+    if (positionManagerAddress && lower(tx?.to) === lower(positionManagerAddress)) {
+      const iface = new ethers.Interface(V4_POSITION_MANAGER_ABI);
+      const parsed = iface.parseTransaction({ data: tx.data, value: tx.value });
+      if (parsed?.name === 'modifyLiquidities') {
+        return extractV4MintInputFromPlan(parsed.args?.[0], token0, token1);
+      }
+    }
+  } catch {
+    // noop
+  }
+
+  try {
+    if (universalRouterAddress && lower(tx?.to) === lower(universalRouterAddress)) {
+      const iface = new ethers.Interface(UNIVERSAL_ROUTER_ABI);
+      const parsed = iface.parseTransaction({ data: tx.data, value: tx.value });
+      const inputs = Array.from(parsed?.args?.[1] || []);
+      for (const input of inputs) {
+        const mint = extractV4MintInputFromPlan(input, token0, token1);
+        if (mint) return mint;
+      }
+    }
+  } catch {
+    // noop
+  }
+
+  return null;
+}
+
+function extractMintInputAmounts({ tx, networkConfig, version, token0, token1 }) {
+  if (!tx || !networkConfig || !version) return null;
+  if (version === 'v3') return extractV3MintInput(tx, networkConfig, token0, token1);
+  if (version === 'v4') return extractV4MintInput(tx, networkConfig, token0, token1);
+  return null;
+}
+
+async function fetchEtherscanProxyResult(apiKey, networkConfig, action, params) {
+  if (!apiKey || !networkConfig?.chainId) return null;
+
+  try {
+    const { data } = await axios.get(ETHERSCAN_PROXY_API_URL, {
+      params: {
+        chainid: networkConfig.chainId,
+        module: 'proxy',
+        action,
+        ...params,
+        apikey: apiKey,
+      },
+      timeout: DEFAULT_TIMEOUT_MS,
+    });
+
+    return data?.result ?? null;
+  } catch (error) {
+    logger.warn('etherscan_proxy_fallback_failed', {
+      chainId: networkConfig.chainId,
+      action,
+      error: error.message,
+    });
+    return null;
+  }
+}
+
+async function getTransactionWithFallback(provider, networkConfig, txHash, apiKey = null, fetcher = null) {
+  try {
+    const tx = fetcher ? await fetcher(txHash) : await provider.getTransaction(txHash);
+    return normalizeTransactionShape(tx);
+  } catch {
+    const tx = await fetchEtherscanProxyResult(apiKey, networkConfig, 'eth_getTransactionByHash', { txhash: txHash });
+    return normalizeTransactionShape(tx);
+  }
+}
+
+async function getReceiptWithFallback(provider, networkConfig, txHash, apiKey = null, fetcher = null) {
+  try {
+    const receipt = fetcher ? await fetcher(txHash) : await getReceipt(provider, txHash);
+    return normalizeReceiptShape(receipt);
+  } catch {
+    const receipt = await fetchEtherscanProxyResult(apiKey, networkConfig, 'eth_getTransactionReceipt', { txhash: txHash });
+    return normalizeReceiptShape(receipt);
+  }
+}
+
+/**
+ * Busca el txHash del mint de un V3 NFT iterando los logs Transfer(0x0 -> *, tokenId)
+ * del NonfungiblePositionManager. Funciona contra RPC sin Etherscan API key.
+ *
+ * @returns {Promise<{ txHash: string, blockNumber: number } | null>}
+ */
+async function findV3MintTxFromLogs({ provider, networkConfig, tokenId }) {
+  if (!provider || !tokenId) return null;
+  const positionManagerAddress = networkConfig?.deployments?.v3?.positionManager;
+  if (!positionManagerAddress) return null;
+  try {
+    const tokenIdHex = ethers.zeroPadValue(ethers.toBeHex(BigInt(tokenId)), 32);
+    const transferTopic = ethers.id('Transfer(address,address,uint256)');
+    const zeroTopic = '0x' + '0'.repeat(64);
+    const latest = await provider.getBlockNumber();
+    const STEP = 10000;
+    for (let to = latest; to >= 0; to -= STEP) {
+      const from = Math.max(0, to - STEP + 1);
+      try {
+        const logs = await provider.getLogs({
+          address: positionManagerAddress,
+          topics: [transferTopic, zeroTopic, null, tokenIdHex],
+          fromBlock: from,
+          toBlock: to,
+        });
+        if (logs && logs.length > 0) {
+          return { txHash: logs[0].transactionHash, blockNumber: logs[0].blockNumber };
+        }
+      } catch {
+        // Algunos RPC limitan el rango. Continuar.
+      }
+      // Cap a 200k bloques (~1 mes en Arbitrum) para evitar loops eternos.
+      if (latest - to > 200_000) break;
+    }
+  } catch (err) {
+    logger.warn('find_v3_mint_tx_failed', { tokenId: String(tokenId), error: err.message });
+  }
+  return null;
+}
+
+async function resolveInitialValuation({
+  provider,
+  networkConfig,
+  apiKey = null,
+  record,
+  positionLiquidity = null,
+  token0,
+  token1,
+  historicalPrice,
+  historicalAmounts,
+  currentValueUsd,
+  unclaimedFeesUsd,
+  priceCurrent = null,
+  getTransactionByHash,
+  getReceiptByHash,
+}) {
+  const warnings = [];
+  const historicalSource = getHistoricalPriceSource(historicalPrice?.accuracy);
+
+  let priceAtOpen = historicalPrice?.price ?? null;
+  let priceAtOpenAccuracy = getAccuracyFromSource(historicalSource);
+  let priceAtOpenSource = historicalSource;
+  let priceAtOpenBlock = historicalSource === 'unavailable'
+    ? null
+    : historicalPrice?.blockNumber ?? record?.mintBlockNumber ?? null;
+
+  let initialAmounts = historicalAmounts && (historicalAmounts.amount0 != null || historicalAmounts.amount1 != null)
+    ? historicalAmounts
+    : { amount0: null, amount1: null };
+  let initialValueUsd = historicalPrice?.price != null
+    ? estimateUsdValueFromPair(
+      token0,
+      token1,
+      initialAmounts.amount0,
+      initialAmounts.amount1,
+      historicalPrice.price
+    )
+    : null;
+  let initialValueUsdSource = initialValueUsd != null ? historicalSource : 'unavailable';
+  let initialValueUsdAccuracy = getAccuracyFromSource(initialValueUsdSource);
+
+  const computeInitialValueUsd = (amount0, amount1, inferredPrice = null) => {
+    const preferredPrice = historicalPrice?.price ?? inferredPrice ?? null;
+    return estimateUsdValueFromPair(token0, token1, amount0, amount1, preferredPrice);
+  };
+
+  // Si falta el txHash del mint (típico cuando no hay Etherscan API key), intentamos
+  // descubrirlo iterando los Transfer logs del NFT vía eth_getLogs.
+  let resolvedTxHash = record?.txHash || null;
+  if (!resolvedTxHash && record?.identifier && record?.version === 'v3') {
+    const discovered = await findV3MintTxFromLogs({
+      provider,
+      networkConfig,
+      tokenId: record.identifier,
+    });
+    if (discovered) {
+      resolvedTxHash = discovered.txHash;
+      if (record && !record.txHash) record.txHash = discovered.txHash;
+      if (record && !record.mintBlockNumber) record.mintBlockNumber = discovered.blockNumber;
+    }
+  }
+
+  if ((priceAtOpen == null || initialValueUsd == null || initialAmounts.amount0 == null || initialAmounts.amount1 == null) && resolvedTxHash) {
+    const [tx, receipt] = await Promise.all([
+      getTransactionWithFallback(provider, networkConfig, resolvedTxHash, apiKey, getTransactionByHash),
+      getReceiptWithFallback(provider, networkConfig, resolvedTxHash, apiKey, getReceiptByHash),
+    ]);
+
+    const transferAmounts = extractOutgoingTokenTransfers({
+      receipt,
+      tx,
+      walletAddress: record.owner || record.creator,
+      token0,
+      token1,
+    });
+
+    if (transferAmounts) {
+      if (initialAmounts.amount0 == null) initialAmounts.amount0 = transferAmounts.amount0;
+      if (initialAmounts.amount1 == null) initialAmounts.amount1 = transferAmounts.amount1;
+
+      const transferPrice = inferSpotPriceFromLpAmounts({
+        liquidity: positionLiquidity ?? record?.positionLiquidity ?? record?.liquidity,
+        amount0: transferAmounts.amount0,
+        amount1: transferAmounts.amount1,
+        tickLower: record?.tickLower,
+        tickUpper: record?.tickUpper,
+        token0Decimals: token0?.decimals ?? 18,
+        token1Decimals: token1?.decimals ?? 18,
+      });
+      if (priceAtOpen == null && transferPrice != null) {
+        priceAtOpen = transferPrice;
+        priceAtOpenAccuracy = getAccuracyFromSource(transferAmounts.source);
+        priceAtOpenSource = transferAmounts.source;
+        priceAtOpenBlock = tx?.blockNumber ?? receipt?.blockNumber ?? record?.mintBlockNumber ?? null;
+      }
+
+      if (initialValueUsd == null) {
+        const transferValueUsd = computeInitialValueUsd(
+          transferAmounts.amount0,
+          transferAmounts.amount1,
+          transferPrice
+        );
+        if (transferValueUsd != null) {
+          initialValueUsd = transferValueUsd;
+          initialValueUsdSource = transferAmounts.source;
+          initialValueUsdAccuracy = getAccuracyFromSource(transferAmounts.source);
+        }
+      }
+    }
+
+    if (initialValueUsd == null || priceAtOpen == null || initialAmounts.amount0 == null || initialAmounts.amount1 == null) {
+      const inputAmounts = extractMintInputAmounts({
+        tx,
+        networkConfig,
+        version: record.version,
+        token0,
+        token1,
+      });
+
+      if (inputAmounts) {
+        if (initialAmounts.amount0 == null) initialAmounts.amount0 = inputAmounts.amount0;
+        if (initialAmounts.amount1 == null) initialAmounts.amount1 = inputAmounts.amount1;
+
+        const inputPrice = inferSpotPriceFromLpAmounts({
+          liquidity: positionLiquidity ?? record?.positionLiquidity ?? record?.liquidity,
+          amount0: inputAmounts.amount0,
+          amount1: inputAmounts.amount1,
+          tickLower: record?.tickLower,
+          tickUpper: record?.tickUpper,
+          token0Decimals: token0?.decimals ?? 18,
+          token1Decimals: token1?.decimals ?? 18,
+        });
+        if (priceAtOpen == null && inputPrice != null) {
+          priceAtOpen = inputPrice;
+          priceAtOpenAccuracy = getAccuracyFromSource(inputAmounts.source);
+          priceAtOpenSource = inputAmounts.source;
+          priceAtOpenBlock = tx?.blockNumber ?? receipt?.blockNumber ?? record?.mintBlockNumber ?? null;
+        }
+
+        if (initialValueUsd == null) {
+          const inputValueUsd = computeInitialValueUsd(
+            inputAmounts.amount0,
+            inputAmounts.amount1,
+            inputPrice
+          );
+          if (inputValueUsd != null) {
+            initialValueUsd = inputValueUsd;
+            initialValueUsdSource = inputAmounts.source;
+            initialValueUsdAccuracy = getAccuracyFromSource(inputAmounts.source);
+          }
+        }
+      }
+    }
+  }
+
+  // Último fallback: si tenemos amounts iniciales pero ningún precio histórico,
+  // usar el precio actual del pool como aproximación. Esto da un valor inicial
+  // razonable para mostrar en UI aunque el P&L pierda precisión histórica.
+  if (initialValueUsd == null
+    && (initialAmounts.amount0 != null || initialAmounts.amount1 != null)
+    && Number.isFinite(Number(priceCurrent)) && Number(priceCurrent) > 0) {
+    const approxValueUsd = estimateUsdValueFromPair(
+      token0,
+      token1,
+      initialAmounts.amount0 || 0,
+      initialAmounts.amount1 || 0,
+      priceCurrent,
+    );
+    if (approxValueUsd != null) {
+      initialValueUsd = approxValueUsd;
+      initialValueUsdSource = 'current_price_fallback';
+      initialValueUsdAccuracy = 'approximate';
+      warnings.push('El valor inicial se aproximo usando el precio actual del pool (no se pudo reconstruir el precio historico).');
+    }
+  }
+
+  if (priceAtOpenSource === 'rpc_prior_block') {
+    warnings.push('El precio de apertura usa el bloque histórico anterior mas cercano disponible del RPC.');
+  }
+  if (priceAtOpenSource === 'tx_receipt_transfers') {
+    warnings.push('El precio de apertura se reconstruyo desde las transferencias del tx de apertura.');
+  }
+  if (priceAtOpenSource === 'tx_input_estimated') {
+    warnings.push('El precio de apertura se estimo desde el calldata del tx de apertura.');
+  }
+  if (priceAtOpen == null) {
+    priceAtOpenAccuracy = 'unavailable';
+    priceAtOpenSource = 'unavailable';
+    warnings.push('No se pudo reconstruir el precio al abrir; el P&L total puede no estar disponible.');
+  }
+
+  if (initialValueUsdSource === 'rpc_prior_block') {
+    warnings.push('El valor inicial usa el bloque histórico anterior mas cercano disponible del RPC.');
+  }
+  if (initialValueUsdSource === 'tx_receipt_transfers') {
+    warnings.push('El valor inicial se reconstruyo desde las transferencias del tx de apertura.');
+  }
+  if (initialValueUsdSource === 'tx_input_estimated') {
+    warnings.push('El valor inicial se estimo desde los montos declarados en el calldata del tx de apertura.');
+  }
+  if (initialValueUsd == null) {
+    initialValueUsdAccuracy = 'unavailable';
+    initialValueUsdSource = 'unavailable';
+  }
+  if (initialValueUsd != null && priceAtOpen == null) {
+    warnings.push('Se pudo reconstruir el valor inicial, pero no el precio exacto de apertura para la grafica.');
+  }
+
+  let valuationAccuracy = initialValueUsdAccuracy;
+  if (currentValueUsd == null || unclaimedFeesUsd == null) {
+    valuationAccuracy = valuationAccuracy === 'exact' ? 'approximate' : valuationAccuracy;
+    warnings.push('La valuación USD usa una heurística best-effort según el par del LP.');
+  }
+  if (initialValueUsd == null) {
+    valuationAccuracy = 'unavailable';
+  }
+
+  return {
+    priceAtOpen,
+    priceAtOpenAccuracy,
+    priceAtOpenSource,
+    priceAtOpenBlock,
+    initialAmount0: initialAmounts.amount0,
+    initialAmount1: initialAmounts.amount1,
+    initialValueUsd,
+    initialValueUsdAccuracy,
+    initialValueUsdSource,
+    valuationAccuracy,
+    valuationWarnings: buildWarningsWithDedup(warnings),
+  };
 }
 
 function decodeSigned24(value) {
@@ -351,6 +959,7 @@ async function resolveHistoricalSpotPrice({ blockNumber, fetchAtBlock }) {
 
   for (const offset of HISTORICAL_PRICE_BLOCK_OFFSETS) {
     const targetBlock = baseBlock + offset;
+    if (!Number.isFinite(targetBlock) || targetBlock <= 0) continue;
     try {
       const value = await fetchAtBlock(targetBlock);
       if (value && Number.isFinite(Number(value.tick)) && Number.isFinite(Number(value.price))) {
@@ -365,22 +974,6 @@ async function resolveHistoricalSpotPrice({ blockNumber, fetchAtBlock }) {
     } catch {
       // Intentamos el siguiente checkpoint si el nodo no tiene estado histórico.
     }
-  }
-
-  // Ultimo recurso: usar el bloque latest (el RPC siempre tiene el estado actual)
-  try {
-    const value = await fetchAtBlock('latest');
-    if (value && Number.isFinite(Number(value.tick)) && Number.isFinite(Number(value.price))) {
-      return {
-        price: compactNumber(value.price, 6),
-        tick: Number(value.tick),
-        sqrtPriceX96: value.sqrtPriceX96 != null ? String(value.sqrtPriceX96) : null,
-        blockNumber: null,
-        accuracy: 'approximate',
-      };
-    }
-  } catch {
-    // ignorar
   }
 
   return {
@@ -421,229 +1014,6 @@ function computeRangeVisual(rangeLowerPrice, rangeUpperPrice, priceAtOpen, price
     currentMarkerPct: Number.isFinite(current)
       ? Math.max(0, Math.min(100, ((current - min) / (max - min)) * 100))
       : null,
-  };
-}
-
-function liquidityToTokenAmounts({
-  liquidity,
-  sqrtPriceX96,
-  tickCurrent,
-  tickLower,
-  tickUpper,
-  token0Decimals,
-  token1Decimals,
-}) {
-  const liquidityFloat = Number(liquidity);
-  const sqrtCurrent = sqrtPriceX96 != null
-    ? sqrtPriceX96ToFloat(sqrtPriceX96)
-    : tickCurrent != null
-      ? tickToRawSqrtRatio(tickCurrent)
-      : null;
-  const sqrtLower = tickToRawSqrtRatio(tickLower);
-  const sqrtUpper = tickToRawSqrtRatio(tickUpper);
-
-  if (
-    !Number.isFinite(liquidityFloat) ||
-    liquidityFloat <= 0 ||
-    !Number.isFinite(sqrtCurrent) ||
-    !Number.isFinite(sqrtLower) ||
-    !Number.isFinite(sqrtUpper) ||
-    sqrtLower <= 0 ||
-    sqrtUpper <= 0
-  ) {
-    return {
-      amount0: null,
-      amount1: null,
-    };
-  }
-
-  const lower = Math.min(sqrtLower, sqrtUpper);
-  const upper = Math.max(sqrtLower, sqrtUpper);
-  let amount0Raw = 0;
-  let amount1Raw = 0;
-
-  if (sqrtCurrent <= lower) {
-    amount0Raw = liquidityFloat * ((upper - lower) / (lower * upper));
-  } else if (sqrtCurrent < upper) {
-    amount0Raw = liquidityFloat * ((upper - sqrtCurrent) / (sqrtCurrent * upper));
-    amount1Raw = liquidityFloat * (sqrtCurrent - lower);
-  } else {
-    amount1Raw = liquidityFloat * (upper - lower);
-  }
-
-  return {
-    amount0: compactNumber(amount0Raw / (10 ** token0Decimals), 8),
-    amount1: compactNumber(amount1Raw / (10 ** token1Decimals), 8),
-  };
-}
-
-function estimateUsdValueFromPair(token0, token1, amount0, amount1, priceQuotePerBase) {
-  const a0 = Number(amount0);
-  const a1 = Number(amount1);
-  const price = Number(priceQuotePerBase);
-
-  if (!Number.isFinite(a0) || !Number.isFinite(a1)) return null;
-
-  const stable0 = isStableSymbol(token0?.symbol);
-  const stable1 = isStableSymbol(token1?.symbol);
-
-  if (stable0 && stable1) return compactNumber(a0 + a1, 2);
-  if (stable1 && Number.isFinite(price) && price > 0) {
-    return compactNumber(a1 + (a0 * price), 2);
-  }
-  if (stable0 && Number.isFinite(price) && price > 0) {
-    return compactNumber(a0 + (a1 / price), 2);
-  }
-  return null;
-}
-
-function computeDistanceToRange(rangeLowerPrice, rangeUpperPrice, priceCurrent) {
-  const lower = Number(rangeLowerPrice);
-  const upper = Number(rangeUpperPrice);
-  const current = Number(priceCurrent);
-
-  if (!Number.isFinite(lower) || !Number.isFinite(upper) || !Number.isFinite(current) || lower === upper) {
-    return {
-      distanceToRangePct: null,
-      distanceToRangePrice: null,
-    };
-  }
-
-  const min = Math.min(lower, upper);
-  const max = Math.max(lower, upper);
-
-  if (current >= min && current <= max) {
-    return {
-      distanceToRangePct: 0,
-      distanceToRangePrice: 0,
-    };
-  }
-
-  if (current < min) {
-    const delta = min - current;
-    return {
-      distanceToRangePrice: compactNumber(delta, 6),
-      distanceToRangePct: current > 0 ? compactNumber((delta / min) * 100, 4) : null,
-    };
-  }
-
-  const delta = current - max;
-  return {
-    distanceToRangePrice: compactNumber(delta, 6),
-    distanceToRangePct: compactNumber((delta / max) * 100, 4),
-  };
-}
-
-function computePnlMetrics(initialValueUsd, currentValueUsd, unclaimedFeesUsd) {
-  const initial = Number(initialValueUsd);
-  const current = Number(currentValueUsd);
-  const fees = Number(unclaimedFeesUsd);
-
-  if (!Number.isFinite(initial) || !Number.isFinite(current) || !Number.isFinite(fees) || initial <= 0) {
-    return {
-      pnlTotalUsd: null,
-      pnlTotalPct: null,
-      yieldPct: null,
-    };
-  }
-
-  const pnlTotalUsd = compactNumber(current + fees - initial, 2);
-  const pnlTotalPct = compactNumber((pnlTotalUsd / initial) * 100, 4);
-
-  return {
-    pnlTotalUsd,
-    pnlTotalPct,
-    yieldPct: pnlTotalPct,
-  };
-}
-
-/**
- * Calcula las fees no reclamadas de una posicion V3 usando fee growth del pool.
- * tokensOwed del position manager solo contiene fees pre-acumuladas (post-collect),
- * NO las fees pendientes reales. Para obtener las fees reales hay que calcular
- * feeGrowthInside a partir de los ticks y el estado global del pool.
- */
-function computeV3UnclaimedFees({
-  liquidity,
-  tickCurrent,
-  tickLower,
-  tickUpper,
-  feeGrowthGlobal0X128,
-  feeGrowthGlobal1X128,
-  feeGrowthOutsideLower0X128,
-  feeGrowthOutsideLower1X128,
-  feeGrowthOutsideUpper0X128,
-  feeGrowthOutsideUpper1X128,
-  feeGrowthInside0LastX128,
-  feeGrowthInside1LastX128,
-  tokensOwed0,
-  tokensOwed1,
-}) {
-  const liq = BigInt(liquidity || 0);
-  const tick = Number(tickCurrent);
-  const tl = Number(tickLower);
-  const tu = Number(tickUpper);
-
-  if (liq <= 0n) {
-    return { fees0: BigInt(tokensOwed0 || 0), fees1: BigInt(tokensOwed1 || 0) };
-  }
-
-  const fg0 = BigInt(feeGrowthGlobal0X128 || 0);
-  const fg1 = BigInt(feeGrowthGlobal1X128 || 0);
-  const foLow0 = BigInt(feeGrowthOutsideLower0X128 || 0);
-  const foLow1 = BigInt(feeGrowthOutsideLower1X128 || 0);
-  const foUp0 = BigInt(feeGrowthOutsideUpper0X128 || 0);
-  const foUp1 = BigInt(feeGrowthOutsideUpper1X128 || 0);
-  const fgLast0 = BigInt(feeGrowthInside0LastX128 || 0);
-  const fgLast1 = BigInt(feeGrowthInside1LastX128 || 0);
-
-  // feeGrowthBelow = tick >= tickLower ? feeGrowthOutside : feeGrowthGlobal - feeGrowthOutside
-  const fBelow0 = tick >= tl ? foLow0 : (fg0 - foLow0) & MAX_UINT256;
-  const fBelow1 = tick >= tl ? foLow1 : (fg1 - foLow1) & MAX_UINT256;
-  // feeGrowthAbove = tick < tickUpper ? feeGrowthOutside : feeGrowthGlobal - feeGrowthOutside
-  const fAbove0 = tick < tu ? foUp0 : (fg0 - foUp0) & MAX_UINT256;
-  const fAbove1 = tick < tu ? foUp1 : (fg1 - foUp1) & MAX_UINT256;
-
-  const fInside0 = (fg0 - fBelow0 - fAbove0) & MAX_UINT256;
-  const fInside1 = (fg1 - fBelow1 - fAbove1) & MAX_UINT256;
-
-  const delta0 = (fInside0 - fgLast0) & MAX_UINT256;
-  const delta1 = (fInside1 - fgLast1) & MAX_UINT256;
-
-  return {
-    fees0: (delta0 * liq) / Q128 + BigInt(tokensOwed0 || 0),
-    fees1: (delta1 * liq) / Q128 + BigInt(tokensOwed1 || 0),
-  };
-}
-
-function computeV4UnclaimedFees({
-  liquidity,
-  feeGrowthInside0LastX128,
-  feeGrowthInside1LastX128,
-  feeGrowthInside0X128,
-  feeGrowthInside1X128,
-}) {
-  const liq = BigInt(liquidity || 0);
-  const growthLast0 = BigInt(feeGrowthInside0LastX128 || 0);
-  const growthLast1 = BigInt(feeGrowthInside1LastX128 || 0);
-  const growth0 = BigInt(feeGrowthInside0X128 || 0);
-  const growth1 = BigInt(feeGrowthInside1X128 || 0);
-
-  if (liq <= 0n) {
-    return {
-      fees0: 0n,
-      fees1: 0n,
-    };
-  }
-
-  // En v4 puede venir un snapshot previo cercano a uint256 max. La resta debe
-  // hacerse en aritmetica modular para no perder fees legitimas en token0/token1.
-  const delta0 = (growth0 - growthLast0) & MAX_UINT256;
-  const delta1 = (growth1 - growthLast1) & MAX_UINT256;
-
-  return {
-    fees0: (delta0 * liq) / Q128,
-    fees1: (delta1 * liq) / Q128,
   };
 }
 
@@ -1116,7 +1486,7 @@ async function enrichV2Record(provider, networkConfig, record) {
   };
 }
 
-async function enrichV3Record(provider, networkConfig, record) {
+async function enrichV3Record(provider, networkConfig, record, apiKey = null) {
   const [token0, token1] = await Promise.all([
     getTokenMeta(provider, networkConfig, record.token0Address),
     getTokenMeta(provider, networkConfig, record.token1Address),
@@ -1157,12 +1527,6 @@ async function enrichV3Record(provider, networkConfig, record) {
       };
     },
   });
-  const rangeVisual = computeRangeVisual(
-    rangeLowerPrice,
-    rangeUpperPrice,
-    historicalPrice.price,
-    priceCurrent
-  );
   const inRange =
     record.tickLower != null &&
     record.tickUpper != null &&
@@ -1221,15 +1585,6 @@ async function enrichV3Record(provider, networkConfig, record) {
     currentAmounts.amount1,
     priceCurrent
   );
-  const initialValueUsd = historicalPrice.price != null
-    ? estimateUsdValueFromPair(
-      token0,
-      token1,
-      initialAmounts.amount0,
-      initialAmounts.amount1,
-      historicalPrice.price
-    )
-    : null;
   const unclaimedFeesUsd = estimateUsdValueFromPair(
     token0,
     token1,
@@ -1237,26 +1592,32 @@ async function enrichV3Record(provider, networkConfig, record) {
     unclaimedFees1,
     priceCurrent
   );
-  const pnlMetrics = computePnlMetrics(initialValueUsd, currentValueUsd, unclaimedFeesUsd);
+  const valuationResult = await resolveInitialValuation({
+    provider,
+    networkConfig,
+    apiKey,
+    record,
+    positionLiquidity,
+    token0,
+    token1,
+    historicalPrice,
+    historicalAmounts: initialAmounts,
+    currentValueUsd,
+    unclaimedFeesUsd,
+    priceCurrent,
+  });
+  const rangeVisual = computeRangeVisual(
+    rangeLowerPrice,
+    rangeUpperPrice,
+    valuationResult.priceAtOpen,
+    priceCurrent
+  );
+  const pnlMetrics = computePnlMetrics(valuationResult.initialValueUsd, currentValueUsd, unclaimedFeesUsd);
   const distanceMetrics = computeDistanceToRange(rangeLowerPrice, rangeUpperPrice, priceCurrent);
-  let valuationAccuracy = historicalPrice.accuracy;
-  const valuationWarnings = [
+  const valuationWarnings = buildWarningsWithDedup([
     'P&L best-effort: no reconstruye aumentos, reducciones o collects posteriores al mint.',
-  ];
-
-  if (historicalPrice.accuracy === 'approximate') {
-    valuationWarnings.push('El precio de apertura usa el primer bloque histórico disponible del RPC.');
-  }
-  if (historicalPrice.accuracy === 'unavailable') {
-    valuationWarnings.push('No se pudo reconstruir el precio al abrir; el P&L total puede no estar disponible.');
-  }
-  if (currentValueUsd == null || unclaimedFeesUsd == null) {
-    valuationAccuracy = valuationAccuracy === 'exact' ? 'approximate' : valuationAccuracy;
-    valuationWarnings.push('La valuación USD usa una heurística best-effort según el par del LP.');
-  }
-  if (initialValueUsd == null) {
-    valuationAccuracy = 'unavailable';
-  }
+    ...(valuationResult.valuationWarnings || []),
+  ]);
 
   return {
     ...record,
@@ -1275,9 +1636,10 @@ async function enrichV3Record(provider, networkConfig, record) {
     activeForMs: lpMeta.activeForMs,
     rangeLowerPrice,
     rangeUpperPrice,
-    priceAtOpen: historicalPrice.price,
-    priceAtOpenAccuracy: historicalPrice.accuracy,
-    priceAtOpenBlock: historicalPrice.blockNumber,
+    priceAtOpen: valuationResult.priceAtOpen,
+    priceAtOpenAccuracy: valuationResult.priceAtOpenAccuracy,
+    priceAtOpenSource: valuationResult.priceAtOpenSource,
+    priceAtOpenBlock: valuationResult.priceAtOpenBlock,
     inRange,
     currentOutOfRangeSide: rangeVisual.currentOutOfRangeSide,
     priceCurrent,
@@ -1287,10 +1649,12 @@ async function enrichV3Record(provider, networkConfig, record) {
     tvlApproxUsd,
     positionAmount0: currentAmounts.amount0,
     positionAmount1: currentAmounts.amount1,
-    initialAmount0: initialAmounts.amount0,
-    initialAmount1: initialAmounts.amount1,
+    initialAmount0: valuationResult.initialAmount0,
+    initialAmount1: valuationResult.initialAmount1,
     currentValueUsd,
-    initialValueUsd,
+    initialValueUsd: valuationResult.initialValueUsd,
+    initialValueUsdAccuracy: valuationResult.initialValueUsdAccuracy,
+    initialValueUsdSource: valuationResult.initialValueUsdSource,
     unclaimedFees0,
     unclaimedFees1,
     unclaimedFeesUsd,
@@ -1299,8 +1663,8 @@ async function enrichV3Record(provider, networkConfig, record) {
     yieldPct: pnlMetrics.yieldPct,
     distanceToRangePct: distanceMetrics.distanceToRangePct,
     distanceToRangePrice: distanceMetrics.distanceToRangePrice,
-    valuationAccuracy,
-    valuationWarnings: buildWarningsWithDedup(valuationWarnings),
+    valuationAccuracy: valuationResult.valuationAccuracy,
+    valuationWarnings,
     liquiditySummary: buildLiquiditySummary(active ? 'active' : 'empty', [
       `Posición #${record.identifier}`,
       `Liquidity: ${positionLiquidity}`,
@@ -1314,7 +1678,7 @@ async function enrichV3Record(provider, networkConfig, record) {
   };
 }
 
-async function enrichV4Record(provider, networkConfig, record) {
+async function enrichV4Record(provider, networkConfig, record, apiKey = null) {
   const [token0, token1] = await Promise.all([
     getTokenMeta(provider, networkConfig, record.token0Address),
     getTokenMeta(provider, networkConfig, record.token1Address),
@@ -1360,12 +1724,6 @@ async function enrichV4Record(provider, networkConfig, record) {
       };
     },
   });
-  const rangeVisual = computeRangeVisual(
-    rangeLowerPrice,
-    rangeUpperPrice,
-    historicalPrice.price,
-    priceCurrent
-  );
   const inRange =
     record.tickLower != null &&
     record.tickUpper != null &&
@@ -1407,15 +1765,6 @@ async function enrichV4Record(provider, networkConfig, record) {
     currentAmounts.amount1,
     priceCurrent
   );
-  const initialValueUsd = historicalPrice.price != null
-    ? estimateUsdValueFromPair(
-      token0,
-      token1,
-      initialAmounts.amount0,
-      initialAmounts.amount1,
-      historicalPrice.price
-    )
-    : null;
   const unclaimedFeesUsd = estimateUsdValueFromPair(
     token0,
     token1,
@@ -1423,26 +1772,32 @@ async function enrichV4Record(provider, networkConfig, record) {
     unclaimedFees1,
     priceCurrent
   );
-  const pnlMetrics = computePnlMetrics(initialValueUsd, currentValueUsd, unclaimedFeesUsd);
+  const valuationResult = await resolveInitialValuation({
+    provider,
+    networkConfig,
+    apiKey,
+    record,
+    positionLiquidity: liquidity,
+    token0,
+    token1,
+    historicalPrice,
+    historicalAmounts: initialAmounts,
+    currentValueUsd,
+    unclaimedFeesUsd,
+    priceCurrent,
+  });
+  const rangeVisual = computeRangeVisual(
+    rangeLowerPrice,
+    rangeUpperPrice,
+    valuationResult.priceAtOpen,
+    priceCurrent
+  );
+  const pnlMetrics = computePnlMetrics(valuationResult.initialValueUsd, currentValueUsd, unclaimedFeesUsd);
   const distanceMetrics = computeDistanceToRange(rangeLowerPrice, rangeUpperPrice, priceCurrent);
-  let valuationAccuracy = historicalPrice.accuracy;
-  const valuationWarnings = [
+  const valuationWarnings = buildWarningsWithDedup([
     'P&L best-effort: no reconstruye aumentos, reducciones o collects posteriores al mint.',
-  ];
-
-  if (historicalPrice.accuracy === 'approximate') {
-    valuationWarnings.push('El precio de apertura usa el primer bloque histórico disponible del RPC.');
-  }
-  if (historicalPrice.accuracy === 'unavailable') {
-    valuationWarnings.push('No se pudo reconstruir el precio al abrir; el P&L total puede no estar disponible.');
-  }
-  if (currentValueUsd == null || unclaimedFeesUsd == null) {
-    valuationAccuracy = valuationAccuracy === 'exact' ? 'approximate' : valuationAccuracy;
-    valuationWarnings.push('La valuación USD usa una heurística best-effort según el par del LP.');
-  }
-  if (initialValueUsd == null) {
-    valuationAccuracy = 'unavailable';
-  }
+    ...(valuationResult.valuationWarnings || []),
+  ]);
 
   return {
     ...record,
@@ -1461,9 +1816,10 @@ async function enrichV4Record(provider, networkConfig, record) {
     activeForMs: lpMeta.activeForMs,
     rangeLowerPrice,
     rangeUpperPrice,
-    priceAtOpen: historicalPrice.price,
-    priceAtOpenAccuracy: historicalPrice.accuracy,
-    priceAtOpenBlock: historicalPrice.blockNumber,
+    priceAtOpen: valuationResult.priceAtOpen,
+    priceAtOpenAccuracy: valuationResult.priceAtOpenAccuracy,
+    priceAtOpenSource: valuationResult.priceAtOpenSource,
+    priceAtOpenBlock: valuationResult.priceAtOpenBlock,
     inRange,
     currentOutOfRangeSide: rangeVisual.currentOutOfRangeSide,
     priceCurrent,
@@ -1474,10 +1830,12 @@ async function enrichV4Record(provider, networkConfig, record) {
     poolId,
     positionAmount0: currentAmounts.amount0,
     positionAmount1: currentAmounts.amount1,
-    initialAmount0: initialAmounts.amount0,
-    initialAmount1: initialAmounts.amount1,
+    initialAmount0: valuationResult.initialAmount0,
+    initialAmount1: valuationResult.initialAmount1,
     currentValueUsd,
-    initialValueUsd,
+    initialValueUsd: valuationResult.initialValueUsd,
+    initialValueUsdAccuracy: valuationResult.initialValueUsdAccuracy,
+    initialValueUsdSource: valuationResult.initialValueUsdSource,
     unclaimedFees0,
     unclaimedFees1,
     unclaimedFeesUsd,
@@ -1486,8 +1844,8 @@ async function enrichV4Record(provider, networkConfig, record) {
     yieldPct: pnlMetrics.yieldPct,
     distanceToRangePct: distanceMetrics.distanceToRangePct,
     distanceToRangePrice: distanceMetrics.distanceToRangePrice,
-    valuationAccuracy,
-    valuationWarnings: buildWarningsWithDedup(valuationWarnings),
+    valuationAccuracy: valuationResult.valuationAccuracy,
+    valuationWarnings,
     liquiditySummary: buildLiquiditySummary(active ? 'active' : 'empty', [
       `Posición #${record.identifier}`,
       `Liquidity: ${liquidity}`,
@@ -1496,11 +1854,11 @@ async function enrichV4Record(provider, networkConfig, record) {
   };
 }
 
-async function enrichRecord(provider, networkConfig, record) {
+async function enrichRecord(provider, networkConfig, record, apiKey = null) {
   if (record.version === 'v1') return enrichV1Record(provider, networkConfig, record);
   if (record.version === 'v2') return enrichV2Record(provider, networkConfig, record);
-  if (record.version === 'v3') return enrichV3Record(provider, networkConfig, record);
-  return enrichV4Record(provider, networkConfig, record);
+  if (record.version === 'v3') return enrichV3Record(provider, networkConfig, record, apiKey);
+  return enrichV4Record(provider, networkConfig, record, apiKey);
 }
 
 async function getPoolSpotData({
@@ -1638,7 +1996,7 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
 
   const enriched = await mapConcurrent(records, 4, async (record) => {
     try {
-      return await enrichV3Record(provider, networkConfig, record);
+      return await enrichV3Record(provider, networkConfig, record, apiKey);
     } catch (err) {
       warnings.push(`No se pudo enriquecer posición v3 ${record.identifier}: ${err.message}`);
       return null;
@@ -1734,7 +2092,7 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
 
   const enriched = await mapConcurrent(records.filter(Boolean), 3, async (record) => {
     try {
-      return enrichV4Record(provider, networkConfig, record);
+      return enrichV4Record(provider, networkConfig, record, apiKey);
     } catch (err) {
       warnings.push(`No se pudo enriquecer posición v4 ${record.identifier}: ${err.message}`);
       return null;
@@ -1812,7 +2170,7 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
   const baseRecords = baseRecordBatches.flat().filter((record) => lower(record.creator) === lower(normalizedWallet));
   const enriched = await mapConcurrent(baseRecords, 4, async (record) => {
     try {
-      return await enrichRecord(provider, networkConfig, record);
+      return await enrichRecord(provider, networkConfig, record, apiKey);
     } catch (err) {
       warnings.push(`No se pudo enriquecer ${record.txHash}: ${err.message}`);
       return null;
@@ -1868,7 +2226,9 @@ module.exports = {
   computeV4UnclaimedFees,
   decodeV4PositionInfo,
   estimateUsdValueFromPair,
+  extractMintInputAmounts,
   resolveHistoricalSpotPrice,
+  resolveInitialValuation,
   getPoolSpotData,
   sqrtPriceX96ToFloat,
   tickToRawSqrtRatio,

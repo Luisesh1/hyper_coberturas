@@ -69,3 +69,25 @@ export function roundUsd(value) {
   if (!Number.isFinite(n)) return 0;
   return Math.round(n * 100) / 100;
 }
+
+export function getValuationAccuracyBadge(accuracy) {
+  if (accuracy === 'approximate') return 'Aprox.';
+  if (accuracy === 'estimated') return 'Est.';
+  return null;
+}
+
+export function getValuationSourceLabel(source) {
+  switch (source) {
+    case 'rpc_exact':
+      return 'RPC bloque exacto';
+    case 'rpc_prior_block':
+      return 'RPC bloque previo';
+    case 'tx_receipt_actual':
+    case 'tx_receipt_transfers':
+      return 'Tx de apertura';
+    case 'tx_input_estimated':
+      return 'Calldata de apertura';
+    default:
+      return 'No disponible';
+  }
+}

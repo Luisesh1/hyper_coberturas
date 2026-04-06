@@ -4,7 +4,8 @@ import { getPoolStatus } from '../utils/pool-helpers';
 import { formatDuration, formatNumber } from '../../../utils/formatters';
 import {
   formatUsd, formatSignedUsd, formatPercent, formatPercentRatio,
-  formatCompactPrice, formatRelativeTimestamp, shortAddress,
+  formatCompactPrice, formatRelativeTimestamp, getValuationAccuracyBadge,
+  getValuationSourceLabel, shortAddress,
 } from '../utils/pool-formatters';
 import RangeTrack from './RangeTrack';
 import styles from './ProtectedPoolCard.module.css';
@@ -29,10 +30,41 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
   const pairLabel = snapshot.token0?.symbol && snapshot.token1?.symbol
     ? `${snapshot.token0.symbol} / ${snapshot.token1.symbol}`
     : `${protection.token0Symbol} / ${protection.token1Symbol}`;
-  const pnlValue = Number(snapshot.pnlTotalUsd);
-  const yieldValue = Number(snapshot.yieldPct);
+  const lpPnlValue = Number(snapshot.pnlTotalUsd);
   const downside = protection.hedges?.downside;
   const upside = protection.hedges?.upside;
+  // P&L combinada: LP + protección (hedges o delta-neutral overlay)
+  const isDeltaNeutralForPnl = protection.protectionMode === 'delta_neutral';
+  const strategyStateForPnl = protection.strategyState || null;
+  let protectionPnlContribution = 0;
+  let hasProtectionPnl = false;
+  if (isDeltaNeutralForPnl && strategyStateForPnl) {
+    // netProtectionPnlUsd ya incluye lpPnl + hedge components
+    const net = Number(strategyStateForPnl.netProtectionPnlUsd);
+    if (Number.isFinite(net) && Number.isFinite(lpPnlValue)) {
+      protectionPnlContribution = net - lpPnlValue;
+      hasProtectionPnl = true;
+    }
+  } else {
+    for (const hedge of [downside, upside]) {
+      if (!hedge) continue;
+      const unrealized = Number(hedge.unrealizedPnlUsd);
+      const funding = Number(hedge.fundingAccumUsd);
+      const fee = Number(hedge.entryFeePaidUsd);
+      if (Number.isFinite(unrealized)) { protectionPnlContribution += unrealized; hasProtectionPnl = true; }
+      if (Number.isFinite(funding)) { protectionPnlContribution += funding; hasProtectionPnl = true; }
+      if (Number.isFinite(fee)) { protectionPnlContribution -= fee; hasProtectionPnl = true; }
+    }
+  }
+  const totalPnlValue = Number.isFinite(lpPnlValue)
+    ? lpPnlValue + protectionPnlContribution
+    : (hasProtectionPnl ? protectionPnlContribution : NaN);
+  const initialValueForYield = Number(snapshot.initialValueUsd);
+  const totalYieldValue = Number.isFinite(totalPnlValue) && Number.isFinite(initialValueForYield) && initialValueForYield > 0
+    ? (totalPnlValue / initialValueForYield) * 100
+    : Number(snapshot.yieldPct);
+  const pnlValue = totalPnlValue;
+  const yieldValue = totalYieldValue;
   const status = getPoolStatus({
     ...snapshot,
     status: protection.status,
@@ -64,6 +96,10 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
   const hasUnsupportedV4Hooks = protection.version === 'v4'
     && snapshot.hooks
     && snapshot.hooks !== '0x0000000000000000000000000000000000000000';
+  const initialValueLabel = getValuationAccuracyBadge(snapshot.initialValueUsdAccuracy);
+  const initialValueSource = getValuationSourceLabel(snapshot.initialValueUsdSource);
+  const openPriceLabel = getValuationAccuracyBadge(snapshot.priceAtOpenAccuracy);
+  const openPriceSource = getValuationSourceLabel(snapshot.priceAtOpenSource);
   const canClaim = ['v3', 'v4'].includes(protection.version)
     && walletState?.isConnected
     && walletState.chainId === snapshot.chainId
@@ -90,6 +126,15 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
   const modeBadgeCls = isDeltaNeutral ? styles.badgeDeltaNeutral : isDynamic ? styles.badgeDynamic : styles.badgeNeutral;
 
   const poolPayload = { ...snapshot, network: protection.network, version: protection.version, identifier: protection.positionIdentifier, chainId: snapshot.chainId };
+  const lpActionButtons = [
+    { action: 'increase-liquidity', label: 'Liquidez', icon: '➕', title: 'Agregar liquidez' },
+    { action: 'decrease-liquidity', label: 'Liquidez', icon: '➖', title: 'Retirar liquidez' },
+    { action: 'reinvest-fees', label: 'Reinvertir', icon: '↻', title: 'Reinvertir fees en liquidez' },
+    { action: 'modify-range', label: 'Rango', icon: '↔', title: 'Cambiar rango de precios' },
+    { action: 'rebalance', label: 'Rebalancear', icon: '⚖', title: 'Rebalancear activos' },
+    { action: 'close-to-usdc', label: 'Cerrar a USDC', icon: '💵', title: 'Cerrar la posición y convertir los fondos a USDC' },
+    { action: 'close-keep-assets', label: 'Cerrar LP', icon: '📦', title: 'Cerrar la posición y conservar token0/token1 en la wallet' },
+  ];
 
   return (
     <article className={`${styles.card} ${toneCls}`}>
@@ -139,7 +184,12 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
       {/* ─── Métricas principales ──────────────── */}
       <div className={styles.metrics}>
         <div className={styles.metric}>
-          <span className={styles.metricValue}>{formatUsd(snapshot.initialValueUsd)}</span>
+          <span className={styles.metricValueRow}>
+            <span className={styles.metricValue}>{formatUsd(snapshot.initialValueUsd)}</span>
+            {initialValueLabel && snapshot.initialValueUsd != null && (
+              <span className={styles.metricBadge}>{initialValueLabel}</span>
+            )}
+          </span>
           <span className={styles.metricLabel}>Valor inicial LP</span>
         </div>
         <div className={styles.metric}>
@@ -151,11 +201,22 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
           <span className={styles.metricLabel}>Fees acumuladas</span>
         </div>
         <div className={styles.metric}>
-          <span className={`${styles.metricValue} ${pnlTone}`}>{formatSignedUsd(snapshot.pnlTotalUsd)}</span>
-          <span className={styles.metricLabel}>Ganancia / Pérdida</span>
+          <span className={`${styles.metricValue} ${pnlTone}`}>
+            {formatSignedUsd(Number.isFinite(totalPnlValue) ? totalPnlValue : null)}
+          </span>
+          <span className={styles.metricLabel}>
+            Ganancia / Pérdida{hasProtectionPnl ? ' (LP + protección)' : ''}
+          </span>
+          {hasProtectionPnl && Number.isFinite(lpPnlValue) && (
+            <span className={styles.metricSubValue} title="Desglose">
+              LP: {formatSignedUsd(lpPnlValue)} · Prot: {formatSignedUsd(protectionPnlContribution)}
+            </span>
+          )}
         </div>
         <div className={styles.metric}>
-          <span className={`${styles.metricValue} ${yieldTone}`}>{formatPercent(snapshot.yieldPct)}</span>
+          <span className={`${styles.metricValue} ${yieldTone}`}>
+            {formatPercent(Number.isFinite(totalYieldValue) ? totalYieldValue : null)}
+          </span>
           <span className={styles.metricLabel}>Rendimiento</span>
         </div>
         {snapshot.activeForMs != null && (
@@ -201,13 +262,19 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
             {unclaimedFees > 0 && <span className={styles.claimAmount}>{formatUsd(snapshot.unclaimedFeesUsd)}</span>}
           </button>
           <div className={styles.manageRow}>
-            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('increase-liquidity', poolPayload)} title={canManage ? 'Agregar liquidez' : manageTitle}>+ Liquidez</button>
-            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('decrease-liquidity', poolPayload)} title={canManage ? 'Retirar liquidez' : manageTitle}>− Liquidez</button>
-            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('reinvest-fees', poolPayload)} title={canManage ? 'Reinvertir fees en liquidez' : manageTitle}>↺ Reinvertir</button>
-            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('modify-range', poolPayload)} title={canManage ? 'Cambiar rango de precios' : manageTitle}>⇔ Rango</button>
-            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('rebalance', poolPayload)} title={canManage ? 'Rebalancear activos' : manageTitle}>⇄ Rebalancear</button>
-            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('close-to-usdc', poolPayload)} title={canManage ? 'Cerrar la posición y convertir los fondos a USDC' : manageTitle}>⇢ Cerrar a USDC</button>
-            <button type="button" className={styles.secondaryBtn} disabled={!canManage} onClick={() => onClaimFees('close-keep-assets', poolPayload)} title={canManage ? 'Cerrar la posición y conservar token0/token1 en la wallet' : manageTitle}>⨯ Cerrar LP</button>
+            {lpActionButtons.map((item) => (
+              <button
+                key={item.action}
+                type="button"
+                className={styles.secondaryBtn}
+                disabled={!canManage}
+                onClick={() => onClaimFees(item.action, poolPayload)}
+                title={canManage ? item.title : manageTitle}
+              >
+                <span className={styles.secondaryBtnIcon} aria-hidden="true">{item.icon}</span>
+                <span className={styles.secondaryBtnLabel}>{item.label}</span>
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -219,6 +286,27 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
           <span className={styles.detailsChevron}>›</span>
         </summary>
         <div className={styles.detailsContent}>
+
+          <p className={styles.sectionTitle}>Datos del LP protegido</p>
+          <div className={styles.metaGrid}>
+            <MetaChip label="Precio de apertura" value={`${formatCompactPrice(snapshot.priceAtOpen)}${openPriceLabel ? ` · ${openPriceLabel}` : ''}`} />
+            <MetaChip label="Origen precio apertura" value={openPriceSource} />
+            <MetaChip label="Origen valor inicial" value={initialValueSource} />
+            <MetaChip label="Valor actual LP" value={formatUsd(snapshot.currentValueUsd)} />
+          </div>
+
+          {snapshot.mode === 'lp_position' && <RangeTrack pool={snapshot} />}
+
+          {Array.isArray(snapshot.valuationWarnings) && snapshot.valuationWarnings.length > 0 && (
+            <>
+              <p className={styles.sectionTitle}>Notas de valuación</p>
+              <div className={styles.warningList}>
+                {snapshot.valuationWarnings.map((warning) => (
+                  <p key={warning} className={styles.warningItem}>{warning}</p>
+                ))}
+              </div>
+            </>
+          )}
 
           {/* Cuenta HL usada para la protección */}
           {protection.account && (

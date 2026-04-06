@@ -51,6 +51,9 @@ function mapSummaryHedge(hedge) {
     createdAt: hedge.createdAt != null ? Number(hedge.createdAt) : null,
     openedAt: hedge.openedAt != null ? Number(hedge.openedAt) : null,
     closedAt: hedge.closedAt != null ? Number(hedge.closedAt) : null,
+    unrealizedPnlUsd: hedge.unrealizedPnlUsd != null ? Number(hedge.unrealizedPnlUsd) : null,
+    fundingAccumUsd: hedge.fundingAccumUsd != null ? Number(hedge.fundingAccumUsd) : null,
+    entryFeePaidUsd: hedge.entryFeePaidUsd != null ? Number(hedge.entryFeePaidUsd) : null,
     error: hedge.error || null,
   };
 }
@@ -201,6 +204,9 @@ async function listByUser(userId, executor) {
                   'createdAt', h.created_at,
                   'openedAt', h.opened_at,
                   'closedAt', h.closed_at,
+                  'unrealizedPnlUsd', h.unrealized_pnl,
+                  'fundingAccumUsd', h.funding_accum,
+                  'entryFeePaidUsd', h.entry_fee_paid,
                   'error', h.error
                 )
                 ORDER BY h.id
@@ -242,6 +248,9 @@ async function listActiveDynamic(executor) {
                   'createdAt', h.created_at,
                   'openedAt', h.opened_at,
                   'closedAt', h.closed_at,
+                  'unrealizedPnlUsd', h.unrealized_pnl,
+                  'fundingAccumUsd', h.funding_accum,
+                  'entryFeePaidUsd', h.entry_fee_paid,
                   'error', h.error
                 )
                 ORDER BY h.id
@@ -308,6 +317,9 @@ async function getById(userId, id, executor) {
                   'createdAt', h.created_at,
                   'openedAt', h.opened_at,
                   'closedAt', h.closed_at,
+                  'unrealizedPnlUsd', h.unrealized_pnl,
+                  'fundingAccumUsd', h.funding_accum,
+                  'entryFeePaidUsd', h.entry_fee_paid,
                   'error', h.error
                 )
                 ORDER BY h.id
@@ -365,6 +377,9 @@ async function listActiveDeltaNeutral(executor) {
                   'createdAt', h.created_at,
                   'openedAt', h.opened_at,
                   'closedAt', h.closed_at,
+                  'unrealizedPnlUsd', h.unrealized_pnl,
+                  'fundingAccumUsd', h.funding_accum,
+                  'entryFeePaidUsd', h.entry_fee_paid,
                   'error', h.error
                 )
                 ORDER BY h.id

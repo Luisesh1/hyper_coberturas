@@ -39,6 +39,10 @@
   height: 30px;
 }
 
+.pinsRowCompact {
+  height: 24px;
+}
+
 .pin {
   position: absolute;
   transform: translateX(-50%);
@@ -46,6 +50,10 @@
   flex-direction: column;
   align-items: center;
   gap: 1px;
+}
+
+.pinCompact {
+  gap: 0;
 }
 
 .pinValue {
@@ -67,6 +75,14 @@
 .pinCurrent .pinValue,
 .pinCurrent .pinLabel {
   color: var(--uni-green);
+}
+
+.pinCompact .pinValue {
+  font-size: 0.68rem;
+}
+
+.pinCompact .pinLabel {
+  font-size: 0.52rem;
 }
 
 .track {

@@ -1,11 +1,79 @@
 const { ethers } = require('ethers');
 const { ValidationError, ExternalServiceError } = require('../errors/app-error');
+const {
+  validatePriceRange,
+  validateTickRange,
+} = require('./uniswap/position-validators');
+const {
+  GAS_PER_TX_TYPE,
+  buildGasBreakdown,
+  estimateTxPlanCostUsd,
+} = require('./uniswap/gas-cost-estimator');
+const {
+  ERC20_ABI,
+  WRAPPED_NATIVE_ABI,
+  V3_FACTORY_ABI,
+  V3_POOL_ABI,
+  V3_POSITION_MANAGER_ABI,
+  V3_SWAP_ROUTER_ABI,
+  TRANSFER_EVENT_ABI,
+} = require('./uniswap/abis');
+const {
+  MAX_UINT128,
+  MAX_UINT256,
+  DEFAULT_DEADLINE_SECONDS,
+  DEFAULT_SLIPPAGE_BPS,
+  V3_SWAP_ROUTER_ADDRESS,
+  CLOSE_SWAP_BUFFER_BPS,
+  ACTIONS,
+  CLOSE_ACTIONS,
+} = require('./uniswap/constants');
+const {
+  encodeTx,
+  deadlineFromNow,
+  buildApprovalRequirement,
+  maybeBuildApprovalTx,
+  appendApprovalIfNeeded,
+  buildWrapNativeTx,
+  buildUnwrapNativeTx,
+} = require('./uniswap/tx-encoders');
+const {
+  buildV3IncreaseTx,
+  buildV3DecreaseTx,
+  buildV3MintTx,
+  buildV3SwapTx,
+} = require('./uniswap/tx-builders-v3');
+const {
+  buildV4ModifyTx,
+  buildV4RouterTx,
+} = require('./uniswap/tx-builders-v4');
+const {
+  buildPermit2ApprovalRequirement,
+  buildPermit2ApproveTx,
+  getPermit2State,
+} = require('./uniswap/permit2-helpers');
+const {
+  buildPostPreview,
+  buildProtectionImpact,
+} = require('./uniswap/position-presenters');
+const {
+  priceToNearestTick,
+  isZeroAddress,
+  estimateLiquidityForAmounts,
+} = require('./uniswap/position-math');
 const uniswapService = require('./uniswap.service');
 const claimFeesService = require('./uniswap-claim-fees.service');
 const protectedPoolRepo = require('../repositories/protected-uniswap-pool.repository');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
 const smartPoolCreatorService = require('./smart-pool-creator.service');
 const logger = require('./logger.service');
+const {
+  amountOutMin,
+  buildModifyRangeRedeployPlan,
+  buildRebalanceSwap,
+  computeOptimalWeightToken0Pct,
+  estimateSwapValueUsd,
+} = require('../domains/uniswap/pools/domain/position-action-math');
 const {
   DEFAULT_PERMIT2_EXPIRATION_SECONDS,
   PERMIT2_ABI,
@@ -34,91 +102,13 @@ const {
   computeV4UnclaimedFees,
   decodeV4PositionInfo,
   liquidityToTokenAmounts,
-  tickToRawSqrtRatio,
 } = uniswapService;
 
 const _finalizeCache = new Map();
 const FINALIZE_CACHE_TTL_MS = 300_000; // 5 min
 
-const ERC20_ABI = [
-  'function symbol() view returns (string)',
-  'function decimals() view returns (uint8)',
-  'function balanceOf(address owner) view returns (uint256)',
-  'function allowance(address owner, address spender) view returns (uint256)',
-  'function approve(address spender, uint256 amount) returns (bool)',
-];
-
-const WRAPPED_NATIVE_ABI = [
-  'function deposit() payable',
-  'function withdraw(uint256)',
-];
-
-const V3_FACTORY_ABI = [
-  'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address)',
-];
-
-const V3_POOL_ABI = [
-  'function tickSpacing() view returns (int24)',
-  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)',
-  'function token0() view returns (address)',
-  'function token1() view returns (address)',
-];
-
-const V3_POSITION_MANAGER_ABI = [
-  'function ownerOf(uint256 tokenId) view returns (address)',
-  'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
-  'function increaseLiquidity(tuple(uint256 tokenId, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, uint256 deadline) params) payable returns (uint128 liquidity, uint256 amount0, uint256 amount1)',
-  'function decreaseLiquidity(tuple(uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min, uint256 deadline) params) payable returns (uint256 amount0, uint256 amount1)',
-  'function mint(tuple(address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline) params) payable returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)',
-];
-
-const V3_SWAP_ROUTER_ABI = [
-  'function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) payable returns (uint256 amountOut)',
-];
-
+// PERMIT2_APPROVAL_ABI viene del módulo v4-helpers (ver imports arriba)
 const PERMIT2_APPROVAL_ABI = PERMIT2_ABI;
-
-const TRANSFER_EVENT_ABI = [
-  'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
-];
-
-const MAX_UINT128 = (1n << 128n) - 1n;
-const DEFAULT_DEADLINE_SECONDS = 1800;
-const DEFAULT_SLIPPAGE_BPS = 100;
-const V3_SWAP_ROUTER_ADDRESS = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45';
-const MAX_UINT256 = (1n << 256n) - 1n;
-const CLOSE_SWAP_BUFFER_BPS = 9800n;
-const GAS_PER_TX_TYPE = {
-  approval: 50_000,
-  permit2_approval: 65_000,
-  collect_fees: 120_000,
-  decrease_liquidity: 180_000,
-  decrease_liquidity_v4: 240_000,
-  swap: 200_000,
-  swap_v4: 260_000,
-  wrap_native: 90_000,
-  unwrap_native: 90_000,
-  mint_position: 350_000,
-  mint_position_v4: 420_000,
-  modify_range_v4: 460_000,
-};
-
-const ACTIONS = new Set([
-  'increase-liquidity',
-  'decrease-liquidity',
-  'collect-fees',
-  'reinvest-fees',
-  'modify-range',
-  'rebalance',
-  'create-position',
-  'close-to-usdc',
-  'close-keep-assets',
-]);
-
-const CLOSE_ACTIONS = new Set([
-  'close-to-usdc',
-  'close-keep-assets',
-]);
 
 function normalizeAddress(address, label = 'address') {
   try {
@@ -192,21 +182,6 @@ function ensureSupportedAction(action) {
   }
 }
 
-function encodeTx(to, data, { value = '0x0', chainId, label, kind, sequence, gas, meta = {} } = {}) {
-  const tx = {
-    to,
-    data,
-    value,
-    chainId,
-    label: label || kind || 'transaction',
-    kind: kind || 'contract_call',
-    sequence: sequence ?? null,
-    ...meta,
-  };
-  if (gas) tx.gas = gas;
-  return tx;
-}
-
 async function getTokenInfo(provider, address) {
   const tokenAddress = normalizeAddress(address, 'token');
   const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
@@ -250,128 +225,14 @@ function toBigIntAmount(value, decimals, field) {
   return ethers.parseUnits(str, decimals);
 }
 
-function amountOutMin(rawAmountOut, slippageBps = DEFAULT_SLIPPAGE_BPS) {
-  const bps = BigInt(Math.max(0, Math.min(5000, Number(slippageBps) || DEFAULT_SLIPPAGE_BPS)));
-  return rawAmountOut - ((rawAmountOut * bps) / 10_000n);
-}
-
-function roundNullable(value, digits = 4) {
-  if (value == null || !Number.isFinite(value)) return null;
-  return Number(value.toFixed(digits));
-}
-
-function estimateSwapValueUsd(ctx, swap) {
-  if (!swap || swap.amountIn <= 0n) return 0;
-  if (swap.tokenIn.address.toLowerCase() === ctx.token0.address.toLowerCase()) {
-    return Number(ethers.formatUnits(swap.amountIn, swap.tokenIn.decimals)) * Number(ctx.priceCurrent);
-  }
-  return Number(ethers.formatUnits(swap.amountIn, swap.tokenIn.decimals));
-}
-
+/**
+ * Wrapper que adapta el ctx interno al formato esperado por
+ * `estimateTxPlanCostUsd`. Mantiene la API legacy para los call sites existentes.
+ */
 async function buildEstimatedCosts(ctx, txPlan, { slippageCostUsd = 0 } = {}) {
-  const filteredTxPlan = txPlan.filter(Boolean);
-  let totalGasUnits = 0;
-  const txBreakdown = filteredTxPlan.map((tx) => {
-    const gas = GAS_PER_TX_TYPE[tx.kind] || 150_000;
-    totalGasUnits += gas;
-    return { label: tx.label || tx.kind, gasUnits: gas };
-  });
-
-  let gasCostUsd = null;
-  let gasCostEth = null;
-  try {
-    const feeData = await getProvider(ctx.networkConfig).getFeeData();
-    const gasPrice = feeData.gasPrice || feeData.maxFeePerGas || 0n;
-    const totalGasWei = gasPrice * BigInt(totalGasUnits);
-    gasCostEth = Number(ethers.formatEther(totalGasWei));
-    const nativeUsdPrice = ctx.priceCurrent > 1 ? ctx.priceCurrent : (1 / ctx.priceCurrent);
-    gasCostUsd = gasCostEth * nativeUsdPrice;
-  } catch {
-    // Best effort.
-  }
-
-  const totalEstimatedCostUsd = (gasCostUsd || 0) + (slippageCostUsd || 0);
-  return {
-    gasCostEth: roundNullable(gasCostEth, 8),
-    gasCostUsd: roundNullable(gasCostUsd, 4),
-    slippageCostUsd: roundNullable(slippageCostUsd || 0, 4),
-    totalEstimatedCostUsd: roundNullable(totalEstimatedCostUsd, 4) ?? 0,
-    txCount: filteredTxPlan.length,
-    txBreakdown,
-  };
-}
-
-function deadlineFromNow(seconds = DEFAULT_DEADLINE_SECONDS) {
-  return BigInt(Math.floor(Date.now() / 1000) + seconds);
-}
-
-function buildApprovalRequirement(token, spender, amount) {
-  return {
-    tokenAddress: token.address,
-    tokenSymbol: token.symbol,
-    spender,
-    amount: amount.toString(),
-    formattedAmount: ethers.formatUnits(amount, token.decimals),
-  };
-}
-
-function maybeBuildApprovalTx(token, spender, amount, chainId) {
-  if (amount <= 0n) return null;
-  const iface = new ethers.Interface(ERC20_ABI);
-  return encodeTx(
-    token.address,
-    iface.encodeFunctionData('approve', [spender, MAX_UINT256]),
-    {
-      chainId,
-      kind: 'approval',
-      label: `Approve ${token.symbol}`,
-      meta: {
-        tokenAddress: token.address,
-        tokenSymbol: token.symbol,
-        spender,
-        amount: MAX_UINT256.toString(),
-      },
-    }
-  );
-}
-
-function buildWrapNativeTx(token, amount, chainId) {
-  if (amount <= 0n) return null;
-  const iface = new ethers.Interface(WRAPPED_NATIVE_ABI);
-  return encodeTx(
-    token.address,
-    iface.encodeFunctionData('deposit', []),
-    {
-      chainId,
-      kind: 'wrap_native',
-      label: `Wrap native to ${token.symbol}`,
-      value: ethers.toBeHex(amount),
-      meta: {
-        tokenAddress: token.address,
-        tokenSymbol: token.symbol,
-        amount: amount.toString(),
-      },
-    }
-  );
-}
-
-function buildUnwrapNativeTx(token, amount, chainId) {
-  if (amount <= 0n) return null;
-  const iface = new ethers.Interface(WRAPPED_NATIVE_ABI);
-  return encodeTx(
-    token.address,
-    iface.encodeFunctionData('withdraw', [amount]),
-    {
-      chainId,
-      kind: 'unwrap_native',
-      label: `Unwrap ${token.symbol} to native`,
-      meta: {
-        tokenAddress: token.address,
-        tokenSymbol: token.symbol,
-        amount: amount.toString(),
-      },
-    }
-  );
+  const provider = getProvider(ctx.networkConfig);
+  const nativeUsdPrice = ctx.priceCurrent > 1 ? ctx.priceCurrent : (1 / ctx.priceCurrent);
+  return estimateTxPlanCostUsd({ provider, txPlan, nativeUsdPrice, slippageCostUsd });
 }
 
 function applyCloseBuffer(amount, bps = CLOSE_SWAP_BUFFER_BPS) {
@@ -472,135 +333,6 @@ function buildClosedPositionPreview(network, version, token0, token1, extra = {}
   };
 }
 
-function priceToNearestTick(price, token0Decimals, token1Decimals, tickSpacing, direction = 'nearest') {
-  const numeric = Number(price);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    throw new ValidationError('Precio de rango invalido');
-  }
-
-  const decimalDelta = token0Decimals - token1Decimals;
-  const rawTick = Math.log(numeric / (10 ** decimalDelta)) / Math.log(1.0001);
-  const spacing = Number(tickSpacing);
-  if (!Number.isFinite(spacing) || spacing <= 0) {
-    throw new ValidationError('tickSpacing invalido');
-  }
-
-  if (direction === 'down') return Math.floor(rawTick / spacing) * spacing;
-  if (direction === 'up') return Math.ceil(rawTick / spacing) * spacing;
-  return Math.round(rawTick / spacing) * spacing;
-}
-
-function isZeroAddress(value) {
-  return String(value || '').toLowerCase() === ethers.ZeroAddress.toLowerCase();
-}
-
-function amountToNumber(rawAmount) {
-  const numeric = Number(rawAmount);
-  if (Number.isFinite(numeric)) return numeric;
-  try {
-    return Number(rawAmount.toString());
-  } catch {
-    return 0;
-  }
-}
-
-function estimateLiquidityForAmounts({
-  amount0Raw,
-  amount1Raw,
-  tickCurrent,
-  tickLower,
-  tickUpper,
-}) {
-  const sqrtCurrent = tickToRawSqrtRatio(tickCurrent);
-  const sqrtLower = tickToRawSqrtRatio(tickLower);
-  const sqrtUpper = tickToRawSqrtRatio(tickUpper);
-  if (
-    !Number.isFinite(sqrtCurrent) ||
-    !Number.isFinite(sqrtLower) ||
-    !Number.isFinite(sqrtUpper) ||
-    sqrtLower <= 0 ||
-    sqrtUpper <= 0
-  ) {
-    throw new ValidationError('No se pudo estimar la liquidez del rango seleccionado');
-  }
-
-  const lower = Math.min(sqrtLower, sqrtUpper);
-  const upper = Math.max(sqrtLower, sqrtUpper);
-  const amount0 = amountToNumber(amount0Raw);
-  const amount1 = amountToNumber(amount1Raw);
-  let liquidity = 0;
-
-  if (sqrtCurrent <= lower) {
-    liquidity = amount0 * ((lower * upper) / (upper - lower));
-  } else if (sqrtCurrent < upper) {
-    const liquidity0 = amount0 * ((sqrtCurrent * upper) / (upper - sqrtCurrent));
-    const liquidity1 = amount1 / (sqrtCurrent - lower);
-    liquidity = Math.min(liquidity0, liquidity1);
-  } else {
-    liquidity = amount1 / (upper - lower);
-  }
-
-  if (!Number.isFinite(liquidity) || liquidity <= 0) {
-    throw new ValidationError('Los montos elegidos no generan liquidez util para este rango');
-  }
-
-  return BigInt(Math.max(1, Math.floor(liquidity)));
-}
-
-function buildPermit2ApprovalRequirement(token, spender, amount, permit2Address) {
-  return {
-    tokenAddress: token.address,
-    tokenSymbol: token.symbol,
-    spender,
-    permit2Address,
-    amount: amount.toString(),
-    formattedAmount: ethers.formatUnits(amount, token.decimals),
-    type: 'permit2_approval',
-  };
-}
-
-function buildPermit2ApproveTx(token, spender, amount, chainId, permit2Address) {
-  if (amount <= 0n) return null;
-  return encodeTx(
-    permit2Address,
-    buildPermit2ApproveCalldata(
-      token.address,
-      spender,
-      amount,
-      BigInt(Math.floor(Date.now() / 1000) + DEFAULT_PERMIT2_EXPIRATION_SECONDS)
-    ),
-    {
-      chainId,
-      kind: 'permit2_approval',
-      label: `Permit2 approve ${token.symbol}`,
-      meta: {
-        tokenAddress: token.address,
-        tokenSymbol: token.symbol,
-        spender,
-        amount: amount.toString(),
-        permit2Address,
-      },
-    }
-  );
-}
-
-async function getPermit2State(provider, token, walletAddress, spender, permit2Address = PERMIT2_ADDRESS) {
-  const tokenContract = new ethers.Contract(token.address, ERC20_ABI, provider);
-  const permit2 = new ethers.Contract(permit2Address, PERMIT2_APPROVAL_ABI, provider);
-  const [[balance, tokenAllowance], permit2Allowance] = await Promise.all([
-    Promise.all([
-      tokenContract.balanceOf(walletAddress).catch(() => 0n),
-      tokenContract.allowance(walletAddress, permit2Address).catch(() => 0n),
-    ]),
-    permit2.allowance(walletAddress, token.address, spender).catch(() => [0n, 0n, 0n]),
-  ]);
-
-  return {
-    balance,
-    tokenAllowanceToPermit2: BigInt(tokenAllowance || 0n),
-    permit2AllowanceAmount: BigInt(Array.isArray(permit2Allowance) ? permit2Allowance[0] || 0n : 0n),
-  };
-}
 
 async function loadV3PositionContext({ network, walletAddress, positionIdentifier }) {
   const networkConfig = getNetworkConfig(network);
@@ -769,135 +501,6 @@ async function loadWalletPoolSnapshot(userId, { network, version, walletAddress,
   return result.pools.find((pool) => String(pool.identifier) === String(positionIdentifier)) || null;
 }
 
-function buildV3IncreaseTx(ctx, { amount0Desired, amount1Desired, slippageBps = DEFAULT_SLIPPAGE_BPS }) {
-  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
-  const amount0Min = amountOutMin(amount0Desired, slippageBps);
-  const amount1Min = amountOutMin(amount1Desired, slippageBps);
-  const data = iface.encodeFunctionData('increaseLiquidity', [{
-    tokenId: BigInt(ctx.tokenId),
-    amount0Desired,
-    amount1Desired,
-    amount0Min,
-    amount1Min,
-    deadline: deadlineFromNow(),
-  }]);
-
-  return encodeTx(ctx.positionManagerAddress, data, {
-    chainId: ctx.networkConfig.chainId,
-    kind: 'increase_liquidity',
-    label: 'Increase liquidity',
-  });
-}
-
-function buildV3DecreaseTx(ctx, { liquidityDelta, slippageBps = DEFAULT_SLIPPAGE_BPS }) {
-  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
-  const data = iface.encodeFunctionData('decreaseLiquidity', [{
-    tokenId: BigInt(ctx.tokenId),
-    liquidity: liquidityDelta,
-    amount0Min: 0n,
-    amount1Min: 0n,
-    deadline: deadlineFromNow(),
-  }]);
-
-  return encodeTx(ctx.positionManagerAddress, data, {
-    chainId: ctx.networkConfig.chainId,
-    kind: 'decrease_liquidity',
-    label: 'Decrease liquidity',
-  });
-}
-
-function buildV3MintTx(ctx, {
-  tickLower,
-  tickUpper,
-  amount0Desired,
-  amount1Desired,
-  slippageBps = DEFAULT_SLIPPAGE_BPS,
-  recipient,
-  amount0Min: overrideAmount0Min,
-  amount1Min: overrideAmount1Min,
-  gasEstimate,
-}) {
-  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
-  const data = iface.encodeFunctionData('mint', [{
-    token0: ctx.token0.address,
-    token1: ctx.token1.address,
-    fee: ctx.position?.fee ?? ctx.fee,
-    tickLower,
-    tickUpper,
-    amount0Desired,
-    amount1Desired,
-    amount0Min: overrideAmount0Min ?? amountOutMin(amount0Desired, slippageBps),
-    amount1Min: overrideAmount1Min ?? amountOutMin(amount1Desired, slippageBps),
-    recipient,
-    deadline: deadlineFromNow(),
-  }]);
-
-  const txOpts = {
-    chainId: ctx.networkConfig.chainId,
-    kind: 'mint_position',
-    label: 'Mint new position',
-  };
-  if (gasEstimate) txOpts.gas = gasEstimate;
-  return encodeTx(ctx.positionManagerAddress, data, txOpts);
-}
-
-function buildV3SwapTx(ctx, swap) {
-  if (!swap || swap.amountIn <= 0n) return null;
-  const iface = new ethers.Interface(V3_SWAP_ROUTER_ABI);
-  const data = iface.encodeFunctionData('exactInputSingle', [{
-    tokenIn: swap.tokenIn.address,
-    tokenOut: swap.tokenOut.address,
-    fee: swap.fee ?? ctx.position?.fee ?? ctx.fee,
-    recipient: ctx.normalizedWallet,
-    amountIn: swap.amountIn,
-    amountOutMinimum: swap.amountOutMinimum,
-    sqrtPriceLimitX96: 0n,
-  }]);
-
-  return encodeTx(V3_SWAP_ROUTER_ADDRESS, data, {
-    chainId: ctx.networkConfig.chainId,
-    kind: 'swap',
-    label: `Swap ${swap.tokenIn.symbol} -> ${swap.tokenOut.symbol}`,
-  });
-}
-
-function buildV4ModifyTx(ctx, { actionCodes, params, label, kind, meta = {} }) {
-  return encodeTx(
-    ctx.positionManagerAddress,
-    buildV4ModifyLiquiditiesCalldata({
-      actions: actionCodes,
-      params,
-      deadline: deadlineFromNow(),
-    }),
-    {
-      chainId: ctx.networkConfig.chainId,
-      kind,
-      label,
-      meta,
-    }
-  );
-}
-
-function buildV4RouterTx(ctx, { actionCodes, params, label, kind, meta = {} }) {
-  if (!ctx.universalRouterAddress) {
-    throw new ValidationError(`No hay Universal Router configurado para ${ctx.networkConfig.label}`);
-  }
-  return encodeTx(
-    ctx.universalRouterAddress,
-    buildUniversalRouterCalldata({
-      actions: actionCodes,
-      params,
-      deadline: deadlineFromNow(),
-    }),
-    {
-      chainId: ctx.networkConfig.chainId,
-      kind,
-      label,
-      meta,
-    }
-  );
-}
-
 async function appendPermit2Approvals({
   provider,
   token,
@@ -925,45 +528,6 @@ async function appendPermit2Approvals({
     requiresApproval.push(buildPermit2ApprovalRequirement(token, spender, amount, permit2Address));
     txPlan.push(buildPermit2ApproveTx(token, spender, amount, chainId, permit2Address));
   }
-}
-
-function buildPostPreview({
-  network,
-  version,
-  positionIdentifier,
-  tickLower,
-  tickUpper,
-  amount0Desired,
-  amount1Desired,
-  token0,
-  token1,
-  priceCurrent,
-}) {
-  const lowerPrice = uniswapService.tickToPrice(tickLower, token0.decimals, token1.decimals);
-  const upperPrice = uniswapService.tickToPrice(tickUpper, token0.decimals, token1.decimals);
-
-  return {
-    network,
-    version,
-    positionIdentifier: positionIdentifier ? String(positionIdentifier) : null,
-    token0,
-    token1,
-    rangeLowerPrice: Number(lowerPrice.toFixed(6)),
-    rangeUpperPrice: Number(upperPrice.toFixed(6)),
-    priceCurrent: Number(priceCurrent.toFixed(6)),
-    desiredAmounts: {
-      amount0: ethers.formatUnits(amount0Desired, token0.decimals),
-      amount1: ethers.formatUnits(amount1Desired, token1.decimals),
-    },
-  };
-}
-
-function buildProtectionImpact(positionIdentifier, nextPositionIdentifier = null) {
-  return {
-    hasPotentialMigration: nextPositionIdentifier != null && String(nextPositionIdentifier) !== String(positionIdentifier),
-    oldPositionIdentifier: positionIdentifier ? String(positionIdentifier) : null,
-    expectedNewPositionIdentifier: nextPositionIdentifier ? String(nextPositionIdentifier) : null,
-  };
 }
 
 async function appendFundingSwapTransactions({
@@ -1036,14 +600,24 @@ async function prepareIncreaseLiquidity(payload) {
 
   const requiresApproval = [];
   const txPlan = [];
-  if (token0State.allowance < amount0Desired) {
-    requiresApproval.push(buildApprovalRequirement(ctx.token0, ctx.positionManagerAddress, amount0Desired));
-    txPlan.push(maybeBuildApprovalTx(ctx.token0, ctx.positionManagerAddress, amount0Desired, ctx.networkConfig.chainId));
-  }
-  if (token1State.allowance < amount1Desired) {
-    requiresApproval.push(buildApprovalRequirement(ctx.token1, ctx.positionManagerAddress, amount1Desired));
-    txPlan.push(maybeBuildApprovalTx(ctx.token1, ctx.positionManagerAddress, amount1Desired, ctx.networkConfig.chainId));
-  }
+  appendApprovalIfNeeded({
+    token: ctx.token0,
+    spender: ctx.positionManagerAddress,
+    amount: amount0Desired,
+    chainId: ctx.networkConfig.chainId,
+    currentAllowance: token0State.allowance,
+    requiresApproval,
+    txPlan,
+  });
+  appendApprovalIfNeeded({
+    token: ctx.token1,
+    spender: ctx.positionManagerAddress,
+    amount: amount1Desired,
+    chainId: ctx.networkConfig.chainId,
+    currentAllowance: token1State.allowance,
+    requiresApproval,
+    txPlan,
+  });
   txPlan.push(buildV3IncreaseTx(ctx, { amount0Desired, amount1Desired, slippageBps: payload.slippageBps }));
 
   return {
@@ -1195,51 +769,9 @@ async function prepareReinvestFees(payload) {
   };
 }
 
-function computeOptimalWeightToken0Pct(priceCurrent, lowerPrice, upperPrice) {
-  if (priceCurrent <= lowerPrice) return 100;
-  if (priceCurrent >= upperPrice) return 0;
-  const sqrtP = Math.sqrt(priceCurrent);
-  const sqrtL = Math.sqrt(lowerPrice);
-  const sqrtU = Math.sqrt(upperPrice);
-  const amount0Value = priceCurrent * (sqrtU - sqrtP) / (sqrtP * sqrtU);
-  const amount1Value = sqrtP - sqrtL;
-  const total = amount0Value + amount1Value;
-  if (!Number.isFinite(total) || total <= 0) return 50;
-  return Math.max(1, Math.min(99, (amount0Value / total) * 100));
-}
-
-function buildModifyRangeRedeployPlan(ctx, {
-  amount0Available,
-  amount1Available,
-  lowerPrice,
-  upperPrice,
-  slippageBps,
-}) {
-  const optimalWeight = computeOptimalWeightToken0Pct(ctx.priceCurrent, lowerPrice, upperPrice);
-  const swapTargetWeightToken0Pct = Math.max(1, Math.min(99, Number(optimalWeight)));
-  const swap = buildRebalanceSwap(ctx, {
-    amount0Available,
-    amount1Available,
-    targetWeightToken0Pct: swapTargetWeightToken0Pct,
-    slippageBps,
-  });
-
-  return {
-    optimalWeight,
-    swapTargetWeightToken0Pct,
-    swap,
-    amount0Desired: swap?.postAmount0 ?? amount0Available,
-    amount1Desired: swap?.postAmount1 ?? amount1Available,
-  };
-}
-
 async function prepareModifyRange(payload) {
   const ctx = await loadV3PositionContext(payload);
-  const lowerPrice = Number(payload.rangeLowerPrice);
-  const upperPrice = Number(payload.rangeUpperPrice);
-  if (!Number.isFinite(lowerPrice) || !Number.isFinite(upperPrice) || lowerPrice <= 0 || upperPrice <= lowerPrice) {
-    throw new ValidationError('El rango nuevo es invalido');
-  }
+  const { lowerPrice, upperPrice } = validatePriceRange(payload.rangeLowerPrice, payload.rangeUpperPrice);
 
   const positionLiquidity = BigInt(ctx.position.liquidity);
   const tokensOwed0 = BigInt(ctx.position.tokensOwed0);
@@ -1267,9 +799,7 @@ async function prepareModifyRange(payload) {
 
   const tickLower = priceToNearestTick(lowerPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'down');
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
-  if (tickLower >= tickUpper) {
-    throw new ValidationError('El rango nuevo genera ticks invalidos');
-  }
+  validateTickRange(tickLower, tickUpper);
 
   const txPlan = [];
   const requiresApproval = [];
@@ -1371,58 +901,6 @@ async function prepareModifyRange(payload) {
       priceCurrent: ctx.priceCurrent,
     }),
     protectionImpact: buildProtectionImpact(ctx.tokenId, 'new_position_pending'),
-  };
-}
-
-function buildRebalanceSwap(ctx, {
-  amount0Available,
-  amount1Available,
-  targetWeightToken0Pct,
-  slippageBps,
-}) {
-  const price = Number(ctx.priceCurrent);
-  if (!Number.isFinite(price) || price <= 0) return null;
-  const targetPct = Number(targetWeightToken0Pct);
-  if (!Number.isFinite(targetPct) || targetPct <= 0 || targetPct >= 100) {
-    throw new ValidationError('targetWeightToken0Pct debe estar entre 0 y 100');
-  }
-
-  const value0 = Number(ethers.formatUnits(amount0Available, ctx.token0.decimals)) * price;
-  const value1 = Number(ethers.formatUnits(amount1Available, ctx.token1.decimals));
-  const totalValue = value0 + value1;
-  if (!Number.isFinite(totalValue) || totalValue <= 0) return null;
-
-  const targetValue0 = totalValue * (targetPct / 100);
-  if (value0 > targetValue0) {
-    const valueToSwap = value0 - targetValue0;
-    const amountIn = ethers.parseUnits(String((valueToSwap / price).toFixed(8)), ctx.token0.decimals);
-    if (amountIn <= 0n) return null;
-    const expectedOut = ethers.parseUnits(String(valueToSwap.toFixed(6)), ctx.token1.decimals);
-    const minimumOut = amountOutMin(expectedOut, slippageBps);
-    return {
-      tokenIn: ctx.token0,
-      tokenOut: ctx.token1,
-      amountIn,
-      amountOutMinimum: minimumOut,
-      postAmount0: amount0Available - amountIn,
-      postAmount1: amount1Available + minimumOut,
-      direction: 'token0_to_token1',
-    };
-  }
-
-  const valueToSwap = value1 - (totalValue - targetValue0);
-  const amountIn = ethers.parseUnits(String(valueToSwap.toFixed(6)), ctx.token1.decimals);
-  if (amountIn <= 0n) return null;
-  const expectedToken0 = ethers.parseUnits(String((valueToSwap / price).toFixed(8)), ctx.token0.decimals);
-  const minimumToken0 = amountOutMin(expectedToken0, slippageBps);
-  return {
-    tokenIn: ctx.token1,
-    tokenOut: ctx.token0,
-    amountIn,
-    amountOutMinimum: minimumToken0,
-    postAmount0: amount0Available + minimumToken0,
-    postAmount1: amount1Available - amountIn,
-    direction: 'token1_to_token0',
   };
 }
 
@@ -1748,7 +1226,7 @@ async function prepareCreatePosition(payload) {
     const amount1Desired = canonicalPlan.amount1Desired;
     const tickLower = priceToNearestTick(canonicalPlan.rangeLowerPrice, token0.decimals, token1.decimals, Number(plan.tickSpacing), 'down');
     const tickUpper = priceToNearestTick(canonicalPlan.rangeUpperPrice, token0.decimals, token1.decimals, Number(plan.tickSpacing), 'up');
-    if (tickLower >= tickUpper) throw new ValidationError('El rango nuevo es invalido');
+    validateTickRange(tickLower, tickUpper);
 
     const pmAddress = normalizeAddress(networkConfig.deployments.v3.positionManager);
     const [token0State, token1State] = await Promise.all([
@@ -1951,7 +1429,7 @@ async function prepareCreatePosition(payload) {
 
   const tickLower = priceToNearestTick(canonicalPlan.rangeLowerPrice, canonicalToken0.decimals, canonicalToken1.decimals, Number(tickSpacing), 'down');
   const tickUpper = priceToNearestTick(canonicalPlan.rangeUpperPrice, canonicalToken0.decimals, canonicalToken1.decimals, Number(tickSpacing), 'up');
-  if (tickLower >= tickUpper) throw new ValidationError('El rango nuevo es invalido');
+  validateTickRange(tickLower, tickUpper);
 
   const dummyCtx = {
     networkConfig,
@@ -2268,11 +1746,7 @@ async function prepareReinvestFeesV4(payload) {
 
 async function prepareModifyRangeV4(payload) {
   const ctx = await loadV4PositionContext(payload);
-  const lowerPrice = Number(payload.rangeLowerPrice);
-  const upperPrice = Number(payload.rangeUpperPrice);
-  if (!Number.isFinite(lowerPrice) || !Number.isFinite(upperPrice) || lowerPrice <= 0 || upperPrice <= lowerPrice) {
-    throw new ValidationError('El rango nuevo es invalido');
-  }
+  const { lowerPrice, upperPrice } = validatePriceRange(payload.rangeLowerPrice, payload.rangeUpperPrice);
 
   const amount0Current = toBigIntAmount(ctx.currentAmounts.amount0 || 0, ctx.token0.decimals, 'amount0Current');
   const amount1Current = toBigIntAmount(ctx.currentAmounts.amount1 || 0, ctx.token1.decimals, 'amount1Current');
@@ -2280,9 +1754,7 @@ async function prepareModifyRangeV4(payload) {
   const amount1Available = amount1Current + BigInt(ctx.unclaimedFeesRaw.fees1 || 0n);
   const tickLower = priceToNearestTick(lowerPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'down');
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
-  if (tickLower >= tickUpper) {
-    throw new ValidationError('El rango nuevo genera ticks invalidos');
-  }
+  validateTickRange(tickLower, tickUpper);
 
   const {
     optimalWeight,
@@ -2524,7 +1996,7 @@ async function prepareCreatePositionV4(payload) {
     const amount1Desired = canonicalPlan.amount1Desired;
     const tickLower = priceToNearestTick(canonicalPlan.rangeLowerPrice, token0.decimals, token1.decimals, Number(plan.tickSpacing), 'down');
     const tickUpper = priceToNearestTick(canonicalPlan.rangeUpperPrice, token0.decimals, token1.decimals, Number(plan.tickSpacing), 'up');
-    if (tickLower >= tickUpper) throw new ValidationError('El rango nuevo es invalido');
+    validateTickRange(tickLower, tickUpper);
     const canonicalCurrentPrice = canonicalPlan.reversed ? (1 / Number(plan.currentPrice)) : Number(plan.currentPrice);
     const liquidityDelta = estimateLiquidityForAmounts({
       amount0Raw: amount0Desired,
@@ -2708,7 +2180,7 @@ async function prepareCreatePositionV4(payload) {
 
   const tickLower = priceToNearestTick(canonicalPlan.rangeLowerPrice, canonicalToken0.decimals, canonicalToken1.decimals, tickSpacing, 'down');
   const tickUpper = priceToNearestTick(canonicalPlan.rangeUpperPrice, canonicalToken0.decimals, canonicalToken1.decimals, tickSpacing, 'up');
-  if (tickLower >= tickUpper) throw new ValidationError('El rango nuevo es invalido');
+  validateTickRange(tickLower, tickUpper);
   const liquidityDelta = estimateLiquidityForAmounts({
     amount0Raw: amount0Desired,
     amount1Raw: amount1Desired,

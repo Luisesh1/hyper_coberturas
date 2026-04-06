@@ -7,6 +7,7 @@ const routes = require('./routes');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const { requestContext } = require('./middleware/request-context.middleware');
 const { requestLogger } = require('./middleware/request-logger.middleware');
+const { buildSuccessEnvelope } = require('./shared/platform/http/response-envelope');
 
 const IS_PROD = config.server.nodeEnv === 'production';
 
@@ -58,10 +59,9 @@ app.use(requestLogger);
 // Rutas
 // ------------------------------------------------------------------
 app.get('/', (req, res) => {
-  res.json({
-    success: true,
+  res.json(buildSuccessEnvelope({
     message: 'Backend activo',
-  });
+  }));
 });
 
 app.use('/api', routes);
