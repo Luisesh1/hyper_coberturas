@@ -9,7 +9,7 @@
  * Si no estan configurados, el servicio se deshabilita silenciosamente.
  */
 
-const axios = require('axios');
+const httpClient = require('../shared/platform/http/http-client');
 const logger = require('./logger.service');
 
 class TelegramService {
@@ -39,7 +39,7 @@ class TelegramService {
   async _request(method, payload) {
     if (!this.enabled) return null;
     try {
-      const { data } = await axios.post(
+      const { data } = await httpClient.post(
         `https://api.telegram.org/bot${this.token}/${method}`,
         payload,
         { timeout: 5000 }

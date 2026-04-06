@@ -1,4 +1,4 @@
-const axios = require('axios');
+const httpClient = require('../shared/platform/http/http-client');
 
 const config = require('../config');
 const logger = require('./logger.service');
@@ -83,7 +83,9 @@ function normalizeCommand(text) {
 
 class TelegramCommandService {
   constructor(deps = {}) {
-    this.axios = deps.axios || axios;
+    // Acepta el alias legacy `deps.axios` (usado por tests existentes) o el
+    // nombre nuevo `deps.http`. Default: helper interno basado en fetch.
+    this.axios = deps.axios || deps.http || httpClient;
     this.logger = deps.logger || logger;
     this.settingsService = deps.settingsService || settingsService;
     this.telegramRegistry = deps.telegramRegistry || telegramRegistry;

@@ -1,4 +1,4 @@
-const axios = require('axios');
+const httpClient = require('../shared/platform/http/http-client');
 const { ethers } = require('ethers');
 const config = require('../config');
 const settingsService = require('./settings.service');
@@ -617,7 +617,7 @@ async function fetchEtherscanProxyResult(apiKey, networkConfig, action, params) 
   if (!apiKey || !networkConfig?.chainId) return null;
 
   try {
-    const { data } = await axios.get(ETHERSCAN_PROXY_API_URL, {
+    const { data } = await httpClient.get(ETHERSCAN_PROXY_API_URL, {
       params: {
         chainid: networkConfig.chainId,
         module: 'proxy',

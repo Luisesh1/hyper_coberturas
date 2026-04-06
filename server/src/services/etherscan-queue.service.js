@@ -1,4 +1,4 @@
-const axios = require('axios');
+const httpClient = require('../shared/platform/http/http-client');
 const config = require('../config');
 const logger = require('./logger.service');
 const { ExternalServiceError, ValidationError } = require('../errors/app-error');
@@ -24,7 +24,7 @@ function normalizeEtherscanError(result) {
 }
 
 function createEtherscanQueueClient({
-  axiosInstance = axios,
+  axiosInstance = httpClient,
   apiUrl = ETHERSCAN_API_URL,
   timeoutMs = config.uniswap.scanTimeoutMs,
   maxRequestsPerSecond = 3,

@@ -11,7 +11,7 @@
  * Las acciones de trading requieren firma EIP-712 con la clave privada de la wallet.
  */
 
-const axios = require('axios');
+const httpClient = require('../shared/platform/http/http-client');
 const { ethers } = require('ethers');
 const { encode: msgpackEncode } = require('@msgpack/msgpack');
 const config = require('../config');
@@ -84,7 +84,7 @@ class HyperliquidService {
 
   async _post(url, body) {
     try {
-      const response = await axios.post(url, body, {
+      const response = await httpClient.post(url, body, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000,
       });
