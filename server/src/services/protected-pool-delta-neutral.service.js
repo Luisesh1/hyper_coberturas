@@ -1752,6 +1752,31 @@ class ProtectedPoolDeltaNeutralService {
       : position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
 
     if (actualQty <= 0) {
+      // Reconciliar fills pendientes incluso si la posición ya está cerrada:
+      // el cierre pudo haber ocurrido en un tick anterior o manualmente y los
+      // fills (closedPnl, fees) podrían no haberse capturado todavía.
+      try {
+        const wasNeverReconciled = !strategyState.lastReconciledFillsAt;
+        const fillsSince = Number(strategyState.lastReconciledFillsAt || protection.createdAt || 0);
+        const reconciled = await this._reconcileHedgeFills(protection, hl, fillsSince);
+        if (reconciled.fillsCount > 0 || reconciled.realizedDelta !== 0) {
+          Object.assign(strategyState, {
+            hedgeRealizedPnlUsd: wasNeverReconciled
+              ? reconciled.realizedDelta
+              : Number(strategyState.hedgeRealizedPnlUsd || 0) + reconciled.realizedDelta,
+            executionFeesUsd: wasNeverReconciled
+              ? reconciled.feeDelta
+              : Number(strategyState.executionFeesUsd || 0) + reconciled.feeDelta,
+            hedgeUnrealizedPnlUsd: 0,
+            lastReconciledFillsAt: reconciled.lastFillTime,
+          });
+        }
+      } catch (reconcileErr) {
+        this.logger.warn('hedge_fills_reconcile_on_deactivation_no_position', {
+          protectionId: protection.id, error: reconcileErr.message,
+        });
+      }
+
       const deactivatedAt = Date.now();
       const finalRangeMetrics = await timeInRangeService.computeIncrementalRangeMetrics(protection, {
         endAt: deactivatedAt,

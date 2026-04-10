@@ -777,6 +777,29 @@ class LpOrchestratorService {
     // Acciones de cierre dejan el orquestador en idle
     let nextPhase = 'lp_active';
     if (action === 'close-to-usdc' || action === 'close-keep-assets') {
+      // Flush final del hedge state al accounting del orquestador antes de
+      // deslindar la protección. Sin esto, los fills reconciliados durante
+      // la desactivación (realized PnL, fees) se pierden porque el
+      // orquestador ya no lee la protección después de limpiar el link.
+      if (orch.activeProtectedPoolId) {
+        try {
+          const protection = await this.protectedPoolRepo.getById(userId, orch.activeProtectedPoolId);
+          const finalHedgeState = this.accounting.readHedgeStateFromProtection(protection);
+          if (finalHedgeState) {
+            const prevBaseline = orch.strategyState?.hedgeBaseline || null;
+            const result = this.accounting.applyHedgeStateDelta(newAccounting, prevBaseline, finalHedgeState);
+            newAccounting = result.accounting;
+          }
+          // Zeroize unrealized ya que el hedge se está cerrando
+          const zeroResult = this.accounting.applyHedgeStateDelta(newAccounting, null, null);
+          newAccounting = zeroResult.accounting;
+        } catch (err) {
+          this.logger.warn('lp_orchestrator_final_hedge_flush_failed', {
+            orchestratorId: orch.id, protectedPoolId: orch.activeProtectedPoolId, error: err.message,
+          });
+        }
+      }
+      await this.repo.updateAccounting(userId, orchestratorId, newAccounting);
       await this.repo.updateActiveLp(userId, orchestratorId, {
         activePositionIdentifier: null,
         activePoolAddress: null,
