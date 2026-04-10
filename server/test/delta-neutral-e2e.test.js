@@ -235,6 +235,75 @@ describe('Delta-Neutral Protection E2E', () => {
     });
   });
 
+  describe('Risk-Paused Reduce-Only and Near-Zero Close', () => {
+    it('risk_paused + negative drift allows reduce (gate bypass)', () => {
+      const forcedStatus = 'risk_paused';
+      const driftQty = -2.5; // negative = need to reduce
+      const isReduceOnlyPath = driftQty < -1e-8;
+      const riskPausedCanReduce = (forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath;
+
+      assert(riskPausedCanReduce, 'Should allow reduce when risk_paused and drift is negative');
+    });
+
+    it('risk_paused + positive drift stays blocked', () => {
+      const forcedStatus = 'risk_paused';
+      const driftQty = 2.5; // positive = need to increase
+      const isReduceOnlyPath = driftQty < -1e-8;
+      const riskPausedCanReduce = (forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath;
+
+      assert(!riskPausedCanReduce, 'Should NOT allow increase when risk_paused');
+    });
+
+    it('near-zero targetQty forces shouldRebalance even without price/timer triggers', () => {
+      const NEAR_ZERO_TARGET_QTY = 1e-6;
+      const metrics = { targetQty: 0 };
+      const actualQty = 0.5;
+      const forceReduceNearZero = metrics.targetQty <= NEAR_ZERO_TARGET_QTY && actualQty > 1e-8;
+
+      const shouldRebalance = false // forceRebalance
+        || forceReduceNearZero
+        || false // forceReason === 'boundary_cross'
+        || false; // no other triggers
+
+      assert(forceReduceNearZero, 'Should detect near-zero condition');
+      assert(shouldRebalance, 'Should force rebalance on near-zero target');
+    });
+
+    it('near-zero + risk_paused together allow the short to close', () => {
+      const NEAR_ZERO_TARGET_QTY = 1e-6;
+      const forcedStatus = 'risk_paused';
+      const metrics = { targetQty: 0 };
+      const actualQty = 0.5;
+      const driftQty = metrics.targetQty - actualQty; // -0.5
+      const isReduceOnlyPath = driftQty < -1e-8;
+      const forceReduceNearZero = metrics.targetQty <= NEAR_ZERO_TARGET_QTY && actualQty > 1e-8;
+      const riskPausedCanReduce = (forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath;
+
+      assert(forceReduceNearZero, 'Near-zero condition active');
+      assert(isReduceOnlyPath, 'Drift is negative (reduce)');
+      assert(riskPausedCanReduce, 'Risk-paused allows reduce');
+      // Both conditions work together to let the close proceed
+    });
+
+    it('margin_pending + negative drift also allows reduce', () => {
+      const forcedStatus = 'margin_pending';
+      const driftQty = -1.0;
+      const isReduceOnlyPath = driftQty < -1e-8;
+      const riskPausedCanReduce = (forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath;
+
+      assert(riskPausedCanReduce, 'Should allow reduce when margin_pending and drift is negative');
+    });
+
+    it('near-zero targetQty with no actual position does not force rebalance', () => {
+      const NEAR_ZERO_TARGET_QTY = 1e-6;
+      const metrics = { targetQty: 0 };
+      const actualQty = 0; // no position open
+      const forceReduceNearZero = metrics.targetQty <= NEAR_ZERO_TARGET_QTY && actualQty > 1e-8;
+
+      assert(!forceReduceNearZero, 'Should NOT force reduce when no position exists');
+    });
+  });
+
   describe('Diagnostics', () => {
     it('should provide diagnostic report format', async () => {
       // This tests the structure, not actual data

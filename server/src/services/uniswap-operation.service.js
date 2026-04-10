@@ -5,6 +5,7 @@ const operationRepo = require('../repositories/uniswap-operation.repository');
 const positionActionsService = require('./uniswap-position-actions.service');
 const claimFeesService = require('./uniswap-claim-fees.service');
 const { AppError, NotFoundError } = require('../errors/app-error');
+const { CLOSE_ACTIONS } = require('./uniswap/constants');
 
 function buildOperationKey({ kind, userId, action, txHashes }) {
   const sortedHashes = [...new Set((txHashes || []).filter(Boolean).map((item) => String(item).toLowerCase()))].sort();
@@ -205,7 +206,8 @@ class UniswapOperationService {
           void this.operationRepo.updateState(operation.id, { status: step, step, replacementMap });
         },
       });
-      const nextStatus = result?.refreshedSnapshot === null && operation.positionIdentifier
+      const isClose = CLOSE_ACTIONS.has(operation.action);
+      const nextStatus = !isClose && result?.refreshedSnapshot === null && operation.positionIdentifier
         ? 'needs_reconcile'
         : 'done';
       const updated = await this.operationRepo.updateState(operation.id, {

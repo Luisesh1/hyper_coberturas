@@ -70,6 +70,7 @@ const V3_POOL_ABI = [
 
 const V3_POSITION_MANAGER_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
+  'function ownerOf(uint256 tokenId) view returns (address)',
   'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
   'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
   'function mint(tuple(address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline) params) payable returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)',
@@ -727,7 +728,8 @@ async function enrichV2Record(provider, networkConfig, record) {
   };
 }
 
-async function enrichV3Record(provider, networkConfig, record, apiKey = null) {
+async function enrichV3Record(provider, networkConfig, record, apiKey = null, options = {}) {
+  const lightweight = options.lightweight === true;
   const [token0, token1] = await Promise.all([
     getTokenMeta(provider, networkConfig, record.token0Address),
     getTokenMeta(provider, networkConfig, record.token1Address),
@@ -818,17 +820,19 @@ async function enrichV3Record(provider, networkConfig, record, apiKey = null) {
   const tvlApproxUsd = estimateTvlApproxUsd(token0, reserve0, token1, reserve1);
   const rangeLowerPrice = compactNumber(tickToPrice(record.tickLower, token0.decimals, token1.decimals), 6);
   const rangeUpperPrice = compactNumber(tickToPrice(record.tickUpper, token0.decimals, token1.decimals), 6);
-  const historicalPrice = await resolveHistoricalSpotPrice({
-    blockNumber: record.mintBlockNumber,
-    fetchAtBlock: async (blockTag) => {
-      const historicalSlot0 = await pool.slot0({ blockTag });
-      return {
-        tick: Number(historicalSlot0.tick),
-        price: tickToPrice(historicalSlot0.tick, token0.decimals, token1.decimals),
-        sqrtPriceX96: historicalSlot0.sqrtPriceX96,
-      };
-    },
-  });
+  const historicalPrice = lightweight
+    ? { tick: null, price: null, sqrtPriceX96: null, accuracy: 'unavailable', blockNumber: null }
+    : await resolveHistoricalSpotPrice({
+      blockNumber: record.mintBlockNumber,
+      fetchAtBlock: async (blockTag) => {
+        const historicalSlot0 = await pool.slot0({ blockTag });
+        return {
+          tick: Number(historicalSlot0.tick),
+          price: tickToPrice(historicalSlot0.tick, token0.decimals, token1.decimals),
+          sqrtPriceX96: historicalSlot0.sqrtPriceX96,
+        };
+      },
+    });
   const inRange =
     record.tickLower != null &&
     record.tickUpper != null &&
@@ -894,20 +898,34 @@ async function enrichV3Record(provider, networkConfig, record, apiKey = null) {
     unclaimedFees1,
     priceCurrent
   );
-  const valuationResult = await resolveInitialValuation({
-    provider,
-    networkConfig,
-    apiKey,
-    record,
-    positionLiquidity,
-    token0,
-    token1,
-    historicalPrice,
-    historicalAmounts: initialAmounts,
-    currentValueUsd,
-    unclaimedFeesUsd,
-    priceCurrent,
-  });
+  const valuationResult = lightweight
+    ? {
+      priceAtOpen: null,
+      priceAtOpenAccuracy: 'unavailable',
+      priceAtOpenSource: 'unavailable',
+      priceAtOpenBlock: null,
+      initialAmount0: initialAmounts.amount0,
+      initialAmount1: initialAmounts.amount1,
+      initialValueUsd: currentValueUsd,
+      initialValueUsdAccuracy: 'approximate',
+      initialValueUsdSource: 'current_price_proxy',
+      valuationAccuracy: 'approximate',
+      valuationWarnings: ['Snapshot ligero: valuation histórica omitida para ahorrar RPC.'],
+    }
+    : await resolveInitialValuation({
+      provider,
+      networkConfig,
+      apiKey,
+      record,
+      positionLiquidity,
+      token0,
+      token1,
+      historicalPrice,
+      historicalAmounts: initialAmounts,
+      currentValueUsd,
+      unclaimedFeesUsd,
+      priceCurrent,
+    });
   const rangeVisual = computeRangeVisual(
     rangeLowerPrice,
     rangeUpperPrice,
@@ -980,7 +998,8 @@ async function enrichV3Record(provider, networkConfig, record, apiKey = null) {
   };
 }
 
-async function enrichV4Record(provider, networkConfig, record, apiKey = null) {
+async function enrichV4Record(provider, networkConfig, record, apiKey = null, options = {}) {
+  const lightweight = options.lightweight === true;
   const [token0, token1] = await Promise.all([
     getTokenMeta(provider, networkConfig, record.token0Address),
     getTokenMeta(provider, networkConfig, record.token1Address),
@@ -1019,17 +1038,19 @@ async function enrichV4Record(provider, networkConfig, record, apiKey = null) {
   const priceCurrent = compactNumber(tickToPrice(slot0.tick, token0.decimals, token1.decimals), 6);
   const rangeLowerPrice = compactNumber(tickToPrice(record.tickLower, token0.decimals, token1.decimals), 6);
   const rangeUpperPrice = compactNumber(tickToPrice(record.tickUpper, token0.decimals, token1.decimals), 6);
-  const historicalPrice = await resolveHistoricalSpotPrice({
-    blockNumber: record.mintBlockNumber,
-    fetchAtBlock: async (blockTag) => {
-      const historicalSlot0 = await stateView.getSlot0(poolId, { blockTag });
-      return {
-        tick: Number(historicalSlot0.tick),
-        price: tickToPrice(historicalSlot0.tick, token0.decimals, token1.decimals),
-        sqrtPriceX96: historicalSlot0.sqrtPriceX96,
-      };
-    },
-  });
+  const historicalPrice = lightweight
+    ? { tick: null, price: null, sqrtPriceX96: null, accuracy: 'unavailable', blockNumber: null }
+    : await resolveHistoricalSpotPrice({
+      blockNumber: record.mintBlockNumber,
+      fetchAtBlock: async (blockTag) => {
+        const historicalSlot0 = await stateView.getSlot0(poolId, { blockTag });
+        return {
+          tick: Number(historicalSlot0.tick),
+          price: tickToPrice(historicalSlot0.tick, token0.decimals, token1.decimals),
+          sqrtPriceX96: historicalSlot0.sqrtPriceX96,
+        };
+      },
+    });
   const inRange =
     record.tickLower != null &&
     record.tickUpper != null &&
@@ -1078,20 +1099,34 @@ async function enrichV4Record(provider, networkConfig, record, apiKey = null) {
     unclaimedFees1,
     priceCurrent
   );
-  const valuationResult = await resolveInitialValuation({
-    provider,
-    networkConfig,
-    apiKey,
-    record,
-    positionLiquidity: liquidity,
-    token0,
-    token1,
-    historicalPrice,
-    historicalAmounts: initialAmounts,
-    currentValueUsd,
-    unclaimedFeesUsd,
-    priceCurrent,
-  });
+  const valuationResult = lightweight
+    ? {
+      priceAtOpen: null,
+      priceAtOpenAccuracy: 'unavailable',
+      priceAtOpenSource: 'unavailable',
+      priceAtOpenBlock: null,
+      initialAmount0: initialAmounts.amount0,
+      initialAmount1: initialAmounts.amount1,
+      initialValueUsd: currentValueUsd,
+      initialValueUsdAccuracy: 'approximate',
+      initialValueUsdSource: 'current_price_proxy',
+      valuationAccuracy: 'approximate',
+      valuationWarnings: ['Snapshot ligero: valuation histórica omitida para ahorrar RPC.'],
+    }
+    : await resolveInitialValuation({
+      provider,
+      networkConfig,
+      apiKey,
+      record,
+      positionLiquidity: liquidity,
+      token0,
+      token1,
+      historicalPrice,
+      historicalAmounts: initialAmounts,
+      currentValueUsd,
+      unclaimedFeesUsd,
+      priceCurrent,
+    });
   const rangeVisual = computeRangeVisual(
     rangeLowerPrice,
     rangeUpperPrice,
@@ -1213,6 +1248,125 @@ async function getPoolSpotData({
   }
 
   throw new ValidationError('Solo v3/v4 soportan spot price on-chain para delta-neutral');
+}
+
+async function inspectPositionByIdentifier({
+  userId,
+  wallet,
+  network,
+  version,
+  positionIdentifier,
+  lightweight = true,
+}) {
+  if (!userId) {
+    throw new ValidationError('userId es requerido');
+  }
+  if (!positionIdentifier) {
+    throw new ValidationError('positionIdentifier es requerido');
+  }
+
+  const { wallet: normalizedWallet, networkConfig } = validateRequest({ wallet, network, version });
+  const provider = getProvider(networkConfig);
+  const apiKey = lightweight
+    ? null
+    : await getUserApiKey(userId).catch((err) => {
+      logger.warn('getUserApiKey failed', { userId, error: err.message });
+      return null;
+    });
+  const normalizedVersion = String(version || '').toLowerCase();
+
+  if (normalizedVersion === 'v3') {
+    const tokenId = BigInt(positionIdentifier);
+    const pmAddress = normalizeAddress(networkConfig.deployments.v3.positionManager);
+    const factoryAddress = normalizeAddress(networkConfig.deployments.v3.eventSource);
+    const positionManager = getContract(networkConfig, pmAddress, V3_POSITION_MANAGER_ABI);
+    const factory = getContract(networkConfig, factoryAddress, V3_FACTORY_ABI);
+
+    const owner = normalizeAddress(await positionManager.ownerOf(tokenId).catch(() => null));
+    if (!owner || lower(owner) !== lower(normalizedWallet)) return null;
+
+    const position = await positionManager.positions(tokenId);
+    const poolAddress = await factory.getPool(position.token0, position.token1, position.fee);
+    const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
+    const tickSpacing = Number(await pool.tickSpacing().catch(() => 0));
+
+    const record = {
+      id: `v3:${networkConfig.id}:${positionIdentifier}`,
+      mode: 'lp_position',
+      version: 'v3',
+      network: networkConfig.id,
+      networkLabel: networkConfig.label,
+      chainId: networkConfig.chainId,
+      creator: normalizedWallet,
+      owner: normalizedWallet,
+      txHash: null,
+      blockNumber: null,
+      mintBlockNumber: null,
+      createdAt: null,
+      openedAt: null,
+      explorerUrl: networkConfig.explorerUrl,
+      source: 'direct_position_inspect',
+      completeness: 'lightweight',
+      token0Address: normalizeAddress(position.token0),
+      token1Address: normalizeAddress(position.token1),
+      poolAddress: normalizeAddress(poolAddress),
+      identifier: String(positionIdentifier),
+      fee: Number(position.fee),
+      tickSpacing: tickSpacing || null,
+      tickLower: Number(position.tickLower),
+      tickUpper: Number(position.tickUpper),
+      positionLiquidity: String(position.liquidity),
+      feeGrowthInside0LastX128: String(position.feeGrowthInside0LastX128),
+      feeGrowthInside1LastX128: String(position.feeGrowthInside1LastX128),
+      tokensOwed0: String(position.tokensOwed0),
+      tokensOwed1: String(position.tokensOwed1),
+    };
+    return enrichV3Record(provider, networkConfig, record, apiKey, { lightweight });
+  }
+
+  if (normalizedVersion === 'v4') {
+    const tokenId = BigInt(positionIdentifier);
+    const pmAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
+    const positionManager = getContract(networkConfig, pmAddress, V4_POSITION_MANAGER_ABI);
+    const owner = normalizeAddress(await positionManager.ownerOf(tokenId).catch(() => null));
+    if (!owner || lower(owner) !== lower(normalizedWallet)) return null;
+
+    const [poolKey, positionInfo] = await positionManager.getPoolAndPositionInfo(tokenId);
+    const decodedInfo = decodeV4PositionInfo(positionInfo);
+    const poolId = computeV4PoolId(poolKey);
+
+    const record = {
+      id: `v4:${networkConfig.id}:${positionIdentifier}`,
+      mode: 'lp_position',
+      version: 'v4',
+      network: networkConfig.id,
+      networkLabel: networkConfig.label,
+      chainId: networkConfig.chainId,
+      creator: normalizedWallet,
+      owner: normalizedWallet,
+      txHash: null,
+      blockNumber: null,
+      mintBlockNumber: null,
+      createdAt: null,
+      openedAt: null,
+      explorerUrl: networkConfig.explorerUrl,
+      source: 'direct_position_inspect',
+      completeness: 'lightweight',
+      token0Address: normalizeAddress(poolKey.currency0),
+      token1Address: normalizeAddress(poolKey.currency1),
+      poolAddress: null,
+      identifier: String(positionIdentifier),
+      poolId,
+      fee: Number(poolKey.fee),
+      tickSpacing: Number(poolKey.tickSpacing),
+      hooks: normalizeAddress(poolKey.hooks),
+      tickLower: decodedInfo.tickLower,
+      tickUpper: decodedInfo.tickUpper,
+    };
+    return enrichV4Record(provider, networkConfig, record, apiKey, { lightweight });
+  }
+
+  throw new ValidationError('Solo v3/v4 soportan inspeccion directa de posicion');
 }
 
 function isRelevantRecord(record) {
@@ -1524,9 +1678,42 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
   };
 }
 
+/**
+ * Returns a networkConfig with the user's Alchemy RPC URLs overlaid if they
+ * have configured a personal API key.  Falls back to the global config when
+ * the user has no key set.
+ */
+async function getNetworkConfigForUser(userId, network) {
+  const networkConfig = SUPPORTED_NETWORKS[String(network || '').toLowerCase()];
+  if (!networkConfig) throw new ValidationError(`network no soportada: ${network}`);
+
+  const { apiKey } = await settingsService.getAlchemy(userId);
+  if (!apiKey) return networkConfig;
+
+  const { buildAlchemyRpcUrls } = require('../config');
+  const userRpcUrls = buildAlchemyRpcUrls(apiKey);
+  const userRpcUrl = userRpcUrls[networkConfig.id];
+  if (!userRpcUrl) return networkConfig;
+
+  return { ...networkConfig, rpcUrl: userRpcUrl };
+}
+
+async function testUserAlchemyKey(userId) {
+  const { apiKey } = await settingsService.getAlchemy(userId);
+  if (!apiKey) throw new ValidationError('No hay API key de Alchemy configurada');
+
+  const { buildAlchemyRpcUrls } = require('../config');
+  const urls = buildAlchemyRpcUrls(apiKey);
+  const provider = new ethers.JsonRpcProvider(urls.ethereum);
+  const blockNumber = await provider.getBlockNumber();
+  return { valid: true, blockNumber };
+}
+
 module.exports = {
   scanPoolsCreatedByWallet,
   testUserEtherscanKey,
+  testUserAlchemyKey,
+  getNetworkConfigForUser,
   computeDistanceToRange,
   computePnlMetrics,
   getSupportMatrix,
@@ -1540,6 +1727,7 @@ module.exports = {
   resolveHistoricalSpotPrice,
   resolveInitialValuation,
   getPoolSpotData,
+  inspectPositionByIdentifier,
   sqrtPriceX96ToFloat,
   tickToRawSqrtRatio,
   tickToPrice,

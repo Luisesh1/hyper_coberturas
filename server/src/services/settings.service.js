@@ -2,7 +2,7 @@ const settingsRepository = require('../repositories/settings.repository');
 const hyperliquidAccountsService = require('./hyperliquid-accounts.service');
 const { decryptValue, encryptJson, ENCRYPTED_PREFIX } = require('./settings.crypto');
 
-const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan']);
+const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan', 'alchemy']);
 
 async function getSetting(userId, key) {
   const row = await settingsRepository.getByKey(userId, key);
@@ -72,6 +72,14 @@ async function setEtherscan(userId, etherscan) {
   await setSetting(userId, 'etherscan', etherscan);
 }
 
+async function getAlchemy(userId) {
+  return (await getSetting(userId, 'alchemy')) || { apiKey: '' };
+}
+
+async function setAlchemy(userId, alchemy) {
+  await setSetting(userId, 'alchemy', alchemy);
+}
+
 module.exports = {
   ENCRYPTED_PREFIX,
   decryptValue,
@@ -83,4 +91,6 @@ module.exports = {
   setWallet,
   getEtherscan,
   setEtherscan,
+  getAlchemy,
+  setAlchemy,
 };

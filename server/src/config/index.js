@@ -104,7 +104,7 @@ const config = {
     uniswapOperationPollMs: parseInt(process.env.UNISWAP_OPERATION_POLL_INTERVAL_MS, 10) || 3_000,
     deltaNeutralLoopMs: parseInt(process.env.DELTA_NEUTRAL_LOOP_INTERVAL_MS, 10) || 2_000,
     deltaNeutralEvalMs: parseInt(process.env.DELTA_NEUTRAL_EVAL_INTERVAL_MS, 10) || 30_000,
-    lpOrchestratorEvalMs: parseInt(process.env.LP_ORCHESTRATOR_EVAL_INTERVAL_MS, 10) || 30_000,
+    lpOrchestratorEvalMs: parseInt(process.env.LP_ORCHESTRATOR_EVAL_INTERVAL_MS, 10) || 600_000,
     telegramPollMs: parseInt(process.env.TELEGRAM_POLL_INTERVAL_MS, 10) || 3_000,
     telegramConfigRefreshMs: parseInt(process.env.TELEGRAM_CONFIG_REFRESH_INTERVAL_MS, 10) || 60_000,
     telegramLongPollTimeoutSec: parseInt(process.env.TELEGRAM_LONG_POLL_TIMEOUT_SEC, 10) || 20,
@@ -115,6 +115,20 @@ const config = {
     wsPingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS, 10) || 30_000,
     wsWatchdogIntervalMs: parseInt(process.env.WS_WATCHDOG_INTERVAL_MS, 10) || 60_000,
     wsWatchdogMaxSilenceMs: parseInt(process.env.WS_WATCHDOG_MAX_SILENCE_MS, 10) || 90_000,
+  },
+  deltaNeutral: {
+    trackingMode: process.env.DELTA_NEUTRAL_TRACKING_MODE || 'hybrid',
+    hlWsEnabled: process.env.DELTA_NEUTRAL_HL_WS_ENABLED !== 'false',
+    truthRefreshNormalMs: parseInt(process.env.DELTA_NEUTRAL_TRUTH_REFRESH_NORMAL_MS, 10) || (30 * 60_000),
+    truthRefreshEdgeMs: parseInt(process.env.DELTA_NEUTRAL_TRUTH_REFRESH_EDGE_MS, 10) || (5 * 60_000),
+    fullScanTtlMs: parseInt(process.env.DELTA_NEUTRAL_FULL_SCAN_TTL_MS, 10) || (12 * 60 * 60_000),
+    basisGuardBps: parseInt(process.env.DELTA_NEUTRAL_BASIS_GUARD_BPS, 10) || 40,
+    lowConfidenceBasisBps: parseInt(process.env.DELTA_NEUTRAL_LOW_CONF_BASIS_BPS, 10) || 75,
+    minDwellMs: parseInt(process.env.DELTA_NEUTRAL_MIN_DWELL_MS, 10) || 60_000,
+    rpcBudgetHourly: parseInt(process.env.DELTA_NEUTRAL_RPC_BUDGET_HOURLY, 10) || 1_000,
+    rpcBudgetDaily: parseInt(process.env.DELTA_NEUTRAL_RPC_BUDGET_DAILY, 10) || 10_000,
+    positionMissingConfirmations: parseInt(process.env.LP_ORCH_MISSING_CONFIRMATIONS, 10) || 2,
+    positionMissingConfirmationGapMs: parseInt(process.env.LP_ORCH_MISSING_CONFIRMATION_GAP_MS, 10) || (3 * 60_000),
   },
 };
 
@@ -155,3 +169,4 @@ function validateConfig() {
 validateConfig();
 
 module.exports = config;
+module.exports.buildAlchemyRpcUrls = buildAlchemyRpcUrls;

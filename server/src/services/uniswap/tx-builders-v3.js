@@ -34,18 +34,20 @@ function encodeV3CollectData(ctx, recipient, amount0Max = MAX_UINT128, amount1Ma
   }]);
 }
 
-function buildV3IncreaseTx(ctx, { amount0Desired, amount1Desired, slippageBps = DEFAULT_SLIPPAGE_BPS }) {
+function encodeV3IncreaseData(ctx, { amount0Desired, amount1Desired, slippageBps = DEFAULT_SLIPPAGE_BPS }) {
   const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
-  const amount0Min = amountOutMin(amount0Desired, slippageBps);
-  const amount1Min = amountOutMin(amount1Desired, slippageBps);
-  const data = iface.encodeFunctionData('increaseLiquidity', [{
+  return iface.encodeFunctionData('increaseLiquidity', [{
     tokenId: BigInt(ctx.tokenId),
     amount0Desired,
     amount1Desired,
-    amount0Min,
-    amount1Min,
+    amount0Min: amountOutMin(amount0Desired, slippageBps),
+    amount1Min: amountOutMin(amount1Desired, slippageBps),
     deadline: deadlineFromNow(),
   }]);
+}
+
+function buildV3IncreaseTx(ctx, { amount0Desired, amount1Desired, slippageBps = DEFAULT_SLIPPAGE_BPS }) {
+  const data = encodeV3IncreaseData(ctx, { amount0Desired, amount1Desired, slippageBps });
 
   return encodeTx(ctx.positionManagerAddress, data, {
     chainId: ctx.networkConfig.chainId,
@@ -101,6 +103,31 @@ function buildV3DecreaseAndCollectTx(ctx, {
     meta: {
       recipient,
       multicallActions: ['decreaseLiquidity', 'collect'],
+    },
+  });
+}
+
+function buildV3CollectAndIncreaseTx(ctx, {
+  recipient,
+  amount0Desired,
+  amount1Desired,
+}) {
+  // slippage min = 0 because collect+increase is atomic inside a single
+  // multicall — no MEV window between the two calls, and the amounts are
+  // fees we already own.  A tight min here only causes unnecessary reverts
+  // when the pool price moves between prepare and execute.
+  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
+  const data = iface.encodeFunctionData('multicall', [[
+    encodeV3CollectData(ctx, recipient),
+    encodeV3IncreaseData(ctx, { amount0Desired, amount1Desired, slippageBps: 0 }),
+  ]]);
+
+  return encodeTx(ctx.positionManagerAddress, data, {
+    chainId: ctx.networkConfig.chainId,
+    kind: 'reinvest_fees',
+    label: 'Collect & reinvest fees',
+    meta: {
+      multicallActions: ['collect', 'increaseLiquidity'],
     },
   });
 }
@@ -164,6 +191,7 @@ module.exports = {
   buildV3IncreaseTx,
   buildV3DecreaseTx,
   buildV3DecreaseAndCollectTx,
+  buildV3CollectAndIncreaseTx,
   buildV3CollectTx,
   buildV3MintTx,
   buildV3SwapTx,

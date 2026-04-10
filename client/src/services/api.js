@@ -141,6 +141,9 @@ export const settingsApi = {
     request('DELETE', `/settings/hyperliquid-accounts/${id}`),
   saveEtherscan: ({ apiKey })       => request('PUT', '/settings/etherscan', { apiKey }),
   testEtherscan: ()                 => request('POST', '/settings/etherscan/test'),
+  getAlchemy:    ()                 => request('GET',  '/settings/alchemy'),
+  saveAlchemy:   ({ apiKey })       => request('PUT',  '/settings/alchemy', { apiKey }),
+  testAlchemy:   ()                 => request('POST', '/settings/alchemy/test'),
 };
 
 // ------------------------------------------------------------------
@@ -292,6 +295,7 @@ export const strategiesApi = {
   create: (payload) => request('POST', '/strategies', payload),
   update: (id, payload) => request('PUT', `/strategies/${id}`, payload),
   remove: (id) => request('DELETE', `/strategies/${id}`),
+  validateDraft: (payload = {}) => request('POST', '/strategies/validate-draft', payload),
   validate: (id, payload = {}) => request('POST', `/strategies/${id}/validate`, payload),
   backtest: (id, payload = {}) => request('POST', `/strategies/${id}/backtest`, payload),
 };

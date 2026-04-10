@@ -58,6 +58,9 @@ router.get('/', asyncHandler(async (req, res) => {
       etherscan: {
         hasApiKey: !!(await settingsService.getEtherscan(userId)).apiKey,
       },
+      alchemy: {
+        hasApiKey: !!(await settingsService.getAlchemy(userId)).apiKey,
+      },
       hyperliquidAccounts: {
         count: accounts.length,
         hasDefault: accounts.some((account) => account.isDefault),
@@ -224,6 +227,37 @@ router.put('/etherscan', asyncHandler(async (req, res) => {
 router.post('/etherscan/test', asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const result = await uniswapService.testUserEtherscanKey(userId);
+  res.json({ success: true, data: result });
+}));
+
+// ------------------------------------------------------------------
+// Alchemy
+// ------------------------------------------------------------------
+
+router.get('/alchemy', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const alchemy = await settingsService.getAlchemy(userId);
+  res.json({
+    success: true,
+    data: { hasApiKey: !!alchemy.apiKey },
+  });
+}));
+
+router.put('/alchemy', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { apiKey } = req.body;
+  if (!apiKey) {
+    throw new ValidationError('apiKey es requerida');
+  }
+  await settingsService.setAlchemy(userId, {
+    apiKey: String(apiKey).trim(),
+  });
+  res.json({ success: true, data: { hasApiKey: true } });
+}));
+
+router.post('/alchemy/test', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const result = await uniswapService.testUserAlchemyKey(userId);
   res.json({ success: true, data: result });
 }));
 

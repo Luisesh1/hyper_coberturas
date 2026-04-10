@@ -9,15 +9,17 @@ const hlRegistry = require('./hyperliquid.registry');
 const { getTradingService } = require('./trading.factory');
 const marketService = require('./market.service');
 const {
-  computeDeltaNeutralMetrics,
-  networkSentinelIntervalMs,
+  buildSyntheticLpState,
 } = require('./delta-neutral-math.service');
+const hyperliquidStreamService = require('./hyperliquid-stream.service');
+const rpcBudgetManager = require('./rpc-budget-manager.service');
 const {
   computeSnapshotHash,
   normalizeProtectionSnapshot,
   validateNormalizedProtectionSnapshot,
 } = require('./delta-neutral-snapshot.service');
 const MAX_SNAPSHOT_FALLBACK_AGE_MS = 2 * 60_000;
+const NEAR_ZERO_TARGET_QTY = 1e-6;
 const {
   DEFAULT_BAND_MODE,
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
@@ -27,6 +29,7 @@ const {
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,
+  DEFAULT_MAX_SPREAD_BPS,
   DEFAULT_MIN_ORDER_NOTIONAL_USD,
   DEFAULT_TWAP_SLICES,
   DEFAULT_TWAP_DURATION_SEC,
@@ -60,19 +63,35 @@ class ProtectedPoolDeltaNeutralService {
     this.hlRegistry = deps.hlRegistry || hlRegistry;
     this.getTradingService = deps.getTradingService || getTradingService;
     this.marketService = deps.marketService || marketService;
+    this.hyperliquidStreamService = deps.hyperliquidStreamService || hyperliquidStreamService;
+    this.rpcBudgetManager = deps.rpcBudgetManager || rpcBudgetManager;
     this.logger = deps.logger || logger;
     this.loopMs = deps.loopMs || config.intervals.deltaNeutralLoopMs || 2_000;
     this.fullEvalMs = deps.fullEvalMs || config.intervals.deltaNeutralEvalMs || 30_000;
+    this.trackingMode = deps.trackingMode || config.deltaNeutral.trackingMode || 'hybrid';
+    this.truthRefreshNormalMs = deps.truthRefreshNormalMs || config.deltaNeutral.truthRefreshNormalMs;
+    this.truthRefreshEdgeMs = deps.truthRefreshEdgeMs || config.deltaNeutral.truthRefreshEdgeMs;
+    this.fullScanTtlMs = deps.fullScanTtlMs || config.deltaNeutral.fullScanTtlMs;
+    this.basisGuardBps = deps.basisGuardBps || config.deltaNeutral.basisGuardBps;
+    this.lowConfidenceBasisBps = deps.lowConfidenceBasisBps || config.deltaNeutral.lowConfidenceBasisBps;
+    this.minDwellMs = deps.minDwellMs || config.deltaNeutral.minDwellMs;
     this.interval = null;
     this.running = false;
-    this.lastSentinelAt = new Map();
     this.lastEvalAt = new Map();
     this.twapSessions = new Map();
     this.rvCache = new Map();
+    this.hybridStats = {
+      marketTicks: 0,
+      truthRefreshes: 0,
+      inspectRefreshes: 0,
+      fullScans: 0,
+      truthRefreshDeferred: 0,
+    };
   }
 
   start() {
     if (this.interval) return;
+    this.hyperliquidStreamService.start?.();
     this.interval = setInterval(() => {
       this.evaluateAll().catch((err) => {
         this.logger.error('protected_pool_delta_neutral_unhandled_error', { error: err.message });
@@ -85,6 +104,208 @@ class ProtectedPoolDeltaNeutralService {
     if (!this.interval) return;
     clearInterval(this.interval);
     this.interval = null;
+    this.hyperliquidStreamService.stop?.();
+  }
+
+  getHybridDiagnostics() {
+    return {
+      trackingMode: this.trackingMode,
+      stats: { ...this.hybridStats },
+      rpcBudget: this.rpcBudgetManager.getSnapshot?.() || null,
+      stream: this.hyperliquidStreamService.getDiagnostics?.() || null,
+    };
+  }
+
+  _recordHybridStat(key) {
+    this.hybridStats[key] = Number(this.hybridStats[key] || 0) + 1;
+  }
+
+  _trackProtection(protection) {
+    this.hyperliquidStreamService.trackProtection?.(protection);
+  }
+
+  _deriveZoneState(protection, currentPrice) {
+    const distancePct = Number(distanceToRangePct(protection, currentPrice));
+    if (!Number.isFinite(distancePct)) return 'center';
+    const currentBoundarySide = getCurrentBoundarySide(protection, currentPrice);
+    if (currentBoundarySide && currentBoundarySide !== 'inside') return 'outside';
+    if (distancePct <= 0.5) return 'edge';
+    if (distancePct <= 2) return 'transition';
+    return 'center';
+  }
+
+  _zoneMultiplier(zoneState) {
+    if (zoneState === 'center') return 0.6;
+    if (zoneState === 'transition') return 0.85;
+    return 1;
+  }
+
+  _hasRealtimeMarketPrice(marketContext = null) {
+    const source = String(marketContext?.source || '').trim().toLowerCase();
+    const price = Number(marketContext?.hlPrice);
+    return Number.isFinite(price) && price > 0 && source.startsWith('hl_ws_');
+  }
+
+  _computeBasisSpreadBps(currentPrice, truthPrice) {
+    const current = Number(currentPrice);
+    const truth = Number(truthPrice);
+    if (!Number.isFinite(current) || current <= 0 || !Number.isFinite(truth) || truth <= 0) return null;
+    return Math.abs((current - truth) / truth) * 10_000;
+  }
+
+  _resolveModelConfidence({ truthAgeMs, basisSpreadBps, zoneState, truthPending = false }) {
+    if (truthPending) return 'low';
+    if (Number.isFinite(basisSpreadBps) && basisSpreadBps >= this.lowConfidenceBasisBps) return 'low';
+    if (Number.isFinite(truthAgeMs) && truthAgeMs > Math.max(this.truthRefreshNormalMs * 2, this.truthRefreshEdgeMs * 3)) {
+      return 'low';
+    }
+    if (zoneState === 'edge' || zoneState === 'outside') {
+      if (Number.isFinite(truthAgeMs) && truthAgeMs <= this.truthRefreshEdgeMs && (!Number.isFinite(basisSpreadBps) || basisSpreadBps <= this.basisGuardBps)) {
+        return 'high';
+      }
+      return 'medium';
+    }
+    if (Number.isFinite(truthAgeMs) && truthAgeMs <= this.truthRefreshNormalMs && (!Number.isFinite(basisSpreadBps) || basisSpreadBps <= this.basisGuardBps)) {
+      return 'high';
+    }
+    return 'medium';
+  }
+
+  async _getHybridMarketContext(protection) {
+    this._trackProtection(protection);
+    const user = protection?.account?.address || protection?.walletAddress;
+    const [mid, bbo, assetContext, clearinghouseState] = await Promise.all([
+      this.hyperliquidStreamService.getMidPrice(protection.inferredAsset).catch(() => null),
+      this.hyperliquidStreamService.getBbo(protection.inferredAsset).catch(() => null),
+      this.hyperliquidStreamService.getActiveAssetCtx(protection.inferredAsset).catch(() => null),
+      this.hyperliquidStreamService.getClearinghouseState(user).catch(() => null),
+    ]);
+    const hlPrice = Number(bbo?.mid ?? mid?.price ?? assetContext?.midPx ?? assetContext?.markPx);
+    let source = 'unavailable';
+    if (bbo?.mid != null) source = bbo.source === 'http' ? 'hl_http_bbo' : 'hl_ws_bbo';
+    else if (mid?.price != null) source = mid.source === 'http' ? 'hl_http_mid' : 'hl_ws_mid';
+    else if (assetContext?.midPx != null || assetContext?.markPx != null) source = assetContext.source === 'http' ? 'hl_http_asset_ctx' : 'hl_ws_asset_ctx';
+
+    return {
+      hlPrice: Number.isFinite(hlPrice) && hlPrice > 0 ? hlPrice : null,
+      source,
+      mid,
+      bbo,
+      assetContext,
+      clearinghouseState: clearinghouseState?.state || clearinghouseState || null,
+    };
+  }
+
+  _buildDigitalTwin(protection, marketContext) {
+    const snapshot = safeJsonClone(protection?.poolSnapshot || {});
+    const baseTwin = buildSyntheticLpState(snapshot, {
+      volatilePriceUsd: marketContext?.hlPrice,
+      targetHedgeRatio: protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
+    });
+    if (!baseTwin?.eligible) {
+      return {
+        ...baseTwin,
+        zoneState: 'center',
+        targetHedgeRatioApplied: protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
+      };
+    }
+
+    const zoneState = this._deriveZoneState(protection, baseTwin.syntheticPriceCurrent);
+    const targetHedgeRatioApplied = Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO) * this._zoneMultiplier(zoneState);
+    const tunedTwin = buildSyntheticLpState(snapshot, {
+      volatilePriceUsd: marketContext?.hlPrice,
+      targetHedgeRatio: targetHedgeRatioApplied,
+    });
+
+    return {
+      ...tunedTwin,
+      zoneState,
+      targetHedgeRatioApplied,
+    };
+  }
+
+  async _resolvePricingContext(protection, snapshotMeta, liveMarket) {
+    const marketTwin = this._buildDigitalTwin(protection, liveMarket);
+    const marketPrice = Number(marketTwin?.syntheticPriceCurrent);
+    const liveSource = liveMarket?.source || 'unavailable';
+
+    if (this._hasRealtimeMarketPrice(liveMarket) && marketTwin?.eligible && Number.isFinite(marketPrice) && marketPrice > 0) {
+      return {
+        currentPrice: marketPrice,
+        twin: marketTwin,
+        spotSource: liveSource,
+        spotFailureReason: null,
+      };
+    }
+
+    const snapshotPrice = Number(protection?.poolSnapshot?.priceCurrent ?? protection?.priceCurrent);
+    const snapshotAgeMs = Math.max(Date.now() - Number(snapshotMeta?.snapshotFreshAt || protection?.snapshotFreshAt || 0), 0);
+    if (Number.isFinite(snapshotPrice) && snapshotPrice > 0 && snapshotAgeMs <= MAX_SNAPSHOT_FALLBACK_AGE_MS) {
+      return {
+        currentPrice: snapshotPrice,
+        twin: this._buildDigitalTwin(protection, { hlPrice: snapshotPrice }),
+        spotSource: 'snapshot',
+        spotFailureReason: null,
+      };
+    }
+
+    const spot = await this._fetchSpot(protection).catch(() => null);
+    const spotPrice = Number(spot?.priceCurrent);
+    if (Number.isFinite(spotPrice) && spotPrice > 0) {
+      return {
+        currentPrice: spotPrice,
+        twin: this._buildDigitalTwin(protection, { hlPrice: spotPrice }),
+        spotSource: 'pool_spot',
+        spotFailureReason: null,
+      };
+    }
+
+    return {
+      currentPrice: null,
+      twin: marketTwin,
+      spotSource: liveSource,
+      spotFailureReason: 'No se pudo obtener el precio actual del pool.',
+    };
+  }
+
+  _shouldRefreshTruth({
+    protection,
+    strategyState,
+    forceReason,
+    zoneState,
+    truthAgeMs,
+    basisSpreadBps,
+    modelConfidence,
+  }) {
+    if (!protection?.poolSnapshot) {
+      return { refresh: true, reason: 'missing_snapshot', urgent: true, useFullScan: true };
+    }
+    if (forceReason === 'restart_reconcile') {
+      return { refresh: true, reason: 'restart_reconcile', urgent: true, useFullScan: false };
+    }
+    if (forceReason === 'boundary_cross') {
+      return { refresh: true, reason: 'boundary_cross', urgent: true, useFullScan: false };
+    }
+    if (strategyState.truthPending) {
+      return { refresh: true, reason: 'truth_pending', urgent: true, useFullScan: false };
+    }
+    if (Number.isFinite(basisSpreadBps) && basisSpreadBps >= this.lowConfidenceBasisBps) {
+      return { refresh: true, reason: 'basis_high', urgent: true, useFullScan: false };
+    }
+    if (modelConfidence === 'low') {
+      return { refresh: true, reason: 'low_confidence', urgent: true, useFullScan: false };
+    }
+    const lastFullScanAt = Number(strategyState.lastFullScanAt || 0);
+    if (lastFullScanAt > 0 && Date.now() - lastFullScanAt >= this.fullScanTtlMs) {
+      return { refresh: true, reason: 'maintenance_full_scan', urgent: false, useFullScan: true };
+    }
+    if ((zoneState === 'edge' || zoneState === 'outside') && truthAgeMs >= this.truthRefreshEdgeMs) {
+      return { refresh: true, reason: 'near_edge_truth_refresh', urgent: true, useFullScan: false };
+    }
+    if (truthAgeMs >= this.truthRefreshNormalMs) {
+      return { refresh: true, reason: 'normal_truth_refresh', urgent: false, useFullScan: false };
+    }
+    return { refresh: false, reason: null, urgent: false, useFullScan: false };
   }
 
   /**
@@ -229,18 +450,202 @@ class ProtectedPoolDeltaNeutralService {
     return this.repo.getById(protection.userId, protection.id);
   }
 
-  async _buildPreflight({ protection, hl, strategyState, actualQty: _actualQty, currentPrice, tracking, bands, decision }) {
-    const accountState = await hl.getClearinghouseState().catch(() => null);
-    const withdrawable = Number(accountState?.withdrawable || 0);
+  async _refreshProtectionTruth(protection, {
+    strategyState = normalizeStrategyState(protection?.strategyState),
+    reason = 'normal_truth_refresh',
+    urgent = false,
+    useFullScan = false,
+  } = {}) {
+    const weight = useFullScan ? 25 : 3;
+    const budget = this.rpcBudgetManager.canSpend?.({ weight, urgent }) || { allowed: true, snapshot: null };
+    if (!budget.allowed) {
+      this._recordHybridStat('truthRefreshDeferred');
+      return {
+        protection,
+        refreshed: false,
+        deferred: true,
+        reason: budget.reason,
+        budget: budget.snapshot || null,
+      };
+    }
+
+    const persistSuccessState = async (freshProtection, nextStrategyState = {}) => {
+      await this.repo.updateStrategyState(freshProtection.userId, freshProtection.id, {
+        strategyState: {
+          ...normalizeStrategyState(freshProtection.strategyState),
+          ...nextStrategyState,
+          trackingMode: this.trackingMode,
+          lastTruthAt: Date.now(),
+          lastTruthPrice: Number(freshProtection.poolSnapshot?.priceCurrent ?? freshProtection.priceCurrent ?? 0) || null,
+          lastTruthReason: reason,
+          truthPending: false,
+          consecutiveTruthFailures: 0,
+          consecutiveInspectFailures: 0,
+          rpcBudgetState: budget.snapshot || this.rpcBudgetManager.getSnapshot?.() || null,
+          ...(useFullScan ? { lastFullScanAt: Date.now() } : {}),
+        },
+      });
+      return this.repo.getById(freshProtection.userId, freshProtection.id);
+    };
+
+    try {
+      this.rpcBudgetManager.record?.({
+        kind: useFullScan ? 'truth_full_scan' : 'truth_direct_inspect',
+        protectionId: protection.id,
+        urgent,
+        weight,
+      });
+
+      if (useFullScan) {
+        this._recordHybridStat('truthRefreshes');
+        this._recordHybridStat('fullScans');
+        const refreshedProtection = await this._refreshProtectionSnapshot(protection);
+        if (!refreshedProtection) {
+          throw new Error('No se pudo refrescar el snapshot via full scan.');
+        }
+        return {
+          protection: await persistSuccessState(refreshedProtection),
+          refreshed: true,
+          source: 'full_scan',
+        };
+      }
+
+      this._recordHybridStat('truthRefreshes');
+      this._recordHybridStat('inspectRefreshes');
+      const freshPool = await this.uniswapService.inspectPositionByIdentifier({
+        userId: protection.userId,
+        wallet: protection.walletAddress,
+        network: protection.network,
+        version: protection.version,
+        positionIdentifier: protection.positionIdentifier,
+        lightweight: true,
+      });
+
+      if (!freshPool) {
+        const nextFailures = Number(strategyState.consecutiveInspectFailures || 0) + 1;
+        await this.repo.updateStrategyState(protection.userId, protection.id, {
+          strategyState: {
+            ...strategyState,
+            trackingMode: this.trackingMode,
+            truthPending: true,
+            lastTruthReason: `${reason}:position_missing`,
+            consecutiveInspectFailures: nextFailures,
+            consecutiveTruthFailures: Number(strategyState.consecutiveTruthFailures || 0),
+            rpcBudgetState: budget.snapshot || this.rpcBudgetManager.getSnapshot?.() || null,
+          },
+        });
+        if (urgent || nextFailures >= 2) {
+          return this._refreshProtectionTruth(protection, {
+            strategyState: {
+              ...strategyState,
+              consecutiveInspectFailures: nextFailures,
+            },
+            reason: `${reason}:fallback_full_scan`,
+            urgent,
+            useFullScan: true,
+          });
+        }
+        return {
+          protection,
+          refreshed: false,
+          missing: true,
+          source: 'direct_inspect',
+        };
+      }
+
+      const rangeMetrics = await timeInRangeService.computeIncrementalRangeMetrics(protection, {
+        endAt: Date.now(),
+        poolSnapshot: freshPool,
+        asset: protection.inferredAsset,
+      }).catch(() => null);
+      const poolSnapshot = rangeMetrics
+        ? timeInRangeService.applyRangeMetricsToSnapshot(freshPool, rangeMetrics)
+        : freshPool;
+      const snapshotMeta = this._normalizeSnapshot(protection, poolSnapshot);
+
+      await this.repo.updateSnapshot(protection.userId, protection.id, {
+        poolAddress: freshPool.poolAddress || protection.poolAddress,
+        token0Symbol: freshPool.token0?.symbol || protection.token0Symbol,
+        token1Symbol: freshPool.token1?.symbol || protection.token1Symbol,
+        token0Address: freshPool.token0Address || protection.token0Address,
+        token1Address: freshPool.token1Address || protection.token1Address,
+        rangeLowerPrice: freshPool.rangeLowerPrice,
+        rangeUpperPrice: freshPool.rangeUpperPrice,
+        priceCurrent: freshPool.priceCurrent,
+        poolSnapshot,
+        snapshotStatus: snapshotMeta.validation.status,
+        snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+        snapshotHash: snapshotMeta.snapshotHash,
+        updatedAt: Date.now(),
+        isCurrentlyInRange: freshPool.inRange === true,
+        ...(rangeMetrics || {}),
+      });
+
+      const refreshedProtection = await this.repo.getById(protection.userId, protection.id);
+      return {
+        protection: await persistSuccessState(refreshedProtection),
+        refreshed: true,
+        source: 'direct_inspect',
+      };
+    } catch (err) {
+      const nextFailures = Number(strategyState.consecutiveTruthFailures || 0) + 1;
+      await this.repo.updateStrategyState(protection.userId, protection.id, {
+        strategyState: {
+          ...strategyState,
+          trackingMode: this.trackingMode,
+          truthPending: true,
+          lastTruthReason: `${reason}:failed`,
+          consecutiveTruthFailures: nextFailures,
+          rpcBudgetState: budget.snapshot || this.rpcBudgetManager.getSnapshot?.() || null,
+        },
+      });
+      this.logger.warn('protected_pool_truth_refresh_failed', {
+        protectionId: protection.id,
+        reason,
+        useFullScan,
+        error: err.message,
+      });
+      if (!useFullScan && (urgent || nextFailures >= 2)) {
+        return this._refreshProtectionTruth(protection, {
+          strategyState: {
+            ...strategyState,
+            consecutiveTruthFailures: nextFailures,
+          },
+          reason: `${reason}:full_scan_after_failure`,
+          urgent,
+          useFullScan: true,
+        });
+      }
+      return {
+        protection,
+        refreshed: false,
+        failed: true,
+        source: useFullScan ? 'full_scan' : 'direct_inspect',
+      };
+    }
+  }
+
+  async _buildPreflight({
+    protection,
+    hl,
+    strategyState,
+    actualQty: _actualQty,
+    currentPrice,
+    tracking,
+    bands,
+    decision,
+    accountState = null,
+    assetContext = null,
+    bbo = null,
+  }) {
+    const resolvedAccountState = accountState || await hl.getClearinghouseState().catch(() => null);
+    const withdrawable = Number(resolvedAccountState?.withdrawable || 0);
     const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
     const increaseNotionalUsd = targetIncreaseQty * currentPrice;
     const requiredMarginUsd = increaseNotionalUsd / Math.max(Number(protection.leverage || 1), 1);
     const cooldownActive = isCooldownActive(protection, strategyState);
     const snapshotStatus = protection.snapshotStatus || 'ready';
-    const priceContext = await this.marketService.getAssetContexts().catch(() => []);
-    const assetContext = Array.isArray(priceContext)
-      ? priceContext.find((item) => String(item.name || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase())
-      : null;
+    const resolvedAssetContext = assetContext || (() => null)();
 
     if (snapshotStatus !== 'ready') {
       return {
@@ -274,6 +679,14 @@ class ProtectedPoolDeltaNeutralService {
         executionSkippedBecause: 'insufficient_margin',
       };
     }
+    if (Number.isFinite(Number(bbo?.spreadBps)) && Number(bbo.spreadBps) > Number(protection.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS)) {
+      return {
+        ok: false,
+        status: 'tracking',
+        reason: 'spread_too_wide',
+        executionSkippedBecause: 'spread_too_wide',
+      };
+    }
 
     return {
       ok: true,
@@ -281,7 +694,8 @@ class ProtectedPoolDeltaNeutralService {
       reason: 'preflight_ok',
       executionSkippedBecause: null,
       withdrawable,
-      fundingRate: assetContext?.fundingRate != null ? Number(assetContext.fundingRate) : null,
+      fundingRate: resolvedAssetContext?.fundingRate != null ? Number(resolvedAssetContext.fundingRate) : null,
+      spreadBps: Number.isFinite(Number(bbo?.spreadBps)) ? Number(bbo.spreadBps) : null,
       estimatedExecutionCostUsd: bands.estimatedCostUsd,
     };
   }
@@ -419,31 +833,29 @@ class ProtectedPoolDeltaNeutralService {
 
   async _tickProtection(protection) {
     const now = Date.now();
-    const cadence = networkSentinelIntervalMs(protection.network);
-    let spot = null;
-    if ((now - (this.lastSentinelAt.get(protection.id) || 0)) >= cadence) {
-      spot = await this._fetchSpot(protection);
-      this.lastSentinelAt.set(protection.id, now);
-    }
-
     const strategyState = normalizeStrategyState(protection.strategyState);
-    const currentPrice = Number(spot?.priceCurrent ?? protection.poolSnapshot?.priceCurrent ?? protection.priceCurrent);
+    const marketContext = await this._getHybridMarketContext(protection).catch(() => null);
+    const twin = this._buildDigitalTwin(protection, marketContext);
+    const currentPrice = Number(twin?.syntheticPriceCurrent ?? protection.poolSnapshot?.priceCurrent ?? protection.priceCurrent);
     const currentBoundarySide = getCurrentBoundarySide(protection, currentPrice);
     const lastBoundarySide = strategyState.lastObservedBoundarySide || 'inside';
     const crossedBoundary = currentBoundarySide && lastBoundarySide !== currentBoundarySide;
-    const nearBoundary = Number(distanceToRangePct(protection, currentPrice)) <= 1;
-    const evalDue = (now - (this.lastEvalAt.get(protection.id) || 0)) >= this.fullEvalMs;
+    const zoneState = this._deriveZoneState(protection, currentPrice);
+    const nearBoundary = zoneState === 'edge' || zoneState === 'outside';
+    const evalDue = (now - (this.lastEvalAt.get(protection.id) || 0)) >= this.fullEvalMs
+      || normalizeStrategyState(protection.strategyState).truthPending === true;
 
     if (!evalDue && !crossedBoundary && !nearBoundary) return;
 
+    this._recordHybridStat('marketTicks');
     this.lastEvalAt.set(protection.id, now);
     await this.evaluateProtection(protection, {
-      spot,
+      marketContext,
       forceReason: crossedBoundary ? 'boundary_cross' : nearBoundary ? 'boundary_watch' : null,
     });
   }
 
-  async evaluateProtection(protection, { spot = null, forceReason = null, forceRebalance = false } = {}) {
+  async evaluateProtection(protection, { marketContext = null, forceReason = null, forceRebalance = false } = {}) {
     const current = await this.repo.getById(protection.userId, protection.id);
     if (!current || current.status !== 'active' || current.protectionMode !== 'delta_neutral') {
       return null;
@@ -452,7 +864,13 @@ class ProtectedPoolDeltaNeutralService {
     const strategyState = normalizeStrategyState(current.strategyState);
     let activeProtection = current;
     if ((current.snapshotStatus && current.snapshotStatus !== 'ready') || !current.poolSnapshot) {
-      activeProtection = await this._refreshProtectionSnapshot(current).catch(() => current);
+      const refreshed = await this._refreshProtectionTruth(current, {
+        strategyState,
+        reason: 'bootstrap_missing_snapshot',
+        urgent: true,
+        useFullScan: true,
+      }).catch(() => null);
+      activeProtection = refreshed?.protection || current;
     }
 
     let snapshotMeta = this._normalizeSnapshot(activeProtection, activeProtection.poolSnapshot);
@@ -488,35 +906,91 @@ class ProtectedPoolDeltaNeutralService {
 
     const hl = await this.hlRegistry.getOrCreate(activeProtection.userId, activeProtection.accountId);
     const tradingService = await this.getTradingService(activeProtection.userId, activeProtection.accountId);
-    let liveSpot = spot || await this._fetchSpot(activeProtection).catch((err) => {
-      logger.warn('_fetchSpot failed in evaluateProtection', { poolId: activeProtection.id, error: err.message });
-      return null;
-    });
-    let spotSource = liveSpot ? 'chain' : 'unavailable';
-    let currentPrice = Number(liveSpot?.priceCurrent);
-    let spotFailureReason = null;
-
-    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
-      const refreshedProtection = await this._refreshProtectionSnapshot(activeProtection).catch(() => null);
-      if (refreshedProtection) {
-        activeProtection = refreshedProtection;
-        snapshotMeta = this._normalizeSnapshot(activeProtection, activeProtection.poolSnapshot);
+    let liveMarket = marketContext || await this._getHybridMarketContext(activeProtection).catch(() => null);
+    if (!liveMarket?.clearinghouseState) {
+      const fallbackAccountState = await hl.getClearinghouseState().catch(() => null);
+      if (fallbackAccountState) {
+        liveMarket = {
+          ...(liveMarket || {}),
+          clearinghouseState: fallbackAccountState,
+        };
       }
-      const snapshotAgeMs = Math.max(
-        Date.now() - Number(snapshotMeta.snapshotFreshAt || activeProtection.snapshotFreshAt || activeProtection.updatedAt || Date.now()),
-        0
-      );
-      const snapshotPrice = Number(activeProtection.poolSnapshot?.priceCurrent ?? activeProtection.priceCurrent);
-      if (Number.isFinite(snapshotPrice) && snapshotPrice > 0 && snapshotAgeMs <= MAX_SNAPSHOT_FALLBACK_AGE_MS) {
-        currentPrice = snapshotPrice;
-        spotSource = 'snapshot';
-        spotFailureReason = liveSpot ? null : 'chain_spot_unavailable_using_fresh_snapshot';
-      } else {
-        spotFailureReason = 'No se pudo obtener el precio actual del pool.';
+    }
+    let {
+      currentPrice,
+      twin,
+      spotSource,
+      spotFailureReason,
+    } = await this._resolvePricingContext(activeProtection, snapshotMeta, liveMarket);
+    let truthAgeMs = Math.max(
+      Date.now() - Number(strategyState.lastTruthAt || snapshotMeta.snapshotFreshAt || activeProtection.snapshotFreshAt || 0),
+      0,
+    );
+    let basisSpreadBps = this._computeBasisSpreadBps(
+      currentPrice,
+      Number(strategyState.lastTruthPrice || activeProtection.poolSnapshot?.priceCurrent || activeProtection.priceCurrent),
+    );
+    let zoneState = twin?.zoneState || this._deriveZoneState(activeProtection, currentPrice);
+    let modelConfidence = this._resolveModelConfidence({
+      truthAgeMs,
+      basisSpreadBps,
+      zoneState,
+      truthPending: strategyState.truthPending,
+    });
+    const refreshPolicy = this._shouldRefreshTruth({
+      protection: activeProtection,
+      strategyState,
+      forceReason,
+      zoneState,
+      truthAgeMs,
+      basisSpreadBps,
+      modelConfidence,
+    });
+    if (refreshPolicy.refresh) {
+      const refreshed = await this._refreshProtectionTruth(activeProtection, {
+        strategyState,
+        reason: refreshPolicy.reason,
+        urgent: refreshPolicy.urgent,
+        useFullScan: refreshPolicy.useFullScan,
+      }).catch(() => null);
+      if (refreshed?.protection) {
+        activeProtection = refreshed.protection;
+        snapshotMeta = this._normalizeSnapshot(activeProtection, activeProtection.poolSnapshot);
+        liveMarket = await this._getHybridMarketContext(activeProtection).catch(() => liveMarket);
+        if (!liveMarket?.clearinghouseState) {
+          const fallbackAccountState = await hl.getClearinghouseState().catch(() => null);
+          if (fallbackAccountState) {
+            liveMarket = {
+              ...(liveMarket || {}),
+              clearinghouseState: fallbackAccountState,
+            };
+          }
+        }
+        ({
+          currentPrice,
+          twin,
+          spotSource,
+          spotFailureReason,
+        } = await this._resolvePricingContext(activeProtection, snapshotMeta, liveMarket));
+        truthAgeMs = Math.max(
+          Date.now() - Number(activeProtection.strategyState?.lastTruthAt || snapshotMeta.snapshotFreshAt || 0),
+          0,
+        );
+        basisSpreadBps = this._computeBasisSpreadBps(
+          currentPrice,
+          Number(activeProtection.strategyState?.lastTruthPrice || activeProtection.poolSnapshot?.priceCurrent || activeProtection.priceCurrent),
+        );
+        zoneState = twin?.zoneState || this._deriveZoneState(activeProtection, currentPrice);
+        modelConfidence = this._resolveModelConfidence({
+          truthAgeMs,
+          basisSpreadBps,
+          zoneState,
+          truthPending: normalizeStrategyState(activeProtection.strategyState).truthPending,
+        });
       }
     }
 
-    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0 || !twin?.eligible) {
       const cooldown = buildCooldown('No se pudo obtener el precio actual del pool.', strategyState);
       const staleState = {
         ...strategyState,
@@ -557,10 +1031,9 @@ class ProtectedPoolDeltaNeutralService {
       ...(safeJsonClone(activeProtection.poolSnapshot) || {}),
       ...snapshotMeta.normalizedSnapshot,
       priceCurrent: currentPrice,
+      inRange: twin.syntheticInRange === true,
     };
-    const metrics = computeDeltaNeutralMetrics(snapshot, {
-      targetHedgeRatio: activeProtection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
-    });
+    const metrics = twin;
     if (!metrics.eligible) {
       const degradedState = {
         ...strategyState,
@@ -646,6 +1119,20 @@ class ProtectedPoolDeltaNeutralService {
       marginModeVerified,
       topUpCapUsd: Math.max(300, 0.25 * Number(activeProtection.initialConfiguredHedgeNotionalUsd || activeProtection.configuredHedgeNotionalUsd || 0)),
       lastObservedBoundarySide: currentBoundarySide,
+      trackingMode: this.trackingMode,
+      truthAgeMs,
+      lastTruthAt: Number(activeProtection.strategyState?.lastTruthAt || strategyState.lastTruthAt || snapshotMeta.snapshotFreshAt || activeProtection.snapshotFreshAt || Date.now()),
+      lastTruthPrice: Number(activeProtection.strategyState?.lastTruthPrice || strategyState.lastTruthPrice || activeProtection.poolSnapshot?.priceCurrent || activeProtection.priceCurrent || currentPrice),
+      lastModelAt: Date.now(),
+      lastModelPrice: currentPrice,
+      modelConfidence,
+      basisSpreadBps,
+      consecutiveTruthFailures: Number((activeProtection.strategyState?.consecutiveTruthFailures ?? strategyState.consecutiveTruthFailures) || 0),
+      consecutiveInspectFailures: Number((activeProtection.strategyState?.consecutiveInspectFailures ?? strategyState.consecutiveInspectFailures) || 0),
+      zoneState,
+      lastTrackedMidPrice: Number(liveMarket?.hlPrice || strategyState.lastTrackedMidPrice || 0) || null,
+      lastBboSpreadBps: Number.isFinite(Number(liveMarket?.bbo?.spreadBps)) ? Number(liveMarket.bbo.spreadBps) : null,
+      rpcBudgetState: this.rpcBudgetManager.getSnapshot?.() || strategyState.rpcBudgetState || null,
       netProtectionPnlUsd:
         lpPnlUsd
         + reconciledRealizedPnlUsd
@@ -670,6 +1157,7 @@ class ProtectedPoolDeltaNeutralService {
     nextState.trackingErrorUsd = tracking.trackingErrorUsd;
     nextState.lastSpotFailureAt = spotFailureReason ? Date.now() : (strategyState.lastSpotFailureAt || null);
     nextState.lastSpotFailureReason = spotFailureReason || null;
+    nextState.truthPending = normalizeStrategyState(activeProtection.strategyState).truthPending === true;
 
     let riskGateTriggered = false;
     let riskGateReason = null;
@@ -756,13 +1244,22 @@ class ProtectedPoolDeltaNeutralService {
       : Infinity;
     const driftQty = Number(metrics.targetQty) - actualQty;
     const driftUsd = Math.abs(driftQty) * currentPrice;
+    const isReduceOnlyPath = driftQty < -1e-8;
+    const forceReduceNearZero = metrics.targetQty <= NEAR_ZERO_TARGET_QTY && actualQty > 1e-8;
+    const minDwellActive = Number.isFinite(Number(nextState.minDwellUntil)) && Date.now() < Number(nextState.minDwellUntil);
+    const confidenceBlocksIncrease = nextState.modelConfidence === 'low' && driftQty > 0;
     const timerDue = !nextState.lastRebalanceAt
       || ((Date.now() - Number(nextState.lastRebalanceAt || 0)) >= (band.intervalSec * 1000));
     const shouldRebalance = forceRebalance
+      || forceReduceNearZero
       || forceReason === 'boundary_cross'
       || priceMovePct >= band.effectiveBandPct
       || (timerDue && driftUsd >= (activeProtection.minRebalanceNotionalUsd ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD))
       || (!position && metrics.targetQty > 0.0000001);
+
+    if (forceReduceNearZero && rebalanceDecision.decision === 'hold') {
+      rebalanceDecision.decision = 'rebalance_full';
+    }
 
     const preflight = await this._buildPreflight({
       protection: activeProtection,
@@ -773,19 +1270,31 @@ class ProtectedPoolDeltaNeutralService {
       tracking,
       bands: rebalanceDecision.bands,
       decision: rebalanceDecision.decision,
+      accountState: liveMarket?.clearinghouseState || null,
+      assetContext: liveMarket?.assetContext || null,
+      bbo: liveMarket?.bbo || null,
     });
+    const effectiveShouldRebalance = shouldRebalance && !minDwellActive && !confidenceBlocksIncrease;
 
     nextState.status = normalizeEvaluationStatus({
       decision: rebalanceDecision.decision,
       trackingErrorUsd: tracking.trackingErrorUsd,
       riskStatus: forcedStatus,
       preflightStatus: preflight.ok ? null : preflight.status,
-      shouldRebalance,
+      shouldRebalance: effectiveShouldRebalance,
       preflightOk: preflight.ok,
     });
     nextState.lastDecision = rebalanceDecision.decision;
     nextState.lastDecisionReason = forceReason
       || (rebalanceDecision.decision === 'hold' ? 'within_cost_aware_band' : 'drift_exceeds_cost_aware_band');
+    if (confidenceBlocksIncrease) {
+      nextState.lastDecision = 'refresh_snapshot';
+      nextState.lastDecisionReason = 'low_confidence_model';
+      nextState.truthPending = true;
+    } else if (minDwellActive && shouldRebalance) {
+      nextState.lastDecision = 'hold';
+      nextState.lastDecisionReason = 'min_dwell_active';
+    }
     if (forcedStatus === 'margin_pending') {
       nextState.nextEligibleAttemptAt = Date.now() + MARGIN_COOLDOWN_MS;
       nextState.cooldownReason = riskGateReason;
@@ -799,8 +1308,13 @@ class ProtectedPoolDeltaNeutralService {
       nextState.cooldownReason = preflight.executionSkippedBecause;
     }
     if (forcedStatus) {
-      nextState.lastDecision = 'hold';
-      nextState.lastDecisionReason = forcedStatus === 'risk_paused' ? 'risk_paused' : 'margin_pending';
+      if ((forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath) {
+        nextState.lastDecision = 'risk_paused_reduce';
+        nextState.lastDecisionReason = 'risk_paused_reduce_only';
+      } else {
+        nextState.lastDecision = 'hold';
+        nextState.lastDecisionReason = forcedStatus === 'risk_paused' ? 'risk_paused' : 'margin_pending';
+      }
     }
 
     await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
@@ -820,6 +1334,8 @@ class ProtectedPoolDeltaNeutralService {
       executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
     });
 
+    const riskPausedCanReduce = (forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath;
+
     await this._persistDecision(activeProtection, {
       decision: nextState.lastDecision,
       reason: nextState.lastDecisionReason,
@@ -827,7 +1343,7 @@ class ProtectedPoolDeltaNeutralService {
       spotSource,
       snapshotStatus: snapshotMeta.validation.status,
       snapshotFreshnessMs: Math.max(Date.now() - Number(snapshotMeta.snapshotFreshAt || Date.now()), 0),
-      executionSkippedBecause: forcedStatus ? riskGateReason : (preflight.ok ? null : preflight.executionSkippedBecause),
+      executionSkippedBecause: (forcedStatus && !riskPausedCanReduce) ? riskGateReason : (preflight.ok ? null : preflight.executionSkippedBecause),
       executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
       estimatedCostUsd: rebalanceDecision.bands.estimatedCostUsd,
       targetQty: metrics.targetQty,
@@ -838,9 +1354,16 @@ class ProtectedPoolDeltaNeutralService {
       finalStrategyStatus: nextState.status,
       riskGateTriggered,
       liquidationDistancePct: distanceToLiqPct,
+      modelConfidence: nextState.modelConfidence,
+      basisSpreadBps: nextState.basisSpreadBps,
+      zoneState: nextState.zoneState,
+      marketSpreadBps: preflight.spreadBps ?? null,
     });
 
-    if (forcedStatus || !shouldRebalance || rebalanceDecision.decision === 'hold' || !preflight.ok) {
+    if (riskPausedCanReduce) {
+      if (!preflight.ok) return nextState;
+      // Reduce permitido — fall through a _executeRebalance
+    } else if (forcedStatus || !effectiveShouldRebalance || rebalanceDecision.decision === 'hold' || !preflight.ok) {
       return nextState;
     }
 
@@ -936,6 +1459,7 @@ class ProtectedPoolDeltaNeutralService {
         lastError: err.message,
         lastExecutionAttemptAt: Date.now(),
         lastExecutionOutcome: 'failed',
+        minDwellUntil: Date.now() + this.minDwellMs,
       };
       const cooldown = buildCooldown(err, failedState);
       failedState.status = cooldown.status;
@@ -1004,6 +1528,7 @@ class ProtectedPoolDeltaNeutralService {
       lastExecutionOutcome: executionSummary.partial ? 'partial' : 'success',
       nextEligibleAttemptAt: null,
       cooldownReason: null,
+      minDwellUntil: Date.now() + this.minDwellMs,
     };
 
     updatedState.netProtectionPnlUsd =

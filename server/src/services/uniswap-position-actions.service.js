@@ -33,6 +33,7 @@ const {
 const {
   buildV3IncreaseTx,
   buildV3DecreaseAndCollectTx,
+  buildV3CollectAndIncreaseTx,
   buildV3MintTx,
   buildV3SwapTx,
 } = require('./uniswap/tx-builders-v3');
@@ -1089,9 +1090,8 @@ async function prepareReinvestFees(payload) {
     throw new ValidationError('No hay fees pendientes para reinvertir');
   }
 
-  const txPlan = [
-    ...(await prepareCollectFees(payload)).txPlan,
-  ];
+  // Approvals first (separate txs), then atomic collect+increase via multicall
+  const txPlan = [];
   const requiresApproval = [];
   if (amount0Desired > 0n) {
     requiresApproval.push(buildApprovalRequirement(ctx.token0, ctx.positionManagerAddress, amount0Desired));
@@ -1101,7 +1101,12 @@ async function prepareReinvestFees(payload) {
     requiresApproval.push(buildApprovalRequirement(ctx.token1, ctx.positionManagerAddress, amount1Desired));
     txPlan.push(maybeBuildApprovalTx(ctx.token1, ctx.positionManagerAddress, amount1Desired, ctx.networkConfig.chainId));
   }
-  txPlan.push(buildV3IncreaseTx(ctx, { amount0Desired, amount1Desired, slippageBps: payload.slippageBps }));
+  txPlan.push(buildV3CollectAndIncreaseTx(ctx, {
+    recipient: ctx.normalizedWallet,
+    amount0Desired,
+    amount1Desired,
+    slippageBps: payload.slippageBps,
+  }));
 
   return {
     action: 'reinvest-fees',
