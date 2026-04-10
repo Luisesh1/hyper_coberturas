@@ -29,9 +29,9 @@ function BacktestingPage() {
   } = useBacktestForm(locationStrategyId, strategies);
 
   const {
-    runs, activeRunId, setActiveRunId, compareRunId, toggleCompare,
-    activeResult, compareResult, isRunning, pendingJob, execute,
-  } = useBacktestRuns(getPayload, addNotification);
+    runs, activeRunId, setActiveRunId, compareTarget, compareResult, toggleCompare,
+    selectBenchmark, activeResult, isRunning, pendingJob, execute,
+  } = useBacktestRuns({ getPayload, selectedStrategy, addNotification });
 
   useEffect(() => {
     const load = async () => {
@@ -106,7 +106,6 @@ function BacktestingPage() {
               </div>
               <BottomPanel
                 result={activeResult}
-                compareResult={compareResult}
                 visibleTrades={visibleTrades}
                 tradeFilter={tradeFilter}
                 setTradeFilter={setTradeFilter}
@@ -114,6 +113,10 @@ function BacktestingPage() {
                 setFocusedTradeId={setFocusedTradeId}
                 selectedStrategy={selectedStrategy}
                 runs={runs}
+                activeRunId={activeRunId}
+                compareTarget={compareTarget}
+                onToggleCompare={toggleCompare}
+                onSelectBenchmark={selectBenchmark}
               />
             </>
           ) : (

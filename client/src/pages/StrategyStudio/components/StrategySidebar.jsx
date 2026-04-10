@@ -24,6 +24,13 @@ export function StrategySidebar({
     ? indicators.filter((i) => i.name.toLowerCase().includes(query) || i.slug.toLowerCase().includes(query))
     : indicators;
 
+  const getHealthClass = (strategy) => {
+    const summary = strategy.latestBacktest?.summary;
+    if (!summary) return styles.itemMissing;
+    if (Number(summary.maxDrawdown) >= 20 || Number(summary.netPnl) < 0) return styles.itemWarning;
+    return '';
+  };
+
   return (
     <aside className={styles.sidebar}>
       <input
@@ -62,13 +69,18 @@ export function StrategySidebar({
           {filteredStrategies.map((s) => (
             <button
               key={s.id}
-              className={`${styles.item} ${Number(s.id) === Number(selectedStrategyId) && activeTab === 'strategy' ? styles.itemActive : ''}`}
+              className={`${styles.item} ${getHealthClass(s)} ${Number(s.id) === Number(selectedStrategyId) && activeTab === 'strategy' ? styles.itemActive : ''}`}
               onClick={() => { onSelectStrategy(s); onTabChange('strategy'); }}
             >
               <strong className={styles.itemName}>{s.name}</strong>
               <span className={styles.itemMeta}>{s.assetUniverse?.join(', ')} · {s.timeframe}</span>
               <span className={styles.itemDate}>
-                {s.latestBacktest?.summary?.trades ?? 0} trades · {formatDate(s.updatedAt)}
+                {s.latestBacktest?.summary
+                  ? `${s.latestBacktest.summary.trades ?? 0} trades · PnL ${s.latestBacktest.summary.netPnl ?? '—'} · DD ${s.latestBacktest.summary.maxDrawdown ?? '—'}`
+                  : 'Sin backtest guardado'}
+              </span>
+              <span className={styles.itemDate}>
+                {formatDate(s.latestBacktest?.updatedAt || s.updatedAt)}
               </span>
             </button>
           ))}

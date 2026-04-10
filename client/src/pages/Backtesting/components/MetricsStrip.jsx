@@ -7,20 +7,10 @@ function MetricsStrip({ metrics }) {
   }
 
   const pnlPositive = Number(metrics.netPnl) >= 0;
-  const winAbove50 = Number(metrics.winRate) >= 50;
+  const expectancyPositive = Number(metrics.expectancy) >= 0;
 
   return (
     <div className={styles.strip}>
-      <div className={styles.chip}>
-        <span className={styles.label}>Trades</span>
-        <span className={styles.value}>{metrics.trades}</span>
-      </div>
-      <div className={styles.chip}>
-        <span className={styles.label}>Win</span>
-        <span className={`${styles.value} ${winAbove50 ? styles.positive : styles.negative}`}>
-          {formatNumber(metrics.winRate, 1)}%
-        </span>
-      </div>
       <div className={styles.chip}>
         <span className={styles.label}>PnL</span>
         <span className={`${styles.value} ${pnlPositive ? styles.positive : styles.negative}`}>
@@ -29,9 +19,21 @@ function MetricsStrip({ metrics }) {
       </div>
       <div className={styles.chip}>
         <span className={styles.label}>DD</span>
-        <span className={`${styles.value} ${styles.amber}`}>
-          {formatNumber(metrics.maxDrawdown, 2)}
+        <span className={`${styles.value} ${styles.amber}`}>{formatNumber(metrics.maxDrawdown, 2)}</span>
+      </div>
+      <div className={styles.chip}>
+        <span className={styles.label}>PF</span>
+        <span className={styles.value}>{formatNumber(metrics.profitFactor, 2)}</span>
+      </div>
+      <div className={styles.chip}>
+        <span className={styles.label}>Expect</span>
+        <span className={`${styles.value} ${expectancyPositive ? styles.positive : styles.negative}`}>
+          {formatNumber(metrics.expectancy, 2)}
         </span>
+      </div>
+      <div className={styles.chip}>
+        <span className={styles.label}>Trades</span>
+        <span className={styles.value}>{metrics.trades}</span>
       </div>
     </div>
   );

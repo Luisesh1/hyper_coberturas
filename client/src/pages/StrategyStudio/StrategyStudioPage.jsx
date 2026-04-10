@@ -104,6 +104,19 @@ function StrategyStudioPage() {
           </div>
 
           {activeTab === 'strategy' && (
+            <div className={styles.statusStrip}>
+              {strategyForm.isDirty && <span className={styles.statusBadge}>Sin guardar</span>}
+              {strategyForm.lastValidationAt && <span className={styles.statusBadge}>Validado con draft</span>}
+              {strategyForm.lastBacktestAt && <span className={styles.statusBadge}>Backtest con draft</span>}
+              {!strategyForm.isDirty && !strategyForm.lastValidationAt && !strategyForm.lastBacktestAt && (
+                <span className={styles.statusMuted}>
+                  {isLoading ? 'Cargando Strategy Studio...' : 'Selecciona o crea una estrategia para comenzar.'}
+                </span>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'strategy' && (
             <>
               <StrategyEditor
                 form={strategyForm.form}
@@ -122,6 +135,11 @@ function StrategyStudioPage() {
                 validationResult={strategyForm.validationResult}
                 backtestResult={strategyForm.backtestResult}
                 selectedStrategy={strategyForm.selected}
+                draftStatus={{
+                  isDirty: strategyForm.isDirty,
+                  lastValidationAt: strategyForm.lastValidationAt,
+                  lastBacktestAt: strategyForm.lastBacktestAt,
+                }}
               />
             </>
           )}

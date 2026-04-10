@@ -1540,6 +1540,21 @@ async function diagnoseDeltaNeutral(userId, protectionId, deps = {}) {
     lastSpotFailureAt: strategyState.lastSpotFailureAt || null,
     lastSpotFailureReason: strategyState.lastSpotFailureReason || null,
   };
+  diagnostics.hybrid = {
+    service: protectedPoolDeltaNeutralService.getHybridDiagnostics?.() || null,
+    trackingMode: strategyState.trackingMode || 'legacy',
+    truthAgeMs: strategyState.truthAgeMs ?? null,
+    lastTruthAt: strategyState.lastTruthAt ?? null,
+    lastTruthPrice: strategyState.lastTruthPrice ?? null,
+    lastModelAt: strategyState.lastModelAt ?? null,
+    lastModelPrice: strategyState.lastModelPrice ?? null,
+    modelConfidence: strategyState.modelConfidence ?? null,
+    basisSpreadBps: strategyState.basisSpreadBps ?? null,
+    zoneState: strategyState.zoneState ?? null,
+    truthPending: strategyState.truthPending === true,
+    lastTrackedMidPrice: strategyState.lastTrackedMidPrice ?? null,
+    lastBboSpreadBps: strategyState.lastBboSpreadBps ?? null,
+  };
   diagnostics.checks.riskGate = {
     triggered: latestDecision?.riskGateTriggered === true
       || ['risk_paused', 'margin_pending'].includes(strategyState.status || ''),

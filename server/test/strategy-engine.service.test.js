@@ -86,6 +86,9 @@ test('backtestStrategy produce métricas deterministas sobre una serie conocida'
   assert.equal(result.metrics.trades, 2);
   assert.equal(result.trades.length, 2);
   assert.ok(result.metrics.netPnl !== 0);
+  assert.ok(Object.hasOwn(result.metrics, 'expectancy'));
+  assert.ok(Object.hasOwn(result.metrics, 'feePaid'));
+  assert.ok(Object.hasOwn(result.metrics, 'avgBarsInTrade'));
 });
 
 test('validateStrategy corta scripts que exceden el timeout', async () => {
@@ -133,6 +136,8 @@ test('simulateBacktest usa sizeUsd para derivar qty y devuelve series ricas', as
   assert.equal(result.equitySeries.length, 5);
   assert.equal(result.overlays.length, 1);
   assert.equal(result.overlays[0].series.length, 1);
+  assert.ok(result.metrics.exposurePct > 0);
+  assert.ok(result.metrics.longTrades >= 1);
 });
 
 test('simulateBacktest ejecuta stop loss primero cuando SL y TP se tocan en la misma vela', async () => {

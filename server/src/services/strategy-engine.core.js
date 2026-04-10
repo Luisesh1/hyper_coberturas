@@ -156,22 +156,47 @@ function applySlippage(rawPrice, side, action, slippageRate) {
     : round(price * (1 + slippageRate));
 }
 
-function buildBacktestMetrics(trades = [], equitySeries = [], drawdownSeries = []) {
+function buildBacktestMetrics(trades = [], equitySeries = [], drawdownSeries = [], candleCount = 0) {
   let wins = 0;
   let grossProfit = 0;
   let grossLoss = 0;
   let netPnl = 0;
   let bestTrade = null;
   let worstTrade = null;
+  let feePaid = 0;
+  let slippagePaid = 0;
+  let longTrades = 0;
+  let shortTrades = 0;
+  let longWins = 0;
+  let shortWins = 0;
+  let winTotal = 0;
+  let lossTotal = 0;
+  let barsHeldTotal = 0;
 
   for (const trade of trades) {
     const pnl = Number(trade.pnl || 0);
+    const fees = Number(trade.fees || 0);
+    const slippage = Number(trade.slippage || 0);
+    const barsHeld = Number(trade.barsHeld || 0);
     netPnl += pnl;
+    feePaid += fees;
+    slippagePaid += slippage;
+    barsHeldTotal += barsHeld;
     if (pnl >= 0) {
       wins += 1;
       grossProfit += pnl;
+      winTotal += pnl;
     } else {
       grossLoss += Math.abs(pnl);
+      lossTotal += Math.abs(pnl);
+    }
+    if (trade.side === 'long') {
+      longTrades += 1;
+      if (pnl >= 0) longWins += 1;
+    }
+    if (trade.side === 'short') {
+      shortTrades += 1;
+      if (pnl >= 0) shortWins += 1;
     }
     bestTrade = bestTrade == null ? pnl : Math.max(bestTrade, pnl);
     worstTrade = worstTrade == null ? pnl : Math.min(worstTrade, pnl);
@@ -188,9 +213,22 @@ function buildBacktestMetrics(trades = [], equitySeries = [], drawdownSeries = [
     netPnl: round(netPnl, 4) || 0,
     maxDrawdown: round(maxDrawdown, 4) || 0,
     profitFactor: grossLoss === 0 ? round(grossProfit, 4) || 0 : round(grossProfit / grossLoss, 4),
+    expectancy: trades.length ? round(netPnl / trades.length, 4) : 0,
     avgTrade: trades.length ? round(netPnl / trades.length, 4) : 0,
+    grossProfit: round(grossProfit, 4) || 0,
+    grossLoss: round(grossLoss, 4) || 0,
+    avgWin: wins ? round(winTotal / wins, 4) : 0,
+    avgLoss: trades.length - wins ? round(lossTotal / (trades.length - wins), 4) : 0,
     bestTrade: round(bestTrade ?? 0, 4) || 0,
     worstTrade: round(worstTrade ?? 0, 4) || 0,
+    longTrades,
+    shortTrades,
+    winRateLong: longTrades ? Number(((longWins / longTrades) * 100).toFixed(2)) : 0,
+    winRateShort: shortTrades ? Number(((shortWins / shortTrades) * 100).toFixed(2)) : 0,
+    feePaid: round(feePaid, 4) || 0,
+    slippagePaid: round(slippagePaid, 4) || 0,
+    exposurePct: candleCount ? round((barsHeldTotal / candleCount) * 100, 4) || 0 : 0,
+    avgBarsInTrade: trades.length ? round(barsHeldTotal / trades.length, 4) : 0,
     endingEquity: equitySeries.length ? round(equitySeries[equitySeries.length - 1].value, 4) || 0 : 0,
   };
 }
@@ -461,6 +499,8 @@ async function runBacktest(payload) {
     const fees = Number(position.entryFee || 0) + exitFee;
     const pnl = round(grossPnl - fees, 4) || 0;
     realizedPnl += pnl;
+    const exitIndex = Number(extra.candleIndex);
+    const barsHeld = Math.max(1, (Number.isFinite(exitIndex) ? exitIndex : position.entryIndex) - Number(position.entryIndex) + 1);
     const trade = {
       side: position.side,
       entryPrice: round(position.entryPrice, 6),
@@ -477,6 +517,7 @@ async function runBacktest(payload) {
       reason,
       fees: round(fees, 6) || 0,
       slippage: round(Number(position.entrySlippage || 0) + (Math.abs(fillPrice - Number(rawPrice)) * Number(position.qty)), 6) || 0,
+      barsHeld,
       pnl,
       equity: round(realizedPnl, 4) || 0,
       equityAfter: round(realizedPnl, 4) || 0,
@@ -502,7 +543,7 @@ async function runBacktest(payload) {
     if (position && index > position.entryIndex) {
       const riskExit = resolveRiskExit(position, candle);
       if (riskExit) {
-        closePosition(riskExit.reason, riskExit.rawPrice, candle, { meta: { kind: 'risk' } });
+        closePosition(riskExit.reason, riskExit.rawPrice, candle, { meta: { kind: 'risk' }, candleIndex: index });
       }
     }
 
@@ -527,7 +568,7 @@ async function runBacktest(payload) {
 
     if (signalType === 'close') {
       if (position) {
-        closePosition('signal_close', candle.close, candle, { meta: signalMeta });
+        closePosition('signal_close', candle.close, candle, { meta: signalMeta, candleIndex: index });
         signalRow.action = 'close';
       } else {
         signalRow.action = 'close_skip';
@@ -537,7 +578,7 @@ async function runBacktest(payload) {
         signalRow.action = 'skip_same_side';
       } else {
         if (position && position.side !== signalType) {
-          closePosition('signal_reverse', candle.close, candle, { meta: signalMeta });
+          closePosition('signal_reverse', candle.close, candle, { meta: signalMeta, candleIndex: index });
           signalRow.action = 'reverse';
         } else {
           signalRow.action = signalType === 'long' ? 'open_long' : 'open_short';
@@ -556,7 +597,10 @@ async function runBacktest(payload) {
 
   if (position && candles.length) {
     const lastCandle = candles[candles.length - 1];
-    closePosition('end_of_range', lastCandle.close, lastCandle, { meta: { kind: 'range_end' } });
+    closePosition('end_of_range', lastCandle.close, lastCandle, {
+      meta: { kind: 'range_end' },
+      candleIndex: candles.length - 1,
+    });
     const lastEquity = round(realizedPnl, 4) || 0;
     peakEquity = Math.max(peakEquity, lastEquity);
     replacePoint(equitySeries, { time: lastCandle.closeTime, value: lastEquity });
@@ -566,7 +610,7 @@ async function runBacktest(payload) {
   const overlays = buildOverlayResults(candles, payload.overlayRequests, customIndicators);
 
   return {
-    metrics: buildBacktestMetrics(trades, equitySeries, drawdownSeries),
+    metrics: buildBacktestMetrics(trades, equitySeries, drawdownSeries, candles.length),
     candles: clone(candles),
     trades,
     signals,

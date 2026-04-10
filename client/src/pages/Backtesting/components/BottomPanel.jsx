@@ -15,7 +15,6 @@ const TABS = [
 
 function BottomPanel({
   result,
-  compareResult,
   visibleTrades,
   tradeFilter,
   setTradeFilter,
@@ -23,11 +22,16 @@ function BottomPanel({
   setFocusedTradeId,
   selectedStrategy,
   runs,
+  activeRunId,
+  compareTarget,
+  onToggleCompare,
+  onSelectBenchmark,
 }) {
   const [activeTab, setActiveTab] = useState('trades');
   const { height, handleProps } = useResizablePanel(240, 150, 500);
 
-  const tabs = TABS.filter((t) => t.id !== 'compare' || runs.length >= 2);
+  const hasBenchmarks = Object.keys(result?.benchmarks || {}).length > 0;
+  const tabs = TABS.filter((t) => t.id !== 'compare' || runs.length >= 2 || hasBenchmarks);
 
   return (
     <div className={styles.panel} style={{ height }}>
@@ -68,7 +72,16 @@ function BottomPanel({
         {activeTab === 'assumptions' && (
           <AssumptionChips result={result} selectedStrategy={selectedStrategy} />
         )}
-        {activeTab === 'compare' && <ComparisonView runs={runs} />}
+        {activeTab === 'compare' && (
+          <ComparisonView
+            runs={runs}
+            activeRunId={activeRunId}
+            activeResult={result}
+            compareTarget={compareTarget}
+            onToggleCompare={onToggleCompare}
+            onSelectBenchmark={onSelectBenchmark}
+          />
+        )}
       </div>
     </div>
   );

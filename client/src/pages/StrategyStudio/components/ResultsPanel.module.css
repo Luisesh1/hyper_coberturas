@@ -7,11 +7,12 @@
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
 }
 
 .tab {
-  flex: 1;
+  flex: 1 1 120px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -26,6 +27,7 @@
   cursor: pointer;
   transition: color var(--transition-fast), border-color var(--transition-fast);
 }
+
 .tab:hover { color: var(--text-secondary); }
 .tabActive { color: var(--text-primary); border-bottom-color: var(--cyan); }
 
@@ -42,9 +44,32 @@
   padding: 16px;
 }
 
+.infoRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.infoBadge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+}
+
+.infoText {
+  font-size: 0.78rem;
+  color: var(--text-hint);
+}
+
 .metricsGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -53,12 +78,13 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: var(--bg-primary);
   border-radius: var(--radius-sm);
 }
 
-.metric span {
+.metric span,
+.paramChip span {
   font-size: 0.68rem;
   font-weight: 600;
   color: var(--text-hint);
@@ -66,9 +92,134 @@
   letter-spacing: 0.3px;
 }
 
-.metric strong {
+.metric strong,
+.paramChip strong {
   font-size: 0.84rem;
   color: var(--text-primary);
+}
+
+.miniChartCard,
+.paramsCard {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.miniChartHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.miniChartHeader strong {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+
+.miniChartHeader span {
+  font-size: 0.74rem;
+  color: var(--text-hint);
+}
+
+.miniChart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.equityPath,
+.drawdownPath {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.equityPath { stroke: #38bdf8; }
+.drawdownPath { stroke: #fb7185; }
+
+.miniLegend {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.miniLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legendEquity,
+.legendDrawdown {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.legendEquity { background: #38bdf8; }
+.legendDrawdown { background: #fb7185; }
+
+.miniChartEmpty {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-hint);
+  font-size: 0.78rem;
+  margin-bottom: 12px;
+}
+
+.sectionTitle {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+
+.paramsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.paramChip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.38);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.table th,
+.table td {
+  padding: 9px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.table th {
+  color: var(--text-hint);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
 
 .json {
@@ -82,36 +233,6 @@
   margin: 0;
   line-height: 1.5;
   white-space: pre-wrap;
-}
-
-.trades {
-  border-top: 1px solid var(--border-subtle);
-  padding-top: 12px;
-}
-
-.tradesTitle {
-  font-size: 0.76rem;
-  font-weight: 700;
-  color: var(--text-tertiary);
-  margin: 0 0 8px;
-}
-
-.tradeRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  font-size: 0.78rem;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.tradeRow:last-child { border-bottom: none; }
-
-.tradePrice {
-  flex: 1;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
 }
 
 .long { color: var(--green); font-weight: 700; }

@@ -74,6 +74,28 @@
   min-width: 0;
 }
 
+.statusStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.statusBadge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: var(--radius-pill);
+  padding: 5px 10px;
+}
+
+.statusMuted {
+  font-size: 0.78rem;
+  color: var(--text-hint);
+}
+
 /* ── Editor Tabs ─────────────────────────────────────────────────── */
 .editorTabs {
   display: flex;

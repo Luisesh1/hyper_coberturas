@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const asyncHandler = require('../middleware/async-handler');
 const { authenticate } = require('../middleware/auth.middleware');
+const backtestingService = require('../services/backtesting.service');
 const strategiesService = require('../services/strategies.service');
 
 const router = Router();
@@ -8,6 +9,11 @@ router.use(authenticate);
 
 router.get('/', asyncHandler(async (req, res) => {
   const data = await strategiesService.listStrategies(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.post('/validate-draft', asyncHandler(async (req, res) => {
+  const data = await strategiesService.validateDraftStrategy(req.user.userId, req.body);
   res.json({ success: true, data });
 }));
 
@@ -37,7 +43,11 @@ router.post('/:id/validate', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/backtest', asyncHandler(async (req, res) => {
-  const data = await strategiesService.backtestStrategy(req.user.userId, Number(req.params.id), req.body);
+  const payload = {
+    ...req.body,
+    strategyId: Number(req.params.id),
+  };
+  const data = await backtestingService.simulateBacktest(req.user.userId, payload);
   res.json({ success: true, data });
 }));
 

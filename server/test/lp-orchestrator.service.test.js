@@ -262,7 +262,7 @@ test('recomendar collect-fees cuando supera el threshold', async () => {
   assert.ok(notifier.calls.some((c) => c.kind === 'recommendCollectFees'));
 });
 
-test('posición desaparece → phase failed + notifier.positionMissing', async () => {
+test('posición desaparece → primero queda pending y luego confirma failed + notifier.positionMissing', async () => {
   const repo = makeFakeRepo();
   const id = await bootstrapOrchestrator(repo);
   const notifier = makeFakeNotifier();
@@ -273,10 +273,17 @@ test('posición desaparece → phase failed + notifier.positionMissing', async (
     notifier,
     logger: { warn: () => {}, info: () => {}, error: () => {} },
   });
+
+  const firstResult = await service.evaluateOne(1, id);
+  assert.equal(firstResult.skipped, 'position_missing_pending');
+  assert.equal(notifier.calls.some((c) => c.kind === 'positionMissing'), false);
+  let o = await repo.getById(1, id);
+  assert.equal(o.phase, 'lp_active');
+
   const result = await service.evaluateOne(1, id);
   assert.equal(result.decision, 'failed');
   assert.ok(notifier.calls.some((c) => c.kind === 'positionMissing'));
-  const o = await repo.getById(1, id);
+  o = await repo.getById(1, id);
   assert.equal(o.phase, 'failed');
 });
 

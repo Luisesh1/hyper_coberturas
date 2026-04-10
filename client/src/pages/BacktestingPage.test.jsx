@@ -38,6 +38,7 @@ vi.mock('../components/Backtesting/BacktestChartPanel', () => ({
 describe('BacktestingPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     strategiesApi.list.mockResolvedValue([{
       id: 11,
       name: 'Trend Rider',
@@ -96,6 +97,15 @@ describe('BacktestingPage', () => {
       overlays: [],
       assumptions: {
         entryMode: 'close_with_slippage',
+      },
+      benchmarks: {
+        buyHold: {
+          key: 'buyHold',
+          label: 'Buy & Hold',
+          metrics: { trades: 1, netPnl: 10, maxDrawdown: 3, profitFactor: 1.4, expectancy: 10 },
+          equitySeries: [{ time: 2, value: 10 }],
+          drawdownSeries: [{ time: 2, value: 3 }],
+        },
       },
     });
   });

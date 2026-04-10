@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { strategiesApi } from '../../../services/api';
+import { backtestingApi, strategiesApi } from '../../../services/api';
 import { safeJsonParse, stringifyJson } from '../../../utils/json';
 import { STRATEGY_TEMPLATES } from '../strategy-templates';
 
@@ -39,9 +39,36 @@ function fromApi(s) {
     assetUniverse: Array.isArray(s.assetUniverse) ? s.assetUniverse.join(', ') : 'BTC',
     timeframe: s.timeframe || '15m',
     defaultParams: stringifyJson(s.defaultParams),
-    scriptSource: s.scriptSource || STRATEGY_TEMPLATE,
+    scriptSource: s.scriptSource || DEFAULT_TEMPLATE.scriptSource,
     isActiveDraft: s.isActiveDraft ?? true,
   };
+}
+
+function buildDraftStrategy(form) {
+  return {
+    id: form.id,
+    name: form.name,
+    description: form.description,
+    assetUniverse: form.assetUniverse.split(',').map((value) => value.trim()).filter(Boolean),
+    timeframe: form.timeframe,
+    defaultParams: safeJsonParse(form.defaultParams, {}),
+    scriptSource: form.scriptSource,
+    isActiveDraft: form.isActiveDraft,
+  };
+}
+
+function validateForm(form, { requireName }) {
+  const nextErrors = {};
+  if (requireName && !form.name.trim()) nextErrors.name = 'Nombre requerido';
+  try {
+    JSON.parse(form.defaultParams);
+  } catch {
+    nextErrors.defaultParams = 'JSON invalido';
+  }
+  if (!form.scriptSource.includes('module.exports')) {
+    nextErrors.scriptSource = 'El script debe exportar una funcion';
+  }
+  return nextErrors;
 }
 
 export function useStrategyForm({ strategies, onReload, addNotification }) {
@@ -53,6 +80,8 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
   const [isBacktesting, setIsBacktesting] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
   const [backtestResult, setBacktestResult] = useState(null);
+  const [lastValidationAt, setLastValidationAt] = useState(null);
+  const [lastBacktestAt, setLastBacktestAt] = useState(null);
   const savedSnapshot = useRef(null);
 
   const selected = useMemo(
@@ -61,7 +90,7 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
   );
 
   const isDirty = useMemo(() => {
-    if (!savedSnapshot.current) return form.name.trim().length > 0;
+    if (!savedSnapshot.current) return form.name.trim().length > 0 || form.scriptSource !== DEFAULT_TEMPLATE.scriptSource;
     return JSON.stringify(form) !== JSON.stringify(savedSnapshot.current);
   }, [form]);
 
@@ -72,34 +101,37 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
     return () => window.removeEventListener('beforeunload', handler);
   }, [isDirty]);
 
-  const validate = useCallback(() => {
-    const e = {};
-    if (!form.name.trim()) e.name = 'Nombre requerido';
-    try { JSON.parse(form.defaultParams); } catch { e.defaultParams = 'JSON invalido'; }
-    if (!form.scriptSource.includes('module.exports')) e.scriptSource = 'El script debe exportar una funcion';
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  }, [form]);
+  const applyErrors = useCallback((nextErrors) => {
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }, []);
+
+  const resetRuntimeResults = useCallback(() => {
+    setValidationResult(null);
+    setBacktestResult(null);
+  }, []);
 
   const select = useCallback((strategy) => {
-    const f = strategy ? fromApi(strategy) : blank();
+    const nextForm = strategy ? fromApi(strategy) : blank();
     setSelectedId(strategy?.id || null);
-    setForm(f);
-    savedSnapshot.current = strategy ? { ...f } : null;
+    setForm(nextForm);
+    savedSnapshot.current = strategy ? { ...nextForm } : null;
     setErrors({});
-    setValidationResult(null);
-    setBacktestResult(null);
-  }, []);
+    setLastValidationAt(null);
+    setLastBacktestAt(null);
+    resetRuntimeResults();
+  }, [resetRuntimeResults]);
 
   const selectTemplate = useCallback((tpl) => {
-    const f = fromTemplate(tpl);
+    const nextForm = fromTemplate(tpl);
     setSelectedId(null);
-    setForm(f);
+    setForm(nextForm);
     savedSnapshot.current = null;
     setErrors({});
-    setValidationResult(null);
-    setBacktestResult(null);
-  }, []);
+    setLastValidationAt(null);
+    setLastBacktestAt(null);
+    resetRuntimeResults();
+  }, [resetRuntimeResults]);
 
   const update = useCallback((field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -109,10 +141,13 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
       delete next[field];
       return next;
     });
-  }, []);
+    resetRuntimeResults();
+  }, [resetRuntimeResults]);
 
   const save = useCallback(async () => {
-    if (!validate()) return;
+    const nextErrors = validateForm(form, { requireName: true });
+    if (!applyErrors(nextErrors)) return;
+
     setIsSaving(true);
     try {
       const payload = {
@@ -136,7 +171,7 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
     } finally {
       setIsSaving(false);
     }
-  }, [form, validate, onReload, addNotification, select]);
+  }, [form, applyErrors, onReload, addNotification, select]);
 
   const remove = useCallback(async () => {
     if (!selected) return;
@@ -151,49 +186,76 @@ export function useStrategyForm({ strategies, onReload, addNotification }) {
   }, [selected, addNotification, select, onReload]);
 
   const runValidation = useCallback(async () => {
-    if (!form.id) { addNotification('info', 'Guarda la estrategia antes de validarla'); return; }
+    const nextErrors = validateForm(form, { requireName: false });
+    if (!applyErrors(nextErrors)) return;
+
     setIsValidating(true);
     try {
-      const result = await strategiesApi.validate(form.id, {
-        asset: form.assetUniverse.split(',')[0]?.trim() || 'BTC',
-        timeframe: form.timeframe,
-        params: safeJsonParse(form.defaultParams, {}),
+      const draftStrategy = buildDraftStrategy(form);
+      const result = await strategiesApi.validateDraft({
+        strategyId: form.id || undefined,
+        draftStrategy,
+        asset: draftStrategy.assetUniverse[0] || 'BTC',
+        timeframe: draftStrategy.timeframe,
+        params: draftStrategy.defaultParams,
+        limit: 250,
       });
       setValidationResult(result);
+      setLastValidationAt(Date.now());
       addNotification('success', `Signal: ${result.signal?.type || 'hold'}`);
     } catch (err) {
       addNotification('error', `Error al validar: ${err.message}`);
     } finally {
       setIsValidating(false);
     }
-  }, [form, addNotification]);
+  }, [form, applyErrors, addNotification]);
 
   const runBacktest = useCallback(async () => {
-    if (!form.id) { addNotification('info', 'Guarda la estrategia antes del backtest'); return; }
+    const nextErrors = validateForm(form, { requireName: false });
+    if (!applyErrors(nextErrors)) return;
+
     setIsBacktesting(true);
     try {
-      const params = safeJsonParse(form.defaultParams, {});
-      const result = await strategiesApi.backtest(form.id, {
-        asset: form.assetUniverse.split(',')[0]?.trim() || 'BTC',
-        timeframe: form.timeframe,
+      const draftStrategy = buildDraftStrategy(form);
+      const params = draftStrategy.defaultParams;
+      const result = await backtestingApi.simulate({
+        strategyId: form.id || undefined,
+        draftStrategy,
+        asset: draftStrategy.assetUniverse[0] || 'BTC',
+        timeframe: draftStrategy.timeframe,
         params,
-        tradeSize: params.size || 0.01,
         limit: 300,
       });
       setBacktestResult(result);
-      await onReload();
+      setLastBacktestAt(Date.now());
+      if (form.id) await onReload();
       addNotification('success', `Backtest: ${result.metrics?.trades || 0} trades`);
     } catch (err) {
       addNotification('error', `Error en backtest: ${err.message}`);
     } finally {
       setIsBacktesting(false);
     }
-  }, [form, addNotification, onReload]);
+  }, [form, applyErrors, addNotification, onReload]);
 
   return {
-    form, errors, isDirty, selected, selectedId,
-    isSaving, isValidating, isBacktesting,
-    validationResult, backtestResult,
-    select, selectTemplate, update, save, remove, runValidation, runBacktest,
+    form,
+    errors,
+    isDirty,
+    selected,
+    selectedId,
+    isSaving,
+    isValidating,
+    isBacktesting,
+    validationResult,
+    backtestResult,
+    lastValidationAt,
+    lastBacktestAt,
+    select,
+    selectTemplate,
+    update,
+    save,
+    remove,
+    runValidation,
+    runBacktest,
   };
 }

@@ -56,10 +56,10 @@ export function StrategyEditor({ form, errors, isSaving, isValidating, isBacktes
         <button type="submit" className={styles.primaryBtn} disabled={isSaving}>
           {isSaving ? <><Spinner size={14} /> Guardando...</> : form.id ? 'Actualizar' : 'Guardar'}
         </button>
-        <button type="button" className={styles.secondaryBtn} onClick={onValidate} disabled={isValidating || !form.id}>
+        <button type="button" className={styles.secondaryBtn} onClick={onValidate} disabled={isValidating}>
           {isValidating ? <><Spinner size={14} /> Validando...</> : 'Validar'}
         </button>
-        <button type="button" className={styles.secondaryBtn} onClick={onBacktest} disabled={isBacktesting || !form.id}>
+        <button type="button" className={styles.secondaryBtn} onClick={onBacktest} disabled={isBacktesting}>
           {isBacktesting ? <><Spinner size={14} /> Backtest...</> : 'Backtest'}
         </button>
         {form.id && (

@@ -27,6 +27,7 @@ const { validate } = require('../middleware/validate.middleware');
 const { z } = require('zod');
 const devLogSink = require('../services/dev-log-sink.service');
 const onChainManager = require('../services/onchain-manager.service');
+const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
 const uniswapService = require('../services/uniswap.service');
 const { clientLogsBatchSchema } = require('../schemas/dev.schema');
 
@@ -75,6 +76,10 @@ router.get('/onchain-stats', asyncHandler(async (_req, res) => {
 router.post('/onchain-stats/reset', asyncHandler(async (_req, res) => {
   onChainManager.resetStats();
   res.json({ success: true, data: { reset: true } });
+}));
+
+router.get('/hybrid-protection-stats', asyncHandler(async (_req, res) => {
+  res.json({ success: true, data: protectedPoolDeltaNeutralService.getHybridDiagnostics() });
 }));
 
 // ─────────────────────────────────────────────────────────────────────────

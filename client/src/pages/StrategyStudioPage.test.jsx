@@ -4,13 +4,14 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import StrategyStudioPage from './StrategyStudio/StrategyStudioPage';
 
-const { strategiesApi, indicatorsApi, addNotification } = vi.hoisted(() => ({
+const { strategiesApi, indicatorsApi, backtestingApi, addNotification } = vi.hoisted(() => ({
   strategiesApi: {
     list: vi.fn(),
     getById: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
+    validateDraft: vi.fn(),
     validate: vi.fn(),
     backtest: vi.fn(),
   },
@@ -20,12 +21,16 @@ const { strategiesApi, indicatorsApi, addNotification } = vi.hoisted(() => ({
     update: vi.fn(),
     remove: vi.fn(),
   },
+  backtestingApi: {
+    simulate: vi.fn(),
+  },
   addNotification: vi.fn(),
 }));
 
 vi.mock('../services/api', () => ({
   strategiesApi,
   indicatorsApi,
+  backtestingApi,
 }));
 
 vi.mock('../context/TradingContext', () => ({
@@ -74,15 +79,29 @@ describe('StrategyStudioPage', () => {
   });
 
   it('ejecuta validacion y backtest de la estrategia seleccionada', async () => {
-    strategiesApi.validate.mockResolvedValue({
+    strategiesApi.validateDraft.mockResolvedValue({
       asset: 'BTC',
       timeframe: '15m',
       signal: { type: 'long' },
       diagnostics: { candles: 250 },
     });
-    strategiesApi.backtest.mockResolvedValue({
-      metrics: { trades: 8, winRate: 62.5, netPnl: 12.5 },
-      trades: [{ side: 'long', entryPrice: 100, exitPrice: 105, pnl: 5 }],
+    backtestingApi.simulate.mockResolvedValue({
+      config: {
+        strategyId: 11,
+        strategyMode: 'draft',
+        strategyName: 'Trend Rider',
+        asset: 'BTC',
+        timeframe: '15m',
+        params: { fastPeriod: 9, slowPeriod: 21 },
+        limit: 300,
+      },
+      metrics: { trades: 8, winRate: 62.5, netPnl: 12.5, maxDrawdown: 4.2, profitFactor: 1.9, expectancy: 1.56 },
+      trades: [{ side: 'long', entryPrice: 100, exitPrice: 105, pnl: 5, entryTime: 1, reason: 'signal_close' }],
+      signals: [{ closeTime: Date.now(), type: 'long', action: 'open_long', price: 101 }],
+      equitySeries: [{ time: 1, value: 0 }, { time: 2, value: 5 }],
+      drawdownSeries: [{ time: 1, value: 0 }, { time: 2, value: 0.5 }],
+      assumptions: { entryMode: 'close_with_slippage' },
+      benchmarks: {},
     });
 
     render(
@@ -94,12 +113,19 @@ describe('StrategyStudioPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Trend Rider/i }));
 
     await userEvent.click(screen.getByRole('button', { name: 'Validar' }));
-    await waitFor(() => expect(strategiesApi.validate).toHaveBeenCalledWith(11, expect.any(Object)));
+    await waitFor(() => expect(strategiesApi.validateDraft).toHaveBeenCalledWith(expect.objectContaining({
+      strategyId: 11,
+      draftStrategy: expect.objectContaining({ name: 'Trend Rider' }),
+    })));
     expect(await screen.findByText('Signal')).toBeTruthy();
     expect(screen.getAllByText('long').length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getAllByRole('button', { name: 'Backtest' })[0]);
-    await waitFor(() => expect(strategiesApi.backtest).toHaveBeenCalledWith(11, expect.any(Object)));
+    await waitFor(() => expect(backtestingApi.simulate).toHaveBeenCalledWith(expect.objectContaining({
+      strategyId: 11,
+      draftStrategy: expect.objectContaining({ name: 'Trend Rider' }),
+    })));
     expect(await screen.findByText('8 trades')).toBeTruthy();
+    expect(screen.getAllByText('Backtest con draft').length).toBeGreaterThan(0);
   });
 });

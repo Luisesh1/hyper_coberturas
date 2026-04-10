@@ -47,6 +47,27 @@ function normalizeDefaultParams(value) {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
+function normalizeRuntimeStrategyInput(input = {}, { requireName = false } = {}) {
+  const name = String(input.name || '').trim();
+  if (requireName && !name) throw new ValidationError('name es requerido');
+
+  const timeframe = marketDataService.normalizeTimeframe(input.timeframe || '15m');
+  const assetUniverse = normalizeAssetUniverse(input.assetUniverse);
+  const scriptSource = String(input.scriptSource || '').trim() || DEFAULT_STRATEGY_SOURCE;
+  if (!scriptSource) throw new ValidationError('scriptSource es requerido');
+
+  return {
+    id: input.id != null ? Number(input.id) : null,
+    name: name || 'Draft strategy',
+    description: String(input.description || '').trim(),
+    assetUniverse,
+    timeframe,
+    scriptSource,
+    defaultParams: normalizeDefaultParams(input.defaultParams),
+    isActiveDraft: input.isActiveDraft !== undefined ? !!input.isActiveDraft : true,
+  };
+}
+
 function mapStrategy(row) {
   if (!row) return null;
   return {
@@ -73,22 +94,49 @@ function mapStrategy(row) {
 }
 
 function normalizeStrategyInput(input = {}) {
-  const name = String(input.name || '').trim();
-  if (!name) throw new ValidationError('name es requerido');
+  return normalizeRuntimeStrategyInput(input, { requireName: true });
+}
 
-  const timeframe = marketDataService.normalizeTimeframe(input.timeframe || '15m');
-  const assetUniverse = normalizeAssetUniverse(input.assetUniverse);
-  const scriptSource = String(input.scriptSource || '').trim() || DEFAULT_STRATEGY_SOURCE;
-  if (!scriptSource) throw new ValidationError('scriptSource es requerido');
+async function resolveRuntimeStrategy(userId, { strategyId, draftStrategy } = {}) {
+  const parsedId = Number(strategyId);
+  const hasDraftStrategy = draftStrategy && typeof draftStrategy === 'object';
+  let baseStrategy = null;
+
+  if (Number.isFinite(parsedId) && parsedId > 0) {
+    baseStrategy = await getStrategy(userId, parsedId);
+  }
+
+  if (!baseStrategy && !hasDraftStrategy) {
+    throw new ValidationError('strategyId o draftStrategy es requerido');
+  }
+
+  if (!hasDraftStrategy) {
+    return {
+      strategy: baseStrategy,
+      strategyId: baseStrategy?.id || null,
+      mode: 'saved',
+      shouldPersist: !!baseStrategy,
+    };
+  }
+
+  const mergedDraft = normalizeRuntimeStrategyInput({
+    ...baseStrategy,
+    ...draftStrategy,
+    assetUniverse: draftStrategy.assetUniverse ?? baseStrategy?.assetUniverse,
+    timeframe: draftStrategy.timeframe ?? baseStrategy?.timeframe,
+    scriptSource: draftStrategy.scriptSource ?? baseStrategy?.scriptSource,
+    defaultParams: {
+      ...(baseStrategy?.defaultParams || {}),
+      ...normalizeDefaultParams(draftStrategy.defaultParams),
+    },
+    isActiveDraft: draftStrategy.isActiveDraft ?? baseStrategy?.isActiveDraft,
+  });
 
   return {
-    name,
-    description: String(input.description || '').trim(),
-    assetUniverse,
-    timeframe,
-    scriptSource,
-    defaultParams: normalizeDefaultParams(input.defaultParams),
-    isActiveDraft: input.isActiveDraft !== undefined ? !!input.isActiveDraft : true,
+    strategy: mergedDraft,
+    strategyId: baseStrategy?.id || null,
+    mode: 'draft',
+    shouldPersist: false,
   };
 }
 
@@ -212,6 +260,33 @@ async function validateStrategy(userId, strategyId, overrides = {}) {
   };
 }
 
+async function validateDraftStrategy(userId, input = {}) {
+  const { strategy } = await resolveRuntimeStrategy(userId, {
+    strategyId: input.strategyId,
+    draftStrategy: input.draftStrategy || input,
+  });
+  const validationContext = await buildValidationContext(userId, strategy, {
+    asset: input.asset,
+    timeframe: input.timeframe,
+    params: input.params,
+    limit: input.limit,
+    from: input.from,
+    to: input.to,
+    force: true,
+  });
+  const result = await strategyEngine.validateStrategy({
+    source: strategy.scriptSource,
+    context: validationContext.context,
+    customIndicators: validationContext.customIndicators,
+  });
+  return {
+    asset: validationContext.asset,
+    timeframe: validationContext.timeframe,
+    signal: result.signal,
+    diagnostics: result.diagnostics,
+  };
+}
+
 async function backtestStrategy(userId, strategyId, options = {}) {
   const strategy = await getStrategy(userId, strategyId);
   const validationContext = await buildValidationContext(userId, strategy, {
@@ -254,6 +329,9 @@ module.exports = {
   listStrategies,
   mapIndicatorRow,
   mapStrategy,
+  normalizeRuntimeStrategyInput,
+  resolveRuntimeStrategy,
   updateStrategy,
+  validateDraftStrategy,
   validateStrategy,
 };

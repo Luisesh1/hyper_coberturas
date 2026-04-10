@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const app = require('../src/app');
 const config = require('../src/config');
 const authService = require('../src/services/auth.service');
+const strategiesService = require('../src/services/strategies.service');
 const backtestingService = require('../src/services/backtesting.service');
 
 async function listen(server) {
@@ -37,97 +38,22 @@ function buildSessionUser(overrides = {}) {
   };
 }
 
-test('POST /api/backtesting/simulate requiere autenticacion', async () => {
-  const server = http.createServer(app);
-  const baseUrl = await listen(server);
-
-  try {
-    const res = await fetch(`${baseUrl}/api/backtesting/simulate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ strategyId: 11 }),
-    });
-    const json = await res.json();
-
-    assert.equal(res.status, 401);
-    assert.match(json.error, /token requerido/i);
-  } finally {
-    server.close();
-  }
-});
-
-test('POST /api/backtesting/simulate responde data para usuario autenticado', async () => {
+test('POST /api/strategies/validate-draft responde el contrato de validación draft', async () => {
   const originalValidateSessionToken = authService.validateSessionToken;
-  const originalSimulateBacktest = backtestingService.simulateBacktest;
+  const originalValidateDraftStrategy = strategiesService.validateDraftStrategy;
   authService.validateSessionToken = async () => buildSessionUser();
-  backtestingService.simulateBacktest = async (userId, body) => ({
-    config: { strategyId: body.strategyId, asset: 'BTC', timeframe: '15m' },
-    metrics: { trades: 1 },
-    candles: [],
-    trades: [],
-    signals: [],
-    positionSegments: [],
-    equitySeries: [],
-    drawdownSeries: [],
-    overlays: [],
-    assumptions: {},
-    userId,
+  strategiesService.validateDraftStrategy = async (_userId, body) => ({
+    asset: 'BTC',
+    timeframe: body.timeframe || '15m',
+    signal: { type: 'long' },
+    diagnostics: { candles: 250 },
   });
 
   const server = http.createServer(app);
   const baseUrl = await listen(server);
 
   try {
-    const res = await fetch(`${baseUrl}/api/backtesting/simulate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${buildToken()}`,
-      },
-      body: JSON.stringify({ strategyId: 11 }),
-    });
-    const json = await res.json();
-
-    assert.equal(res.status, 200);
-    assert.equal(json.success, true);
-    assert.equal(json.data.config.strategyId, 11);
-    assert.equal(json.data.userId, 1);
-  } finally {
-    authService.validateSessionToken = originalValidateSessionToken;
-    backtestingService.simulateBacktest = originalSimulateBacktest;
-    server.close();
-  }
-});
-
-test('POST /api/backtesting/simulate acepta draftStrategy sin strategyId', async () => {
-  const originalValidateSessionToken = authService.validateSessionToken;
-  const originalSimulateBacktest = backtestingService.simulateBacktest;
-  authService.validateSessionToken = async () => buildSessionUser();
-  backtestingService.simulateBacktest = async (_userId, body) => ({
-    config: {
-      strategyId: null,
-      strategyName: body.draftStrategy?.name || 'Draft Alpha',
-      strategyMode: 'draft',
-      asset: 'BTC',
-      timeframe: '15m',
-    },
-    metrics: { trades: 1 },
-    candles: [],
-    trades: [],
-    signals: [],
-    positionSegments: [],
-    equitySeries: [],
-    drawdownSeries: [],
-    overlays: [],
-    assumptions: {},
-    benchmarks: {},
-  });
-
-  const server = http.createServer(app);
-  const baseUrl = await listen(server);
-
-  try {
-    const res = await fetch(`${baseUrl}/api/backtesting/simulate`, {
+    const res = await fetch(`${baseUrl}/api/strategies/validate-draft`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -147,8 +73,64 @@ test('POST /api/backtesting/simulate acepta draftStrategy sin strategyId', async
 
     assert.equal(res.status, 200);
     assert.equal(json.success, true);
+    assert.equal(json.data.signal.type, 'long');
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    strategiesService.validateDraftStrategy = originalValidateDraftStrategy;
+    server.close();
+  }
+});
+
+test('POST /api/strategies/:id/backtest delega al flujo unificado de backtesting', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalSimulateBacktest = backtestingService.simulateBacktest;
+  authService.validateSessionToken = async () => buildSessionUser();
+  backtestingService.simulateBacktest = async (_userId, body) => ({
+    config: {
+      strategyId: body.strategyId,
+      strategyMode: body.draftStrategy ? 'draft' : 'saved',
+      asset: 'BTC',
+      timeframe: '15m',
+    },
+    metrics: { trades: 4, netPnl: 22 },
+    candles: [],
+    trades: [],
+    signals: [],
+    positionSegments: [],
+    equitySeries: [],
+    drawdownSeries: [],
+    overlays: [],
+    assumptions: {},
+    benchmarks: {},
+  });
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/strategies/11/backtest`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({
+        draftStrategy: {
+          name: 'Draft override',
+          assetUniverse: ['BTC'],
+          timeframe: '15m',
+          defaultParams: {},
+          scriptSource: 'module.exports.evaluate = async () => signal.hold();',
+        },
+      }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.success, true);
+    assert.equal(json.data.config.strategyId, 11);
     assert.equal(json.data.config.strategyMode, 'draft');
-    assert.equal(json.data.config.strategyId, null);
+    assert.equal(json.data.metrics.trades, 4);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
     backtestingService.simulateBacktest = originalSimulateBacktest;

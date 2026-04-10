@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { formatNumber } from '../../../utils/formatters';
+import { formatDate, formatNumber } from '../../../utils/formatters';
 import styles from './RunHistoryDropdown.module.css';
 
 function RunHistoryDropdown({ runs, activeRunId, onSelectRun, onToggleCompare }) {
@@ -43,7 +43,12 @@ function RunHistoryDropdown({ runs, activeRunId, onSelectRun, onToggleCompare })
                   <span className={styles.itemLabel}>{run.label}</span>
                   {m && (
                     <span className={styles.itemMeta}>
-                      {m.trades}t &middot; {formatNumber(m.netPnl, 1)}
+                      {run.sourceMode} &middot; {run.range} &middot; {m.trades}t &middot; {formatNumber(m.netPnl, 1)}
+                    </span>
+                  )}
+                  {run.timestamp && (
+                    <span className={styles.itemMeta}>
+                      {formatDate(run.timestamp)}
                     </span>
                   )}
                 </button>
@@ -52,6 +57,7 @@ function RunHistoryDropdown({ runs, activeRunId, onSelectRun, onToggleCompare })
                   className={styles.compareBtn}
                   onClick={() => onToggleCompare(run.id)}
                   title="Comparar"
+                  disabled={active}
                 >
                   vs
                 </button>

@@ -172,6 +172,33 @@ function quotePriceFromVolatileUsd(volatilePriceUsd, orientation) {
     : 1 / price;
 }
 
+function buildSyntheticLpState(snapshot, {
+  volatilePriceUsd,
+  targetHedgeRatio = 1,
+} = {}) {
+  const metrics = computeDeltaNeutralMetrics(snapshot, {
+    volatilePriceUsd,
+    targetHedgeRatio,
+  });
+  if (!metrics.eligible) return metrics;
+
+  const syntheticPriceCurrent = quotePriceFromVolatileUsd(metrics.volatilePriceUsd, metrics.orientation);
+  const lower = Number(snapshot?.rangeLowerPrice);
+  const upper = Number(snapshot?.rangeUpperPrice);
+  const price = Number(syntheticPriceCurrent);
+  const inRange = Number.isFinite(lower)
+    && Number.isFinite(upper)
+    && Number.isFinite(price)
+    && price >= Math.min(lower, upper)
+    && price <= Math.max(lower, upper);
+
+  return {
+    ...metrics,
+    syntheticPriceCurrent,
+    syntheticInRange: inRange,
+  };
+}
+
 function calculatePoolValueAtPrice(snapshot, orientation, volatilePriceUsd) {
   const token0Decimals = getTokenDecimals(snapshot?.token0);
   const token1Decimals = getTokenDecimals(snapshot?.token1);
@@ -289,11 +316,13 @@ function networkSentinelIntervalMs(network) {
 
 module.exports = {
   asFiniteNumber,
+  buildSyntheticLpState,
   buildBandPreset,
   computeDeltaNeutralMetrics,
   getCurrentVolatilePriceUsd,
   isStableSymbol,
   networkSentinelIntervalMs,
   normalizeSymbol,
+  quotePriceFromVolatileUsd,
   resolveDeltaNeutralOrientation,
 };

@@ -56,6 +56,26 @@ function buildDeltaNeutralProtection(overrides = {}) {
   };
 }
 
+function makeHybridTestDeps() {
+  return {
+    hyperliquidStreamService: {
+      trackProtection: () => {},
+      start: () => {},
+      stop: () => {},
+      getMidPrice: async () => null,
+      getBbo: async () => null,
+      getActiveAssetCtx: async () => null,
+      getClearinghouseState: async () => null,
+      getDiagnostics: () => ({ enabled: false }),
+    },
+    rpcBudgetManager: {
+      canSpend: () => ({ allowed: true, snapshot: null }),
+      getSnapshot: () => null,
+      record: () => {},
+    },
+  };
+}
+
 test('computeVolatilityStats devuelve RV de 4h y 24h', () => {
   const candles = Array.from({ length: 24 }, (_, index) => ({
     close: 100 + (index * 2),
@@ -206,6 +226,7 @@ test('evaluateProtection con decision hold nunca persiste rebalance_pending', as
       warn: () => {},
       error: () => {},
     },
+    ...makeHybridTestDeps(),
   });
   service._fetchSpot = async () => ({ priceCurrent: 2500 });
 
@@ -257,6 +278,7 @@ test('evaluateProtection deja risk_paused cuando la distancia a liquidacion es d
       warn: () => {},
       error: () => {},
     },
+    ...makeHybridTestDeps(),
   });
   service._fetchSpot = async () => ({ priceCurrent: 2500 });
 
@@ -310,6 +332,7 @@ test('evaluateProtection degrada a spot_stale si falla spot y el snapshot esta v
       warn: () => {},
       error: () => {},
     },
+    ...makeHybridTestDeps(),
   });
   service._fetchSpot = async () => null;
 

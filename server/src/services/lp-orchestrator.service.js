@@ -10,6 +10,7 @@
  */
 
 const { ethers } = require('ethers');
+const config = require('../config');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const uniswapService = require('./uniswap.service');
@@ -44,6 +45,8 @@ const verifier = require('./lp-orchestrator/verifier');
 const LpOrchestratorNotifier = require('./lp-orchestrator/notifier');
 
 const FAILED_COOLDOWN_MS = 60 * 60 * 1000; // 1 h tras drift detectado
+const POSITION_MISSING_CONFIRMATIONS = config.deltaNeutral.positionMissingConfirmations || 2;
+const POSITION_MISSING_CONFIRMATION_GAP_MS = config.deltaNeutral.positionMissingConfirmationGapMs || (3 * 60_000);
 
 class LpOrchestratorService {
   constructor(deps = {}) {
@@ -1037,29 +1040,29 @@ class LpOrchestratorService {
       return { skipped: 'no_active_lp' };
     }
 
-    // 1) Snapshot fresco del LP
-    let scanResult;
-    try {
-      scanResult = await this.uniswapService.scanPoolsCreatedByWallet({
-        userId: orch.userId,
-        wallet: orch.walletAddress,
-        network: orch.network,
-        version: orch.version,
-      });
-    } catch (err) {
-      this.logger.warn('lp_orchestrator_scan_failed', {
-        orchestratorId: orch.id,
-        error: err.message,
-      });
-      return { skipped: 'scan_failed' };
-    }
-
     const hasLiquidity = (p) => {
       try { return BigInt(p?.liquidity || 0) > 0n; } catch { return Number(p?.liquidity || 0) > 0; }
     };
-    let pool = (scanResult?.pools || []).find(
-      (p) => String(p.identifier || '') === String(orch.activePositionIdentifier)
-    );
+    let pool = null;
+    const canInspectDirectly = typeof this.uniswapService.inspectPositionByIdentifier === 'function';
+    if (canInspectDirectly) {
+      try {
+        pool = await this.uniswapService.inspectPositionByIdentifier({
+          userId: orch.userId,
+          wallet: orch.walletAddress,
+          network: orch.network,
+          version: orch.version,
+          positionIdentifier: orch.activePositionIdentifier,
+          lightweight: true,
+        });
+      } catch (err) {
+        this.logger.warn('lp_orchestrator_direct_inspect_failed', {
+          orchestratorId: orch.id,
+          positionIdentifier: orch.activePositionIdentifier,
+          error: err.message,
+        });
+      }
+    }
 
     // Recovery: si la posición original no aparece o está vacía, intentamos
     // reconciliar buscando una nueva posición del mismo par en la wallet.
@@ -1100,21 +1103,67 @@ class LpOrchestratorService {
           orch = await this.repo.getById(orch.userId, orch.id);
         }
       } else {
+        const now = Date.now();
+        const strategyState = { ...(orch.strategyState || {}) };
+        const lastMissingAt = Number(strategyState.lastMissingDetectedAt || 0);
+        const withinWindow = lastMissingAt > 0 && (now - lastMissingAt) <= POSITION_MISSING_CONFIRMATION_GAP_MS;
+        const consecutiveMissingDetections = withinWindow
+          ? Number(strategyState.consecutiveMissingDetections || 0) + 1
+          : 1;
+
+        await this.repo.updateStrategyState(orch.userId, orch.id, {
+          strategyState: {
+            ...strategyState,
+            consecutiveMissingDetections,
+            lastMissingDetectedAt: now,
+          },
+          lastEvaluation: {
+            ...(orch.lastEvaluation || {}),
+            status: 'position_missing_pending',
+            consecutiveMissingDetections,
+          },
+          lastEvaluationAt: now,
+          lastDecision: 'truth_pending',
+        });
+
+        if (consecutiveMissingDetections < POSITION_MISSING_CONFIRMATIONS) {
+          await this.repo.appendActionLog({
+            orchestratorId: orch.id,
+            kind: 'recovery',
+            reason: 'position_missing_pending',
+            payload: { consecutiveMissingDetections },
+            createdAt: now,
+          });
+          return { skipped: 'position_missing_pending', confirmations: consecutiveMissingDetections };
+        }
+
         await this.repo.updatePhase(orch.userId, orch.id, {
           phase: 'failed',
           lastError: 'position_not_found',
-          nextEligibleAttemptAt: Date.now() + FAILED_COOLDOWN_MS,
+          nextEligibleAttemptAt: now + FAILED_COOLDOWN_MS,
           cooldownReason: 'position_not_found',
         });
         await this.repo.appendActionLog({
           orchestratorId: orch.id,
           kind: 'recovery',
           reason: 'position_not_found',
-          createdAt: Date.now(),
+          payload: { consecutiveMissingDetections },
+          createdAt: now,
         });
         this.notifier.positionMissing(orch).catch(() => {});
         return { decision: 'failed' };
       }
+    }
+
+    if (Number(orch.strategyState?.consecutiveMissingDetections || 0) > 0) {
+      await this.repo.updateStrategyState(orch.userId, orch.id, {
+        strategyState: {
+          ...(orch.strategyState || {}),
+          consecutiveMissingDetections: 0,
+          lastMissingDetectedAt: null,
+        },
+      });
+      orch = await this.repo.getById(orch.userId, orch.id);
     }
 
     const snapshotHash = computeSnapshotHash(pool);

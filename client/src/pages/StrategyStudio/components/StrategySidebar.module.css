@@ -109,6 +109,8 @@
 }
 .item:hover { background: var(--bg-hover); }
 .itemActive { background: var(--bg-hover); border-color: rgba(56, 189, 248, 0.3); }
+.itemMissing { border-color: rgba(245, 158, 11, 0.18); }
+.itemWarning { border-color: rgba(239, 68, 68, 0.2); }
 
 .itemName {
   font-size: 0.84rem;
