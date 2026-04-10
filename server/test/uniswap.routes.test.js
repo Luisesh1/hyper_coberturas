@@ -9,6 +9,7 @@ const authService = require('../src/services/auth.service');
 const uniswapProtectionService = require('../src/services/uniswap-protection.service');
 const protectedPoolRefreshService = require('../src/services/protected-pool-refresh.service');
 const positionActionsService = require('../src/services/uniswap-position-actions.service');
+const uniswapOperationService = require('../src/services/uniswap-operation.service');
 const smartPoolCreatorService = require('../src/services/smart-pool-creator.service');
 const { AppError } = require('../src/errors/app-error');
 
@@ -429,13 +430,13 @@ test('POST /api/uniswap/increase-liquidity/prepare delega al coordinador de acci
 
 test('POST /api/uniswap/modify-range/finalize usa userId autenticado al finalizar', async () => {
   const originalValidateSessionToken = authService.validateSessionToken;
-  const originalFinalize = positionActionsService.finalizePositionAction;
+  const originalFinalize = uniswapOperationService.submitPositionActionFinalize;
   const calls = [];
 
   authService.validateSessionToken = async () => buildSessionUser();
-  positionActionsService.finalizePositionAction = async (payload) => {
+  uniswapOperationService.submitPositionActionFinalize = async (payload) => {
     calls.push(payload);
-    return { action: 'modify-range', txHashes: payload.txHashes };
+    return { action: 'modify-range', operationId: 77, txHashes: payload.txHashes, status: 'queued' };
   };
 
   const server = http.createServer(app);
@@ -460,12 +461,13 @@ test('POST /api/uniswap/modify-range/finalize usa userId autenticado al finaliza
 
     assert.equal(res.status, 200);
     assert.equal(json.data.action, 'modify-range');
+    assert.equal(json.data.operationId, 77);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].userId, 1);
     assert.deepEqual(calls[0].txHashes, ['0xabc']);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
-    positionActionsService.finalizePositionAction = originalFinalize;
+    uniswapOperationService.submitPositionActionFinalize = originalFinalize;
     server.close();
   }
 });
@@ -515,13 +517,13 @@ test('POST /api/uniswap/close-to-usdc/prepare delega al coordinador de acciones'
 
 test('POST /api/uniswap/close-keep-assets/finalize usa userId autenticado al finalizar', async () => {
   const originalValidateSessionToken = authService.validateSessionToken;
-  const originalFinalize = positionActionsService.finalizePositionAction;
+  const originalFinalize = uniswapOperationService.submitPositionActionFinalize;
   const calls = [];
 
   authService.validateSessionToken = async () => buildSessionUser();
-  positionActionsService.finalizePositionAction = async (payload) => {
+  uniswapOperationService.submitPositionActionFinalize = async (payload) => {
     calls.push(payload);
-    return { action: 'close-keep-assets', txHashes: payload.txHashes };
+    return { action: 'close-keep-assets', operationId: 81, txHashes: payload.txHashes, status: 'queued' };
   };
 
   const server = http.createServer(app);
@@ -546,12 +548,44 @@ test('POST /api/uniswap/close-keep-assets/finalize usa userId autenticado al fin
 
     assert.equal(res.status, 200);
     assert.equal(json.data.action, 'close-keep-assets');
+    assert.equal(json.data.operationId, 81);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].userId, 1);
     assert.deepEqual(calls[0].txHashes, ['0xabc']);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
-    positionActionsService.finalizePositionAction = originalFinalize;
+    uniswapOperationService.submitPositionActionFinalize = originalFinalize;
+    server.close();
+  }
+});
+
+test('GET /api/uniswap/operations/:id devuelve el estado de la operacion del usuario', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalGetOperation = uniswapOperationService.getOperation;
+
+  authService.validateSessionToken = async () => buildSessionUser();
+  uniswapOperationService.getOperation = async (userId, operationId) => ({
+    operationId,
+    action: 'modify-range',
+    status: 'waiting_receipts',
+    userId,
+  });
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/operations/12`, {
+      headers: { Authorization: `Bearer ${buildToken()}` },
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.data.operationId, 12);
+    assert.equal(json.data.status, 'waiting_receipts');
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    uniswapOperationService.getOperation = originalGetOperation;
     server.close();
   }
 });

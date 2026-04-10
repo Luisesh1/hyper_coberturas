@@ -14,13 +14,144 @@ const { uniswapApi } = vi.hoisted(() => ({
   },
 }));
 
+const { executionController } = vi.hoisted(() => {
+  const createSnapshot = (overrides = {}) => ({
+    state: 'idle',
+    currentTx: null,
+    progress: {
+      total: 0,
+      completed: 0,
+      operationId: null,
+      step: 'idle',
+    },
+    normalizedError: null,
+    txHashes: [],
+    finalResult: null,
+    ...overrides,
+  });
+
+  return {
+    executionController: {
+      config: {
+        outcome: 'done',
+        txHashes: ['0xabc123def456'],
+        result: {
+          status: 'done',
+          txHashes: ['0xabc123def456'],
+        },
+      },
+      createSnapshot,
+      runPlan: vi.fn(),
+      reset: vi.fn(),
+      setConfig(next) {
+        this.config = {
+          ...this.config,
+          ...next,
+        };
+      },
+      resetAll() {
+        this.config = {
+          outcome: 'done',
+          txHashes: ['0xabc123def456'],
+          result: {
+            status: 'done',
+            txHashes: ['0xabc123def456'],
+          },
+        };
+        this.runPlan.mockReset();
+        this.reset.mockReset();
+      },
+    },
+  };
+});
+
 vi.mock('../../../services/api', () => ({
   uniswapApi,
 }));
 
+vi.mock('../../../hooks/useWalletExecution', async () => {
+  const React = await import('react');
+
+  const STATES = {
+    IDLE: 'idle',
+    PREFLIGHT: 'preflight',
+    AWAITING_WALLET: 'awaiting_wallet',
+    BROADCAST_SUBMITTED: 'broadcast_submitted',
+    NETWORK_CONFIRMING: 'network_confirming',
+    FINALIZE_PENDING: 'finalize_pending',
+    DONE: 'done',
+    FAILED: 'failed',
+    NEEDS_RECONCILE: 'needs_reconcile',
+  };
+
+  return {
+    WALLET_EXECUTION_STATE: STATES,
+    useWalletExecution() {
+      const [snapshot, setSnapshot] = React.useState(() => executionController.createSnapshot());
+
+      const runPlan = React.useCallback(async (payload) => {
+        executionController.runPlan(payload);
+        const config = executionController.config;
+
+        if (config.outcome === 'error') {
+          setSnapshot(executionController.createSnapshot({
+            state: config.state || STATES.FAILED,
+            currentTx: {
+              index: config.failedIndex ?? 0,
+              label: config.failedLabel || payload.txPlan[0]?.label || 'Transacción 1',
+            },
+            progress: {
+              total: payload.txPlan.length,
+              completed: config.completed ?? 0,
+              operationId: 'op-1',
+              step: config.state || STATES.FAILED,
+            },
+            normalizedError: {
+              code: config.errorCode || 'tx_reverted',
+              message: config.errorMessage || 'La transacción falló on-chain.',
+            },
+            txHashes: config.txHashes || [],
+            finalResult: config.returnValue || null,
+          }));
+          return config.returnValue || null;
+        }
+
+        const result = config.result || {
+          status: 'done',
+          txHashes: config.txHashes || [],
+        };
+        setSnapshot(executionController.createSnapshot({
+          state: STATES.DONE,
+          progress: {
+            total: payload.txPlan.length,
+            completed: payload.txPlan.length,
+            operationId: 'op-1',
+            step: STATES.DONE,
+          },
+          txHashes: result.txHashes || config.txHashes || [],
+          finalResult: result,
+        }));
+        return result;
+      }, []);
+
+      const reset = React.useCallback(() => {
+        executionController.reset();
+        setSnapshot(executionController.createSnapshot());
+      }, []);
+
+      return {
+        ...snapshot,
+        runPlan,
+        reset,
+      };
+    },
+  };
+});
+
 describe('SmartCreatePoolModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    executionController.resetAll();
     uniswapApi.getSmartCreateTokenList.mockResolvedValue([
       { symbol: 'WETH', address: '0x00000000000000000000000000000000000000AA' },
       { symbol: 'USDC', address: '0x00000000000000000000000000000000000000BB' },
@@ -198,21 +329,19 @@ describe('SmartCreatePoolModal', () => {
     expect(uniswapApi.smartCreateFundingPlan).toHaveBeenCalledWith(expect.objectContaining({ network: 'arbitrum' }));
   }, 15000);
 
-  it('espera confirmación on-chain de cada tx y corta si una falla', async () => {
-    const sendTransaction = vi
-      .fn()
-      .mockResolvedValueOnce('0xaaa')
-      .mockResolvedValueOnce('0xbbb');
-    const waitForTransactionReceipt = vi
-      .fn()
-      .mockResolvedValueOnce({ status: 1 })
-      .mockResolvedValueOnce({ status: 0 });
+  it('muestra error parcial si el runner falla después de confirmar txs previas', async () => {
+    executionController.setConfig({
+      outcome: 'error',
+      completed: 2,
+      txHashes: ['0xaaa', '0xbbb'],
+      failedIndex: 1,
+      failedLabel: 'Swap USDC -> WETH',
+      errorMessage: 'La transacción "Swap USDC -> WETH" falló on-chain.',
+    });
 
     render(
       <SmartCreatePoolModal
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
-        sendTransaction={sendTransaction}
-        waitForTransactionReceipt={waitForTransactionReceipt}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'] }] }}
         onClose={vi.fn()}
@@ -233,36 +362,37 @@ describe('SmartCreatePoolModal', () => {
     await screen.findByText(/Paso 4: Review y firma/i);
     await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
 
-    expect((await screen.findAllByText(/Swap USDC -> WETH/)).length).toBeGreaterThan(0);
+    await waitFor(() => expect(executionController.runPlan).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'create-position',
+      finalizeKind: 'position_action',
+    })));
+
     expect(await screen.findByText(/falló on-chain/i)).toBeTruthy();
-    expect(sendTransaction).toHaveBeenCalledTimes(2);
-    expect(waitForTransactionReceipt).toHaveBeenNthCalledWith(1, '0xaaa');
-    expect(waitForTransactionReceipt).toHaveBeenNthCalledWith(2, '0xbbb');
-    expect(uniswapApi.finalizeCreatePosition).not.toHaveBeenCalled();
+    expect(screen.getByText(/Transacciones completadas exitosamente/i)).toBeTruthy();
+    expect(screen.queryByText(/Reintentar desde aquí/i)).toBeNull();
   }, 15000);
 
-  it('permite reintentar desde la tx fallida sin repetir las completadas', async () => {
-    const sendTransaction = vi
-      .fn()
-      .mockResolvedValueOnce('0xaaa')
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce('0xbbb')
-      .mockResolvedValueOnce('0xccc');
-    const waitForTransactionReceipt = vi
-      .fn()
-      .mockResolvedValueOnce({ status: 1 })
-      .mockResolvedValueOnce({ status: 1 })
-      .mockResolvedValueOnce({ status: 1 });
+  it('entrega el resultado final al cerrar el wizard con el runner común', async () => {
+    const onFinalized = vi.fn();
+    executionController.setConfig({
+      outcome: 'done',
+      txHashes: ['0xaaa', '0xbbb', '0xccc'],
+      result: {
+        status: 'done',
+        txHashes: ['0xaaa', '0xbbb', '0xccc'],
+        positionChanges: {
+          newPositionIdentifier: '789',
+        },
+      },
+    });
 
     render(
       <SmartCreatePoolModal
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
-        sendTransaction={sendTransaction}
-        waitForTransactionReceipt={waitForTransactionReceipt}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'], explorerUrl: 'https://arbiscan.io' }] }}
         onClose={vi.fn()}
-        onFinalized={vi.fn()}
+        onFinalized={onFinalized}
       />
     );
 
@@ -279,22 +409,29 @@ describe('SmartCreatePoolModal', () => {
     await screen.findByText(/Paso 4: Review y firma/i);
     await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
 
-    // Tx 1 OK, Tx 2 cancelled → error with retry
-    expect(await screen.findByText(/no devolvió un hash/i)).toBeTruthy();
-    expect(screen.getByText(/Transacciones completadas exitosamente/i)).toBeTruthy();
-    expect(screen.getByText(/Reintentar desde aquí/i)).toBeTruthy();
-
-    // Retry — should resume from tx 2
-    await userEvent.click(screen.getByRole('button', { name: /Reintentar desde aquí/i }));
-
-    await waitFor(() => expect(uniswapApi.finalizeCreatePosition).toHaveBeenCalled());
-    expect(sendTransaction).toHaveBeenCalledTimes(4);
+    await waitFor(() => expect(onFinalized).toHaveBeenCalledWith({
+      txHashes: ['0xaaa', '0xbbb', '0xccc'],
+      finalizeResult: {
+        status: 'done',
+        txHashes: ['0xaaa', '0xbbb', '0xccc'],
+        positionChanges: {
+          newPositionIdentifier: '789',
+        },
+      },
+    }));
+    expect(await screen.findByText(/Posición LP creada correctamente/i)).toBeTruthy();
   }, 20000);
 
   it('muestra links al explorador en DONE y no cierra automáticamente', async () => {
-    const sendTransaction = vi.fn().mockResolvedValue('0xabc123def456');
-    const waitForTransactionReceipt = vi.fn().mockResolvedValue({ status: 1 });
     const onClose = vi.fn();
+    executionController.setConfig({
+      outcome: 'done',
+      txHashes: ['0xabc123def456'],
+      result: {
+        status: 'done',
+        txHashes: ['0xabc123def456'],
+      },
+    });
 
     uniswapApi.prepareCreatePosition.mockResolvedValue({
       quoteSummary: { token0: { symbol: 'WETH' }, token1: { symbol: 'USDC' } },
@@ -306,8 +443,6 @@ describe('SmartCreatePoolModal', () => {
     render(
       <SmartCreatePoolModal
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
-        sendTransaction={sendTransaction}
-        waitForTransactionReceipt={waitForTransactionReceipt}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'], explorerUrl: 'https://arbiscan.io' }] }}
         onClose={onClose}

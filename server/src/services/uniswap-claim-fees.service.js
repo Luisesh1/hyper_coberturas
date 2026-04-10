@@ -4,6 +4,7 @@ const uniswapService = require('./uniswap.service');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
 const protectedPoolRepo = require('../repositories/protected-uniswap-pool.repository');
 const logger = require('./logger.service');
+const onChainManager = require('./onchain-manager.service');
 const {
   V4_ACTIONS,
   V4_POSITION_MANAGER_ABI,
@@ -47,16 +48,7 @@ function lower(a) {
 }
 
 function getProviderCached(networkConfig) {
-  // Re-use the same caching pattern as uniswap.service
-  if (!getProviderCached._cache) getProviderCached._cache = new Map();
-  if (getProviderCached._cache.has(networkConfig.id)) {
-    return getProviderCached._cache.get(networkConfig.id);
-  }
-  const provider = new ethers.JsonRpcProvider(networkConfig.rpcUrl, networkConfig.chainId, {
-    staticNetwork: true,
-  });
-  getProviderCached._cache.set(networkConfig.id, provider);
-  return provider;
+  return onChainManager.getProvider(networkConfig, { scope: 'uniswap-claim-fees' });
 }
 
 async function getTokenInfo(provider, address, networkConfig) {
@@ -64,20 +56,12 @@ async function getTokenInfo(provider, address, networkConfig) {
   if (!normalized || normalized === ethers.ZeroAddress) {
     return { symbol: networkConfig.nativeSymbol, decimals: 18, address: ethers.ZeroAddress };
   }
-  const contract = new ethers.Contract(normalized, ERC20_ABI, provider);
+  const contract = onChainManager.getContract({ runner: provider, address: normalized, abi: ERC20_ABI });
   const [symbol, decimals] = await Promise.all([
     contract.symbol().catch(() => 'UNKNOWN'),
     contract.decimals().catch(() => 18),
   ]);
   return { symbol, decimals: Number(decimals), address: normalized };
-}
-
-function formatTokenAmount(raw, decimals) {
-  try {
-    return Number(ethers.formatUnits(raw, decimals));
-  } catch {
-    return 0;
-  }
 }
 
 // --- Validate inputs ---------------------------------------------------
@@ -115,7 +99,7 @@ function validateClaimInput({ network, version, positionIdentifier, walletAddres
 async function prepareV3Collect({ networkConfig, normalizedWallet, tokenId }) {
   const provider = getProviderCached(networkConfig);
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v3.positionManager);
-  const pm = new ethers.Contract(positionManagerAddress, V3_COLLECT_ABI, provider);
+  const pm = onChainManager.getContract({ runner: provider, address: positionManagerAddress, abi: V3_COLLECT_ABI });
 
   // Verify ownership
   const owner = normalizeAddress(await pm.ownerOf(tokenId));
@@ -165,7 +149,7 @@ async function prepareV3Collect({ networkConfig, normalizedWallet, tokenId }) {
 async function prepareV4Collect({ networkConfig, normalizedWallet, tokenId }) {
   const provider = getProviderCached(networkConfig);
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
-  const pm = new ethers.Contract(positionManagerAddress, V4_POSITION_MANAGER_ABI, provider);
+  const pm = onChainManager.getContract({ runner: provider, address: positionManagerAddress, abi: V4_POSITION_MANAGER_ABI });
 
   // Verify ownership
   const owner = normalizeAddress(await pm.ownerOf(tokenId));
@@ -237,9 +221,7 @@ async function prepareClaimFees({ network, version, positionIdentifier, walletAd
   return prepareV4Collect({ networkConfig, normalizedWallet, tokenId });
 }
 
-// --- Public: finalize --------------------------------------------------
-
-async function finalizeClaimFees({ network, version, positionIdentifier, walletAddress, txHash }) {
+async function waitForClaimReceipt({ network, version, positionIdentifier, walletAddress, txHash, onProgress }) {
   if (!txHash) {
     throw new ValidationError('txHash es requerido');
   }
@@ -250,10 +232,16 @@ async function finalizeClaimFees({ network, version, positionIdentifier, walletA
 
   const provider = getProviderCached(networkConfig);
 
-  // Wait for receipt (up to 60s)
+  onProgress?.('waiting_receipts', { txHash });
   let receipt;
   try {
-    receipt = await provider.waitForTransaction(txHash, 1, 60_000);
+    receipt = await onChainManager.waitForReceipt({
+      networkConfig,
+      txHash,
+      confirmations: 1,
+      timeoutMs: 60_000,
+      scope: 'uniswap-claim-fees',
+    });
   } catch (err) {
     throw new ExternalServiceError(`No se pudo obtener el receipt de ${txHash}: ${err.message}`);
   }
@@ -266,6 +254,30 @@ async function finalizeClaimFees({ network, version, positionIdentifier, walletA
     throw new ValidationError('La transacción falló on-chain (status 0)');
   }
 
+  return {
+    txHash,
+    receipt,
+    tokenId,
+    networkConfig,
+    normalizedWallet,
+  };
+}
+
+// --- Public: finalize --------------------------------------------------
+
+async function finalizeClaimFeesAfterReceipt({
+  network,
+  version,
+  positionIdentifier,
+  walletAddress,
+  txHash,
+  receipt,
+  onProgress,
+}) {
+  const { networkConfig, tokenId } = validateClaimInput({
+    network, version, positionIdentifier, walletAddress,
+  });
+
   // Verify the tx was sent to the expected contract
   const expectedTo = version === 'v3'
     ? normalizeAddress(networkConfig.deployments.v3.positionManager)
@@ -277,6 +289,7 @@ async function finalizeClaimFees({ network, version, positionIdentifier, walletA
 
   // Refresh any protected pool that matches this position
   let updatedProtection = null;
+  onProgress?.('refreshing_snapshot', { positionIdentifier: tokenId });
   try {
     const protections = await protectedPoolRepo.findByPositionIdentifier(
       tokenId, network, version
@@ -304,6 +317,7 @@ async function finalizeClaimFees({ network, version, positionIdentifier, walletA
       positionIdentifier: tokenId,
       error: err.message,
     });
+    throw err;
   }
 
   return {
@@ -317,7 +331,30 @@ async function finalizeClaimFees({ network, version, positionIdentifier, walletA
   };
 }
 
+async function finalizeClaimFees({ network, version, positionIdentifier, walletAddress, txHash, onProgress }) {
+  const { receipt } = await waitForClaimReceipt({
+    network,
+    version,
+    positionIdentifier,
+    walletAddress,
+    txHash,
+    onProgress,
+  });
+
+  return finalizeClaimFeesAfterReceipt({
+    network,
+    version,
+    positionIdentifier,
+    walletAddress,
+    txHash,
+    receipt,
+    onProgress,
+  });
+}
+
 module.exports = {
   prepareClaimFees,
   finalizeClaimFees,
+  waitForClaimReceipt,
+  finalizeClaimFeesAfterReceipt,
 };

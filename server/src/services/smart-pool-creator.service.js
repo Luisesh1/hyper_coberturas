@@ -6,6 +6,8 @@ const { atr } = require('./indicator-library');
 const { normalizeSymbol, isStableSymbol } = require('./delta-neutral-math.service');
 const { AppError, ValidationError } = require('../errors/app-error');
 const uniswapService = require('./uniswap.service');
+const onChainManager = require('./onchain-manager.service');
+const { MULTICALL3_ADDRESS } = onChainManager;
 const {
   computeV4PoolId,
   hasHooks,
@@ -39,6 +41,10 @@ const V4_STATE_VIEW_ABI = [
 const DEFAULT_FEE_TIERS = [100, 500, 3000, 10000];
 const DEFAULT_MAX_SLIPPAGE_BPS = 50;
 const DEFAULT_POOL_VALUE_BUFFER = 1.05;
+// Mínimo USD por swap. Por debajo de este umbral los costos de gas + slippage
+// superan el valor del swap, así que es preferible aceptar ese sub-déficit y
+// dejar el dust en la wallet en vez de generar una tx extra (approve + swap).
+const MIN_SWAP_USD = 1.5;
 const DEFAULT_V4_TICK_SPACING_BY_FEE = {
   100: 1,
   500: 10,
@@ -117,14 +123,7 @@ function getNetworkConfig(network) {
 }
 
 function getProvider(networkConfig) {
-  if (!getProvider.cache) getProvider.cache = new Map();
-  if (!getProvider.cache.has(networkConfig.id)) {
-    getProvider.cache.set(
-      networkConfig.id,
-      new ethers.JsonRpcProvider(networkConfig.rpcUrl, networkConfig.chainId, { staticNetwork: true })
-    );
-  }
-  return getProvider.cache.get(networkConfig.id);
+  return onChainManager.getProvider(networkConfig, { scope: 'smart-pool-creator' });
 }
 
 function normalizeTokenList(tokens = []) {
@@ -309,12 +308,12 @@ function buildNativeAsset(networkConfig, balanceRaw) {
 }
 
 async function getTokenBalance(provider, tokenAddress, walletAddress) {
-  const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const contract = onChainManager.getContract({ runner: provider, address: tokenAddress, abi: ERC20_ABI });
   return contract.balanceOf(walletAddress).catch(() => 0n);
 }
 
 async function getTokenInfoFromChain(provider, tokenAddress) {
-  const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const contract = onChainManager.getContract({ runner: provider, address: tokenAddress, abi: ERC20_ABI });
   const [symbol, decimals] = await Promise.all([
     contract.symbol().catch(() => 'UNKNOWN'),
     contract.decimals().catch(() => 18),
@@ -455,23 +454,53 @@ async function getV3PoolContext({
   fee,
 }) {
   const ordered = sortTokensByAddress(token0, token1);
-  const factory = new ethers.Contract(
-    ethers.getAddress(networkConfig.deployments.v3.eventSource),
-    V3_FACTORY_ABI,
-    provider
-  );
+  const factoryAddress = ethers.getAddress(networkConfig.deployments.v3.eventSource);
+  const factory = onChainManager.getContract({
+    runner: provider,
+    address: factoryAddress,
+    abi: V3_FACTORY_ABI,
+  });
   const poolAddress = await factory.getPool(ordered.token0.address, ordered.token1.address, fee);
   if (!poolAddress || poolAddress === ethers.ZeroAddress) {
     throw new ValidationError('Solo se soporta crear posicion sobre pools existentes');
   }
 
-  const pool = new ethers.Contract(poolAddress, V3_POOL_ABI, provider);
-  const [slot0, tickSpacing, actualToken0, actualToken1] = await Promise.all([
-    pool.slot0(),
-    pool.tickSpacing(),
-    pool.token0(),
-    pool.token1(),
-  ]);
+  // Multicall3: 4 reads del pool en 1 sola RPC. Fallback a Promise.all
+  // si Multicall3 no está disponible.
+  let slot0;
+  let tickSpacing;
+  let actualToken0;
+  let actualToken1;
+  try {
+    const results = await onChainManager.aggregate({
+      networkConfig,
+      scope: 'smart-pool-creator',
+      calls: [
+        { target: poolAddress, abi: V3_POOL_ABI, method: 'slot0' },
+        { target: poolAddress, abi: V3_POOL_ABI, method: 'tickSpacing' },
+        { target: poolAddress, abi: V3_POOL_ABI, method: 'token0' },
+        { target: poolAddress, abi: V3_POOL_ABI, method: 'token1' },
+      ],
+    });
+    slot0 = results[0].value;
+    tickSpacing = results[1].value;
+    actualToken0 = results[2].value;
+    actualToken1 = results[3].value;
+  } catch (mcErr) {
+    logger.warn('get_v3_pool_context_multicall_fallback', {
+      poolAddress,
+      network: networkConfig?.id,
+      error: mcErr?.message,
+      code: mcErr?.code,
+    });
+    const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
+    [slot0, tickSpacing, actualToken0, actualToken1] = await Promise.all([
+      pool.slot0(),
+      pool.tickSpacing(),
+      pool.token0(),
+      pool.token1(),
+    ]);
+  }
   const actualReversed = actualToken0.toLowerCase() !== token0.address.toLowerCase();
   const canonicalPrice = uniswapService.tickToPrice(
     Number(slot0.tick),
@@ -521,11 +550,11 @@ async function getV4PoolContext({
     hooks: resolvedHooks,
   });
 
-  const stateView = new ethers.Contract(
-    ethers.getAddress(networkConfig.deployments.v4.stateView),
-    V4_STATE_VIEW_ABI,
-    provider
-  );
+  const stateView = onChainManager.getContract({
+    runner: provider,
+    address: ethers.getAddress(networkConfig.deployments.v4.stateView),
+    abi: V4_STATE_VIEW_ABI,
+  });
   let slot0;
   try {
     slot0 = await stateView.getSlot0(resolvedPoolId);
@@ -612,14 +641,64 @@ async function enrichWalletAssets({
     ).then((items) => items.filter(Boolean)),
   ]);
   const allPrices = await marketService.getAllPrices().catch(() => ({}));
-  const nativeBalanceRaw = await provider.getBalance(normalizedWallet).catch(() => 0n);
+
+  // Multicall3: leemos el balance nativo + N balances ERC20 en UNA sola
+  // RPC call. Antes esto eran ~21 calls secuenciales (1 getBalance + 20
+  // balanceOf), ahora es 1 sola. Si Multicall3 no está deployed o falla,
+  // caemos al path legacy con un warning.
+  const MULTICALL3_ETH_BALANCE_ABI = [
+    'function getEthBalance(address addr) view returns (uint256 balance)',
+  ];
+  const ERC20_BAL_ABI = [
+    'function balanceOf(address account) external view returns (uint256)',
+  ];
+  let nativeBalanceRaw = 0n;
+  let erc20Balances = [];
+  try {
+    const calls = [
+      {
+        target: MULTICALL3_ADDRESS,
+        abi: MULTICALL3_ETH_BALANCE_ABI,
+        method: 'getEthBalance',
+        args: [normalizedWallet],
+        allowFailure: true,
+      },
+      ...knownTokens.map((token) => ({
+        target: token.address,
+        abi: ERC20_BAL_ABI,
+        method: 'balanceOf',
+        args: [normalizedWallet],
+        allowFailure: true,
+      })),
+    ];
+    const results = await onChainManager.aggregate({
+      networkConfig,
+      calls,
+      scope: 'smart-pool-creator',
+    });
+    nativeBalanceRaw = results[0]?.success ? BigInt(results[0].value) : 0n;
+    erc20Balances = knownTokens.map((token, idx) => {
+      const r = results[idx + 1];
+      return {
+        token,
+        balanceRaw: r?.success ? BigInt(r.value) : 0n,
+      };
+    });
+  } catch (multicallErr) {
+    logger.warn('enrich_wallet_assets_multicall_fallback', {
+      network,
+      walletAddress: normalizedWallet,
+      error: multicallErr?.message,
+    });
+    nativeBalanceRaw = await provider.getBalance(normalizedWallet).catch(() => 0n);
+    erc20Balances = await Promise.all(
+      knownTokens.map(async (token) => {
+        const balanceRaw = await getTokenBalance(provider, token.address, normalizedWallet);
+        return { token, balanceRaw };
+      })
+    );
+  }
   const nativeAsset = buildNativeAsset(networkConfig, nativeBalanceRaw);
-  const erc20Balances = await Promise.all(
-    knownTokens.map(async (token) => {
-      const balanceRaw = await getTokenBalance(provider, token.address, normalizedWallet);
-      return { token, balanceRaw };
-    })
-  );
 
   const assets = [nativeAsset];
   for (const { token, balanceRaw } of erc20Balances) {
@@ -685,44 +764,309 @@ async function enrichWalletAssets({
   };
 }
 
-function buildFundingPriority(asset, { token0Address, token1Address }) {
-  if (asset.address && asset.address.toLowerCase() === String(token0Address || '').toLowerCase()) return 0;
-  if (asset.address && asset.address.toLowerCase() === String(token1Address || '').toLowerCase()) return 0;
+function isAssetDirectFor(asset, targetAddress, wrappedNativeAddress) {
+  if (!targetAddress) return false;
+  const target = String(targetAddress).toLowerCase();
+  if (asset.address && asset.address.toLowerCase() === target) return true;
+  if (asset.isNative && wrappedNativeAddress && wrappedNativeAddress.toLowerCase() === target) return true;
+  return false;
+}
+
+function buildFundingPriority(asset, { token0Address, token1Address, wrappedNativeAddress }) {
+  if (isAssetDirectFor(asset, token0Address, wrappedNativeAddress)) return 0;
+  if (isAssetDirectFor(asset, token1Address, wrappedNativeAddress)) return 0;
   if (asset.isNative && asset.isWrappedNative) return 1;
   if (asset.isStable) return 2;
   if (asset.usdValue != null) return 3;
   return 4;
 }
 
+/**
+ * Selección óptima de assets para fondear un LP minimizando swaps.
+ *
+ * Algoritmo:
+ *   1. Calcula la deuda por lado a partir de `totalUsdTarget` + weight.
+ *   2. Asigna primero los assets directos (token0/token1, o native si el
+ *      wrapped es uno de los lados) hasta cubrir su lado correspondiente.
+ *   3. Si queda déficit en algún lado, agrega assets no-directos del MAYOR
+ *      USD value primero, hasta cubrir todo el déficit. Un solo asset puede
+ *      cubrir ambos lados en 2 swaps (drenado secuencial); preferimos eso
+ *      antes que usar varios assets pequeños con 1 swap cada uno.
+ *   4. Solo agrega lo NECESARIO. No infla la selección con assets que no
+ *      van a aportar valor al LP.
+ *
+ * Devuelve `{ selection, estimatedSwapCount, uncoveredUsd }` donde:
+ *   - selection: array `{ assetId, enabled }` listo para `fundingSelections`
+ *   - estimatedSwapCount: cuántos swaps generará este subset (best-effort)
+ *   - uncoveredUsd: cuánto del target no se llegaría a cubrir con este subset
+ */
+function buildOptimalFundingSelection({
+  assets,
+  token0Address,
+  token1Address,
+  totalUsdTarget,
+  targetWeightToken0Pct,
+  wrappedNativeAddress = null,
+}) {
+  const target = Number(totalUsdTarget || 0);
+  const weight = Number(targetWeightToken0Pct);
+  if (target <= 0 || !Number.isFinite(weight)) {
+    return { selection: [], estimatedSwapCount: 0, uncoveredUsd: target };
+  }
+
+  // 5% buffer sobre cada lado para absorber slippage + fees del DEX. Un
+  // 5% es suficiente porque después la lógica de swap también escala los
+  // mínimos por slippageBps.
+  const SLIPPAGE_BUFFER = DEFAULT_POOL_VALUE_BUFFER;
+  let need0 = target * (weight / 100) * SLIPPAGE_BUFFER;
+  let need1 = target * (1 - weight / 100) * SLIPPAGE_BUFFER;
+
+  const usable = (assets || []).filter((asset) => {
+    if (asset.canUseForFunding === false) return false;
+    if (BigInt(asset.usableBalanceRaw || asset.balanceRaw || 0n) <= 0n) return false;
+    return Number(asset.usdValue || 0) > 0;
+  });
+
+  // Pool de trabajo: cada asset con `remainingUsd` para drenar.
+  const pool = usable.map((asset) => ({
+    asset,
+    remainingUsd: Number(asset.usdValue || 0),
+    isDirect0: isAssetDirectFor(asset, token0Address, wrappedNativeAddress),
+    isDirect1: isAssetDirectFor(asset, token1Address, wrappedNativeAddress),
+  }));
+
+  // Orden: directs primero, después largest USD desc.
+  //
+  // CRÍTICO: dentro de los directs preferimos NON-NATIVE sobre native.
+  // Razón: si el usuario tiene WETH ya en wallet, usarlo es 0 swaps + 0
+  // wraps. Usar ETH nativo agrega un wrap tx (con riesgo de OOG por L1
+  // calldata fee spikes en Arbitrum) Y reduce el balance ETH disponible
+  // para gas en las txs subsiguientes. ETH solo se usa si el WETH no
+  // alcanza a cubrir el side completo.
+  //
+  // Esto previene la falla "Deposit -0.00138 ETH Fallida" que reportó el
+  // usuario: el planner estaba wrappeando $3 de ETH cuando ya tenía $27
+  // de WETH suficientes para cubrir el side, generando una tx fallida
+  // que dejaba al wallet sin ETH para gas del resto del plan.
+  pool.sort((a, b) => {
+    const aDirect = a.isDirect0 || a.isDirect1;
+    const bDirect = b.isDirect0 || b.isDirect1;
+    if (aDirect && !bDirect) return -1;
+    if (!aDirect && bDirect) return 1;
+    if (aDirect && bDirect) {
+      // Dentro de los directs: ERC20 antes que native (evita wraps).
+      if (!a.asset.isNative && b.asset.isNative) return -1;
+      if (a.asset.isNative && !b.asset.isNative) return 1;
+    }
+    return b.remainingUsd - a.remainingUsd;
+  });
+
+  const selection = [];
+  let estimatedSwapCount = 0;
+  const taken = new Set();
+  const take = (assetId) => {
+    if (taken.has(assetId)) return;
+    taken.add(assetId);
+    selection.push({ assetId, enabled: true });
+  };
+
+  // Helper: aplica una asignación non-direct (con swap) sobre un item.
+  const applyNonDirect = (item) => {
+    const helps0 = need0 > 0;
+    const helps1 = need1 > 0;
+    const totalDeficit = Math.max(0, need0) + Math.max(0, need1);
+    if (totalDeficit <= 0 || item.remainingUsd < MIN_SWAP_USD) return;
+    const used = Math.min(item.remainingUsd, totalDeficit);
+
+    if (helps0 && helps1) {
+      const ratio0 = need0 / (need0 + need1);
+      const used0 = used * ratio0;
+      const used1 = used - used0;
+      need0 -= used0;
+      need1 -= used1;
+      item.remainingUsd -= used;
+      const swapsForThis =
+        (used0 >= MIN_SWAP_USD ? 1 : 0) + (used1 >= MIN_SWAP_USD ? 1 : 0);
+      estimatedSwapCount += swapsForThis;
+    } else if (helps0) {
+      const used0 = Math.min(used, need0);
+      need0 -= used0;
+      item.remainingUsd -= used0;
+      estimatedSwapCount += 1;
+    } else if (helps1) {
+      const used1 = Math.min(used, need1);
+      need1 -= used1;
+      item.remainingUsd -= used1;
+      estimatedSwapCount += 1;
+    }
+    take(item.asset.id);
+  };
+
+  // ── Fase 1: aporte DIRECTO desde NON-NATIVE assets ──
+  // Cubre los lados con tokens ERC20 que ya tiene el usuario, sin wraps.
+  // Wraps de native se posponen porque agregan una tx extra y, en
+  // Arbitrum, son propensos a OOG por L1 calldata fee spikes.
+  for (const item of pool) {
+    if (need0 <= 0 && need1 <= 0) break;
+    if (item.asset.isNative) continue;
+    if (item.isDirect0 && need0 > 0) {
+      const used = Math.min(item.remainingUsd, need0);
+      if (used > 0) {
+        need0 -= used;
+        item.remainingUsd -= used;
+        take(item.asset.id);
+      }
+    }
+    if (item.isDirect1 && need1 > 0 && item.remainingUsd > 0) {
+      const used = Math.min(item.remainingUsd, need1);
+      if (used > 0) {
+        need1 -= used;
+        item.remainingUsd -= used;
+        take(item.asset.id);
+      }
+    }
+  }
+
+  // ── Fase 2: leftover de directs NON-NATIVE como swap source ──
+  // Ej: si WETH cubrió token0 y todavía sobra balance, lo usamos para
+  // swappear hacia token1 en 1 sola tx (mejor que traer otro asset).
+  for (const item of pool) {
+    if (need0 <= 0 && need1 <= 0) break;
+    if (item.asset.isNative) continue;
+    if (item.remainingUsd < MIN_SWAP_USD) continue;
+    if (!(item.isDirect0 || item.isDirect1)) continue;
+
+    if (item.isDirect0 && need1 > 0) {
+      const used = Math.min(item.remainingUsd, need1);
+      if (used >= MIN_SWAP_USD) {
+        need1 -= used;
+        item.remainingUsd -= used;
+        estimatedSwapCount += 1;
+        take(item.asset.id);
+      }
+    }
+    if (item.isDirect1 && need0 > 0) {
+      const used = Math.min(item.remainingUsd, need0);
+      if (used >= MIN_SWAP_USD) {
+        need0 -= used;
+        item.remainingUsd -= used;
+        estimatedSwapCount += 1;
+        take(item.asset.id);
+      }
+    }
+  }
+
+  // ── Fase 3: fillers NON-DIRECT NON-NATIVE (mayor USD primero) ──
+  // Greedy: el asset ERC20 más grande primero. Un solo asset puede cubrir
+  // ambos sides en 2 swaps (preferimos esto sobre 2 assets pequeños).
+  for (const item of pool) {
+    if (need0 <= 0 && need1 <= 0) break;
+    if (item.asset.isNative) continue;
+    if (item.isDirect0 || item.isDirect1) continue;
+    applyNonDirect(item);
+  }
+
+  // ── Fase 4 (LAST RESORT): native ETH ──
+  // Solo se usa si todos los pasos anteriores no alcanzaron a cubrir el
+  // target. Wrappear ETH agrega una tx más + riesgo de OOG/L1 fee spikes
+  // en Arbitrum, así que es preferible evitarlo cuando sea posible.
+  //
+  // SKIP Phase 4 si el plan actual YA cumple con el threshold mínimo de
+  // cobertura del post-validation (0.93). En ese caso pulleár native solo
+  // serviría para satisfacer el buffer de slippage 5%, pero a costa de
+  // un wrap tx adicional + riesgo. Mejor aceptar la cobertura actual.
+  const projectedCoveredUsd = (target * SLIPPAGE_BUFFER)
+    - (Math.max(0, need0) + Math.max(0, need1));
+  const POST_VALIDATION_THRESHOLD = 0.93;
+  if (projectedCoveredUsd >= target * POST_VALIDATION_THRESHOLD) {
+    return {
+      selection,
+      estimatedSwapCount,
+      uncoveredUsd: Math.max(0, need0) + Math.max(0, need1),
+    };
+  }
+
+  for (const item of pool) {
+    if (need0 <= 0 && need1 <= 0) break;
+    if (!item.asset.isNative) continue;
+
+    if (item.isDirect0 && need0 > 0) {
+      const used = Math.min(item.remainingUsd, need0);
+      if (used > 0) {
+        need0 -= used;
+        item.remainingUsd -= used;
+        take(item.asset.id);
+      }
+    }
+    if (item.isDirect1 && need1 > 0 && item.remainingUsd > 0) {
+      const used = Math.min(item.remainingUsd, need1);
+      if (used > 0) {
+        need1 -= used;
+        item.remainingUsd -= used;
+        take(item.asset.id);
+      }
+    }
+    // Native como swap source para el lado opuesto (last resort de last
+    // resort): solo si todavía hay déficit Y el native tiene leftover.
+    if (item.isDirect0 && need1 > 0 && item.remainingUsd >= MIN_SWAP_USD) {
+      const used = Math.min(item.remainingUsd, need1);
+      if (used >= MIN_SWAP_USD) {
+        need1 -= used;
+        item.remainingUsd -= used;
+        estimatedSwapCount += 1;
+        take(item.asset.id);
+      }
+    }
+    if (item.isDirect1 && need0 > 0 && item.remainingUsd >= MIN_SWAP_USD) {
+      const used = Math.min(item.remainingUsd, need0);
+      if (used >= MIN_SWAP_USD) {
+        need0 -= used;
+        item.remainingUsd -= used;
+        estimatedSwapCount += 1;
+        take(item.asset.id);
+      }
+    }
+    // Native non-direct (ej: ETH en pool BTC/USDT) → fallback final.
+    if (!item.isDirect0 && !item.isDirect1) {
+      applyNonDirect(item);
+    }
+  }
+
+  return {
+    selection,
+    estimatedSwapCount,
+    uncoveredUsd: Math.max(0, need0) + Math.max(0, need1),
+  };
+}
+
+// Wrapper legacy: mantiene la firma vieja `(assets, token0Address, ...)
+// → selectionArray` para los call sites que solo necesitan la selección.
 function buildAutoFundingSelection({
   assets,
   token0Address,
   token1Address,
   totalUsdTarget,
+  targetWeightToken0Pct = 50,
+  wrappedNativeAddress = null,
 }) {
-  const sorted = [...assets]
-    .filter((asset) => asset.canUseForFunding !== false && BigInt(asset.usableBalanceRaw || asset.balanceRaw || 0n) > 0n)
-    .sort((left, right) => {
-      const priorityDiff = buildFundingPriority(left, { token0Address, token1Address }) - buildFundingPriority(right, { token0Address, token1Address });
-      if (priorityDiff !== 0) return priorityDiff;
-      return Number(right.usdValue || 0) - Number(left.usdValue || 0);
-    });
-
-  const selected = [];
-  let accumulatedUsd = 0;
-  const targetUsd = Number(totalUsdTarget || 0) * DEFAULT_POOL_VALUE_BUFFER;
-
-  for (const asset of sorted) {
-    selected.push({
-      assetId: asset.id,
+  const { selection } = buildOptimalFundingSelection({
+    assets,
+    token0Address,
+    token1Address,
+    totalUsdTarget,
+    targetWeightToken0Pct,
+    wrappedNativeAddress,
+  });
+  // Agregamos `amount` para preservar la API previa que algunos call sites
+  // (tests) pueden depender de.
+  return selection.map((s) => {
+    const asset = (assets || []).find((a) => a.id === s.assetId);
+    return {
+      assetId: s.assetId,
       enabled: true,
-      amount: asset.usableBalance || asset.balance,
-    });
-    accumulatedUsd += Number(asset.usdValue || 0);
-    if (accumulatedUsd >= targetUsd) break;
-  }
-
-  return selected;
+      amount: asset?.usableBalance || asset?.balance || undefined,
+    };
+  });
 }
 
 async function resolveBestDirectRoute({
@@ -735,18 +1079,18 @@ async function resolveBestDirectRoute({
   if (!tokenIn?.address || !tokenOut?.address) return null;
   if (String(tokenIn.address).toLowerCase() === String(tokenOut.address).toLowerCase()) return null;
 
-  const factory = new ethers.Contract(
-    ethers.getAddress(networkConfig.deployments.v3.eventSource),
-    V3_FACTORY_ABI,
-    provider
-  );
+  const factory = onChainManager.getContract({
+    runner: provider,
+    address: ethers.getAddress(networkConfig.deployments.v3.eventSource),
+    abi: V3_FACTORY_ABI,
+  });
 
   let bestRoute = null;
   for (const fee of DEFAULT_FEE_TIERS) {
     try {
       const poolAddress = await factory.getPool(tokenIn.address, tokenOut.address, fee);
       if (!poolAddress || poolAddress === ethers.ZeroAddress) continue;
-      const pool = new ethers.Contract(poolAddress, V3_POOL_ABI, provider);
+      const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
       const [slot0, poolToken0, poolToken1] = await Promise.all([
         pool.slot0(),
         pool.token0(),
@@ -791,9 +1135,134 @@ async function resolveBestDirectRoute({
   return bestRoute;
 }
 
+/**
+ * Resuelve una ruta de swap tokenIn → tokenOut. Primero intenta un pool V3
+ * directo (hop único). Si no encuentra ruta directa, intenta un hop por un
+ * pivot (típicamente WETH) para desbloquear casos comunes como USDC → USD₮0
+ * donde no hay pool directo V3 pero sí existen USDC/WETH y WETH/USD₮0.
+ *
+ * Devuelve siempre una ruta con la forma:
+ *   {
+ *     hops: [
+ *       { tokenIn, tokenOut, fee, poolAddress, expectedOutRaw, expectedOut, currentPrice, amountInRaw, amountInMinimumRaw }
+ *     ],
+ *     expectedOutRaw,          // output del último hop, valuación sin slippage
+ *     amountOutMinimumRaw,     // output mínimo del último hop tras slippage por hop
+ *     expectedOut,
+ *     currentPrice,            // del último hop (legacy, para diagnósticos)
+ *   }
+ *
+ * El consumidor debe hacer push de un swap por cada hop al `swapPlan`.
+ */
+async function resolveBestRoute({
+  provider,
+  networkConfig,
+  tokenIn,
+  tokenOut,
+  amountInRaw,
+  maxSlippageBps = DEFAULT_MAX_SLIPPAGE_BPS,
+  pivotTokens = [],
+}) {
+  if (!tokenIn?.address || !tokenOut?.address) return null;
+  if (String(tokenIn.address).toLowerCase() === String(tokenOut.address).toLowerCase()) return null;
+
+  const slippageBps = BigInt(Number(maxSlippageBps || DEFAULT_MAX_SLIPPAGE_BPS));
+
+  // 1) Intento directo.
+  const direct = await resolveBestDirectRoute({ provider, networkConfig, tokenIn, tokenOut, amountInRaw });
+  if (direct) {
+    const amountOutMinimumRaw = direct.expectedOutRaw - ((direct.expectedOutRaw * slippageBps) / 10_000n);
+    return {
+      hops: [{
+        tokenIn,
+        tokenOut,
+        fee: direct.fee,
+        poolAddress: direct.poolAddress,
+        amountInRaw: BigInt(amountInRaw),
+        expectedOutRaw: direct.expectedOutRaw,
+        expectedOut: direct.expectedOut,
+        amountOutMinimumRaw,
+        currentPrice: direct.currentPrice,
+      }],
+      expectedOutRaw: direct.expectedOutRaw,
+      expectedOut: direct.expectedOut,
+      amountOutMinimumRaw,
+      currentPrice: direct.currentPrice,
+    };
+  }
+
+  // 2) Fallback multi-hop por cada pivot configurado.
+  const tokenInAddr = String(tokenIn.address).toLowerCase();
+  const tokenOutAddr = String(tokenOut.address).toLowerCase();
+  let bestComposite = null;
+  for (const pivot of pivotTokens || []) {
+    if (!pivot?.address) continue;
+    const pivotAddr = String(pivot.address).toLowerCase();
+    if (pivotAddr === tokenInAddr || pivotAddr === tokenOutAddr) continue;
+
+    const leg1 = await resolveBestDirectRoute({
+      provider,
+      networkConfig,
+      tokenIn,
+      tokenOut: pivot,
+      amountInRaw,
+    });
+    if (!leg1) continue;
+    // Para el segundo hop, usamos el mínimo garantizado del primero como
+    // entrada conservadora — cualquier sobrante del leg1 queda en la wallet.
+    const leg1MinOutRaw = leg1.expectedOutRaw - ((leg1.expectedOutRaw * slippageBps) / 10_000n);
+    if (leg1MinOutRaw <= 0n) continue;
+
+    const leg2 = await resolveBestDirectRoute({
+      provider,
+      networkConfig,
+      tokenIn: pivot,
+      tokenOut,
+      amountInRaw: leg1MinOutRaw,
+    });
+    if (!leg2) continue;
+    const leg2MinOutRaw = leg2.expectedOutRaw - ((leg2.expectedOutRaw * slippageBps) / 10_000n);
+
+    if (!bestComposite || leg2.expectedOutRaw > bestComposite.expectedOutRaw) {
+      bestComposite = {
+        hops: [
+          {
+            tokenIn,
+            tokenOut: pivot,
+            fee: leg1.fee,
+            poolAddress: leg1.poolAddress,
+            amountInRaw: BigInt(amountInRaw),
+            expectedOutRaw: leg1.expectedOutRaw,
+            expectedOut: leg1.expectedOut,
+            amountOutMinimumRaw: leg1MinOutRaw,
+            currentPrice: leg1.currentPrice,
+          },
+          {
+            tokenIn: pivot,
+            tokenOut,
+            fee: leg2.fee,
+            poolAddress: leg2.poolAddress,
+            amountInRaw: leg1MinOutRaw,
+            expectedOutRaw: leg2.expectedOutRaw,
+            expectedOut: leg2.expectedOut,
+            amountOutMinimumRaw: leg2MinOutRaw,
+            currentPrice: leg2.currentPrice,
+          },
+        ],
+        expectedOutRaw: leg2.expectedOutRaw,
+        expectedOut: leg2.expectedOut,
+        amountOutMinimumRaw: leg2MinOutRaw,
+        currentPrice: leg2.currentPrice,
+      };
+    }
+  }
+
+  return bestComposite;
+}
+
 function buildSelectedFundingAssetsMap(assets, fundingSelections = []) {
   const assetMap = new Map(assets.map((asset) => [asset.id, asset]));
-  return (fundingSelections || [])
+  const result = (fundingSelections || [])
     .filter((selection) => selection && selection.enabled !== false)
     .map((selection) => {
       const asset = assetMap.get(String(selection.assetId || '').toLowerCase());
@@ -811,6 +1280,18 @@ function buildSelectedFundingAssetsMap(assets, fundingSelections = []) {
       };
     })
     .filter(Boolean);
+
+  // Reordenar: NON-NATIVE primero, NATIVE al final. Esto asegura que el
+  // direct loop de buildFundingPlan agote primero los ERC20 y solo dipee
+  // en native (con su wrap tx asociado) si los ERC20 no alcanzan.
+  // Mantiene el orden relativo dentro de cada grupo (estabilidad).
+  result.sort((a, b) => {
+    const aNative = a.asset.isNative === true ? 1 : 0;
+    const bNative = b.asset.isNative === true ? 1 : 0;
+    return aNative - bNative;
+  });
+
+  return result;
 }
 
 async function buildFundingPlan({
@@ -870,19 +1351,25 @@ async function buildFundingPlan({
     token1.decimals
   );
 
+  const wrappedNative = getWrappedNativeToken(network);
+  // El optimizador necesita conocer el wrapped native para tratar a `ETH`
+  // como direct cuando WETH es uno de los lados del par.
+  const optimalSelectionResult = buildOptimalFundingSelection({
+    assets: fundingUniverse.assets,
+    token0Address: token0.address,
+    token1Address: token1.address,
+    totalUsdTarget,
+    targetWeightToken0Pct,
+    wrappedNativeAddress: wrappedNative?.address || null,
+  });
+
   const selectedAssets = buildSelectedFundingAssetsMap(
     fundingUniverse.assets,
     fundingSelections?.length
       ? fundingSelections
-      : buildAutoFundingSelection({
-          assets: fundingUniverse.assets,
-          token0Address: token0.address,
-          token1Address: token1.address,
-          totalUsdTarget,
-        })
+      : optimalSelectionResult.selection
   );
 
-  const wrappedNative = getWrappedNativeToken(network);
   const warnings = [];
   const swapPlan = [];
   const selectedFundingAssets = [];
@@ -947,15 +1434,27 @@ async function buildFundingPlan({
     entry.remainingRaw = availableRaw;
   }
 
+  // Iteración del swap planner: para CADA asset, intentamos drenarlo
+  // mientras quede balance Y haya deficit en algún lado. Antes hacíamos
+  // una sola pasada por asset (un swap target por iteración), lo cual
+  // causaba que un asset con balance grande (ej. USDT $43) solo cubriera
+  // UN lado del LP y dejara el otro sin fuente. Ahora el mismo asset
+  // puede generar dos swaps: USDT → WETH (token0) + USDT → USDT0 (token1)
+  // en secuencia, hasta agotar el balance o cubrir ambos lados.
+  //
+  // Límite de seguridad: máximo 4 iteraciones por asset (cubre el caso
+  // más complejo: 2 sides × 2 hops cada uno). Más que eso indicaría un
+  // bug de bookkeeping y queremos detectarlo.
+  const MAX_ITERATIONS_PER_ASSET = 4;
   for (const entry of selectedAssets) {
     if (remaining0 <= 0n && remaining1 <= 0n) break;
     const { asset } = entry;
-    let availableRaw = BigInt(entry.remainingRaw || 0n);
-    if (availableRaw <= 0n) continue;
 
     const sourceToken = asset.isNative ? wrappedNative : asset;
     if (!sourceToken?.address) {
-      warnings.push(`No se pudo usar ${asset.symbol} como fuente de capital`);
+      if (BigInt(entry.remainingRaw || 0n) > 0n) {
+        warnings.push(`No se pudo usar ${asset.symbol} como fuente de capital`);
+      }
       continue;
     }
 
@@ -965,72 +1464,124 @@ async function buildFundingPlan({
         ? token1UsdPrice
         : asset.usdPrice;
     if (!Number.isFinite(sourceUsdPrice) || sourceUsdPrice <= 0) {
-      warnings.push(`No se pudo valorar ${asset.symbol} en USD para planear swaps`);
+      if (BigInt(entry.remainingRaw || 0n) > 0n) {
+        warnings.push(`No se pudo valorar ${asset.symbol} en USD para planear swaps`);
+      }
       continue;
     }
 
-    const targetToken = pickTargetTokenByUsdDeficit({
-      remaining0Raw: remaining0,
-      remaining1Raw: remaining1,
-      token0,
-      token1,
-      token0UsdPrice,
-      token1UsdPrice,
-    });
-    const targetUsdPrice = targetToken.address.toLowerCase() === token0.address.toLowerCase() ? token0UsdPrice : token1UsdPrice;
-    const deficitRaw = targetToken.address.toLowerCase() === token0.address.toLowerCase() ? remaining0 : remaining1;
-    if (deficitRaw <= 0n) continue;
-    const deficitUsd = rawToAmount(deficitRaw, targetToken.decimals) * targetUsdPrice;
-    const availableUsd = rawToAmount(availableRaw, asset.decimals) * sourceUsdPrice;
-    const useUsd = Math.min(deficitUsd, availableUsd);
-    const amountInRaw = toRawAmount(useUsd / sourceUsdPrice, asset.decimals);
-    if (amountInRaw <= 0n) continue;
+    let exhaustedTargets = new Set();
+    let iterations = 0;
+    while (iterations < MAX_ITERATIONS_PER_ASSET) {
+      iterations += 1;
+      let availableRaw = BigInt(entry.remainingRaw || 0n);
+      if (availableRaw <= 0n) break;
+      if (remaining0 <= 0n && remaining1 <= 0n) break;
 
-    const route = await resolveBestDirectRoute({
-      provider,
-      networkConfig: poolContext.networkConfig,
-      tokenIn: sourceToken,
-      tokenOut: targetToken,
-      amountInRaw,
-    });
-    if (!route) {
-      missingRouteCount += 1;
-      warnings.push(`No se encontro una ruta simple de ${sourceToken.symbol} a ${targetToken.symbol}`);
-      continue;
+      // Elegimos el lado con mayor déficit que NO hayamos descartado
+      // antes (ej. una ruta no encontrada para este asset → ese target
+      // queda fuera para los próximos intentos del mismo asset).
+      let candidateTarget = pickTargetTokenByUsdDeficit({
+        remaining0Raw: exhaustedTargets.has(token0.address.toLowerCase()) ? 0n : remaining0,
+        remaining1Raw: exhaustedTargets.has(token1.address.toLowerCase()) ? 0n : remaining1,
+        token0,
+        token1,
+        token0UsdPrice,
+        token1UsdPrice,
+      });
+      const candidateRemainingRaw = candidateTarget.address.toLowerCase() === token0.address.toLowerCase() ? remaining0 : remaining1;
+      // Si el candidato elegido tiene deficit 0 (porque el otro lado está
+      // lleno y este lado fue marcado exhausted), salimos.
+      if (candidateRemainingRaw <= 0n || exhaustedTargets.has(candidateTarget.address.toLowerCase())) break;
+
+      const targetToken = candidateTarget;
+      const targetUsdPrice = targetToken.address.toLowerCase() === token0.address.toLowerCase() ? token0UsdPrice : token1UsdPrice;
+      const deficitRaw = candidateRemainingRaw;
+      const deficitUsd = rawToAmount(deficitRaw, targetToken.decimals) * targetUsdPrice;
+      const availableUsd = rawToAmount(availableRaw, asset.decimals) * sourceUsdPrice;
+      const useUsd = Math.min(deficitUsd, availableUsd);
+      // Skip dust swaps: si el valor del swap es menor que MIN_SWAP_USD,
+      // los costos de gas + slippage del approve+swap superan el beneficio.
+      // Aceptamos el sub-déficit y dejamos el dust en la wallet para que
+      // el txPlan tenga menos firmas manuales.
+      if (useUsd < MIN_SWAP_USD) {
+        // Marcamos este target como exhausted para que la próxima
+        // iteración intente con el otro lado en vez de quedarse loopeando.
+        exhaustedTargets.add(targetToken.address.toLowerCase());
+        if (exhaustedTargets.size >= 2) break;
+        continue;
+      }
+      const amountInRaw = toRawAmount(useUsd / sourceUsdPrice, asset.decimals);
+      if (amountInRaw <= 0n) break;
+
+      const pivotTokens = wrappedNative ? [wrappedNative] : [];
+      const route = await resolveBestRoute({
+        provider,
+        networkConfig: poolContext.networkConfig,
+        tokenIn: sourceToken,
+        tokenOut: targetToken,
+        amountInRaw,
+        maxSlippageBps,
+        pivotTokens,
+      });
+      if (!route || !route.hops?.length) {
+        // Este asset no tiene ruta a ESTE target. Marcamos el target
+        // como exhausted PARA ESTE ASSET y reintentamos con el otro
+        // lado (si todavía tiene déficit). NO incrementamos
+        // missingRouteCount inmediatamente — solo lo hacemos si después
+        // de agotar todos los targets el asset no aportó nada.
+        exhaustedTargets.add(targetToken.address.toLowerCase());
+        if (exhaustedTargets.size >= 2) {
+          // Ambos targets fallaron para este asset. Solo entonces
+          // reportamos missingRoute.
+          missingRouteCount += 1;
+          warnings.push(`No se encontro ruta de ${sourceToken.symbol} a ${targetToken.symbol} (probamos directo${pivotTokens.length ? ' y por ' + pivotTokens.map((p) => p.symbol).join('/') : ''})`);
+          break;
+        }
+        continue;
+      }
+
+    // Cada hop es una tx exactInputSingle independiente. El primer hop arranca
+    // con el amountIn del asset y los siguientes usan el minOut del anterior
+    // como input (conservador: cualquier excedente queda en la wallet).
+    for (let hopIndex = 0; hopIndex < route.hops.length; hopIndex += 1) {
+      const hop = route.hops[hopIndex];
+      const isFirstHop = hopIndex === 0;
+      const isLastHop = hopIndex === route.hops.length - 1;
+      swapPlan.push({
+        sourceAssetId: asset.id,
+        sourceSymbol: asset.symbol,
+        requiresWrapNative: isFirstHop && asset.isNative === true,
+        tokenIn: {
+          address: hop.tokenIn.address,
+          symbol: hop.tokenIn.symbol,
+          decimals: hop.tokenIn.decimals,
+        },
+        tokenOut: {
+          address: hop.tokenOut.address,
+          symbol: hop.tokenOut.symbol,
+          decimals: hop.tokenOut.decimals,
+        },
+        fee: hop.fee,
+        routePoolAddress: hop.poolAddress,
+        amountIn: ethers.formatUnits(hop.amountInRaw, hop.tokenIn.decimals),
+        amountInRaw: hop.amountInRaw.toString(),
+        estimatedAmountOut: hop.expectedOut,
+        estimatedAmountOutRaw: hop.expectedOutRaw.toString(),
+        amountOutMinimum: ethers.formatUnits(hop.amountOutMinimumRaw, hop.tokenOut.decimals),
+        amountOutMinimumRaw: hop.amountOutMinimumRaw.toString(),
+        estimatedSlippageBps: Number(maxSlippageBps),
+        direction: isLastHop && targetToken.address.toLowerCase() === token0.address.toLowerCase() ? 'to_token0' : isLastHop ? 'to_token1' : 'hop',
+        currentPrice: hop.currentPrice,
+        wrapToken: isFirstHop && asset.isNative && wrappedNative ? wrappedNative : null,
+        hopIndex,
+        hopCount: route.hops.length,
+      });
     }
 
-    const amountOutMinimumRaw = route.expectedOutRaw - ((route.expectedOutRaw * BigInt(maxSlippageBps)) / 10_000n);
-    swapPlan.push({
-      sourceAssetId: asset.id,
-      sourceSymbol: asset.symbol,
-      requiresWrapNative: asset.isNative === true,
-      tokenIn: {
-        address: sourceToken.address,
-        symbol: sourceToken.symbol,
-        decimals: sourceToken.decimals,
-      },
-      tokenOut: {
-        address: targetToken.address,
-        symbol: targetToken.symbol,
-        decimals: targetToken.decimals,
-      },
-      fee: route.fee,
-      routePoolAddress: route.poolAddress,
-      amountIn: ethers.formatUnits(amountInRaw, asset.decimals),
-      amountInRaw: amountInRaw.toString(),
-      estimatedAmountOut: route.expectedOut,
-      estimatedAmountOutRaw: route.expectedOutRaw.toString(),
-      amountOutMinimum: ethers.formatUnits(amountOutMinimumRaw, targetToken.decimals),
-      amountOutMinimumRaw: amountOutMinimumRaw.toString(),
-      estimatedSlippageBps: Number(maxSlippageBps),
-      direction: targetToken.address.toLowerCase() === token0.address.toLowerCase() ? 'to_token0' : 'to_token1',
-      currentPrice: route.currentPrice,
-      wrapToken: asset.isNative && wrappedNative ? wrappedNative : null,
-    });
-
-    // Use the guaranteed minimum swap output so the mint never requests
-    // more tokens than the wallet will have. Any excess stays in wallet.
-    const creditedOutRaw = amountOutMinimumRaw > 0n ? amountOutMinimumRaw : route.expectedOutRaw;
+    // Creditamos sólo el minOut del último hop al lado correspondiente del LP.
+    const lastHop = route.hops[route.hops.length - 1];
+    const creditedOutRaw = lastHop.amountOutMinimumRaw > 0n ? lastHop.amountOutMinimumRaw : lastHop.expectedOutRaw;
 
     if (targetToken.address.toLowerCase() === token0.address.toLowerCase()) {
       finalAmount0Raw += creditedOutRaw;
@@ -1053,13 +1604,23 @@ async function buildFundingPlan({
       usdValueUsed: useUsd,
       fundingRole: 'swap_source',
     });
+    // Si este asset todavía tiene balance Y todavía hay deficit en
+    // algún lado, el while loop hace una iteración más para drenarlo.
+    // El target del próximo iter se elige con pickTargetTokenByUsdDeficit
+    // teniendo en cuenta los `exhaustedTargets` de este asset.
+    } // ← cierra el while (MAX_ITERATIONS_PER_ASSET)
   }
 
   const finalValueUsd =
     (rawToAmount(finalAmount0Raw, token0.decimals) * token0UsdPrice)
     + (rawToAmount(finalAmount1Raw, token1.decimals) * token1UsdPrice);
 
-  if (finalValueUsd < (Number(totalUsdTarget) * 0.98) || finalAmount0Raw <= 0n || finalAmount1Raw <= 0n) {
+  // Threshold de aceptación del plan: 0.93 (= aceptamos hasta 7% bajo el
+  // target). Esto da margen para que el dust skipping (MIN_SWAP_USD) +
+  // slippage real durante los swaps no haga fallar el plan en wallets
+  // donde el balance es solo marginalmente superior al target.
+  // Antes era 0.98 que era demasiado estricto y throwaba en casos válidos.
+  if (finalValueUsd < (Number(totalUsdTarget) * 0.93) || finalAmount0Raw <= 0n || finalAmount1Raw <= 0n) {
     const diagnostics = summarizeFundingDiagnostics({
       network: poolContext.networkConfig.id,
       fundingUniverse,
@@ -1156,7 +1717,14 @@ async function buildFundingPlan({
       directValueUsd: Number(directValueUsd.toFixed(2)),
       swapValueUsd: Number(swapValueUsd.toFixed(2)),
       estimatedPoolValueUsd: Number(finalValueUsd.toFixed(2)),
+      swapCount: swapPlan.length,
     },
+    // El planner devuelve la selección óptima (calculada con
+    // `buildOptimalFundingSelection`) por separado. Si el usuario manualmente
+    // eligió un subset diferente, el cliente puede comparar ambos y mostrar
+    // un botón "Usar recomendado" cuando minimice swaps.
+    recommendedFundingSelection: optimalSelectionResult.selection,
+    recommendedSwapCount: optimalSelectionResult.estimatedSwapCount,
     wrappedNativeAddress: wrappedNative?.address || null,
     swapPlan,
     expectedPostSwapBalances: {
@@ -1307,13 +1875,80 @@ async function getWalletAssets({ network, walletAddress, importTokenAddresses = 
   };
 }
 
+/**
+ * Wrapper delgado que reusa `buildFundingPlan` para el flujo de
+ * increase-liquidity sobre una posición existente. La diferencia clave con
+ * el flujo de create-position es que aquí el `targetWeightToken0Pct` NO lo
+ * elige el usuario: lo derivamos del rango ya fijo de la posición y del
+ * precio actual via `computeToken0Pct`.
+ *
+ * Si el precio está fuera del rango (rawWeight = 0 o 100), clampeamos a
+ * 0.1/99.9 para que `buildFundingPlan` no rechace single-side y agregamos
+ * un warning para que el modal informe al usuario.
+ */
+async function buildIncreaseLiquidityFundingPlan({
+  network,
+  version,
+  walletAddress,
+  token0Address,
+  token1Address,
+  fee,
+  tickSpacing,
+  hooks,
+  poolId,
+  rangeLowerPrice,
+  rangeUpperPrice,
+  currentPrice,
+  totalUsdTarget,
+  fundingSelections,
+  importTokenAddresses = [],
+  maxSlippageBps,
+}) {
+  const rawWeight = computeToken0Pct(
+    Number(currentPrice || 0),
+    Number(rangeLowerPrice),
+    Number(rangeUpperPrice),
+  );
+  const targetWeightToken0Pct = Math.max(0.1, Math.min(99.9, rawWeight));
+
+  const plan = await buildFundingPlan({
+    network,
+    version,
+    walletAddress,
+    token0Address,
+    token1Address,
+    fee,
+    tickSpacing,
+    hooks,
+    poolId,
+    totalUsdTarget,
+    targetWeightToken0Pct,
+    rangeLowerPrice,
+    rangeUpperPrice,
+    fundingSelections,
+    importTokenAddresses,
+    maxSlippageBps,
+  });
+
+  if (targetWeightToken0Pct !== rawWeight) {
+    plan.warnings.push(
+      'El precio actual está fuera del rango de la posición; el fondeo será de un solo lado.'
+    );
+  }
+  return plan;
+}
+
 module.exports = {
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_V4_TICK_SPACING_BY_FEE,
+  MIN_SWAP_USD,
   buildAutoFundingSelection,
+  buildOptimalFundingSelection,
   buildFundingPlan,
+  buildIncreaseLiquidityFundingPlan,
   computeAmountsFromWeight,
   computeRangeSuggestions,
+  computeToken0Pct,
   getCanonicalUsdcToken,
   getGasReserveAmount,
   getKnownTokens,
@@ -1324,5 +1959,6 @@ module.exports = {
   orientRangeToCanonicalOrder,
   pickTargetTokenByUsdDeficit,
   resolveBestDirectRoute,
+  resolveBestRoute,
   sortTokensByAddress,
 };

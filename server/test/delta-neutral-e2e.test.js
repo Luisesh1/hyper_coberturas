@@ -5,10 +5,7 @@
 
 const { describe, it, before } = require('node:test');
 const assert = require('assert');
-const db = require('../src/db');
 const protectedPoolRepository = require('../src/repositories/protected-uniswap-pool.repository');
-const protectedPoolDeltaNeutralService = require('../src/services/protected-pool-delta-neutral.service');
-const uniswapProtectionService = require('../src/services/uniswap-protection.service');
 const { computeDeltaNeutralMetrics } = require('../src/services/delta-neutral-math.service');
 
 function priceToTick(price, token0Decimals = 18, token1Decimals = 6) {
@@ -30,11 +27,10 @@ function buildEligibleSnapshot(overrides = {}) {
 }
 
 describe('Delta-Neutral Protection E2E', () => {
-  let testUserId;
-  let testProtectionId;
+  let _testUserId;
 
   before(async () => {
-    testUserId = Math.floor(Math.random() * 1000000) + 1;
+    _testUserId = Math.floor(Math.random() * 1000000) + 1;
   });
 
   describe('Creation & Bootstrap', () => {
@@ -52,15 +48,6 @@ describe('Delta-Neutral Protection E2E', () => {
         rangeUpperPrice: 2500,
         priceCurrent: 2000,
         liquidity: '1000000000000000000',
-      };
-
-      const candidate = {
-        baseNotionalUsd: 10000,
-        inferredAsset: 'ETH',
-        deltaNeutralAsset: 'ETH',
-        deltaNeutralEligible: true,
-        maxLeverage: 20,
-        defaultLeverage: 10,
       };
 
       const snapshot = { ...pool };

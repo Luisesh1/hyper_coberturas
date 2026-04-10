@@ -5,13 +5,17 @@ const { validate } = require('../middleware/validate.middleware');
 const uniswapService = require('../services/uniswap.service');
 const uniswapProtectionService = require('../services/uniswap-protection.service');
 const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
+const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
+const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const smartPoolCreatorService = require('../services/smart-pool-creator.service');
+const uniswapOperationService = require('../services/uniswap-operation.service');
 const {
   createProtectedPoolSchema,
   scanPoolsSchema,
   claimFeesPrepareSchema,
   claimFeesFinalizeSchema,
   increaseLiquidityPrepareSchema,
+  increaseLiquidityFundingPlanSchema,
   decreaseLiquidityPrepareSchema,
   collectFeesPrepareSchema,
   reinvestFeesPrepareSchema,
@@ -105,6 +109,29 @@ router.post('/protected-pools/:id/deactivate', asyncHandler(async (req, res) => 
   res.json({ success: true, data });
 }));
 
+/**
+ * Force-close del hedge corto cuando una protección quedó huérfana:
+ * marcada como `inactive` en BD pero con la posición short todavía abierta
+ * en Hyperliquid. Esto pasaba en el flujo legacy de close-LP que solo
+ * marcaba la protección como inactiva sin cerrar el short. El endpoint
+ * funciona sobre cualquier protección (activa o inactiva) del usuario.
+ */
+router.post('/protected-pools/:id/force-close-hedge', asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    return res.status(400).json({ success: false, error: 'ID invalido' });
+  }
+  const protection = await protectedPoolRepository.getById(req.user.userId, id);
+  if (!protection) {
+    return res.status(404).json({ success: false, error: 'Protección no encontrada' });
+  }
+  if (protection.protectionMode !== 'delta_neutral') {
+    return res.status(400).json({ success: false, error: 'force-close-hedge solo aplica a protecciones delta_neutral' });
+  }
+  const result = await protectedPoolDeltaNeutralService.forceCloseHedge(protection);
+  res.json({ success: true, data: result });
+}));
+
 // --- Smart Pool Creation -------------------------------------------------------
 
 router.post('/smart-create/suggest', validate(smartCreateSuggestSchema), asyncHandler(async (req, res) => {
@@ -141,6 +168,18 @@ router.post('/smart-create/funding-plan', validate(smartCreateFundingPlanSchema)
   res.json({ success: true, data });
 }));
 
+// Smart funding-plan preview para increase-liquidity sobre una posición
+// existente. Reusa toda la maquinaria de smart-create pero deriva el rango
+// y los tokens desde la posición en vez de pedirlos al cliente.
+router.post(
+  '/increase-liquidity/funding-plan',
+  validate(increaseLiquidityFundingPlanSchema),
+  asyncHandler(async (req, res) => {
+    const data = await positionActionsService.buildIncreaseLiquidityFundingPlanFromPosition(req.body);
+    res.json({ success: true, data });
+  }),
+);
+
 // --- Claim Fees -------------------------------------------------------
 
 router.post('/claim-fees/prepare', validate(claimFeesPrepareSchema), asyncHandler(async (req, res) => {
@@ -149,7 +188,19 @@ router.post('/claim-fees/prepare', validate(claimFeesPrepareSchema), asyncHandle
 }));
 
 router.post('/claim-fees/finalize', validate(claimFeesFinalizeSchema), asyncHandler(async (req, res) => {
-  const data = await claimFeesService.finalizeClaimFees(req.body);
+  const data = await uniswapOperationService.submitClaimFeesFinalize({
+    userId: req.user.userId,
+    ...req.body,
+  });
+  res.json({ success: true, data });
+}));
+
+router.get('/operations/:id', asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    return res.status(400).json({ success: false, error: 'ID invalido' });
+  }
+  const data = await uniswapOperationService.getOperation(req.user.userId, id);
   res.json({ success: true, data });
 }));
 
@@ -163,7 +214,7 @@ Object.entries(ACTION_SCHEMAS).forEach(([action, schema]) => {
   }));
 
   router.post(`/${action}/finalize`, validate(positionActionFinalizeSchema), asyncHandler(async (req, res) => {
-    const data = await positionActionsService.finalizePositionAction({
+    const data = await uniswapOperationService.submitPositionActionFinalize({
       userId: req.user.userId,
       action,
       ...req.body,

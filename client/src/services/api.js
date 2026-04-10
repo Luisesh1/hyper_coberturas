@@ -2,10 +2,35 @@ import { clearSession, getToken } from './sessionStore';
 import { createHttpClient } from '../shared/api/httpClient';
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
+// Sólo en dev: forwardea errores HTTP del cliente al buffer del DevLogPanel
+// para que aparezcan correlacionados con los del server vía requestId.
+// En build de producción este import lo elimina Vite por tree-shaking.
+let _devOnHttpError = null;
+if (import.meta.env.DEV) {
+  // Carga dinámica para no bloquear el bundle si el módulo no existe.
+  import('../dev/devLogBuffer').then(({ devLogBuffer }) => {
+    _devOnHttpError = (err, ctx) => {
+      const status = Number(err?.status ?? ctx?.status ?? 0);
+      devLogBuffer.enqueue({
+        level: status >= 500 ? 'error' : 'warn',
+        source: 'client_http',
+        message: `${ctx?.method || 'REQ'} ${ctx?.path || ''} → ${status || err?.code || 'ERR'}`,
+        status,
+        code: err?.code || null,
+        requestId: err?.requestId || null,
+        detailMessage: err?.message || null,
+        details: err?.details || null,
+      });
+    };
+  }).catch(() => { /* noop si el módulo no está disponible */ });
+}
+
 const request = createHttpClient({
   baseUrl: BASE_URL,
   getToken,
   onUnauthorized: clearSession,
+  onHttpError: (err, ctx) => { if (_devOnHttpError) _devOnHttpError(err, ctx); },
 });
 
 // ------------------------------------------------------------------
@@ -176,23 +201,23 @@ export const uniswapApi = {
   finalizeClaimFees: ({ network, version, positionIdentifier, walletAddress, txHash }) =>
     request('POST', '/uniswap/claim-fees/finalize', { network, version, positionIdentifier, walletAddress, txHash }),
   preparePositionAction: (action, payload) =>
-    request('POST', `/uniswap/${action}/prepare`, payload),
+    request('POST', `/uniswap/${action}/prepare`, payload, { timeoutMs: 120_000 }),
   finalizePositionAction: (action, payload) =>
-    request('POST', `/uniswap/${action}/finalize`, payload),
+    request('POST', `/uniswap/${action}/finalize`, payload, { timeoutMs: 30_000 }),
   prepareIncreaseLiquidity: (payload) => request('POST', '/uniswap/increase-liquidity/prepare', payload),
-  finalizeIncreaseLiquidity: (payload) => request('POST', '/uniswap/increase-liquidity/finalize', payload),
+  finalizeIncreaseLiquidity: (payload) => request('POST', '/uniswap/increase-liquidity/finalize', payload, { timeoutMs: 240_000 }),
   prepareDecreaseLiquidity: (payload) => request('POST', '/uniswap/decrease-liquidity/prepare', payload),
-  finalizeDecreaseLiquidity: (payload) => request('POST', '/uniswap/decrease-liquidity/finalize', payload),
+  finalizeDecreaseLiquidity: (payload) => request('POST', '/uniswap/decrease-liquidity/finalize', payload, { timeoutMs: 240_000 }),
   prepareCollectFees: (payload) => request('POST', '/uniswap/collect-fees/prepare', payload),
-  finalizeCollectFees: (payload) => request('POST', '/uniswap/collect-fees/finalize', payload),
+  finalizeCollectFees: (payload) => request('POST', '/uniswap/collect-fees/finalize', payload, { timeoutMs: 240_000 }),
   prepareReinvestFees: (payload) => request('POST', '/uniswap/reinvest-fees/prepare', payload),
-  finalizeReinvestFees: (payload) => request('POST', '/uniswap/reinvest-fees/finalize', payload),
+  finalizeReinvestFees: (payload) => request('POST', '/uniswap/reinvest-fees/finalize', payload, { timeoutMs: 240_000 }),
   prepareModifyRange: (payload) => request('POST', '/uniswap/modify-range/prepare', payload),
-  finalizeModifyRange: (payload) => request('POST', '/uniswap/modify-range/finalize', payload),
+  finalizeModifyRange: (payload) => request('POST', '/uniswap/modify-range/finalize', payload, { timeoutMs: 240_000 }),
   prepareRebalance: (payload) => request('POST', '/uniswap/rebalance/prepare', payload),
-  finalizeRebalance: (payload) => request('POST', '/uniswap/rebalance/finalize', payload),
+  finalizeRebalance: (payload) => request('POST', '/uniswap/rebalance/finalize', payload, { timeoutMs: 240_000 }),
   prepareCreatePosition: (payload) => request('POST', '/uniswap/create-position/prepare', payload),
-  finalizeCreatePosition: (payload) => request('POST', '/uniswap/create-position/finalize', payload),
+  finalizeCreatePosition: (payload) => request('POST', '/uniswap/create-position/finalize', payload, { timeoutMs: 240_000 }),
   smartCreateSuggest: ({
     network,
     version,
@@ -226,6 +251,36 @@ export const uniswapApi = {
   },
   smartCreateFundingPlan: (payload) =>
     request('POST', '/uniswap/smart-create/funding-plan', payload),
+  smartIncreaseLiquidityFundingPlan: (payload) =>
+    request('POST', '/uniswap/increase-liquidity/funding-plan', payload),
+  getOperation: (id) => request('GET', `/uniswap/operations/${id}`),
+};
+
+// ------------------------------------------------------------------
+// LP Orchestrator
+// ------------------------------------------------------------------
+export const lpOrchestratorApi = {
+  list: ({ includeArchived = false } = {}) => {
+    const qs = includeArchived ? '?includeArchived=true' : '';
+    return request('GET', `/lp-orchestrators${qs}`);
+  },
+  getById: (id) => request('GET', `/lp-orchestrators/${id}`),
+  create: (payload) => request('POST', '/lp-orchestrators', payload),
+  evaluate: (id) => request('POST', `/lp-orchestrators/${id}/evaluate`, {}),
+  reconcile: (id) => request('POST', `/lp-orchestrators/${id}/reconcile`, {}, { timeoutMs: 60_000 }),
+  attachLp: (id, payload) => request('POST', `/lp-orchestrators/${id}/attach-lp`, payload),
+  listAdoptableLps: (id) => request('GET', `/lp-orchestrators/${id}/adoptable-lps`, null, { timeoutMs: 60_000 }),
+  adoptLp: (id, { positionIdentifier, protectionConfig } = {}) =>
+    request('POST', `/lp-orchestrators/${id}/adopt-lp`, { positionIdentifier, protectionConfig }),
+  recordTxFinalized: (id, payload) =>
+    request('POST', `/lp-orchestrators/${id}/record-tx-finalized`, payload),
+  killLp: (id, { mode = 'auto' } = {}) =>
+    request('POST', `/lp-orchestrators/${id}/kill-lp`, { mode }),
+  archive: (id) => request('POST', `/lp-orchestrators/${id}/archive`, {}),
+  getActionLog: (id, { limit } = {}) => {
+    const qs = limit ? `?limit=${limit}` : '';
+    return request('GET', `/lp-orchestrators/${id}/action-log${qs}`);
+  },
 };
 
 // ------------------------------------------------------------------
@@ -266,4 +321,17 @@ export const backtestingApi = {
   enqueue: (payload) => request('POST', '/backtesting/queue', payload),
   getJob: (jobId) => request('GET', `/backtesting/jobs/${jobId}`),
   getJobs: () => request('GET', '/backtesting/jobs'),
+};
+
+// ------------------------------------------------------------------
+// Dev (sólo en NODE_ENV=development en el server)
+// ------------------------------------------------------------------
+export const devApi = {
+  getInfo: () => request('GET', '/dev/info'),
+  getLogsSnapshot: (limit) => request('GET', `/dev/logs/snapshot${limit ? `?limit=${limit}` : ''}`),
+  clearLogs: () => request('POST', '/dev/logs/clear', {}),
+  // Recovery endpoint para fondos atascados en posiciones V3 (liquidity=0
+  // pero tokensOwed > 0). Devuelve una tx ready-to-sign que llama collect().
+  recoverPositionFees: ({ network, tokenId, walletAddress, recipient }) =>
+    request('POST', '/dev/recover-position-fees', { network, tokenId, walletAddress, recipient }),
 };

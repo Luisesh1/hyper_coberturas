@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatCompactPrice, formatUsd } from '../utils/pool-formatters';
 import { formatNumber } from '../../../utils/formatters';
 import { getExplorerLink } from '../utils/pool-helpers';
 import { uniswapApi } from '../../../services/api';
+import { useWalletExecution, WALLET_EXECUTION_STATE } from '../../../hooks/useWalletExecution';
 import styles from './SmartCreatePoolModal.module.css';
 import { STEP, FEE_TIERS } from './smart-create/constants';
 import {
@@ -28,12 +29,14 @@ export default function SmartCreatePoolModal({
   const network = defaults?.network || 'arbitrum';
   const version = defaults?.version || 'v3';
   const [step, setStep] = useState(STEP.POOL);
-  const [fee, setFee] = useState(3000);
-  const [token0Address, setToken0Address] = useState('');
-  const [token1Address, setToken1Address] = useState('');
+  const [fee, setFee] = useState(() => Number(defaults?.fee) || 3000);
+  const [token0Address, setToken0Address] = useState(() => defaults?.token0Address || '');
+  const [token1Address, setToken1Address] = useState(() => defaults?.token1Address || '');
   const [customToken0, setCustomToken0] = useState('');
   const [customToken1, setCustomToken1] = useState('');
-  const [totalUsdTarget, setTotalUsdTarget] = useState('1000');
+  const [totalUsdTarget, setTotalUsdTarget] = useState(() => (
+    defaults?.totalUsdTarget != null ? String(defaults.totalUsdTarget) : '1000'
+  ));
   const [rangeMode, setRangeMode] = useState('auto');
   const [selectedPreset, setSelectedPreset] = useState('balanced');
   const [customLowerPrice, setCustomLowerPrice] = useState('');
@@ -57,6 +60,13 @@ export default function SmartCreatePoolModal({
   const [error, setError] = useState('');
   const [loadingMessage, setLoadingMessage] = useState('');
   const [isBusy, setIsBusy] = useState(false);
+  const execution = useWalletExecution();
+  const autoAnalyzedRef = useRef(false);
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   const networkOptions = Array.isArray(meta?.networks) ? meta.networks : [{ id: 'ethereum', label: 'Ethereum', versions: ['v3'] }];
   const selectedNetwork = networkOptions.find((item) => item.id === network) || networkOptions[0];
@@ -89,7 +99,77 @@ export default function SmartCreatePoolModal({
     setImportTokenAddress('');
     setError('');
     setHasFundingEdits(false);
+    // Permitimos volver a auto-analizar si la red/versión cambian.
+    autoAnalyzedRef.current = false;
   }, [network, version]);
+
+  useEffect(() => {
+    if (!execution.normalizedError?.message) return;
+    setError(execution.normalizedError.message);
+  }, [execution.normalizedError]);
+
+  useEffect(() => {
+    setTxHashes(execution.txHashes);
+    setCompletedTxIndex(execution.progress.completed - 1);
+    setCurrentTxIndex(execution.currentTx?.index ?? -1);
+
+    if (execution.state === WALLET_EXECUTION_STATE.PREFLIGHT) {
+      setLoadingMessage('Validando transacciones antes de abrir la wallet...');
+      return;
+    }
+    if (execution.state === WALLET_EXECUTION_STATE.AWAITING_WALLET) {
+      setLoadingMessage(execution.currentTx?.label
+        ? `Firma "${execution.currentTx.label}" en tu wallet...`
+        : 'Firma la transacción en tu wallet...');
+      setStep(STEP.SIGNING);
+      return;
+    }
+    if (execution.state === WALLET_EXECUTION_STATE.BROADCAST_SUBMITTED || execution.state === WALLET_EXECUTION_STATE.NETWORK_CONFIRMING) {
+      setLoadingMessage(execution.currentTx?.label
+        ? `Esperando confirmación on-chain de "${execution.currentTx.label}"...`
+        : 'Esperando confirmación on-chain...');
+      setStep(STEP.SIGNING);
+      return;
+    }
+    if (execution.state === WALLET_EXECUTION_STATE.FINALIZE_PENDING) {
+      setLoadingMessage('Conciliando recibos y finalizando la creación del LP...');
+      setStep(STEP.SIGNING);
+      return;
+    }
+    if (execution.state === WALLET_EXECUTION_STATE.DONE) {
+      setLoadingMessage('');
+      setStep(STEP.DONE);
+      return;
+    }
+    if (execution.state === WALLET_EXECUTION_STATE.NEEDS_RECONCILE || execution.state === WALLET_EXECUTION_STATE.FAILED) {
+      setLoadingMessage('');
+      setStep(STEP.ERROR);
+      return;
+    }
+    if (execution.state === WALLET_EXECUTION_STATE.IDLE) {
+      setLoadingMessage('');
+    }
+  }, [execution.currentTx, execution.progress.completed, execution.state, execution.txHashes]);
+
+  // `handleAnalyzePool` no está memoizado y cambia de identidad cada render.
+  // Lo dejamos accesible vía ref para que el efecto de auto-análisis pueda
+  // invocar siempre la versión actual sin entrar en el array de dependencias
+  // (no podemos meterlo sin loops).
+  const handleAnalyzePoolRef = useRef(null);
+
+  // Si el modal se abre con el par/fee/capital ya pre-cargados (p. ej. desde
+  // el flujo de creación de orquestador), saltamos automáticamente el paso 1
+  // disparando el análisis del pool una sola vez. El usuario aún puede usar
+  // "Volver" para editar los valores.
+  useEffect(() => {
+    if (autoAnalyzedRef.current) return;
+    if (!wallet?.address) return;
+    if (step !== STEP.POOL) return;
+    if (!defaults?.token0Address || !defaults?.token1Address) return;
+    if (!defaults?.fee || !defaults?.totalUsdTarget) return;
+    autoAnalyzedRef.current = true;
+    handleAnalyzePoolRef.current?.().catch(() => {});
+  }, [wallet?.address, defaults?.token0Address, defaults?.token1Address, defaults?.fee, defaults?.totalUsdTarget, step]);
 
   const tokenOptions = useMemo(() => (
     tokenList.map((token) => ({
@@ -126,6 +206,7 @@ export default function SmartCreatePoolModal({
       }))
   ), [assetSelections]);
 
+  handleAnalyzePoolRef.current = handleAnalyzePool;
   async function handleAnalyzePool() {
     if (!wallet?.address) {
       setError('Conecta tu wallet antes de crear una posición LP.');
@@ -190,6 +271,7 @@ export default function SmartCreatePoolModal({
         walletAddress: wallet.address,
         importTokenAddresses: importedFundingTokens,
       });
+      if (!isMountedRef.current) return;
       setAvailableAssets(assetsData.assets || []);
       const plan = await uniswapApi.smartCreateFundingPlan({
         network,
@@ -207,6 +289,7 @@ export default function SmartCreatePoolModal({
         fundingSelections: preserveSelections ? normalizedFundingSelections : undefined,
         ...buildOptionalPoolContext(suggestions),
       });
+      if (!isMountedRef.current) return;
 
       setAvailableAssets(plan.availableFundingAssets || assetsData.assets || []);
       setFundingPlan(plan);
@@ -216,13 +299,16 @@ export default function SmartCreatePoolModal({
       }
       setStep(STEP.FUNDING);
     } catch (err) {
+      if (!isMountedRef.current) return;
       setFundingPlan(null);
       setFundingIssue(deriveFundingIssue(err));
       setError('');
       setStep(STEP.FUNDING);
     } finally {
-      setIsBusy(false);
-      setLoadingMessage('');
+      if (isMountedRef.current) {
+        setIsBusy(false);
+        setLoadingMessage('');
+      }
     }
   }
 
@@ -237,6 +323,27 @@ export default function SmartCreatePoolModal({
     }
     setHasFundingEdits(false);
     await refreshFundingPlan({ preserveSelections: false });
+  }
+
+  // Aplica la selección recomendada por el optimizador del server: limpia
+  // las selecciones manuales y deja solo los assetIds que minimizan swaps,
+  // luego re-pide el plan al backend para reflejar el nuevo swapCount.
+  async function handleApplyRecommended() {
+    const recommended = fundingPlan?.recommendedFundingSelection;
+    if (!Array.isArray(recommended) || recommended.length === 0) return;
+    const recommendedMap = {};
+    for (const item of recommended) {
+      const asset = (availableAssets || []).find((a) => a.id === item.assetId);
+      if (!asset) continue;
+      recommendedMap[item.assetId] = {
+        enabled: true,
+        amount: asset.usableBalance || asset.balance,
+      };
+    }
+    setAssetSelections(recommendedMap);
+    setHasFundingEdits(true);
+    // Re-pedir el plan con la nueva selección
+    await refreshFundingPlan({ preserveSelections: true });
   }
 
   async function handlePrepareReview() {
@@ -289,83 +396,24 @@ export default function SmartCreatePoolModal({
     }
     setError('');
     setFailedTxLabel('');
-    setStep(STEP.SIGNING);
 
-    const startIndex = completedTxIndex + 1;
-    const hashes = [...txHashes];
-
-    for (let index = startIndex; index < prepareData.txPlan.length; index++) {
-      const tx = prepareData.txPlan[index];
-      const txLabel = tx?.label || `Transacción ${index + 1}`;
-      setCurrentTxIndex(index);
-      setLoadingMessage(`Firma "${txLabel}" en tu wallet...`);
-
-      const hash = await sendTransaction(tx);
-      if (!hash) {
-        setFailedTxLabel(txLabel);
-        setError(`No se pudo confirmar el envío de "${txLabel}" porque la wallet no devolvió un hash. Revisa la actividad de tu wallet antes de reintentar.`);
-        setStep(STEP.ERROR);
-        setLoadingMessage('');
-        return;
-      }
-
-      hashes.push(hash);
-      setTxHashes([...hashes]);
-      setLoadingMessage(`Esperando confirmación on-chain de "${txLabel}"...`);
-
-      if (waitForTransactionReceipt) {
-        try {
-          const receipt = await waitForTransactionReceipt(hash);
-          if (!receipt) {
-            setFailedTxLabel(txLabel);
-            setError(`No se pudo obtener el receipt de "${txLabel}".`);
-            setStep(STEP.ERROR);
-            setLoadingMessage('');
-            return;
-          }
-          if (Number(receipt.status) !== 1) {
-            setFailedTxLabel(txLabel);
-            setError(`La transacción "${txLabel}" falló on-chain. Revisa el explorador para más detalles.`);
-            setStep(STEP.ERROR);
-            setLoadingMessage('');
-            return;
-          }
-        } catch (receiptErr) {
-          setFailedTxLabel(txLabel);
-          setError(receiptErr.message || `Error esperando confirmación de "${txLabel}".`);
-          setStep(STEP.ERROR);
-          setLoadingMessage('');
-          return;
-        }
-      }
-
-      setCompletedTxIndex(index);
-    }
-
-    setLoadingMessage('Conciliando recibos y finalizando la creación del LP...');
-    try {
-      await uniswapApi.finalizeCreatePosition({
+    const finalizeResult = await execution.runPlan({
+      action: 'create-position',
+      chainId: prepareData.txPlan[0]?.chainId || null,
+      txPlan: prepareData.txPlan,
+      finalizePayload: {
         network,
         version,
         walletAddress: wallet.address,
-        txHashes: hashes,
-      });
-    } catch (finErr) {
-      setError(finErr.message || 'No se pudo finalizar la posición, pero las transacciones fueron exitosas.');
-      setStep(STEP.ERROR);
-      setLoadingMessage('');
-      return;
+      },
+      finalizeKind: 'position_action',
+    });
+
+    if (finalizeResult?.status === 'done') {
+      onFinalized?.({ txHashes: finalizeResult.txHashes || execution.txHashes, finalizeResult });
+    } else if (!finalizeResult && execution.currentTx?.label) {
+      setFailedTxLabel(execution.currentTx.label);
     }
-
-    setStep(STEP.DONE);
-    setLoadingMessage('');
-    onFinalized?.();
-  }
-
-  function handleRetryFromFailure() {
-    setError('');
-    setFailedTxLabel('');
-    handleExecute();
   }
 
   function handleReset() {
@@ -384,6 +432,7 @@ export default function SmartCreatePoolModal({
     setImportTokenAddress('');
     setError('');
     setHasFundingEdits(false);
+    execution.reset();
   }
 
   function handleAddFundingImport() {
@@ -663,10 +712,14 @@ export default function SmartCreatePoolModal({
                   </strong>
                 </div>
                 <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Capital utilizable</span>
+                  <span className={styles.tileLabel}>Total disponible</span>
                   <strong className={styles.tileValue}>
-                    {formatNumber(Number(fundingDiagnostics?.gasReserve?.usableNative || fundingDiagnostics?.usableNative?.balance || 0), 6)} {fundingDiagnostics?.gasReserve?.symbol || fundingDiagnostics?.usableNative?.symbol || ''}
+                    {formatUsd(Number(fundingDiagnostics?.usableFundingUsd || 0))}
                   </strong>
+                  <span style={{ color: '#97a9bd', fontSize: '0.72rem' }}>
+                    {(fundingDiagnostics?.availableFundingAssets || []).length} activos ·{' '}
+                    {formatNumber(Number(fundingDiagnostics?.gasReserve?.usableNative || fundingDiagnostics?.usableNative?.balance || 0), 6)} {fundingDiagnostics?.gasReserve?.symbol || ''} nativo
+                  </span>
                 </div>
                 <div className={styles.summaryTile}>
                   <span className={styles.tileLabel}>Objetivo / desplegable</span>
@@ -683,6 +736,18 @@ export default function SmartCreatePoolModal({
                 <div>{fundingIssue.message}</div>
                 {fundingIssue.details?.missingUsd > 0 && (
                   <div>Falta estimada: {formatUsd(fundingIssue.details.missingUsd)}</div>
+                )}
+                {(fundingIssue.details?.warnings || []).length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    <div style={{ fontSize: '0.78rem', color: '#f5a623', marginBottom: '4px' }}>
+                      Diagnóstico por activo:
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '0.78rem', color: '#97a9bd' }}>
+                      {fundingIssue.details.warnings.map((warning, index) => (
+                        <li key={index}>{warning}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 <div className={styles.inlineActions}>
                   <button type="button" className={styles.secondaryBtn} onClick={onClose}>
@@ -788,6 +853,39 @@ export default function SmartCreatePoolModal({
                     <strong className={styles.tileValue}>{fundingPlan.swapPlan?.length || 0}</strong>
                   </div>
                 </div>
+
+                {/* Sugerencia del optimizador: si la selección actual genera
+                    más swaps que la recomendada, mostramos un banner para
+                    aplicar la configuración óptima en 1 click. */}
+                {(() => {
+                  const currentSwaps = fundingPlan.swapPlan?.length || 0;
+                  const recSwaps = fundingPlan.recommendedSwapCount;
+                  const recSelection = fundingPlan.recommendedFundingSelection || [];
+                  if (recSwaps == null || recSelection.length === 0) return null;
+                  if (recSwaps >= currentSwaps) return null;
+
+                  const recSymbols = recSelection
+                    .map((item) => (availableAssets || []).find((a) => a.id === item.assetId)?.symbol)
+                    .filter(Boolean)
+                    .join(', ');
+                  return (
+                    <div className={styles.recommendationBanner}>
+                      <div>
+                        <strong>Configuración óptima detectada:</strong>{' '}
+                        usar {recSymbols} reduce de {currentSwaps} a {recSwaps} swap{recSwaps === 1 ? '' : 's'}
+                        {' '}(menos firmas, menos gas).
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.primaryBtn}
+                        onClick={handleApplyRecommended}
+                        disabled={isBusy}
+                      >
+                        Aplicar recomendación
+                      </button>
+                    </div>
+                  );
+                })()}
 
                 <div className={styles.txList}>
                   <h4>Swaps planeados</h4>
@@ -1018,7 +1116,7 @@ export default function SmartCreatePoolModal({
                     );
                   })}
                   <p className={styles.hint}>
-                    Las aprobaciones ya firmadas siguen vigentes. Solo se reintentará desde la transacción que falló.
+                    El plan ya quedó parcialmente ejecutado on-chain. Antes de volver a intentarlo, revisa estas transacciones y genera un plan nuevo desde estado fresco.
                   </p>
                 </div>
               )}
@@ -1028,11 +1126,6 @@ export default function SmartCreatePoolModal({
               )}
 
               <div className={styles.buttonGroup}>
-                {completedTxIndex >= 0 && prepareData?.txPlan?.length > 0 && (
-                  <button type="button" className={styles.primaryBtn} onClick={handleRetryFromFailure}>
-                    Reintentar desde aquí
-                  </button>
-                )}
                 <button type="button" className={styles.secondaryBtn} onClick={handleReset}>
                   Empezar de nuevo
                 </button>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { uniswapApi } from '../../../services/api';
 import { formatUsd, formatCompactPrice } from '../utils/pool-formatters';
+import { useWalletExecution, WALLET_EXECUTION_STATE } from '../../../hooks/useWalletExecution';
 import styles from './ClaimFeesModal.module.css';
 
 const STEP = {
@@ -21,9 +22,9 @@ export default function ClaimFeesModal({
 }) {
   const [step, setStep] = useState(STEP.PREPARE);
   const [claimData, setClaimData] = useState(null);
-  const [txHash, setTxHash] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const execution = useWalletExecution();
 
   const network = pool.network;
   const version = pool.version;
@@ -54,38 +55,63 @@ export default function ClaimFeesModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!execution.normalizedError?.message) return;
+    setError(execution.normalizedError.message);
+  }, [execution.normalizedError]);
+
+  useEffect(() => {
+    switch (execution.state) {
+      case WALLET_EXECUTION_STATE.PREFLIGHT:
+      case WALLET_EXECUTION_STATE.AWAITING_WALLET:
+        setStep(STEP.SIGNING);
+        break;
+      case WALLET_EXECUTION_STATE.BROADCAST_SUBMITTED:
+      case WALLET_EXECUTION_STATE.NETWORK_CONFIRMING:
+        setStep(STEP.CONFIRMING);
+        break;
+      case WALLET_EXECUTION_STATE.FINALIZE_PENDING:
+        setStep(STEP.CONFIRMING);
+        break;
+      case WALLET_EXECUTION_STATE.DONE:
+        setStep(STEP.DONE);
+        break;
+      case WALLET_EXECUTION_STATE.NEEDS_RECONCILE:
+      case WALLET_EXECUTION_STATE.FAILED:
+        setStep(STEP.ERROR);
+        break;
+      default:
+        break;
+    }
+  }, [execution.state]);
+
   // Step 2: sign & send
   const handleSign = useCallback(async () => {
     if (!claimData?.tx) return;
-    setStep(STEP.SIGNING);
     setError(null);
 
-    const hash = await sendTransaction(claimData.tx);
-    if (!hash) {
-      setStep(STEP.REVIEW);
-      return;
-    }
-
-    setTxHash(hash);
-    setStep(STEP.CONFIRMING);
-
-    // Step 3: finalize
-    try {
-      const finalResult = await uniswapApi.finalizeClaimFees({
+    const finalResult = await execution.runPlan({
+      action: 'claim-fees',
+      chainId: claimData.tx?.chainId || null,
+      txPlan: [{
+        ...claimData.tx,
+        label: 'Claim fees',
+      }],
+      finalizePayload: {
         network,
         version,
         positionIdentifier,
         walletAddress: wallet.address,
-        txHash: hash,
-      });
+      },
+      finalizeKind: 'claim_fees',
+    });
+    if (finalResult) {
       setResult(finalResult);
-      setStep(STEP.DONE);
-      if (onFinalized) onFinalized(finalResult);
-    } catch (err) {
-      setError(err.message);
-      setStep(STEP.ERROR);
+      if (finalResult.status === 'done' && onFinalized) {
+        onFinalized(finalResult);
+      }
     }
-  }, [claimData, sendTransaction, network, version, positionIdentifier, wallet, onFinalized]);
+  }, [claimData, execution, network, onFinalized, positionIdentifier, version, wallet]);
 
   const summary = claimData?.claimSummary;
 
@@ -173,9 +199,9 @@ export default function ClaimFeesModal({
         {step === STEP.CONFIRMING && (
           <div className={styles.section}>
             <p className={styles.statusText}>Esperando confirmacion on-chain...</p>
-            {txHash && (
+            {execution.txHashes[0] && (
               <p className={styles.txHash}>
-                tx: <span className={styles.mono}>{txHash.slice(0, 10)}...{txHash.slice(-8)}</span>
+                tx: <span className={styles.mono}>{execution.txHashes[0].slice(0, 10)}...{execution.txHashes[0].slice(-8)}</span>
               </p>
             )}
           </div>
@@ -186,9 +212,9 @@ export default function ClaimFeesModal({
           <>
             <div className={styles.section}>
               <p className={styles.successText}>Fees reclamadas exitosamente</p>
-              {txHash && (
+              {execution.txHashes[0] && (
                 <p className={styles.txHash}>
-                  tx: <span className={styles.mono}>{txHash.slice(0, 10)}...{txHash.slice(-8)}</span>
+                  tx: <span className={styles.mono}>{execution.txHashes[0].slice(0, 10)}...{execution.txHashes[0].slice(-8)}</span>
                 </p>
               )}
               {result?.receipt && (
@@ -206,9 +232,9 @@ export default function ClaimFeesModal({
           <>
             <div className={styles.section}>
               <p className={styles.errorText}>{error || 'Error desconocido'}</p>
-              {txHash && (
+              {execution.txHashes[0] && (
                 <p className={styles.txHash}>
-                  tx: <span className={styles.mono}>{txHash.slice(0, 10)}...{txHash.slice(-8)}</span>
+                  tx: <span className={styles.mono}>{execution.txHashes[0].slice(0, 10)}...{execution.txHashes[0].slice(-8)}</span>
                 </p>
               )}
             </div>

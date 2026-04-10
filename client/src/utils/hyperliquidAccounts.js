@@ -1,4 +1,5 @@
-export { shortAddress } from './formatters';
+import { shortAddress } from './formatters';
+export { shortAddress };
 
 export function formatUsd(value) {
   if (value == null || Number.isNaN(Number(value))) return '—';

@@ -16,9 +16,30 @@ import ApplyProtectionModal from './components/ApplyProtectionModal';
 import PositionActionModal from './components/PositionActionModal';
 import SmartCreatePoolModal from './components/SmartCreatePoolModal';
 import SkeletonCard from './components/SkeletonCard';
+import WalletConnectSetupModal from '../../components/shared/WalletConnectSetupModal';
 import styles from './UniswapPoolsPage.module.css';
 
 const PROTECTED_POOLS_REFRESH_INTERVAL_MS = 600000;
+const EMPTY_WALLET_CONNECTION = {
+  address: '',
+  chainId: null,
+  isConnected: false,
+  hasProvider: false,
+  connector: null,
+  connectorLabel: '',
+  error: '',
+  hasInjectedProvider: false,
+  hasWalletConnect: false,
+  needsWalletConnectSetup: false,
+  walletConnectProjectId: '',
+  connectInjected: () => {},
+  connectWalletConnect: async () => null,
+  disconnect: async () => null,
+  sendTransaction: async () => null,
+  waitForTransactionReceipt: async () => null,
+  setWalletConnectProjectId: () => {},
+  dismissWalletConnectSetup: () => {},
+};
 
 export default function UniswapPoolsPage() {
   const [meta, setMeta] = useState(null);
@@ -44,14 +65,14 @@ export default function UniswapPoolsPage() {
   const [activeAction, setActiveAction] = useState(null);
   const [showSmartCreate, setShowSmartCreate] = useState(false);
   const { dialog, confirm } = useConfirmAction();
-  const walletConn = useWalletConnection();
+  const walletConn = useWalletConnection() || EMPTY_WALLET_CONNECTION;
   const walletState = useMemo(() => ({
     address: walletConn.address,
     chainId: walletConn.chainId,
     isConnected: walletConn.isConnected,
     hasProvider: walletConn.hasProvider,
     connector: walletConn.connector,
-  }), [walletConn.address, walletConn.chainId, walletConn.isConnected, walletConn.hasProvider]);
+  }), [walletConn.address, walletConn.chainId, walletConn.isConnected, walletConn.hasProvider, walletConn.connector]);
   const positionActionDefaults = useMemo(
     () => ({ network, version, walletAddress: walletState.address }),
     [network, version, walletState.address],
@@ -66,8 +87,10 @@ export default function UniswapPoolsPage() {
       setProtectedPools(data);
       setProtectedRefreshedAt(Date.now());
       setResult((prev) => mergeResultProtections(prev, data));
+      return data;
     } catch (err) {
       setError(err.message);
+      return null;
     } finally {
       setIsLoadingProtected(false);
     }
@@ -313,10 +336,10 @@ export default function UniswapPoolsPage() {
   };
 
   const refreshVisibleData = useCallback(async () => {
-    await loadProtectedPools();
+    const fresh = await loadProtectedPools();
     if (result) {
       const data = await uniswapApi.scanPools({ wallet, network, version });
-      setResult(mergeResultProtections(data, protectedPools));
+      setResult(mergeResultProtections(data, fresh ?? protectedPools));
     }
   }, [loadProtectedPools, network, protectedPools, result, version, wallet]);
 
@@ -601,6 +624,17 @@ export default function UniswapPoolsPage() {
           variant={dialog.variant}
           onConfirm={dialog.onConfirm}
           onCancel={dialog.onCancel}
+        />
+      )}
+
+      {walletConn.needsWalletConnectSetup && (
+        <WalletConnectSetupModal
+          initialValue={walletConn.walletConnectProjectId}
+          onSave={(id) => walletConn.setWalletConnectProjectId(id)}
+          onClose={() => walletConn.dismissWalletConnectSetup()}
+          onSavedConnect={() => {
+            setTimeout(() => walletConn.connectWalletConnect().catch(() => {}), 50);
+          }}
         />
       )}
     </div>

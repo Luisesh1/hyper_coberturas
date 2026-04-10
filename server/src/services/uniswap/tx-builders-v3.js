@@ -11,6 +11,29 @@ const { DEFAULT_SLIPPAGE_BPS, V3_SWAP_ROUTER_ADDRESS } = require('./constants');
 const { encodeTx, deadlineFromNow } = require('./tx-encoders');
 const { amountOutMin } = require('../../domains/uniswap/pools/domain/position-action-math');
 
+const MAX_UINT128 = (1n << 128n) - 1n;
+
+function encodeV3DecreaseData(ctx, liquidityDelta) {
+  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
+  return iface.encodeFunctionData('decreaseLiquidity', [{
+    tokenId: BigInt(ctx.tokenId),
+    liquidity: liquidityDelta,
+    amount0Min: 0n,
+    amount1Min: 0n,
+    deadline: deadlineFromNow(),
+  }]);
+}
+
+function encodeV3CollectData(ctx, recipient, amount0Max = MAX_UINT128, amount1Max = MAX_UINT128) {
+  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
+  return iface.encodeFunctionData('collect', [{
+    tokenId: BigInt(ctx.tokenId),
+    recipient,
+    amount0Max,
+    amount1Max,
+  }]);
+}
+
 function buildV3IncreaseTx(ctx, { amount0Desired, amount1Desired, slippageBps = DEFAULT_SLIPPAGE_BPS }) {
   const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
   const amount0Min = amountOutMin(amount0Desired, slippageBps);
@@ -32,22 +55,53 @@ function buildV3IncreaseTx(ctx, { amount0Desired, amount1Desired, slippageBps = 
 }
 
 function buildV3DecreaseTx(ctx, { liquidityDelta, slippageBps = DEFAULT_SLIPPAGE_BPS }) {
-  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
   // slippageBps se acepta para compatibilidad con otros builders pero el min es 0n
   // intencionalmente: el caller puede ajustar via overrides si lo necesita.
   void slippageBps;
-  const data = iface.encodeFunctionData('decreaseLiquidity', [{
-    tokenId: BigInt(ctx.tokenId),
-    liquidity: liquidityDelta,
-    amount0Min: 0n,
-    amount1Min: 0n,
-    deadline: deadlineFromNow(),
-  }]);
+  const data = encodeV3DecreaseData(ctx, liquidityDelta);
 
   return encodeTx(ctx.positionManagerAddress, data, {
     chainId: ctx.networkConfig.chainId,
     kind: 'decrease_liquidity',
     label: 'Decrease liquidity',
+  });
+}
+
+function buildV3CollectTx(ctx, { recipient, amount0Max = MAX_UINT128, amount1Max = MAX_UINT128 }) {
+  const data = encodeV3CollectData(ctx, recipient, amount0Max, amount1Max);
+
+  return encodeTx(ctx.positionManagerAddress, data, {
+    chainId: ctx.networkConfig.chainId,
+    kind: 'collect_fees',
+    label: 'Collect to wallet',
+    meta: {
+      recipient,
+    },
+  });
+}
+
+function buildV3DecreaseAndCollectTx(ctx, {
+  liquidityDelta,
+  recipient,
+  slippageBps = DEFAULT_SLIPPAGE_BPS,
+  amount0Max = MAX_UINT128,
+  amount1Max = MAX_UINT128,
+}) {
+  void slippageBps;
+  const iface = new ethers.Interface(V3_POSITION_MANAGER_ABI);
+  const data = iface.encodeFunctionData('multicall', [[
+    encodeV3DecreaseData(ctx, liquidityDelta),
+    encodeV3CollectData(ctx, recipient, amount0Max, amount1Max),
+  ]]);
+
+  return encodeTx(ctx.positionManagerAddress, data, {
+    chainId: ctx.networkConfig.chainId,
+    kind: 'decrease_liquidity',
+    label: 'Decrease liquidity',
+    meta: {
+      recipient,
+      multicallActions: ['decreaseLiquidity', 'collect'],
+    },
   });
 }
 
@@ -109,6 +163,8 @@ function buildV3SwapTx(ctx, swap) {
 module.exports = {
   buildV3IncreaseTx,
   buildV3DecreaseTx,
+  buildV3DecreaseAndCollectTx,
+  buildV3CollectTx,
   buildV3MintTx,
   buildV3SwapTx,
 };

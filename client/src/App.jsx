@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useNavigate, useLocation, Navigate, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { TradingProvider } from './context/TradingContext';
@@ -12,10 +12,19 @@ import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
 import UniswapPoolsPage from './pages/UniswapPools/UniswapPoolsPage';
+import LpOrchestratorPage from './pages/LpOrchestrator/LpOrchestratorPage';
 import StrategyStudioPage from './pages/StrategyStudio/StrategyStudioPage';
 import BotsPage from './pages/Bots/BotsPage';
 import BacktestingPage from './pages/Backtesting/BacktestingPage';
+import HidenActionsPage from './pages/HidenActions/HidenActionsPage';
 import styles from './App.module.css';
+
+// DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
+// completo en build de producción gracias al guard `import.meta.env.DEV`.
+const DevLogPanel = import.meta.env.DEV
+  ? lazy(() => import('./dev/DevLogPanel'))
+  : null;
+const IS_DEV = import.meta.env.DEV;
 
 const BASE_NAV = [
   { id: 'manual',   path: '/trade',      label: 'Trading Manual', activeClass: 'modeBtnActive',  title: 'Trading' },
@@ -24,6 +33,7 @@ const BASE_NAV = [
   { id: 'backtesting', path: '/backtesting', label: 'Backtesting', activeClass: 'modeBtnActive', title: 'Backtesting' },
   { id: 'bots', path: '/bots', label: 'Bots', activeClass: 'modeBtnActive', title: 'Bots' },
   { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
+  { id: 'lp-orchestrator', path: '/lp-orchestrator', label: '🎛 Orquestador LP', activeClass: 'modeBtnActive', title: 'Orquestador LP' },
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
 
@@ -94,7 +104,14 @@ function AppContent() {
 
         <div className={styles.logo}>
           <span className={styles.logoIcon}>◈</span>
-          <span className={styles.logoText}>Hyperliquid Bot</span>
+          <div className={styles.logoStack}>
+            <span className={styles.logoText}>Hyperliquid Bot</span>
+            {IS_DEV && (
+              <span className={styles.devWatermark} title="Modo de logs intensivos activo (NODE_ENV=development). Errores y warnings del server + cliente se capturan en tiempo real.">
+                ⚙ DEV LOGS ACTIVE
+              </span>
+            )}
+          </div>
         </div>
 
         <nav className={styles.modeNav}>
@@ -135,7 +152,11 @@ function AppContent() {
               <Route path="/backtesting" element={<BacktestingPage />} />
               <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
               <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
+              <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
               <Route path="/config"     element={<SettingsPage />} />
+              {/* Ruta oculta — no aparece en el navbar. Acciones de
+                  recovery / mantenimiento manual. Acceso por URL directo. */}
+              <Route path="/hidenActions" element={<HidenActionsPage />} />
               {isSuperuser && <Route path="/usuarios" element={<UsersPage />} />}
               <Route path="*"           element={<Navigate to="/trade" replace />} />
             </Routes>
@@ -144,6 +165,12 @@ function AppContent() {
       </main>
 
       <Notifications />
+
+      {IS_DEV && DevLogPanel && (
+        <Suspense fallback={null}>
+          <DevLogPanel />
+        </Suspense>
+      )}
     </div>
   );
 }

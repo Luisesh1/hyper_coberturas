@@ -1,0 +1,149 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--uni-border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--uni-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.lpCount {
+  font-size: 0.72rem;
+  color: var(--uni-text-2);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--uni-bg-1);
+  border: 1px solid var(--uni-border);
+}
+
+.cellLabel {
+  font-size: 0.68rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cellValue {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--uni-text-0);
+}
+
+.positive { color: var(--uni-green); }
+.negative { color: var(--uni-red); }
+.neutral { color: var(--uni-text-1); }
+
+.netRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--uni-bg-2);
+  border: 1px solid var(--uni-border-strong);
+  font-size: 0.95rem;
+  color: var(--uni-text-1);
+}
+
+.netRow strong {
+  font-size: 1.1rem;
+}
+
+.compact .grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* ───────── Sections (LP / Hedge) ───────── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--uni-border);
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.section_cyan {
+  border-left: 3px solid rgba(102, 225, 219, 0.6);
+}
+
+.section_amber {
+  border-left: 3px solid rgba(255, 191, 95, 0.6);
+}
+
+.sectionTitle {
+  font-size: 0.62rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  padding: 0 2px;
+}
+
+.section_cyan .sectionTitle {
+  color: var(--uni-cyan);
+}
+
+.section_amber .sectionTitle {
+  color: var(--uni-amber);
+}
+
+@media (max-width: 540px) {
+  .section .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ───────── Lifetime row ───────── */
+.lifetimeRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: rgba(102, 225, 219, 0.05);
+  border: 1px solid rgba(102, 225, 219, 0.22);
+  font-size: 0.78rem;
+  color: var(--uni-text-2);
+}
+
+.lifetimeLabel {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.lifetimeValue {
+  font-size: 0.92rem;
+  color: var(--uni-cyan);
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-weight: 800;
+}

@@ -16,10 +16,12 @@
  */
 
 require('dotenv').config();
+const { test } = require('node:test');
 const { ethers } = require('ethers');
 
 const uniswapService = require('../services/uniswap.service');
 const { SUPPORTED_NETWORKS } = uniswapService;
+const HAS_TOKEN_ID_ARG = process.argv.some((arg) => arg === '--token-id' || arg.startsWith('--token-id='));
 
 function getNetworkConfig(name) {
   const cfg = SUPPORTED_NETWORKS[String(name || '').toLowerCase()];
@@ -57,6 +59,10 @@ const ERC20_ABI = [
 
 const POSITION_MANAGER_NFT_TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 const ZERO_ADDRESS_TOPIC = '0x' + '0'.repeat(64);
+// event IncreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)
+const INCREASE_LIQUIDITY_TOPIC = ethers.id('IncreaseLiquidity(uint256,uint128,uint256,uint256)');
+// event DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)
+const DECREASE_LIQUIDITY_TOPIC = ethers.id('DecreaseLiquidity(uint256,uint128,uint256,uint256)');
 
 function parseArgs(argv) {
   const args = {};
@@ -287,7 +293,6 @@ async function main() {
   }
 
   console.log('\n[6/6] MÉTODO 3 — Transfers del receipt (lo que la wallet realmente envió)...');
-  let transferAmounts = null;
   try {
     let amount0Raw = 0n;
     let amount1Raw = 0n;
@@ -304,7 +309,6 @@ async function main() {
     }
     const amount0 = Number(ethers.formatUnits(amount0Raw, token0.decimals));
     const amount1 = Number(ethers.formatUnits(amount1Raw, token1.decimals));
-    transferAmounts = { amount0, amount1 };
     console.log(`  amount0 enviado: ${fmtNum(amount0, 8)} ${token0.symbol}`);
     console.log(`  amount1 enviado: ${fmtNum(amount1, 6)} ${token1.symbol}`);
     if (priceAtMint != null) {
@@ -318,21 +322,150 @@ async function main() {
     console.log(`  ❌ Error: ${err.message}`);
   }
 
+  console.log('\n[7/8] MÉTODO 4 — Cost basis acumulado por IncreaseLiquidity events del NFT...');
+  // Suma TODOS los IncreaseLiquidity y RESTA los DecreaseLiquidity del tokenId.
+  // Cada deposit/retiro se valua a USD usando el precio (slot0) del bloque
+  // respectivo. Esta es la forma matemáticamente correcta de calcular el cost
+  // basis de un LP que pudo haber sido modificado después del mint inicial.
+  let cumulativeAmount0 = 0n;
+  let cumulativeAmount1 = 0n;
+  let cumulativeUsd = 0;
+  const lifetimeEvents = [];
+  try {
+    const tokenIdHex = ethers.zeroPadValue(ethers.toBeHex(BigInt(tokenId)), 32);
+    const latest = await provider.getBlockNumber();
+    const STEP = 10000;
+    for (const [topic, kind, sign] of [
+      [INCREASE_LIQUIDITY_TOPIC, 'increase', 1n],
+      [DECREASE_LIQUIDITY_TOPIC, 'decrease', -1n],
+    ]) {
+      for (let to = latest; to >= 0; to -= STEP) {
+        const from = Math.max(0, to - STEP + 1);
+        let logs;
+        try {
+          logs = await provider.getLogs({
+            address: positionManagerAddress,
+            topics: [topic, tokenIdHex],
+            fromBlock: from,
+            toBlock: to,
+          });
+        } catch {
+          continue;
+        }
+        for (const log of logs) {
+          // data layout: liquidity (uint128) | amount0 (uint256) | amount1 (uint256)
+          const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
+            ['uint128', 'uint256', 'uint256'],
+            log.data,
+          );
+          lifetimeEvents.push({
+            kind,
+            sign,
+            blockNumber: log.blockNumber,
+            txHash: log.transactionHash,
+            liquidity: decoded[0].toString(),
+            amount0Raw: decoded[1],
+            amount1Raw: decoded[2],
+          });
+        }
+      }
+    }
+
+    lifetimeEvents.sort((a, b) => a.blockNumber - b.blockNumber);
+    console.log(`  events encontrados: ${lifetimeEvents.length} (${lifetimeEvents.filter((e) => e.kind === 'increase').length} increases / ${lifetimeEvents.filter((e) => e.kind === 'decrease').length} decreases)`);
+
+    for (const evt of lifetimeEvents) {
+      const a0 = Number(ethers.formatUnits(evt.amount0Raw, token0.decimals));
+      const a1 = Number(ethers.formatUnits(evt.amount1Raw, token1.decimals));
+      cumulativeAmount0 += evt.sign * evt.amount0Raw;
+      cumulativeAmount1 += evt.sign * evt.amount1Raw;
+      // Precio histórico del bloque del evento
+      let priceAt = priceCurrent;
+      try {
+        const slot0Hist = await pool.slot0({ blockTag: evt.blockNumber });
+        priceAt = sqrtPriceToPrice(sqrtPriceX96ToFloat(slot0Hist.sqrtPriceX96), token0.decimals, token1.decimals);
+      } catch {
+        // Algunos nodos no exponen estado histórico para ese bloque; mantenemos el último precio conocido.
+      }
+      // estimateUsdValueFromPair: si token1 stable → a1 + a0*price, si token0 stable → a0 + a1/price
+      let evtUsd = null;
+      if (/usd|dai/i.test(token1.symbol)) {
+        evtUsd = a1 + a0 * priceAt;
+      } else if (/usd|dai/i.test(token0.symbol)) {
+        // priceCurrent es token1/token0 humanos: ej WETH/USDC ≈ 0.0004 → 1/0.0004 = 2500 USDC/WETH
+        evtUsd = a0 + (priceAt > 0 ? a1 / priceAt : 0);
+      }
+      cumulativeUsd += Number(evt.sign) * (evtUsd || 0);
+      console.log(`    ${evt.kind.padEnd(8)} block ${evt.blockNumber}  ${fmtNum(a0, 8)} ${token0.symbol} + ${fmtNum(a1, 6)} ${token1.symbol}  @ ${fmtNum(priceAt, 6)}  →  ${fmtUsd(evtUsd)}`);
+    }
+    const cum0 = Number(ethers.formatUnits(cumulativeAmount0, token0.decimals));
+    const cum1 = Number(ethers.formatUnits(cumulativeAmount1, token1.decimals));
+    console.log(`  COST BASIS NETO    : ${fmtNum(cum0, 8)} ${token0.symbol} + ${fmtNum(cum1, 6)} ${token1.symbol}`);
+    console.log(`  COST BASIS USD     : ${fmtUsd(cumulativeUsd)}  ⭐⭐ (cost basis acumulado real)`);
+  } catch (err) {
+    console.log(`  ❌ Error: ${err.message}`);
+  }
+
+  console.log('\n[8/8] Comparando con resolveInitialValuation() actual del bot...');
+  try {
+    const valuation = await uniswapService.resolveInitialValuation({
+      provider,
+      networkConfig,
+      apiKey: null,
+      record: {
+        identifier: String(tokenId),
+        version: 'v3',
+        owner,
+        creator: owner,
+        txHash: mintInfo.txHash,
+        mintBlockNumber: mintInfo.blockNumber,
+        positionLiquidity: position.liquidity.toString(),
+        tickLower: Number(position.tickLower),
+        tickUpper: Number(position.tickUpper),
+      },
+      positionLiquidity: position.liquidity.toString(),
+      token0,
+      token1,
+      historicalPrice: priceAtMint != null
+        ? { price: priceAtMint, accuracy: 'exact', blockNumber: mintInfo.blockNumber }
+        : null,
+      historicalAmounts: null,
+      currentValueUsd: null,
+      unclaimedFeesUsd: null,
+      priceCurrent,
+    });
+    console.log(`  initialValueUsd       : ${fmtUsd(valuation.initialValueUsd)}`);
+    console.log(`  initialValueUsdSource : ${valuation.initialValueUsdSource}`);
+    console.log(`  initialValueUsdAccuracy: ${valuation.initialValueUsdAccuracy}`);
+    console.log(`  initialAmount0        : ${fmtNum(valuation.initialAmount0, 8)}`);
+    console.log(`  initialAmount1        : ${fmtNum(valuation.initialAmount1, 6)}`);
+    console.log(`  warnings              : ${(valuation.valuationWarnings || []).length}`);
+  } catch (err) {
+    console.log(`  ❌ Error llamando a resolveInitialValuation: ${err.message}`);
+  }
+
   console.log('\n' + '='.repeat(80));
   console.log('CONCLUSIÓN:');
-  console.log('  - Método 1 (math + slot0 histórico): exacto para liquidez actual al precio del mint.');
-  console.log('  - Método 2 (calldata): da los Desired pero puede sobreestimar (no todo se deposita).');
-  console.log('  - Método 3 (transfers del receipt): refleja los amounts REALMENTE depositados.');
+  console.log('  - Método 1 (math + slot0 histórico): exacto para liquidez ACTUAL al precio del mint.');
+  console.log('    NO refleja increases/decreases posteriores.');
+  console.log('  - Método 2 (calldata): da los Desired del mint inicial, ignora increases.');
+  console.log('  - Método 3 (transfers del receipt): refleja los amounts REALMENTE depositados en el mint inicial.');
+  console.log('    NO captura increases/decreases posteriores.');
+  console.log('  - Método 4 (cost basis acumulado): suma TODOS los IncreaseLiquidity y resta');
+  console.log('    los DecreaseLiquidity, valuando cada uno al precio histórico de su bloque.');
+  console.log('    Esta es la forma correcta de medir el cost basis de un LP modificado.');
   console.log('');
-  console.log('  Para el valor inicial, lo más correcto es:');
-  console.log('  1. Obtener los amounts reales desde los Transfer events del receipt del mint.');
-  console.log('  2. Multiplicar por el precio histórico del bloque del mint (slot0 con blockTag).');
-  console.log('  3. Si hay token stable, convertir a USD directamente.');
-  console.log('  4. Si no hay stable, usar fuente externa para precio del par.');
+  console.log('  Si los métodos 1-3 difieren del 4, la posición tuvo modificaciones después del mint.');
+  console.log('  El bot debería usar el método 4 como fuente PRIMARIA del valor inicial.');
   console.log('='.repeat(80));
 }
 
-main().catch((err) => {
-  console.error('FATAL:', err);
-  process.exit(1);
-});
+if (!HAS_TOKEN_ID_ARG) {
+  test('manual valuation script is skipped without CLI arguments', { skip: 'manual utility' }, () => {});
+  module.exports = { main };
+} else {
+  main().catch((err) => {
+    console.error('FATAL:', err);
+    process.exit(1);
+  });
+}

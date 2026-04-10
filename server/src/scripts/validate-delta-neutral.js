@@ -9,7 +9,6 @@
 const db = require('../db');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
-const logger = require('../services/logger.service');
 
 async function validateDeltaNeutral() {
   console.log('🔍 Starting delta-neutral validation...\n');

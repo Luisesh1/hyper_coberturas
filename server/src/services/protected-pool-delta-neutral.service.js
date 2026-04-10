@@ -9,8 +9,6 @@ const hlRegistry = require('./hyperliquid.registry');
 const { getTradingService } = require('./trading.factory');
 const marketService = require('./market.service');
 const {
-  asFiniteNumber,
-  buildBandPreset,
   computeDeltaNeutralMetrics,
   networkSentinelIntervalMs,
 } = require('./delta-neutral-math.service');
@@ -19,346 +17,39 @@ const {
   normalizeProtectionSnapshot,
   validateNormalizedProtectionSnapshot,
 } = require('./delta-neutral-snapshot.service');
-
-const DEFAULT_BAND_MODE = 'adaptive';
-const DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT = 3;
-const DEFAULT_REBALANCE_INTERVAL_SEC = 6 * 60 * 60;
-const DEFAULT_TARGET_HEDGE_RATIO = 1;
-const DEFAULT_MIN_REBALANCE_NOTIONAL_USD = 50;
-const DEFAULT_MAX_SLIPPAGE_BPS = 20;
-const DEFAULT_TWAP_MIN_NOTIONAL_USD = 10_000;
-const DEFAULT_EXECUTION_MODE = 'auto';
-const DEFAULT_MAX_SPREAD_BPS = 30;
-const DEFAULT_MAX_EXECUTION_FEE_USD = 25;
-const DEFAULT_MIN_ORDER_NOTIONAL_USD = 25;
-const DEFAULT_TWAP_SLICES = 5;
-const DEFAULT_TWAP_DURATION_SEC = 60;
-const DEFAULT_EMERGENCY_IOC_NOTIONAL_USD = 250;
-const DEFAULT_GAMMA_TIGHTEN_THRESHOLD = 0.2;
-const DEFAULT_MAX_AUTO_TOPUPS_PER_24H = 3;
 const MAX_SNAPSHOT_FALLBACK_AGE_MS = 2 * 60_000;
-const DELTA_NEUTRAL_STATUSES = new Set([
-  'bootstrapping',
-  'healthy',
-  'tracking',
-  'rebalance_pending',
-  'executing',
-  'boundary_watch',
-  'partial_hedge_warning',
-  'degraded_partial',
-  'rate_limited',
-  'margin_pending',
-  'spot_stale',
-  'snapshot_invalid',
-  'risk_paused',
-  'reconciling',
-  'deactivating',
-  'deactivation_pending',
-  'inactive',
-]);
-const ESTIMATED_TAKER_FEE_RATE = 0.0005;
-const RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
-const STALE_SPOT_COOLDOWN_MS = 60_000;
-const MARGIN_COOLDOWN_MS = 2 * 60_000;
-
-function clampNonNegative(value, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function normalizeStatus(status) {
-  return DELTA_NEUTRAL_STATUSES.has(status) ? status : 'healthy';
-}
-
-function safeJsonClone(value) {
-  if (value == null) return null;
-  return JSON.parse(JSON.stringify(value));
-}
-
-function getCurrentBoundarySide(protection, currentPrice) {
-  const lower = Number(protection.rangeLowerPrice);
-  const upper = Number(protection.rangeUpperPrice);
-  const price = Number(currentPrice);
-  if (!Number.isFinite(lower) || !Number.isFinite(upper) || !Number.isFinite(price)) return null;
-  if (price < Math.min(lower, upper)) return 'below';
-  if (price > Math.max(lower, upper)) return 'above';
-  return 'inside';
-}
-
-function distanceToRangePct(protection, currentPrice) {
-  const lower = Number(protection.rangeLowerPrice);
-  const upper = Number(protection.rangeUpperPrice);
-  const price = Number(currentPrice);
-  if (!Number.isFinite(lower) || !Number.isFinite(upper) || !Number.isFinite(price) || price <= 0) return null;
-  const min = Math.min(lower, upper);
-  const max = Math.max(lower, upper);
-  if (price >= min && price <= max) {
-    return Math.min(
-      ((price - min) / min) * 100,
-      ((max - price) / max) * 100
-    );
-  }
-  if (price < min) return ((min - price) / min) * 100;
-  return ((price - max) / max) * 100;
-}
-
-function isIsolatedPosition(position) {
-  if (!position?.leverage) return true;
-  const leverage = position.leverage;
-  if (typeof leverage === 'string') return leverage.toLowerCase() !== 'cross';
-  if (typeof leverage?.type === 'string') return leverage.type.toLowerCase() !== 'cross';
-  if (typeof leverage?.mode === 'string') return leverage.mode.toLowerCase() !== 'cross';
-  return true;
-}
-
-function computeLiquidationDistancePct(position, currentPrice) {
-  const liq = Number(position?.liquidationPx);
-  const price = Number(currentPrice);
-  if (!Number.isFinite(liq) || liq <= 0 || !Number.isFinite(price) || price <= 0) return null;
-  if (Number(position?.szi || 0) < 0) {
-    return ((liq - price) / price) * 100;
-  }
-  return ((price - liq) / price) * 100;
-}
-
-function buildInitialStrategyState({
-  currentPrice,
-  deltaQty,
-  gamma,
-  targetQty,
-  actualQty = 0,
-  effectiveBandPct = DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
-  rv4hPct = 0,
-  rv24hPct = 0,
-} = {}) {
-  return {
-    status: 'bootstrapping',
-    lastSnapshotPrice: currentPrice ?? null,
-    lastDeltaQty: deltaQty ?? null,
-    lastGamma: gamma ?? null,
-    lastTargetQty: targetQty ?? null,
-    lastActualQty: actualQty ?? null,
-    lastRebalanceAt: null,
-    lastRebalanceReason: null,
-    effectiveBandPct,
-    rv4hPct,
-    rv24hPct,
-    fundingAccumUsd: 0,
-    distanceToLiqPct: null,
-    topUpCount24h: 0,
-    topUpUsd24h: 0,
-    marginModeVerified: true,
-    hedgeRealizedPnlUsd: 0,
-    hedgeUnrealizedPnlUsd: 0,
-    executionFeesUsd: 0,
-    slippageUsd: 0,
-    lpPnlUsd: 0,
-    netProtectionPnlUsd: 0,
-    lastObservedBoundarySide: null,
-    lastTopUpAt: null,
-    topUpWindowStartedAt: Date.now(),
-    lastError: null,
-    deactivationRequestedAt: null,
-    lastDecision: null,
-    lastDecisionReason: null,
-    lastExecutionAttemptAt: null,
-    lastExecutionOutcome: null,
-    nextEligibleAttemptAt: null,
-    cooldownReason: null,
-    trackingErrorQty: null,
-    trackingErrorUsd: null,
-  };
-}
-
-function normalizeStrategyState(state = {}) {
-  const safeState = state || {};
-  const topUpWindowStartedAt = Number(safeState.topUpWindowStartedAt || Date.now());
-  return {
-    ...buildInitialStrategyState(),
-    ...safeState,
-    status: normalizeStatus(safeState.status),
-    topUpCount24h: clampNonNegative(safeState.topUpCount24h),
-    topUpUsd24h: clampNonNegative(safeState.topUpUsd24h),
-    topUpWindowStartedAt,
-    marginModeVerified: safeState.marginModeVerified !== false,
-    nextEligibleAttemptAt: safeState.nextEligibleAttemptAt != null ? Number(safeState.nextEligibleAttemptAt) : null,
-  };
-}
-
-function isCooldownActive(protection, strategyState, now = Date.now()) {
-  const nextEligibleAttemptAt = Number(
-    protection?.nextEligibleAttemptAt
-    ?? strategyState?.nextEligibleAttemptAt
-    ?? 0
-  );
-  return Number.isFinite(nextEligibleAttemptAt) && nextEligibleAttemptAt > now;
-}
-
-function estimateExecutionCostUsd(qty, currentPrice) {
-  const size = Math.abs(Number(qty) || 0);
-  const price = Number(currentPrice) || 0;
-  return size * price * ESTIMATED_TAKER_FEE_RATE;
-}
-
-function buildTrackingMetrics(metrics, actualQty, currentPrice) {
-  const targetQty = Number(metrics?.targetQty || 0);
-  const actual = Number(actualQty || 0);
-  const trackingErrorQty = targetQty - actual;
-  return {
-    trackingErrorQty,
-    trackingErrorUsd: Math.abs(trackingErrorQty) * Number(currentPrice || 0),
-    lpDeltaUsd: Number(metrics?.deltaQty || 0) * Number(currentPrice || 0),
-    hedgeDeltaUsd: -actual * Number(currentPrice || 0),
-    netProtectedExposureUsd: trackingErrorQty * Number(currentPrice || 0),
-  };
-}
-
-function deriveDecisionBandUsd(protection, metrics, currentPrice) {
-  const minRebalanceUsd = Number(
-    protection?.minOrderNotionalUsd
-    ?? protection?.minRebalanceNotionalUsd
-    ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD
-  );
-  const targetQty = Number(metrics?.targetQty || 0);
-  const estimatedCost = estimateExecutionCostUsd(targetQty, currentPrice);
-  const floor = Math.max(minRebalanceUsd, estimatedCost * 3);
-  return {
-    holdBandUsd: floor,
-    fullBandUsd: floor * 2,
-    estimatedCostUsd: estimatedCost,
-  };
-}
-
-function resolveRebalanceDecision({ protection, metrics, actualQty, currentPrice, forceReason, forceRebalance }) {
-  const tracking = buildTrackingMetrics(metrics, actualQty, currentPrice);
-  const bands = deriveDecisionBandUsd(protection, metrics, currentPrice);
-  const absoluteDriftUsd = Math.abs(tracking.trackingErrorUsd);
-
-  if (forceRebalance || forceReason === 'boundary_cross') {
-    return { decision: 'rebalance_full', tracking, bands };
-  }
-  if (absoluteDriftUsd < bands.holdBandUsd) {
-    return { decision: 'hold', tracking, bands };
-  }
-  if (absoluteDriftUsd < bands.fullBandUsd) {
-    return { decision: 'rebalance_partial', tracking, bands };
-  }
-  return { decision: 'rebalance_full', tracking, bands };
-}
-
-function buildCooldown(error, strategyState, {
-  fallbackMs = RATE_LIMIT_COOLDOWN_MS,
-} = {}) {
-  const message = String(error?.message || error || '').trim();
-  if (!message) {
-    return {
-      nextEligibleAttemptAt: null,
-      cooldownReason: null,
-      status: strategyState?.status || 'partial_hedge_warning',
-    };
-  }
-
-  const lowered = message.toLowerCase();
-  if (lowered.includes('too many cumulative requests sent') || lowered.includes('rate limit')) {
-    return {
-      nextEligibleAttemptAt: Date.now() + RATE_LIMIT_COOLDOWN_MS,
-      cooldownReason: message,
-      status: 'rate_limited',
-    };
-  }
-  if (lowered.includes('margen insuficiente')) {
-    return {
-      nextEligibleAttemptAt: Date.now() + MARGIN_COOLDOWN_MS,
-      cooldownReason: message,
-      status: 'margin_pending',
-    };
-  }
-  if (lowered.includes('precio actual del pool') || lowered.includes('spot')) {
-    return {
-      nextEligibleAttemptAt: Date.now() + STALE_SPOT_COOLDOWN_MS,
-      cooldownReason: message,
-      status: 'spot_stale',
-    };
-  }
-  return {
-    nextEligibleAttemptAt: Date.now() + fallbackMs,
-    cooldownReason: message,
-    status: strategyState?.status || 'partial_hedge_warning',
-  };
-}
-
-function normalizeEvaluationStatus({
-  decision,
-  trackingErrorUsd,
-  riskStatus,
-  preflightStatus,
-  shouldRebalance,
-  preflightOk,
-}) {
-  if (riskStatus) return riskStatus;
-  if (preflightStatus && preflightStatus !== 'tracking') return preflightStatus;
-  if (shouldRebalance && decision !== 'hold' && preflightOk) return 'rebalance_pending';
-  if (decision === 'hold') {
-    return Math.abs(Number(trackingErrorUsd || 0)) > 0 ? 'tracking' : 'healthy';
-  }
-  return 'tracking';
-}
-
-function deriveBandSettings(protection, rvStats, metrics, currentPrice) {
-  const bandMode = protection.bandMode || DEFAULT_BAND_MODE;
-  const rv4hPct = asFiniteNumber(rvStats.rv4hPct) || 0;
-  const rv24hPct = asFiniteNumber(rvStats.rv24hPct) || 0;
-  const effectiveRvPct = Math.max(rv4hPct, rv24hPct);
-  const adaptivePreset = buildBandPreset(effectiveRvPct);
-  const baseBandPct = bandMode === 'fixed'
-    ? (asFiniteNumber(protection.baseRebalancePriceMovePct) || DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT)
-    : adaptivePreset.priceMovePct;
-  const intervalSec = bandMode === 'fixed'
-    ? (asFiniteNumber(protection.rebalanceIntervalSec) || DEFAULT_REBALANCE_INTERVAL_SEC)
-    : adaptivePreset.intervalSec;
-  let effectiveBandPct = baseBandPct;
-  const distancePct = distanceToRangePct(protection, currentPrice);
-  if (
-    (Number.isFinite(distancePct) && distancePct <= 1)
-    || (Number(metrics?.normalizedGamma) >= DEFAULT_GAMMA_TIGHTEN_THRESHOLD)
-  ) {
-    effectiveBandPct = baseBandPct * 0.5;
-  }
-
-  return {
-    rv4hPct,
-    rv24hPct,
-    effectiveRvPct,
-    intervalSec,
-    baseBandPct,
-    effectiveBandPct,
-  };
-}
-
-function computeVolatilityStats(candles = []) {
-  const closes = candles
-    .map((item) => Number(item?.close ?? item?.c ?? item?.mid))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  const returns = [];
-  for (let index = 1; index < closes.length; index += 1) {
-    returns.push(Math.log(closes[index] / closes[index - 1]));
-  }
-  if (returns.length === 0) {
-    return { rv4hPct: 0, rv24hPct: 0 };
-  }
-
-  const annualize = (series) => {
-    if (!series.length) return 0;
-    const mean = series.reduce((acc, value) => acc + value, 0) / series.length;
-    const variance = series.reduce((acc, value) => acc + ((value - mean) ** 2), 0) / series.length;
-    return Math.sqrt(variance) * Math.sqrt(24 * 365) * 100;
-  };
-
-  return {
-    rv4hPct: annualize(returns.slice(-4)),
-    rv24hPct: annualize(returns.slice(-24)),
-  };
-}
+const {
+  DEFAULT_BAND_MODE,
+  DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
+  DEFAULT_REBALANCE_INTERVAL_SEC,
+  DEFAULT_TARGET_HEDGE_RATIO,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MAX_SLIPPAGE_BPS,
+  DEFAULT_TWAP_MIN_NOTIONAL_USD,
+  DEFAULT_EXECUTION_MODE,
+  DEFAULT_MIN_ORDER_NOTIONAL_USD,
+  DEFAULT_TWAP_SLICES,
+  DEFAULT_TWAP_DURATION_SEC,
+  DEFAULT_EMERGENCY_IOC_NOTIONAL_USD,
+  DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+  ESTIMATED_TAKER_FEE_RATE,
+  MARGIN_COOLDOWN_MS,
+  clampNonNegative,
+  estimateExecutionCostUsd,
+  safeJsonClone,
+  getCurrentBoundarySide,
+  distanceToRangePct,
+  isIsolatedPosition,
+  computeLiquidationDistancePct,
+  buildInitialStrategyState,
+  normalizeStrategyState,
+  isCooldownActive,
+  resolveRebalanceDecision,
+  buildCooldown,
+  normalizeEvaluationStatus,
+  deriveBandSettings,
+  computeVolatilityStats,
+} = require('./protected-pool-delta-neutral.helpers');
 
 class ProtectedPoolDeltaNeutralService {
   constructor(deps = {}) {
@@ -394,6 +85,73 @@ class ProtectedPoolDeltaNeutralService {
     if (!this.interval) return;
     clearInterval(this.interval);
     this.interval = null;
+  }
+
+  /**
+   * Reconcilia los acumuladores de PnL realizado, fees y funding del hedge
+   * a partir del historial de fills de Hyperliquid. Esto cubre TODOS los
+   * caminos de cierre (rebalance interno, deactivation, cierre manual,
+   * liquidación o margin call) — el motor antes solo capturaba realized
+   * cuando ejecutaba un rebalance, así que pérdidas en cierres por otra
+   * vía quedaban huérfanas (visibles en el balance de la cuenta pero no
+   * en `strategy_state_json.hedgeRealizedPnlUsd`).
+   *
+   * Devuelve los deltas a aplicar y el timestamp del último fill leído,
+   * para que el caller pueda persistir `lastReconciledFillsAt` y evitar
+   * doble conteo en ticks futuros.
+   *
+   * @param {object} protection
+   * @param {object} hl - cliente Hyperliquid de la cuenta
+   * @param {number} sinceMs - timestamp del último fill ya contabilizado
+   * @returns {Promise<{ realizedDelta: number, feeDelta: number, lastFillTime: number, fillsCount: number }>}
+   */
+  async _reconcileHedgeFills(protection, hl, sinceMs) {
+    if (!hl || typeof hl.getUserFills !== 'function') {
+      return { realizedDelta: 0, feeDelta: 0, lastFillTime: Number(sinceMs || 0), fillsCount: 0 };
+    }
+    // Fallback: si nunca reconciliamos antes (lastReconciledFillsAt está
+    // unset), tomamos como cursor inicial el `createdAt` de la protección.
+    // Esto permite que protecciones legacy capturen automáticamente todos
+    // los fills históricos sin necesidad de migración.
+    let since = Number(sinceMs || 0);
+    if (!since && protection?.createdAt) {
+      since = Number(protection.createdAt);
+    }
+
+    let fills = [];
+    try {
+      fills = await hl.getUserFills(protection.walletAddress);
+    } catch (err) {
+      this.logger.warn('hedge_fills_fetch_failed', {
+        protectionId: protection?.id,
+        asset: protection?.inferredAsset,
+        error: err.message,
+      });
+      return { realizedDelta: 0, feeDelta: 0, lastFillTime: since, fillsCount: 0 };
+    }
+    if (!Array.isArray(fills) || fills.length === 0) {
+      return { realizedDelta: 0, feeDelta: 0, lastFillTime: since, fillsCount: 0 };
+    }
+
+    const asset = String(protection?.inferredAsset || '').toUpperCase();
+    let realizedDelta = 0;
+    let feeDelta = 0;
+    let lastFillTime = since;
+    let fillsCount = 0;
+
+    for (const fill of fills) {
+      const t = Number(fill?.time || 0);
+      if (!Number.isFinite(t) || t <= since) continue;
+      if (asset && String(fill?.coin || '').toUpperCase() !== asset) continue;
+      const closedPnl = Number(fill?.closedPnl || 0);
+      const fee = Number(fill?.fee || 0);
+      if (Number.isFinite(closedPnl)) realizedDelta += closedPnl;
+      if (Number.isFinite(fee)) feeDelta += fee;
+      if (t > lastFillTime) lastFillTime = t;
+      fillsCount += 1;
+    }
+
+    return { realizedDelta, feeDelta, lastFillTime, fillsCount };
   }
 
   _normalizeSnapshot(protection, snapshot = null) {
@@ -471,7 +229,7 @@ class ProtectedPoolDeltaNeutralService {
     return this.repo.getById(protection.userId, protection.id);
   }
 
-  async _buildPreflight({ protection, hl, strategyState, actualQty, currentPrice, tracking, bands, decision }) {
+  async _buildPreflight({ protection, hl, strategyState, actualQty: _actualQty, currentPrice, tracking, bands, decision }) {
     const accountState = await hl.getClearinghouseState().catch(() => null);
     const withdrawable = Number(accountState?.withdrawable || 0);
     const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
@@ -581,6 +339,82 @@ class ProtectedPoolDeltaNeutralService {
       ...protection,
       strategyState,
     });
+  }
+
+  /**
+   * Force-close del short del hedge. Útil cuando una protección quedó en
+   * `inactive` (en BD) pero la posición short en Hyperliquid sigue abierta
+   * — típicamente porque un flujo legacy de close-LP marcó la protección
+   * como inactiva sin cerrar el hedge. Detecta el size actual on-chain y
+   * llama directamente a `closePosition` + reconcilia los fills.
+   *
+   * Este método NO requiere que la protección esté `active`: funciona
+   * sobre cualquier registro de protected_pool y la dejará deactivated.
+   */
+  async forceCloseHedge(protection) {
+    const strategyState = normalizeStrategyState(protection.strategyState);
+    const hl = await this.hlRegistry.getOrCreate(protection.userId, protection.accountId);
+    const tradingService = await this.getTradingService(protection.userId, protection.accountId);
+    const position = await hl.getPosition(protection.inferredAsset).catch((err) => {
+      logger.warn('forceCloseHedge_getPosition_failed', { protectionId: protection.id, asset: protection.inferredAsset, error: err.message });
+      return null;
+    });
+    const actualQty = position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
+
+    if (actualQty <= 0) {
+      this.logger.info('force_close_hedge_no_position', {
+        protectionId: protection.id,
+        asset: protection.inferredAsset,
+      });
+      return { closed: false, reason: 'no_open_position', actualQty: 0 };
+    }
+
+    await tradingService.closePosition({
+      asset: protection.inferredAsset,
+      size: actualQty,
+    });
+
+    // Reconcilia fills para que los costos del cierre queden contabilizados.
+    try {
+      const wasNeverReconciled = !strategyState.lastReconciledFillsAt;
+      const fillsSince = Number(strategyState.lastReconciledFillsAt || 0);
+      const reconciled = await this._reconcileHedgeFills(protection, hl, fillsSince);
+      await this.repo.updateStrategyState(protection.userId, protection.id, {
+        strategyState: {
+          ...strategyState,
+          hedgeRealizedPnlUsd: wasNeverReconciled
+            ? reconciled.realizedDelta
+            : Number(strategyState.hedgeRealizedPnlUsd || 0) + reconciled.realizedDelta,
+          executionFeesUsd: wasNeverReconciled
+            ? reconciled.feeDelta
+            : Number(strategyState.executionFeesUsd || 0) + reconciled.feeDelta,
+          hedgeUnrealizedPnlUsd: 0,
+          lastReconciledFillsAt: reconciled.lastFillTime,
+          lastActualQty: 0,
+          status: 'inactive',
+          lastError: null,
+        },
+      });
+    } catch (reconcileErr) {
+      this.logger.warn('force_close_hedge_reconcile_failed', {
+        protectionId: protection.id,
+        error: reconcileErr.message,
+      });
+    }
+
+    // Asegura que la protección quede como inactive si todavía está activa.
+    if (protection.status === 'active') {
+      await this.repo.deactivate(protection.userId, protection.id, {
+        deactivatedAt: Date.now(),
+      }).catch((err) => logger.warn('force_close_hedge_deactivate_failed', { protectionId: protection.id, error: err.message }));
+    }
+
+    this.logger.info('force_close_hedge_completed', {
+      protectionId: protection.id,
+      asset: protection.inferredAsset,
+      closedQty: actualQty,
+    });
+    return { closed: true, actualQty };
   }
 
   async _tickProtection(protection) {
@@ -770,6 +604,26 @@ class ProtectedPoolDeltaNeutralService {
     const lpPnlUsd = Number(snapshot.pnlTotalUsd || 0);
     const topUpState = this._refreshTopUpWindow(strategyState);
     const referencePrice = Number(strategyState.lastSnapshotPrice || currentPrice);
+
+    // Reconcilia los acumuladores realizados (PnL realized + fees) leyendo
+    // fills nuevos desde Hyperliquid. Esto cubre cierres por cualquier vía
+    // (rebalance interno, deactivation, manual, liquidación) ya que el motor
+    // antes solo capturaba realized en `_executeRebalance` y los $ perdidos
+    // en otros caminos quedaban huérfanos en el balance de la cuenta.
+    //
+    // Si nunca reconciliamos antes, tratamos los acumuladores actuales como
+    // estimaciones legacy y los REEMPLAZAMOS por la suma de fills históricos
+    // (fuente de verdad). En ticks subsecuentes acumulamos sólo el delta.
+    const wasNeverReconciled = !strategyState.lastReconciledFillsAt;
+    const fillsSince = Number(strategyState.lastReconciledFillsAt || 0);
+    const reconciled = await this._reconcileHedgeFills(activeProtection, hl, fillsSince);
+    const reconciledRealizedPnlUsd = wasNeverReconciled
+      ? reconciled.realizedDelta
+      : Number(strategyState.hedgeRealizedPnlUsd || 0) + reconciled.realizedDelta;
+    const reconciledExecutionFeesUsd = wasNeverReconciled
+      ? reconciled.feeDelta
+      : Number(strategyState.executionFeesUsd || 0) + reconciled.feeDelta;
+
     const nextState = {
       ...strategyState,
       ...topUpState,
@@ -784,6 +638,9 @@ class ProtectedPoolDeltaNeutralService {
       rv24hPct: band.rv24hPct,
       fundingAccumUsd,
       hedgeUnrealizedPnlUsd,
+      hedgeRealizedPnlUsd: reconciledRealizedPnlUsd,
+      executionFeesUsd: reconciledExecutionFeesUsd,
+      lastReconciledFillsAt: reconciled.lastFillTime,
       lpPnlUsd,
       distanceToLiqPct,
       marginModeVerified,
@@ -791,10 +648,10 @@ class ProtectedPoolDeltaNeutralService {
       lastObservedBoundarySide: currentBoundarySide,
       netProtectionPnlUsd:
         lpPnlUsd
-        + Number(strategyState.hedgeRealizedPnlUsd || 0)
+        + reconciledRealizedPnlUsd
         + hedgeUnrealizedPnlUsd
         + fundingAccumUsd
-        - Number(strategyState.executionFeesUsd || 0)
+        - reconciledExecutionFeesUsd
         - Number(strategyState.slippageUsd || 0),
       lastError: null,
       cooldownReason: null,
@@ -1007,7 +864,7 @@ class ProtectedPoolDeltaNeutralService {
     protection,
     tradingService,
     hl,
-    position,
+    position: _position,
     actualQty,
     currentPrice,
     metrics,
@@ -1116,12 +973,26 @@ class ProtectedPoolDeltaNeutralService {
 
     const refreshedPosition = await hl.getPosition(protection.inferredAsset).catch((err) => { logger.warn('getPosition failed after rebalance', { poolId: protection.id, asset: protection.inferredAsset, error: err.message }); return null; });
     const actualQtyAfter = refreshedPosition && Number(refreshedPosition.szi) < 0 ? Math.abs(Number(refreshedPosition.szi)) : 0;
-    const realizedDelta = this._estimateRealizedPnl(position, executionSummary, driftQty);
+    // Reconcilia el realized PnL y fees del fill recién ejecutado leyendo de
+    // getUserFills (fuente de verdad). Esto reemplaza el viejo estimador
+    // `_estimateRealizedPnl` que solo cubría reduce-shorts y dependía de un
+    // fillPrice estimado — además NO doble-cuenta porque usa
+    // `lastReconciledFillsAt` como cursor.
+    const wasNeverReconciledExec = !strategyState.lastReconciledFillsAt;
+    const fillsSinceExec = Number(strategyState.lastReconciledFillsAt || 0);
+    const reconciledExec = await this._reconcileHedgeFills(protection, hl, fillsSinceExec);
     const updatedState = {
       ...strategyState,
       status: executionSummary.partial ? 'partial_hedge_warning' : 'healthy',
-      hedgeRealizedPnlUsd: Number(strategyState.hedgeRealizedPnlUsd || 0) + realizedDelta,
-      executionFeesUsd: Number(strategyState.executionFeesUsd || 0) + Number(executionSummary.executionFeeUsd || 0),
+      hedgeRealizedPnlUsd: wasNeverReconciledExec
+        ? reconciledExec.realizedDelta
+        : Number(strategyState.hedgeRealizedPnlUsd || 0) + reconciledExec.realizedDelta,
+      executionFeesUsd: wasNeverReconciledExec
+        ? reconciledExec.feeDelta
+        : Number(strategyState.executionFeesUsd || 0) + reconciledExec.feeDelta,
+      lastReconciledFillsAt: reconciledExec.lastFillTime,
+      // Slippage NO viene en getUserFills — lo seguimos calculando como
+      // |fillPrice - currentPrice| * qty desde el executionSummary local.
       slippageUsd: Number(strategyState.slippageUsd || 0) + Number(executionSummary.slippageUsd || 0),
       lastRebalanceAt: Date.now(),
       lastRebalanceReason: reason,
@@ -1383,6 +1254,35 @@ class ProtectedPoolDeltaNeutralService {
         asset: protection.inferredAsset,
         size: actualQty,
       });
+      // Reconciliar el realized PnL del cierre antes de marcar como
+      // desactivado: los $ perdidos en el close van al accounting del
+      // orquestador en el siguiente tick.
+      try {
+        const wasNeverReconciledClose = !strategyState.lastReconciledFillsAt;
+        const fillsSince = Number(strategyState.lastReconciledFillsAt || 0);
+        const reconciled = await this._reconcileHedgeFills(protection, hl, fillsSince);
+        if (reconciled.fillsCount > 0 || reconciled.lastFillTime > fillsSince) {
+          await this.repo.updateStrategyState(protection.userId, protection.id, {
+            strategyState: {
+              ...strategyState,
+              hedgeRealizedPnlUsd: wasNeverReconciledClose
+                ? reconciled.realizedDelta
+                : Number(strategyState.hedgeRealizedPnlUsd || 0) + reconciled.realizedDelta,
+              executionFeesUsd: wasNeverReconciledClose
+                ? reconciled.feeDelta
+                : Number(strategyState.executionFeesUsd || 0) + reconciled.feeDelta,
+              hedgeUnrealizedPnlUsd: 0,
+              lastReconciledFillsAt: reconciled.lastFillTime,
+              lastActualQty: 0,
+            },
+          });
+        }
+      } catch (reconcileErr) {
+        this.logger.warn('hedge_fills_reconcile_on_deactivation_failed', {
+          protectionId: protection.id,
+          error: reconcileErr.message,
+        });
+      }
       const deactivatedAt = Date.now();
       const finalRangeMetrics = await timeInRangeService.computeIncrementalRangeMetrics(protection, {
         endAt: deactivatedAt,

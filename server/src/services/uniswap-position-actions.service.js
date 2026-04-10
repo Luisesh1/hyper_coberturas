@@ -5,23 +5,17 @@ const {
   validateTickRange,
 } = require('./uniswap/position-validators');
 const {
-  GAS_PER_TX_TYPE,
-  buildGasBreakdown,
   estimateTxPlanCostUsd,
 } = require('./uniswap/gas-cost-estimator');
 const {
   ERC20_ABI,
-  WRAPPED_NATIVE_ABI,
   V3_FACTORY_ABI,
   V3_POOL_ABI,
   V3_POSITION_MANAGER_ABI,
-  V3_SWAP_ROUTER_ABI,
   TRANSFER_EVENT_ABI,
 } = require('./uniswap/abis');
 const {
-  MAX_UINT128,
   MAX_UINT256,
-  DEFAULT_DEADLINE_SECONDS,
   DEFAULT_SLIPPAGE_BPS,
   V3_SWAP_ROUTER_ADDRESS,
   CLOSE_SWAP_BUFFER_BPS,
@@ -30,7 +24,6 @@ const {
 } = require('./uniswap/constants');
 const {
   encodeTx,
-  deadlineFromNow,
   buildApprovalRequirement,
   maybeBuildApprovalTx,
   appendApprovalIfNeeded,
@@ -39,7 +32,7 @@ const {
 } = require('./uniswap/tx-encoders');
 const {
   buildV3IncreaseTx,
-  buildV3DecreaseTx,
+  buildV3DecreaseAndCollectTx,
   buildV3MintTx,
   buildV3SwapTx,
 } = require('./uniswap/tx-builders-v3');
@@ -65,8 +58,12 @@ const uniswapService = require('./uniswap.service');
 const claimFeesService = require('./uniswap-claim-fees.service');
 const protectedPoolRepo = require('../repositories/protected-uniswap-pool.repository');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
+const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
 const smartPoolCreatorService = require('./smart-pool-creator.service');
+const marketService = require('./market.service');
+const { isStableSymbol } = require('./delta-neutral-math.service');
 const logger = require('./logger.service');
+const onChainManager = require('./onchain-manager.service');
 const {
   amountOutMin,
   buildModifyRangeRedeployPlan,
@@ -75,16 +72,10 @@ const {
   estimateSwapValueUsd,
 } = require('../domains/uniswap/pools/domain/position-action-math');
 const {
-  DEFAULT_PERMIT2_EXPIRATION_SECONDS,
-  PERMIT2_ABI,
   PERMIT2_ADDRESS,
-  UNIVERSAL_ROUTER_ABI,
   V4_ACTIONS,
   V4_POSITION_MANAGER_ABI,
   V4_STATE_VIEW_ABI,
-  buildPermit2ApproveCalldata,
-  buildUniversalRouterCalldata,
-  buildV4ModifyLiquiditiesCalldata,
   computeV4PoolId,
   encodeV4CloseCurrencyParams,
   encodeV4MintParams,
@@ -106,9 +97,6 @@ const {
 
 const _finalizeCache = new Map();
 const FINALIZE_CACHE_TTL_MS = 300_000; // 5 min
-
-// PERMIT2_APPROVAL_ABI viene del módulo v4-helpers (ver imports arriba)
-const PERMIT2_APPROVAL_ABI = PERMIT2_ABI;
 
 function normalizeAddress(address, label = 'address') {
   try {
@@ -158,14 +146,7 @@ function normalizeCreatePositionPoolOrder({
 }
 
 function getProvider(networkConfig) {
-  if (!getProvider.cache) getProvider.cache = new Map();
-  if (!getProvider.cache.has(networkConfig.id)) {
-    getProvider.cache.set(
-      networkConfig.id,
-      new ethers.JsonRpcProvider(networkConfig.rpcUrl, networkConfig.chainId, { staticNetwork: true })
-    );
-  }
-  return getProvider.cache.get(networkConfig.id);
+  return onChainManager.getProvider(networkConfig, { scope: 'uniswap-position-actions' });
 }
 
 function getNetworkConfig(network) {
@@ -184,7 +165,7 @@ function ensureSupportedAction(action) {
 
 async function getTokenInfo(provider, address) {
   const tokenAddress = normalizeAddress(address, 'token');
-  const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const contract = onChainManager.getContract({ runner: provider, address: tokenAddress, abi: ERC20_ABI });
   const [symbol, decimals] = await Promise.all([
     contract.symbol().catch(() => 'UNKNOWN'),
     contract.decimals().catch(() => 18),
@@ -198,7 +179,7 @@ async function getTokenInfo(provider, address) {
 }
 
 async function getBalanceAndAllowance(provider, token, walletAddress, spender) {
-  const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
+  const contract = onChainManager.getContract({ runner: provider, address: token.address, abi: ERC20_ABI });
   const [balance, allowance] = await Promise.all([
     contract.balanceOf(walletAddress).catch(() => 0n),
     spender ? contract.allowance(walletAddress, spender).catch(() => 0n) : Promise.resolve(0n),
@@ -208,6 +189,48 @@ async function getBalanceAndAllowance(provider, token, walletAddress, spender) {
     balance,
     allowance,
   };
+}
+
+/**
+ * Versión batched: lee balance+allowance de N tokens contra el mismo spender
+ * en una sola RPC call vía Multicall3. Devuelve el resultado en el mismo
+ * orden que el array de tokens. Si Multicall3 no está disponible cae al
+ * path legacy (Promise.all de getBalanceAndAllowance).
+ */
+async function getBalancesAndAllowancesBatch({ provider, networkConfig, tokens, walletAddress, spender, scope = 'uniswap-position-actions' }) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return [];
+
+  try {
+    const calls = [];
+    for (const token of tokens) {
+      calls.push({ target: token.address, abi: ERC20_ABI, method: 'balanceOf', args: [walletAddress], allowFailure: true });
+      if (spender) {
+        calls.push({ target: token.address, abi: ERC20_ABI, method: 'allowance', args: [walletAddress, spender], allowFailure: true });
+      }
+    }
+    const results = await onChainManager.aggregate({ networkConfig, scope, calls });
+    const out = [];
+    let cursor = 0;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const balanceR = results[cursor++];
+      const balance = balanceR?.success ? BigInt(balanceR.value) : 0n;
+      let allowance = 0n;
+      if (spender) {
+        const allowanceR = results[cursor++];
+        allowance = allowanceR?.success ? BigInt(allowanceR.value) : 0n;
+      }
+      out.push({ balance, allowance });
+    }
+    return out;
+  } catch (mcErr) {
+    logger.warn('balances_allowances_batch_multicall_fallback', {
+      network: networkConfig?.id,
+      tokenCount: tokens.length,
+      error: mcErr?.message,
+      code: mcErr?.code,
+    });
+    return Promise.all(tokens.map((token) => getBalanceAndAllowance(provider, token, walletAddress, spender)));
+  }
 }
 
 function toBigIntAmount(value, decimals, field) {
@@ -225,13 +248,54 @@ function toBigIntAmount(value, decimals, field) {
   return ethers.parseUnits(str, decimals);
 }
 
+// Mapeo del símbolo nativo de la red al símbolo usado en el feed de
+// Hyperliquid (algunas redes renombraron su token, ej. MATIC → POL).
+const NATIVE_SYMBOL_TO_HL_SYMBOL = {
+  ETH: 'ETH',
+  POL: 'MATIC',
+  MATIC: 'MATIC',
+  BNB: 'BNB',
+  AVAX: 'AVAX',
+};
+
+const _nativePriceCache = new Map(); // hlSymbol -> { price, fetchedAt }
+const NATIVE_PRICE_TTL_MS = 60_000;
+
+async function getNativeUsdPrice(networkConfig) {
+  const nativeSymbol = String(networkConfig?.nativeSymbol || '').toUpperCase();
+  const hlSymbol = NATIVE_SYMBOL_TO_HL_SYMBOL[nativeSymbol] || nativeSymbol;
+  if (!hlSymbol) return null;
+
+  const cached = _nativePriceCache.get(hlSymbol);
+  if (cached && Date.now() - cached.fetchedAt < NATIVE_PRICE_TTL_MS) {
+    return cached.price;
+  }
+
+  try {
+    const mids = await marketService.getAllPrices();
+    const raw = mids?.[hlSymbol];
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      _nativePriceCache.set(hlSymbol, { price: numeric, fetchedAt: Date.now() });
+      return numeric;
+    }
+  } catch (err) {
+    logger.warn('native_usd_price_fetch_failed', {
+      network: networkConfig?.id,
+      nativeSymbol,
+      error: err.message,
+    });
+  }
+  return null;
+}
+
 /**
  * Wrapper que adapta el ctx interno al formato esperado por
  * `estimateTxPlanCostUsd`. Mantiene la API legacy para los call sites existentes.
  */
 async function buildEstimatedCosts(ctx, txPlan, { slippageCostUsd = 0 } = {}) {
   const provider = getProvider(ctx.networkConfig);
-  const nativeUsdPrice = ctx.priceCurrent > 1 ? ctx.priceCurrent : (1 / ctx.priceCurrent);
+  const nativeUsdPrice = await getNativeUsdPrice(ctx.networkConfig);
   return estimateTxPlanCostUsd({ provider, txPlan, nativeUsdPrice, slippageCostUsd });
 }
 
@@ -250,6 +314,38 @@ function getCanonicalUsdcTokenForNetwork(network) {
     address: normalizeAddress(token.address, 'usdc'),
     symbol: token.symbol,
     decimals: Number(token.decimals),
+  };
+}
+
+/**
+ * Determina el stablecoin destino al cerrar una posición LP.
+ *
+ * Si el par YA contiene un stablecoin reconocido (USDC, USDT, USDT0, DAI…),
+ * cerramos contra ESE stable: evita un swap stable→stable innecesario que
+ * generaría fees, slippage y, en algunos casos, falla porque no hay un pool
+ * directo con liquidez (ej. USDT0/USDC en Arbitrum V3).
+ *
+ * Si el par no tiene ningún stable, caemos al USDC canónico de la red — que
+ * es el comportamiento histórico.
+ *
+ * @param {{ token0: { symbol, address, decimals }, token1: { symbol, address, decimals } }} ctx
+ * @param {string} networkId
+ */
+function resolveCloseTargetStable(ctx, networkId) {
+  const candidates = [ctx?.token0, ctx?.token1].filter(Boolean);
+  for (const token of candidates) {
+    if (isStableSymbol(token.symbol)) {
+      return {
+        address: normalizeAddress(token.address, 'closeTargetStable'),
+        symbol: token.symbol,
+        decimals: Number(token.decimals),
+        sourceFromPair: true,
+      };
+    }
+  }
+  return {
+    ...getCanonicalUsdcTokenForNetwork(networkId),
+    sourceFromPair: false,
   };
 }
 
@@ -341,29 +437,111 @@ async function loadV3PositionContext({ network, walletAddress, positionIdentifie
   const tokenId = String(positionIdentifier);
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v3.positionManager, 'positionManager');
   const factoryAddress = normalizeAddress(networkConfig.deployments.v3.eventSource, 'factory');
-  const pm = new ethers.Contract(positionManagerAddress, V3_POSITION_MANAGER_ABI, provider);
-  const factory = new ethers.Contract(factoryAddress, V3_FACTORY_ABI, provider);
+  const pm = onChainManager.getContract({ runner: provider, address: positionManagerAddress, abi: V3_POSITION_MANAGER_ABI });
+  const factory = onChainManager.getContract({ runner: provider, address: factoryAddress, abi: V3_FACTORY_ABI });
 
-  const owner = normalizeAddress(await pm.ownerOf(tokenId), 'owner');
-  if (owner.toLowerCase() !== normalizedWallet.toLowerCase()) {
-    throw new ValidationError('La wallet proporcionada no es dueña de esta posicion');
+  // Path optimizado vía Multicall3: 3 round-trips en lugar de 8 reads
+  // sequenciales (ownerOf, positions, 4× token meta, getPool, slot0, tickSpacing).
+  // Si Multicall3 no existe en la red caemos al path legacy con un warning.
+  let owner;
+  let position;
+  let token0;
+  let token1;
+  let poolAddress;
+  let slot0Result;
+  let tickSpacingResult;
+
+  try {
+    // Multicall #1: ownerOf + positions (ambos en el mismo PM)
+    const batch1 = await onChainManager.aggregate({
+      networkConfig,
+      scope: 'uniswap-position-actions',
+      calls: [
+        { target: positionManagerAddress, abi: V3_POSITION_MANAGER_ABI, method: 'ownerOf', args: [tokenId] },
+        { target: positionManagerAddress, abi: V3_POSITION_MANAGER_ABI, method: 'positions', args: [tokenId] },
+      ],
+    });
+    owner = normalizeAddress(batch1[0].value, 'owner');
+    if (owner.toLowerCase() !== normalizedWallet.toLowerCase()) {
+      throw new ValidationError('La wallet proporcionada no es dueña de esta posicion');
+    }
+    position = batch1[1].value;
+
+    // Multicall #2: getPool + 4× token meta (necesitamos position.token0/token1 antes)
+    const token0Address = normalizeAddress(position.token0, 'token0');
+    const token1Address = normalizeAddress(position.token1, 'token1');
+    const batch2 = await onChainManager.aggregate({
+      networkConfig,
+      scope: 'uniswap-position-actions',
+      calls: [
+        { target: factoryAddress, abi: V3_FACTORY_ABI, method: 'getPool', args: [token0Address, token1Address, position.fee] },
+        { target: token0Address, abi: ERC20_ABI, method: 'symbol', allowFailure: true },
+        { target: token0Address, abi: ERC20_ABI, method: 'decimals', allowFailure: true },
+        { target: token1Address, abi: ERC20_ABI, method: 'symbol', allowFailure: true },
+        { target: token1Address, abi: ERC20_ABI, method: 'decimals', allowFailure: true },
+      ],
+    });
+    poolAddress = batch2[0].value;
+    token0 = {
+      address: token0Address,
+      symbol: batch2[1].success ? batch2[1].value : 'UNKNOWN',
+      decimals: batch2[2].success ? Number(batch2[2].value) : 18,
+    };
+    token1 = {
+      address: token1Address,
+      symbol: batch2[3].success ? batch2[3].value : 'UNKNOWN',
+      decimals: batch2[4].success ? Number(batch2[4].value) : 18,
+    };
+
+    if (!poolAddress || poolAddress === ethers.ZeroAddress) {
+      throw new ValidationError('No se encontro el pool asociado a la posicion');
+    }
+
+    // Multicall #3: slot0 + tickSpacing (ya conocemos pool address)
+    const batch3 = await onChainManager.aggregate({
+      networkConfig,
+      scope: 'uniswap-position-actions',
+      calls: [
+        { target: poolAddress, abi: V3_POOL_ABI, method: 'slot0' },
+        { target: poolAddress, abi: V3_POOL_ABI, method: 'tickSpacing' },
+      ],
+    });
+    slot0Result = batch3[0].value;
+    tickSpacingResult = batch3[1].value;
+  } catch (multicallErr) {
+    if (multicallErr instanceof ValidationError) throw multicallErr;
+    logger.warn('load_v3_position_context_multicall_fallback', {
+      network: networkConfig?.id,
+      tokenId,
+      error: multicallErr?.message,
+      code: multicallErr?.code,
+    });
+
+    // Fallback legacy: secuencial sin multicall
+    owner = normalizeAddress(await pm.ownerOf(tokenId), 'owner');
+    if (owner.toLowerCase() !== normalizedWallet.toLowerCase()) {
+      throw new ValidationError('La wallet proporcionada no es dueña de esta posicion');
+    }
+
+    position = await pm.positions(tokenId);
+    [token0, token1] = await Promise.all([
+      getTokenInfo(provider, position.token0),
+      getTokenInfo(provider, position.token1),
+    ]);
+    poolAddress = await factory.getPool(position.token0, position.token1, position.fee);
+    if (!poolAddress || poolAddress === ethers.ZeroAddress) {
+      throw new ValidationError('No se encontro el pool asociado a la posicion');
+    }
+
+    const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
+    [slot0Result, tickSpacingResult] = await Promise.all([
+      pool.slot0(),
+      pool.tickSpacing(),
+    ]);
   }
 
-  const position = await pm.positions(tokenId);
-  const [token0, token1] = await Promise.all([
-    getTokenInfo(provider, position.token0),
-    getTokenInfo(provider, position.token1),
-  ]);
-  const poolAddress = await factory.getPool(position.token0, position.token1, position.fee);
-  if (!poolAddress || poolAddress === ethers.ZeroAddress) {
-    throw new ValidationError('No se encontro el pool asociado a la posicion');
-  }
-
-  const pool = new ethers.Contract(poolAddress, V3_POOL_ABI, provider);
-  const [slot0, tickSpacing] = await Promise.all([
-    pool.slot0(),
-    pool.tickSpacing(),
-  ]);
+  const slot0 = slot0Result;
+  const tickSpacing = tickSpacingResult;
 
   const currentAmounts = liquidityToTokenAmounts({
     liquidity: String(position.liquidity),
@@ -393,6 +571,31 @@ async function loadV3PositionContext({ network, walletAddress, positionIdentifie
   };
 }
 
+async function loadV3DecreaseLiquidityContext({ network, walletAddress, positionIdentifier }) {
+  const networkConfig = getNetworkConfig(network);
+  const provider = getProvider(networkConfig);
+  const normalizedWallet = normalizeAddress(walletAddress, 'walletAddress');
+  const tokenId = String(positionIdentifier);
+  const positionManagerAddress = normalizeAddress(networkConfig.deployments.v3.positionManager, 'positionManager');
+  const pm = onChainManager.getContract({ runner: provider, address: positionManagerAddress, abi: V3_POSITION_MANAGER_ABI });
+
+  const owner = normalizeAddress(await pm.ownerOf(tokenId), 'owner');
+  if (owner.toLowerCase() !== normalizedWallet.toLowerCase()) {
+    throw new ValidationError('La wallet proporcionada no es dueña de esta posicion');
+  }
+
+  const position = await pm.positions(tokenId);
+
+  return {
+    networkConfig,
+    provider,
+    normalizedWallet,
+    tokenId,
+    positionManagerAddress,
+    position,
+  };
+}
+
 async function loadV4PositionContext({ network, walletAddress, positionIdentifier }) {
   const networkConfig = getNetworkConfig(network);
   const provider = getProvider(networkConfig);
@@ -400,8 +603,8 @@ async function loadV4PositionContext({ network, walletAddress, positionIdentifie
   const tokenId = String(positionIdentifier);
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager, 'positionManager');
   const stateViewAddress = normalizeAddress(networkConfig.deployments.v4.stateView, 'stateView');
-  const positionManager = new ethers.Contract(positionManagerAddress, V4_POSITION_MANAGER_ABI, provider);
-  const stateView = new ethers.Contract(stateViewAddress, V4_STATE_VIEW_ABI, provider);
+  const positionManager = onChainManager.getContract({ runner: provider, address: positionManagerAddress, abi: V4_POSITION_MANAGER_ABI });
+  const stateView = onChainManager.getContract({ runner: provider, address: stateViewAddress, abi: V4_STATE_VIEW_ABI });
 
   const owner = normalizeAddress(await positionManager.ownerOf(tokenId), 'owner');
   if (owner.toLowerCase() !== normalizedWallet.toLowerCase()) {
@@ -587,12 +790,172 @@ async function appendFundingSwapTransactions({
 
 async function prepareIncreaseLiquidity(payload) {
   const ctx = await loadV3PositionContext(payload);
+
+  // Smart funding: el cliente envía un `totalUsdTarget` (en USD) en lugar
+  // de amounts crudos. Reusamos el mismo plan + composición que ya hace
+  // `prepareCreatePosition` (wrap → swaps → approvals PM → increase),
+  // pero apuntando a la posición existente: rango y tokens vienen del
+  // ctx, no del payload.
+  const usingSmartFunding = payload.totalUsdTarget != null
+    || Array.isArray(payload.fundingSelections)
+    || Array.isArray(payload.importTokenAddresses);
+
+  if (usingSmartFunding) {
+    const rangeLowerPrice = uniswapService.tickToPrice(
+      Number(ctx.position.tickLower),
+      ctx.token0.decimals,
+      ctx.token1.decimals,
+    );
+    const rangeUpperPrice = uniswapService.tickToPrice(
+      Number(ctx.position.tickUpper),
+      ctx.token0.decimals,
+      ctx.token1.decimals,
+    );
+
+    const plan = await smartPoolCreatorService.buildIncreaseLiquidityFundingPlan({
+      network: payload.network,
+      version: 'v3',
+      walletAddress: payload.walletAddress,
+      token0Address: ctx.token0.address,
+      token1Address: ctx.token1.address,
+      fee: Number(ctx.position.fee),
+      rangeLowerPrice,
+      rangeUpperPrice,
+      currentPrice: ctx.priceCurrent,
+      totalUsdTarget: Number(payload.totalUsdTarget),
+      fundingSelections: payload.fundingSelections,
+      importTokenAddresses: payload.importTokenAddresses || [],
+      maxSlippageBps: payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
+    });
+
+    const amount0Desired = BigInt(plan.expectedPostSwapBalances.amount0Raw);
+    const amount1Desired = BigInt(plan.expectedPostSwapBalances.amount1Raw);
+
+    const txPlan = [];
+    const requiresApproval = [];
+    const allowanceCache = new Map();
+
+    // Seed cache con allowances ya consultadas para el position manager
+    // (ahorra reads cuando el path de swap re-aprovecha la misma allowance).
+    const [token0State, token1State] = await getBalancesAndAllowancesBatch({
+      provider: ctx.provider,
+      networkConfig: ctx.networkConfig,
+      tokens: [ctx.token0, ctx.token1],
+      walletAddress: ctx.normalizedWallet,
+      spender: ctx.positionManagerAddress,
+    });
+    allowanceCache.set(`${ctx.token0.address}:${ctx.positionManagerAddress}`, { ...token0State });
+    allowanceCache.set(`${ctx.token1.address}:${ctx.positionManagerAddress}`, { ...token1State });
+
+    // Combinar wraps nativos (depósitos directos + sources de swap) en una
+    // sola tx, mismo patrón que `prepareCreatePosition`.
+    let totalNativeWrapRaw = 0n;
+    for (const asset of (plan.selectedFundingAssets || [])) {
+      if (asset.isNative && (asset.fundingRole === 'direct_token0' || asset.fundingRole === 'direct_token1')) {
+        totalNativeWrapRaw += BigInt(asset.useAmountRaw || 0);
+      }
+    }
+    for (const swap of (plan.swapPlan || [])) {
+      if (swap.requiresWrapNative) {
+        totalNativeWrapRaw += BigInt(swap.amountInRaw || 0);
+      }
+    }
+    if (totalNativeWrapRaw > 0n) {
+      const wrapToken = ctx.token0.address.toLowerCase() === plan.wrappedNativeAddress?.toLowerCase()
+        ? ctx.token0
+        : ctx.token1.address.toLowerCase() === plan.wrappedNativeAddress?.toLowerCase()
+          ? ctx.token1
+          : ctx.token0;
+      txPlan.push(buildWrapNativeTx(wrapToken, totalNativeWrapRaw, ctx.networkConfig.chainId));
+    }
+
+    const swapPlanNoWraps = (plan.swapPlan || []).map((s) => ({ ...s, requiresWrapNative: false }));
+    await appendFundingSwapTransactions({
+      provider: ctx.provider,
+      networkConfig: ctx.networkConfig,
+      normalizedWallet: ctx.normalizedWallet,
+      swapPlan: swapPlanNoWraps,
+      requiresApproval,
+      txPlan,
+      allowanceCache,
+    });
+
+    // Tras los swaps, aprobar el Position Manager si la allowance no
+    // alcanza para los amounts post-swap (mismo patrón que en
+    // `prepareCreatePosition`).
+    const token0PmState = allowanceCache.get(`${ctx.token0.address}:${ctx.positionManagerAddress}`) || token0State;
+    const token1PmState = allowanceCache.get(`${ctx.token1.address}:${ctx.positionManagerAddress}`) || token1State;
+    if (token0PmState.allowance < amount0Desired) {
+      requiresApproval.push(buildApprovalRequirement(ctx.token0, ctx.positionManagerAddress, amount0Desired));
+      txPlan.push(maybeBuildApprovalTx(ctx.token0, ctx.positionManagerAddress, amount0Desired, ctx.networkConfig.chainId));
+    }
+    if (token1PmState.allowance < amount1Desired) {
+      requiresApproval.push(buildApprovalRequirement(ctx.token1, ctx.positionManagerAddress, amount1Desired));
+      txPlan.push(maybeBuildApprovalTx(ctx.token1, ctx.positionManagerAddress, amount1Desired, ctx.networkConfig.chainId));
+    }
+
+    txPlan.push(buildV3IncreaseTx(ctx, {
+      amount0Desired,
+      amount1Desired,
+      slippageBps: payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
+    }));
+
+    return {
+      action: 'increase-liquidity',
+      network: ctx.networkConfig.id,
+      version: 'v3',
+      positionIdentifier: ctx.tokenId,
+      walletAddress: ctx.normalizedWallet,
+      quoteSummary: {
+        token0: ctx.token0,
+        token1: ctx.token1,
+        amount0Desired: ethers.formatUnits(amount0Desired, ctx.token0.decimals),
+        amount1Desired: ethers.formatUnits(amount1Desired, ctx.token1.decimals),
+        currentAmounts: ctx.currentAmounts,
+        liquidity: ctx.position.liquidity.toString(),
+        currentPrice: plan.currentPrice,
+        rangeLowerPrice,
+        rangeUpperPrice,
+        gasReserve: plan.gasReserve,
+        fundingPlan: plan.fundingPlan,
+        swapCount: plan.swapPlan.length,
+      },
+      requiresApproval,
+      txPlan: txPlan.filter(Boolean),
+      fundingPlan: {
+        ...plan.fundingPlan,
+        gasReserve: plan.gasReserve,
+        selectedFundingAssets: plan.selectedFundingAssets,
+      },
+      swapPlan: plan.swapPlan,
+      availableFundingAssets: plan.availableFundingAssets,
+      warnings: plan.warnings,
+      postActionPositionPreview: buildPostPreview({
+        network: ctx.networkConfig.id,
+        version: 'v3',
+        positionIdentifier: ctx.tokenId,
+        tickLower: Number(ctx.position.tickLower),
+        tickUpper: Number(ctx.position.tickUpper),
+        amount0Desired,
+        amount1Desired,
+        token0: ctx.token0,
+        token1: ctx.token1,
+        priceCurrent: ctx.priceCurrent,
+      }),
+      protectionImpact: buildProtectionImpact(ctx.tokenId),
+    };
+  }
+
+  // ---------- Path legacy: amounts crudos ----------
   const amount0Desired = toBigIntAmount(payload.amount0Desired, ctx.token0.decimals, 'amount0Desired');
   const amount1Desired = toBigIntAmount(payload.amount1Desired, ctx.token1.decimals, 'amount1Desired');
-  const [token0State, token1State] = await Promise.all([
-    getBalanceAndAllowance(ctx.provider, ctx.token0, ctx.normalizedWallet, ctx.positionManagerAddress),
-    getBalanceAndAllowance(ctx.provider, ctx.token1, ctx.normalizedWallet, ctx.positionManagerAddress),
-  ]);
+  const [token0State, token1State] = await getBalancesAndAllowancesBatch({
+    provider: ctx.provider,
+    networkConfig: ctx.networkConfig,
+    tokens: [ctx.token0, ctx.token1],
+    walletAddress: ctx.normalizedWallet,
+    spender: ctx.positionManagerAddress,
+  });
 
   if (token0State.balance < amount0Desired || token1State.balance < amount1Desired) {
     throw new ValidationError('La wallet no tiene balance suficiente para aumentar liquidez');
@@ -653,7 +1016,7 @@ async function prepareIncreaseLiquidity(payload) {
 }
 
 async function prepareDecreaseLiquidity(payload) {
-  const ctx = await loadV3PositionContext(payload);
+  const ctx = await loadV3DecreaseLiquidityContext(payload);
   const percent = Number(payload.liquidityPercent ?? 100);
   if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
     throw new ValidationError('liquidityPercent debe estar entre 0 y 100');
@@ -671,15 +1034,18 @@ async function prepareDecreaseLiquidity(payload) {
     positionIdentifier: ctx.tokenId,
     walletAddress: ctx.normalizedWallet,
     quoteSummary: {
-      token0: ctx.token0,
-      token1: ctx.token1,
       liquidityPercent: percent,
-      estimatedCurrentAmounts: ctx.currentAmounts,
       currentLiquidity: ctx.position.liquidity.toString(),
       liquidityDelta: liquidityDelta.toString(),
+      receivesDirectlyInWallet: true,
+      txCount: 1,
     },
     requiresApproval: [],
-    txPlan: [buildV3DecreaseTx(ctx, { liquidityDelta, slippageBps: payload.slippageBps })],
+    txPlan: [buildV3DecreaseAndCollectTx(ctx, {
+      liquidityDelta,
+      recipient: ctx.normalizedWallet,
+      slippageBps: payload.slippageBps,
+    })],
     postActionPositionPreview: {
       network: ctx.networkConfig.id,
       version: 'v3',
@@ -783,10 +1149,13 @@ async function prepareModifyRange(payload) {
   const provider = getProvider(ctx.networkConfig);
   let amount0Available, amount1Available;
   if (positionLiquidity === 0n && amount0Current === 0n && amount1Current === 0n && tokensOwed0 === 0n && tokensOwed1 === 0n) {
-    const [bal0, bal1] = await Promise.all([
-      getBalanceAndAllowance(provider, ctx.token0, ctx.normalizedWallet, ctx.positionManagerAddress),
-      getBalanceAndAllowance(provider, ctx.token1, ctx.normalizedWallet, ctx.positionManagerAddress),
-    ]);
+    const [bal0, bal1] = await getBalancesAndAllowancesBatch({
+      provider,
+      networkConfig: ctx.networkConfig,
+      tokens: [ctx.token0, ctx.token1],
+      walletAddress: ctx.normalizedWallet,
+      spender: ctx.positionManagerAddress,
+    });
     amount0Available = bal0.balance;
     amount1Available = bal1.balance;
     if (amount0Available === 0n && amount1Available === 0n) {
@@ -804,11 +1173,17 @@ async function prepareModifyRange(payload) {
   const txPlan = [];
   const requiresApproval = [];
 
-  // Only decrease + collect if there's liquidity or pending fees
+  // Combinar decrease+collect en una sola tx vía PositionManager.multicall()
+  // cuando hay liquidez activa. Si solo hay tokensOwed pendientes (caso de
+  // modify-range tras un decrease previo sin collect), llamamos a collect
+  // standalone.
   if (positionLiquidity > 0n) {
-    txPlan.push(buildV3DecreaseTx(ctx, { liquidityDelta: positionLiquidity, slippageBps: payload.slippageBps }));
-  }
-  if (positionLiquidity > 0n || tokensOwed0 > 0n || tokensOwed1 > 0n) {
+    txPlan.push(buildV3DecreaseAndCollectTx(ctx, {
+      liquidityDelta: positionLiquidity,
+      recipient: ctx.normalizedWallet,
+      slippageBps: payload.slippageBps,
+    }));
+  } else if (tokensOwed0 > 0n || tokensOwed1 > 0n) {
     txPlan.push(...(await prepareCollectFees(payload)).txPlan);
   }
 
@@ -919,9 +1294,13 @@ async function prepareRebalance(payload) {
     slippageBps: payload.slippageBps,
   });
 
+  // decrease+collect combinado en una sola tx vía PositionManager.multicall()
   const txPlan = [
-    buildV3DecreaseTx(ctx, { liquidityDelta: BigInt(ctx.position.liquidity), slippageBps: payload.slippageBps }),
-    ...(await prepareCollectFees(payload)).txPlan,
+    buildV3DecreaseAndCollectTx(ctx, {
+      liquidityDelta: BigInt(ctx.position.liquidity),
+      recipient: ctx.normalizedWallet,
+      slippageBps: payload.slippageBps,
+    }),
   ];
   const requiresApproval = [];
 
@@ -1006,10 +1385,18 @@ async function prepareCloseKeepAssets(payload) {
   }
 
   const txPlan = [];
+  // decrease+collect combinado en 1 sola tx vía PositionManager.multicall().
+  // Si no hay liquidez activa pero quedan tokensOwed (caso "decrease previo
+  // sin collect"), seguimos haciendo collect standalone.
   if (positionLiquidity > 0n) {
-    txPlan.push(buildV3DecreaseTx(ctx, { liquidityDelta: positionLiquidity, slippageBps: payload.slippageBps }));
+    txPlan.push(buildV3DecreaseAndCollectTx(ctx, {
+      liquidityDelta: positionLiquidity,
+      recipient: ctx.normalizedWallet,
+      slippageBps: payload.slippageBps,
+    }));
+  } else if (tokensOwed0 > 0n || tokensOwed1 > 0n) {
+    txPlan.push(...(await prepareCollectFees(payload)).txPlan);
   }
-  txPlan.push(...(await prepareCollectFees(payload)).txPlan);
 
   return {
     action: 'close-keep-assets',
@@ -1045,7 +1432,7 @@ async function prepareCloseKeepAssets(payload) {
 
 async function prepareCloseToUsdc(payload) {
   const ctx = await loadV3PositionContext(payload);
-  const usdc = getCanonicalUsdcTokenForNetwork(ctx.networkConfig.id);
+  const usdc = resolveCloseTargetStable(ctx, ctx.networkConfig.id);
   const wrappedNative = getWrappedNativeTokenForNetwork(ctx.networkConfig.id);
   const reserveRaw = getGasReserveRaw(ctx.networkConfig.id);
   const nativeBalanceRaw = await ctx.provider.getBalance(ctx.normalizedWallet).catch(() => 0n);
@@ -1062,10 +1449,16 @@ async function prepareCloseToUsdc(payload) {
   }
 
   const txPlan = [];
+  // decrease+collect combinado en 1 sola tx vía PositionManager.multicall().
   if (positionLiquidity > 0n) {
-    txPlan.push(buildV3DecreaseTx(ctx, { liquidityDelta: positionLiquidity, slippageBps: payload.slippageBps }));
+    txPlan.push(buildV3DecreaseAndCollectTx(ctx, {
+      liquidityDelta: positionLiquidity,
+      recipient: ctx.normalizedWallet,
+      slippageBps: payload.slippageBps,
+    }));
+  } else if (tokensOwed0 > 0n || tokensOwed1 > 0n) {
+    txPlan.push(...(await prepareCollectFees(payload)).txPlan);
   }
-  txPlan.push(...(await prepareCollectFees(payload)).txPlan);
 
   const requiresApproval = [];
   const warnings = [];
@@ -1229,10 +1622,13 @@ async function prepareCreatePosition(payload) {
     validateTickRange(tickLower, tickUpper);
 
     const pmAddress = normalizeAddress(networkConfig.deployments.v3.positionManager);
-    const [token0State, token1State] = await Promise.all([
-      getBalanceAndAllowance(provider, token0, normalizedWallet, pmAddress),
-      getBalanceAndAllowance(provider, token1, normalizedWallet, pmAddress),
-    ]);
+    const [token0State, token1State] = await getBalancesAndAllowancesBatch({
+      provider,
+      networkConfig,
+      tokens: [token0, token1],
+      walletAddress: normalizedWallet,
+      spender: pmAddress,
+    });
     const dummyCtx = {
       networkConfig,
       normalizedWallet,
@@ -1391,13 +1787,17 @@ async function prepareCreatePosition(payload) {
     throw new ValidationError('fee invalido');
   }
 
-  const factory = new ethers.Contract(normalizeAddress(networkConfig.deployments.v3.eventSource), V3_FACTORY_ABI, provider);
+  const factory = onChainManager.getContract({
+    runner: provider,
+    address: normalizeAddress(networkConfig.deployments.v3.eventSource),
+    abi: V3_FACTORY_ABI,
+  });
   const poolAddress = await factory.getPool(token0.address, token1.address, fee);
   if (!poolAddress || poolAddress === ethers.ZeroAddress) {
     throw new ValidationError('Solo se soporta crear posicion sobre pools existentes');
   }
 
-  const pool = new ethers.Contract(poolAddress, V3_POOL_ABI, provider);
+  const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
   const [tickSpacing, slot0, poolToken0Address, poolToken1Address] = await Promise.all([
     pool.tickSpacing(),
     pool.slot0(),
@@ -1419,10 +1819,13 @@ async function prepareCreatePosition(payload) {
   const amount0Desired = canonicalPlan.amount0Desired;
   const amount1Desired = canonicalPlan.amount1Desired;
   const pmAddress = normalizeAddress(networkConfig.deployments.v3.positionManager);
-  const [token0State, token1State] = await Promise.all([
-    getBalanceAndAllowance(provider, canonicalToken0, normalizedWallet, pmAddress),
-    getBalanceAndAllowance(provider, canonicalToken1, normalizedWallet, pmAddress),
-  ]);
+  const [token0State, token1State] = await getBalancesAndAllowancesBatch({
+    provider,
+    networkConfig,
+    tokens: [canonicalToken0, canonicalToken1],
+    walletAddress: normalizedWallet,
+    spender: pmAddress,
+  });
   if (token0State.balance < amount0Desired || token1State.balance < amount1Desired) {
     throw new ValidationError('La wallet no tiene balance suficiente para crear la posicion');
   }
@@ -2167,7 +2570,11 @@ async function prepareCreatePositionV4(payload) {
     throw new ValidationError('Los pools v4 con token nativo no estan soportados en gestion on-chain por ahora');
   }
   const poolId = payload.poolId || computeV4PoolId(poolKey);
-  const stateView = new ethers.Contract(normalizeAddress(networkConfig.deployments.v4.stateView), V4_STATE_VIEW_ABI, provider);
+  const stateView = onChainManager.getContract({
+    runner: provider,
+    address: normalizeAddress(networkConfig.deployments.v4.stateView),
+    abi: V4_STATE_VIEW_ABI,
+  });
   let slot0;
   try {
     slot0 = await stateView.getSlot0(poolId);
@@ -2550,7 +2957,7 @@ async function prepareCloseKeepAssetsV4(payload) {
 
 async function prepareCloseToUsdcV4(payload) {
   const ctx = await loadV4PositionContext(payload);
-  const usdc = getCanonicalUsdcTokenForNetwork(ctx.networkConfig.id);
+  const usdc = resolveCloseTargetStable(ctx, ctx.networkConfig.id);
   const wrappedNative = getWrappedNativeTokenForNetwork(ctx.networkConfig.id);
   const reserveRaw = getGasReserveRaw(ctx.networkConfig.id);
   const nativeBalanceRaw = await ctx.provider.getBalance(ctx.normalizedWallet).catch(() => 0n);
@@ -2781,9 +3188,15 @@ async function preparePositionAction({ action, payload }) {
   return result;
 }
 
-async function waitForReceipt(provider, txHash) {
+async function waitForReceipt(networkConfig, txHash) {
   try {
-    return await provider.waitForTransaction(txHash, 1, 90_000);
+    return await onChainManager.waitForReceipt({
+      networkConfig,
+      txHash,
+      confirmations: 1,
+      timeoutMs: 90_000,
+      scope: 'uniswap-position-actions',
+    });
   } catch (err) {
     throw new ExternalServiceError(`No se pudo obtener el receipt de ${txHash}: ${err.message}`);
   }
@@ -2851,11 +3264,56 @@ async function updateProtectionRecords({
         lastTxHash: txHashes[txHashes.length - 1] || null,
         lastTxAt: now,
       });
-      await protectedPoolRepo.deactivate(userId, protection.id, {
-        deactivatedAt: now,
-        poolSnapshot: refreshedSnapshot || protection.poolSnapshot || null,
-        rangeFrozenAt: now,
-      });
+
+      // CRÍTICO: cerrar el hedge en Hyperliquid ANTES de marcar la
+      // protección como inactive en BD. Si solo marcamos inactive en BD
+      // (como hacíamos antes), la posición short queda huérfana en la
+      // cuenta del usuario — el LP se cierra pero la cobertura sigue
+      // sangrando funding/PnL.
+      //
+      // `deactivateProtectedPool` delega en
+      // `protectedPoolDeltaNeutralService.requestDeactivate` para modo
+      // delta-neutral, que ejecuta `closePosition` y reconcilia los fills
+      // antes de persistir el `deactivatedAt` final.
+      let closedHedgeOk = false;
+      if (protection.protectionMode === 'delta_neutral') {
+        try {
+          await protectedPoolDeltaNeutralService.requestDeactivate(protection);
+          closedHedgeOk = true;
+        } catch (err) {
+          logger.error('uniswap_position_action_hedge_close_failed', {
+            action,
+            userId,
+            protectionId: protection.id,
+            asset: protection.inferredAsset,
+            error: err.message,
+          });
+          // No re-lanzamos: el LP ya se cerró on-chain. Marcamos la
+          // protección con `lastError` y la dejamos en `deactivation_pending`
+          // para que el monitor reintente cerrar el hedge.
+          await protectedPoolRepo.updateStrategyState(userId, protection.id, {
+            strategyState: {
+              ...(protection.strategyState || {}),
+              status: 'deactivation_pending',
+              lastError: `hedge_close_failed_on_lp_close: ${err.message}`,
+              deactivationRequestedAt: now,
+            },
+          }).catch((stateErr) => logger.warn('hedge_close_state_persist_failed', { protectionId: protection.id, error: stateErr.message }));
+        }
+      }
+
+      // Si el hedge ya se cerró arriba (delta-neutral path lo hizo
+      // dentro de `_continueDeactivation`), evitamos doble-deactivate.
+      // Si no es delta-neutral, o si delta-neutral falló, marcamos
+      // inactive aquí para mantener compatibilidad con el comportamiento
+      // legacy (legacy hedges no abren posiciones automáticamente).
+      if (!closedHedgeOk || protection.protectionMode !== 'delta_neutral') {
+        await protectedPoolRepo.deactivate(userId, protection.id, {
+          deactivatedAt: now,
+          poolSnapshot: refreshedSnapshot || protection.poolSnapshot || null,
+          rangeFrozenAt: now,
+        });
+      }
     }
 
     try {
@@ -2941,7 +3399,40 @@ async function updateProtectionRecords({
   };
 }
 
-async function finalizePositionAction({
+async function collectFinalizeReceipts({
+  action,
+  network,
+  version: _version,
+  walletAddress,
+  txHashes,
+  onProgress,
+}) {
+  ensureSupportedAction(action);
+  if (!Array.isArray(txHashes) || txHashes.length === 0) {
+    throw new ValidationError('txHashes es requerido');
+  }
+
+  const networkConfig = getNetworkConfig(network);
+  const provider = getProvider(networkConfig);
+  const normalizedWallet = normalizeAddress(walletAddress, 'walletAddress');
+  const receipts = [];
+  for (const txHash of txHashes) {
+    onProgress?.('waiting_receipts', { txHash });
+    const receipt = await waitForReceipt(networkConfig, txHash);
+    if (!receipt) throw new ExternalServiceError(`Timeout esperando receipt de ${txHash}`);
+    if (receipt.status !== 1) throw new ValidationError(`La transaccion ${txHash} fallo on-chain`);
+    receipts.push(receipt);
+  }
+
+  return {
+    networkConfig,
+    provider,
+    normalizedWallet,
+    receipts,
+  };
+}
+
+async function finalizePositionActionAfterReceipts({
   userId,
   action,
   network,
@@ -2949,6 +3440,8 @@ async function finalizePositionAction({
   walletAddress,
   positionIdentifier,
   txHashes,
+  receipts,
+  onProgress,
 }) {
   ensureSupportedAction(action);
   if (!Array.isArray(txHashes) || txHashes.length === 0) {
@@ -2962,15 +3455,7 @@ async function finalizePositionAction({
   }
 
   const networkConfig = getNetworkConfig(network);
-  const provider = getProvider(networkConfig);
   const normalizedWallet = normalizeAddress(walletAddress, 'walletAddress');
-  const receipts = [];
-  for (const txHash of txHashes) {
-    const receipt = await waitForReceipt(provider, txHash);
-    if (!receipt) throw new ExternalServiceError(`Timeout esperando receipt de ${txHash}`);
-    if (receipt.status !== 1) throw new ValidationError(`La transaccion ${txHash} fallo on-chain`);
-    receipts.push(receipt);
-  }
 
   const positionManagerAddress = version === 'v3'
     ? normalizeAddress(networkConfig.deployments.v3.positionManager)
@@ -2980,6 +3465,7 @@ async function finalizePositionAction({
 
   let refreshedSnapshot = null;
   if (finalPositionIdentifier) {
+    onProgress?.('refreshing_snapshot', { positionIdentifier: finalPositionIdentifier });
     try {
       refreshedSnapshot = await loadWalletPoolSnapshot(userId, {
         network,
@@ -2999,6 +3485,10 @@ async function finalizePositionAction({
     }
   }
 
+  onProgress?.('migrating_protection', {
+    oldPositionIdentifier: positionIdentifier ? String(positionIdentifier) : null,
+    newPositionIdentifier: mintedPositionIdentifier || null,
+  });
   const protectionMigration = await updateProtectionRecords({
     userId,
     action,
@@ -3032,13 +3522,110 @@ async function finalizePositionAction({
   return finalResult;
 }
 
+async function finalizePositionAction({
+  userId,
+  action,
+  network,
+  version,
+  walletAddress,
+  positionIdentifier,
+  txHashes,
+  onProgress,
+}) {
+  const { receipts } = await collectFinalizeReceipts({
+    action,
+    network,
+    version,
+    walletAddress,
+    txHashes,
+    onProgress,
+  });
+
+  return finalizePositionActionAfterReceipts({
+    userId,
+    action,
+    network,
+    version,
+    walletAddress,
+    positionIdentifier,
+    txHashes,
+    receipts,
+    onProgress,
+  });
+}
+
+/**
+ * Resuelve el plan de fondeo (preview) para un increase-liquidity smart
+ * sobre una posición existente. El cliente lo llama desde el paso FUNDING
+ * del modal para iterar selecciones de assets sin construir el txPlan
+ * completo cada vez. Carga la posición, deriva rango/tokens/fee y delega
+ * en `smartPoolCreatorService.buildIncreaseLiquidityFundingPlan`.
+ */
+async function buildIncreaseLiquidityFundingPlanFromPosition(payload) {
+  const version = String(payload.version || 'v3').toLowerCase();
+  if (version === 'v4') {
+    const ctx = await loadV4PositionContext(payload);
+    const rangeLowerPrice = uniswapService.tickToPrice(ctx.tickLower, ctx.token0.decimals, ctx.token1.decimals);
+    const rangeUpperPrice = uniswapService.tickToPrice(ctx.tickUpper, ctx.token0.decimals, ctx.token1.decimals);
+    return smartPoolCreatorService.buildIncreaseLiquidityFundingPlan({
+      network: payload.network,
+      version: 'v4',
+      walletAddress: payload.walletAddress,
+      token0Address: ctx.token0.address,
+      token1Address: ctx.token1.address,
+      fee: Number(ctx.poolKey.fee),
+      tickSpacing: Number(ctx.poolKey.tickSpacing),
+      hooks: ctx.poolKey.hooks,
+      poolId: ctx.poolId,
+      rangeLowerPrice,
+      rangeUpperPrice,
+      currentPrice: ctx.priceCurrent,
+      totalUsdTarget: Number(payload.totalUsdTarget),
+      fundingSelections: payload.fundingSelections,
+      importTokenAddresses: payload.importTokenAddresses || [],
+      maxSlippageBps: payload.maxSlippageBps ?? DEFAULT_SLIPPAGE_BPS,
+    });
+  }
+
+  const ctx = await loadV3PositionContext(payload);
+  const rangeLowerPrice = uniswapService.tickToPrice(
+    Number(ctx.position.tickLower),
+    ctx.token0.decimals,
+    ctx.token1.decimals,
+  );
+  const rangeUpperPrice = uniswapService.tickToPrice(
+    Number(ctx.position.tickUpper),
+    ctx.token0.decimals,
+    ctx.token1.decimals,
+  );
+  return smartPoolCreatorService.buildIncreaseLiquidityFundingPlan({
+    network: payload.network,
+    version: 'v3',
+    walletAddress: payload.walletAddress,
+    token0Address: ctx.token0.address,
+    token1Address: ctx.token1.address,
+    fee: Number(ctx.position.fee),
+    rangeLowerPrice,
+    rangeUpperPrice,
+    currentPrice: ctx.priceCurrent,
+    totalUsdTarget: Number(payload.totalUsdTarget),
+    fundingSelections: payload.fundingSelections,
+    importTokenAddresses: payload.importTokenAddresses || [],
+    maxSlippageBps: payload.maxSlippageBps ?? DEFAULT_SLIPPAGE_BPS,
+  });
+}
+
 module.exports = {
   ACTIONS: [...ACTIONS],
   preparePositionAction,
   finalizePositionAction,
+  collectFinalizeReceipts,
+  finalizePositionActionAfterReceipts,
+  buildIncreaseLiquidityFundingPlanFromPosition,
   __test: {
     buildModifyRangeRedeployPlan,
     buildRebalanceSwap,
     computeOptimalWeightToken0Pct,
+    resolveCloseTargetStable,
   },
 };

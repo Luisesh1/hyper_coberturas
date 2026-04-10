@@ -4,6 +4,7 @@
  */
 
 const { ethers } = require('ethers');
+const onChainManager = require('../onchain-manager.service');
 const {
   DEFAULT_PERMIT2_EXPIRATION_SECONDS,
   PERMIT2_ABI,
@@ -63,8 +64,8 @@ function buildPermit2ApproveTx(token, spender, amount, chainId, permit2Address) 
  * - allowance interna de Permit2 hacia el spender
  */
 async function getPermit2State(provider, token, walletAddress, spender, permit2Address = PERMIT2_ADDRESS) {
-  const tokenContract = new ethers.Contract(token.address, ERC20_ABI, provider);
-  const permit2 = new ethers.Contract(permit2Address, PERMIT2_ABI, provider);
+  const tokenContract = onChainManager.getContract({ runner: provider, address: token.address, abi: ERC20_ABI });
+  const permit2 = onChainManager.getContract({ runner: provider, address: permit2Address, abi: PERMIT2_ABI });
   const [[balance, tokenAllowance], permit2Allowance] = await Promise.all([
     Promise.all([
       tokenContract.balanceOf(walletAddress).catch(() => 0n),

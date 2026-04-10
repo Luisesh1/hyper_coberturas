@@ -1,0 +1,436 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--uni-border);
+  background: linear-gradient(180deg, rgba(11, 18, 26, 0.96), rgba(8, 13, 19, 0.94));
+  box-shadow: var(--uni-shadow);
+  position: relative;
+  transition: border-color 0.18s ease, transform 0.12s ease;
+}
+
+.card:hover {
+  border-color: var(--uni-border-strong);
+}
+
+.card.urgent {
+  border-color: rgba(255, 125, 125, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 125, 125, 0.18), var(--uni-shadow);
+}
+
+.card.warn {
+  border-color: rgba(255, 191, 95, 0.5);
+}
+
+/* ───────── Header ───────── */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.headerInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+  color: var(--uni-text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  font-size: 0.76rem;
+  color: var(--uni-text-2);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.pair {
+  color: var(--uni-text-1);
+  font-weight: 800;
+}
+
+.dot {
+  color: var(--uni-text-3);
+  margin: 0 2px;
+}
+
+.badge {
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--uni-border);
+  white-space: nowrap;
+}
+
+.badge_ok      { color: var(--uni-green); border-color: rgba(61, 217, 145, 0.4); }
+.badge_warn    { color: var(--uni-amber); border-color: rgba(255, 191, 95, 0.5); }
+.badge_urgent  { color: var(--uni-red); border-color: rgba(255, 125, 125, 0.6); animation: pulse 2s ease-in-out infinite; }
+.badge_info    { color: var(--uni-cyan); border-color: rgba(102, 225, 219, 0.4); }
+.badge_muted   { color: var(--uni-text-3); }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 125, 125, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 125, 125, 0); }
+}
+
+/* ───────── Banner ───────── */
+.banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  font-size: 0.85rem;
+}
+
+.banner_urgent {
+  background: rgba(255, 125, 125, 0.12);
+  border: 1px solid rgba(255, 125, 125, 0.4);
+  color: var(--uni-red);
+}
+
+.banner_warn {
+  background: rgba(255, 191, 95, 0.10);
+  border: 1px solid rgba(255, 191, 95, 0.35);
+  color: var(--uni-amber);
+}
+
+.banner_info {
+  background: rgba(102, 225, 219, 0.10);
+  border: 1px solid rgba(102, 225, 219, 0.35);
+  color: var(--uni-cyan);
+}
+
+.banner strong {
+  font-size: 0.92rem;
+}
+
+.banner span {
+  color: var(--uni-text-1);
+}
+
+/* ───────── Idle state ───────── */
+.idleState {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(102, 225, 219, 0.04);
+  border: 1px dashed rgba(102, 225, 219, 0.28);
+}
+
+.idleIcon {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.idleText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.idleText strong {
+  color: var(--uni-cyan);
+  font-size: 0.9rem;
+}
+
+.idleText span {
+  color: var(--uni-text-2);
+  font-size: 0.78rem;
+}
+
+/* ───────── Price delta ───────── */
+.priceDeltaRow {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.priceDeltaLabel {
+  font-size: 0.7rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+.priceDeltaValue {
+  font-size: 0.85rem;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.delta_positive { color: var(--uni-green); }
+.delta_negative { color: var(--uni-red); }
+.delta_neutral  { color: var(--uni-text-2); }
+
+/* ───────── Strategy collapsible ───────── */
+.strategyBlock {
+  border: 1px solid var(--uni-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.015);
+  overflow: hidden;
+}
+
+.strategySummary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 13px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--uni-text-1);
+  font-weight: 700;
+  list-style: none;
+  user-select: none;
+}
+
+.strategySummary::-webkit-details-marker {
+  display: none;
+}
+
+.strategySummary:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.strategyHint {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--uni-text-3);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.strategyGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 4px 10px 12px;
+}
+
+.strategyCell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--uni-bg-1);
+  border: 1px solid var(--uni-border);
+}
+
+.strategyCellLabel {
+  font-size: 0.6rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.strategyCellValue {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--uni-text-0);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ───────── Meta row ───────── */
+.meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.74rem;
+  color: var(--uni-text-3);
+}
+
+.metaInfo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.evalDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--uni-cyan);
+  box-shadow: 0 0 6px rgba(102, 225, 219, 0.5);
+  animation: dotPulse 3s ease-in-out infinite;
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.metaActions {
+  display: flex;
+  gap: 6px;
+}
+
+.metaBtn {
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--uni-border);
+  background: var(--uni-bg-1);
+  color: var(--uni-text-1);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.metaBtn:hover:not(:disabled) {
+  background: var(--uni-bg-2);
+  border-color: var(--uni-border-strong);
+}
+
+.metaBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.metaBtnBusy {
+  color: var(--uni-cyan);
+  border-color: rgba(102, 225, 219, 0.4);
+}
+
+/* ───────── Actions ───────── */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--uni-border);
+  background: var(--uni-bg-1);
+  color: var(--uni-text-1);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+}
+
+.actionBtn:hover:not(:disabled) {
+  background: var(--uni-bg-2);
+  border-color: var(--uni-border-strong);
+}
+
+.actionBtn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.actionBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.actionIcon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.actionPrimary {
+  background: rgba(102, 225, 219, 0.16);
+  border-color: rgba(102, 225, 219, 0.5);
+  color: var(--uni-cyan);
+}
+
+.actionPrimary:hover:not(:disabled) {
+  background: rgba(102, 225, 219, 0.24);
+}
+
+.action_urgent {
+  background: rgba(255, 125, 125, 0.14);
+  border-color: rgba(255, 125, 125, 0.55);
+  color: var(--uni-red);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.action_warn {
+  background: rgba(255, 191, 95, 0.14);
+  border-color: rgba(255, 191, 95, 0.5);
+  color: var(--uni-amber);
+}
+
+.action_info {
+  background: rgba(102, 225, 219, 0.14);
+  border-color: rgba(102, 225, 219, 0.45);
+  color: var(--uni-cyan);
+}
+
+.killBtn {
+  border-color: rgba(255, 125, 125, 0.4);
+  color: var(--uni-red);
+}
+
+.killBtn:hover:not(:disabled) {
+  background: rgba(255, 125, 125, 0.08);
+}
+
+.killArchiveBtn {
+  border-color: rgba(255, 125, 125, 0.55);
+  background: rgba(255, 125, 125, 0.06);
+  color: var(--uni-red);
+  font-weight: 800;
+}
+
+.killArchiveBtn:hover:not(:disabled) {
+  background: rgba(255, 125, 125, 0.14);
+  border-color: rgba(255, 125, 125, 0.75);
+}
+
+.archiveBtn {
+  color: var(--uni-text-3);
+}
+
+/* ───────── Mobile ───────── */
+@media (max-width: 540px) {
+  .card {
+    padding: 14px;
+    gap: 11px;
+  }
+  .strategyGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .actions {
+    flex-direction: column;
+  }
+  .actionBtn {
+    width: 100%;
+    justify-content: center;
+  }
+  .metaActions {
+    flex: 1;
+    justify-content: flex-end;
+  }
+}

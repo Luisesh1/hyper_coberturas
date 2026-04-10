@@ -92,10 +92,37 @@ const positionActionBaseSchema = z.object({
   hooks: optionalStringField,
 });
 
-const increaseLiquidityPrepareSchema = positionActionBaseSchema.extend({
+const increaseLiquidityPrepareSchema = positionActionBaseSchema
+  .extend({
+    positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
+    // Path legacy: amounts crudos en unidades del token
+    amount0Desired: z.union([z.number().min(0), z.string().min(1)]).optional(),
+    amount1Desired: z.union([z.number().min(0), z.string().min(1)]).optional(),
+    // Path smart: monto en USD + selección de assets de la wallet
+    totalUsdTarget: z.number().positive().optional(),
+    maxSlippageBps: z.number().int().positive().max(1000).optional(),
+    importTokenAddresses: z.array(z.string().min(1)).optional(),
+    fundingSelections: z.array(z.object({
+      assetId: z.string().min(1),
+      amount: z.string().min(1).optional(),
+      enabled: z.boolean().optional(),
+    })).optional(),
+  })
+  .refine(
+    (d) => d.totalUsdTarget != null || (d.amount0Desired != null && d.amount1Desired != null),
+    { message: 'Debes especificar totalUsdTarget o amount0Desired+amount1Desired' },
+  );
+
+const increaseLiquidityFundingPlanSchema = positionActionBaseSchema.extend({
   positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
-  amount0Desired: z.union([z.number().min(0), z.string().min(1)]),
-  amount1Desired: z.union([z.number().min(0), z.string().min(1)]),
+  totalUsdTarget: z.number().positive(),
+  maxSlippageBps: z.number().int().positive().max(1000).optional(),
+  importTokenAddresses: z.array(z.string().min(1)).optional(),
+  fundingSelections: z.array(z.object({
+    assetId: z.string().min(1),
+    amount: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+  })).optional(),
 });
 
 const decreaseLiquidityPrepareSchema = positionActionBaseSchema.extend({
@@ -221,6 +248,7 @@ module.exports = {
   claimFeesPrepareSchema,
   claimFeesFinalizeSchema,
   increaseLiquidityPrepareSchema,
+  increaseLiquidityFundingPlanSchema,
   decreaseLiquidityPrepareSchema,
   collectFeesPrepareSchema,
   reinvestFeesPrepareSchema,

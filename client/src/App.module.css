@@ -45,12 +45,35 @@
   color: var(--indigo);
 }
 
+.logoStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1;
+}
+
 .logoText {
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: 0.3px;
   white-space: nowrap;
+}
+
+.devWatermark {
+  margin-top: 2px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #f5a623;
+  background: rgba(245, 166, 35, 0.12);
+  border: 1px solid rgba(245, 166, 35, 0.35);
+  border-radius: 3px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: help;
+  user-select: none;
 }
 
 /* ── Nav horizontal (desktop) ──────────────────────────────────── */

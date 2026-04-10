@@ -1,0 +1,214 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(5, 9, 16, 0.78);
+  backdrop-filter: blur(12px);
+  animation: fadeIn 0.18s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  width: min(560px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(102, 225, 219, 0.32);
+  background: linear-gradient(180deg, rgba(11, 18, 26, 0.98), rgba(8, 13, 19, 0.96));
+  box-shadow: 0 24px 80px rgba(3, 9, 16, 0.6);
+  color: var(--uni-text-0);
+  animation: slideUp 0.22s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--uni-border);
+}
+
+.eyebrow {
+  color: var(--uni-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.title {
+  margin: 4px 0 0;
+  font-size: 1.1rem;
+  color: var(--uni-text-0);
+}
+
+.closeBtn {
+  background: transparent;
+  border: 1px solid var(--uni-border);
+  color: var(--uni-text-1);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intro {
+  margin: 0;
+  color: var(--uni-text-1);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.intro strong {
+  color: var(--uni-cyan);
+}
+
+.steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--uni-text-1);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.steps li::marker {
+  color: var(--uni-cyan);
+}
+
+.steps strong { color: var(--uni-text-0); }
+
+.link {
+  color: var(--uni-cyan);
+  text-decoration: underline;
+  text-decoration-color: rgba(102, 225, 219, 0.4);
+  text-underline-offset: 2px;
+}
+
+.link:hover {
+  text-decoration-color: var(--uni-cyan);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.field label {
+  font-size: 0.74rem;
+  font-weight: 800;
+  color: var(--uni-text-1);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.field input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--uni-border);
+  background: var(--uni-bg-1);
+  color: var(--uni-text-0);
+  font-size: 0.9rem;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+.field input:focus {
+  outline: none;
+  border-color: var(--uni-cyan);
+  box-shadow: 0 0 0 3px rgba(102, 225, 219, 0.12);
+}
+
+.error {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 125, 125, 0.10);
+  border: 1px solid rgba(255, 125, 125, 0.35);
+  color: var(--uni-red);
+  font-size: 0.82rem;
+}
+
+.footnote {
+  margin: 0;
+  color: var(--uni-text-3);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.footnote code {
+  background: rgba(102, 225, 219, 0.08);
+  color: var(--uni-cyan);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--uni-border);
+  padding-top: 12px;
+}
+
+.btn,
+.btnGhost {
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+  border: 1px solid var(--uni-border);
+}
+
+.btnGhost {
+  background: transparent;
+  color: var(--uni-text-2);
+}
+
+.btnGhost:hover {
+  background: var(--uni-bg-2);
+}
+
+.btn {
+  background: var(--uni-bg-1);
+  color: var(--uni-text-1);
+}
+
+.primary {
+  background: rgba(102, 225, 219, 0.18);
+  border-color: rgba(102, 225, 219, 0.5);
+  color: var(--uni-cyan);
+}
+
+.primary:hover {
+  background: rgba(102, 225, 219, 0.26);
+}

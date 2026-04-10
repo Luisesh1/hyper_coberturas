@@ -22,7 +22,7 @@ describe('useWalletConnection helpers', () => {
     });
   });
 
-  it('solo acepta hashes extraídos de errores si realmente fueron broadcasted', async () => {
+  it('preserva hashes ambiguos como broadcast_unknown para seguir monitoreando la red', async () => {
     const provider = {
       request: vi.fn()
         .mockRejectedValueOnce({ data: { txHash: '0x1111111111111111111111111111111111111111111111111111111111111111' } })
@@ -48,8 +48,8 @@ describe('useWalletConnection helpers', () => {
       setError,
     });
 
-    expect(hash).toBeNull();
-    expect(setError).toHaveBeenLastCalledWith('No se pudo enviar la transacción.');
+    expect(hash).toBe('0x1111111111111111111111111111111111111111111111111111111111111111');
+    expect(setError).toHaveBeenLastCalledWith('La wallet devolvió un estado ambiguo, pero la transacción podría haberse enviado.');
   });
 
   it('reintenta sin gas si el wallet rechaza el envío con gas explícito', async () => {

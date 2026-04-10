@@ -236,6 +236,31 @@ input[type='number']:focus {
   color: #00d4ff;
 }
 
+.recommendationBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  margin-top: 0.75rem;
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  border-radius: 6px;
+  color: #cdeaf6;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.recommendationBanner > div {
+  flex: 1;
+}
+
+.recommendationBanner button {
+  flex-shrink: 0;
+  padding: 0.55rem 1rem;
+  font-size: 0.85rem;
+}
+
 .primaryBtn,
 .secondaryBtn {
   padding: 1rem 1.5rem;

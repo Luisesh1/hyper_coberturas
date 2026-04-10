@@ -18,6 +18,7 @@ const authService   = require('../services/auth.service');
 const db            = require('../db');
 const config        = require('../config');
 const logger        = require('../services/logger.service');
+const devLogSink    = require('../services/dev-log-sink.service');
 
 const CLIENT_PING_INTERVAL_MS = 20_000;
 const WS_AUTH_TIMEOUT_MS = 5_000;       // tiempo máximo para autenticar tras conexión
@@ -354,6 +355,22 @@ function createWsServer(httpServer) {
       message: 'Conectado al bot de Hyperliquid',
       timestamp: Date.now(),
     }));
+
+    // Suscripción al stream de logs de desarrollo. Solo se engancha en
+    // modo dev (en prod el sink es no-op y `on()` devuelve un unsubscribe
+    // vacío). Se desengancha automáticamente cuando el socket cierra.
+    if (devLogSink.isEnabled()) {
+      const handleEntry = (entry) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        try {
+          ws.send(JSON.stringify({ type: 'dev_log_event', entry }));
+        } catch {
+          // noop: el siguiente entry intentará de nuevo
+        }
+      };
+      const unsubscribe = devLogSink.on('entry', handleEntry);
+      ws.on('close', () => { try { unsubscribe(); } catch { /* noop */ } });
+    }
   }
 
   logger.info('ws_server_ready');

@@ -40,6 +40,7 @@ export default function PositionActionModal({
   sendTransaction,
   waitForTransactionReceipt,
   defaults = {},
+  prefilledPrepareResult = null,
   onClose,
   onFinalized,
 }) {
@@ -62,7 +63,8 @@ export default function PositionActionModal({
     sendTransaction,
     waitForTransactionReceipt,
     onFinalized,
-    autoPrepare: action === 'collect-fees',
+    autoPrepare: action === 'collect-fees' && !prefilledPrepareResult,
+    prefilledPrepareResult,
   });
 
   useEffect(() => {
@@ -72,7 +74,10 @@ export default function PositionActionModal({
     }));
   }, [wallet?.address]);
 
-  const title = ACTION_LABELS[action] || action;
+  const targetStableSymbol = prepareData?.quoteSummary?.targetStableSymbol || null;
+  const title = action === 'close-to-usdc' && targetStableSymbol
+    ? `Cerrar LP a ${targetStableSymbol}`
+    : (ACTION_LABELS[action] || action);
   const identifier = pool?.identifier || pool?.positionIdentifier;
   const pairLabel = pool?.token0?.symbol && pool?.token1?.symbol
     ? `${pool.token0.symbol} / ${pool.token1.symbol}`
@@ -100,7 +105,7 @@ export default function PositionActionModal({
               {action === 'create-position'
                 ? 'Nueva posición LP desde la plataforma'
                 : action === 'close-to-usdc'
-                  ? `${pairLabel}${identifier ? ` · #${identifier}` : ''} · cierre total con conversión a USDC`
+                  ? `${pairLabel}${identifier ? ` · #${identifier}` : ''} · cierre total con conversión a ${targetStableSymbol || 'stablecoin'}`
                   : action === 'close-keep-assets'
                     ? `${pairLabel}${identifier ? ` · #${identifier}` : ''} · cierre total conservando token0/token1`
                 : `${pairLabel}${identifier ? ` · #${identifier}` : ''}`}

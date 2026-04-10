@@ -1,4 +1,5 @@
 const db = require('../db');
+const config = require('../config');
 const { createWsServer, loadActiveUsers } = require('../websocket/wsServer');
 const hlWsClient = require('../websocket/hyperliquidWs');
 const runtimeStatus = require('../runtime/status');
@@ -6,13 +7,40 @@ const logger = require('../services/logger.service');
 const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
 const protectedPoolDynamicService = require('../services/protected-pool-dynamic.service');
 const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
+const lpOrchestratorMonitorService = require('../services/lp-orchestrator-monitor.service');
+const uniswapOperationService = require('../services/uniswap-operation.service');
 const telegramCommandService = require('../services/telegram-command.service');
 const etherscanQueueService = require('../services/etherscan-queue.service');
 const backtestQueueService = require('../services/backtest-queue.service');
 const hedgeRegistry = require('../services/hedge.registry');
 const botRegistry = require('../services/bot.registry');
 
+// Hooks de proceso para capturar promesas/errores no manejados. En dev
+// los redirigimos al logger para que aparezcan en el DevLogPanel y dejen
+// de ser invisibles. En prod siguen siendo silenciosos por defecto (no
+// queremos que un crash en background tire el proceso sin control).
+let _processHooksInstalled = false;
+function installProcessHooksOnce() {
+  if (_processHooksInstalled) return;
+  if (config.server.nodeEnv !== 'development') return;
+  _processHooksInstalled = true;
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error('process_unhandled_rejection', {
+      message: err.message,
+      stack: err.stack || null,
+    });
+  });
+  process.on('uncaughtException', (err) => {
+    logger.error('process_uncaught_exception', {
+      message: err?.message || String(err),
+      stack: err?.stack || null,
+    });
+  });
+}
+
 async function bootstrapInfra(httpServer) {
+  installProcessHooksOnce();
   await db.ensureConnection();
   await db.initSchema();
 
@@ -37,6 +65,8 @@ async function bootstrapInfra(httpServer) {
   protectedPoolRefreshService.start();
   protectedPoolDynamicService.start();
   protectedPoolDeltaNeutralService.start();
+  lpOrchestratorMonitorService.start();
+  uniswapOperationService.start();
   telegramCommandService.start();
   backtestQueueService.start();
 
@@ -46,6 +76,8 @@ async function bootstrapInfra(httpServer) {
       protectedPoolRefreshService.stop();
       protectedPoolDynamicService.stop();
       protectedPoolDeltaNeutralService.stop();
+      lpOrchestratorMonitorService.stop();
+      uniswapOperationService.stop();
       telegramCommandService.stop();
       etherscanQueueService.shutdown();
       backtestQueueService.stop();

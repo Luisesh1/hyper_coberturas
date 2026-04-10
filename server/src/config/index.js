@@ -17,6 +17,36 @@ function getDefaultDevEncryptionKey() {
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 
+function getAlchemyApiKey() {
+  const explicit = String(process.env.UNI_RPC_ALCHEMY_API_KEY || '').trim();
+  if (explicit) return explicit;
+
+  const ethereumUrl = String(process.env.UNI_RPC_ETHEREUM || '').trim();
+  const match = ethereumUrl.match(/alchemy\.com\/v2\/([^/?#]+)/i);
+  return match?.[1] || '';
+}
+
+function buildAlchemyRpcUrls(apiKey) {
+  if (!apiKey) return {};
+  return {
+    ethereum: `https://eth-mainnet.g.alchemy.com/v2/${apiKey}`,
+    arbitrum: `https://arb-mainnet.g.alchemy.com/v2/${apiKey}`,
+    optimism: `https://opt-mainnet.g.alchemy.com/v2/${apiKey}`,
+    base: `https://base-mainnet.g.alchemy.com/v2/${apiKey}`,
+    polygon: `https://polygon-mainnet.g.alchemy.com/v2/${apiKey}`,
+  };
+}
+
+const ALCHEMY_API_KEY = getAlchemyApiKey();
+const ALCHEMY_RPC_URLS = buildAlchemyRpcUrls(ALCHEMY_API_KEY);
+const PUBLIC_RPC_DEFAULTS = {
+  ethereum: 'https://ethereum-rpc.publicnode.com',
+  arbitrum: 'https://arbitrum-one-rpc.publicnode.com',
+  optimism: 'https://optimism-rpc.publicnode.com',
+  base: 'https://base-rpc.publicnode.com',
+  polygon: 'https://polygon-bor-rpc.publicnode.com',
+};
+
 const config = {
   server: {
     port: parseInt(process.env.PORT, 10) || 3001,
@@ -29,11 +59,18 @@ const config = {
   },
   uniswap: {
     rpcUrls: {
-      ethereum: process.env.UNI_RPC_ETHEREUM || 'https://ethereum-rpc.publicnode.com',
-      arbitrum: process.env.UNI_RPC_ARBITRUM || 'https://arbitrum-one-rpc.publicnode.com',
-      optimism: process.env.UNI_RPC_OPTIMISM || 'https://optimism-rpc.publicnode.com',
-      base: process.env.UNI_RPC_BASE || 'https://base-rpc.publicnode.com',
-      polygon: process.env.UNI_RPC_POLYGON || 'https://polygon-bor-rpc.publicnode.com',
+      ethereum: process.env.UNI_RPC_ETHEREUM || ALCHEMY_RPC_URLS.ethereum || PUBLIC_RPC_DEFAULTS.ethereum,
+      arbitrum: process.env.UNI_RPC_ARBITRUM || ALCHEMY_RPC_URLS.arbitrum || PUBLIC_RPC_DEFAULTS.arbitrum,
+      optimism: process.env.UNI_RPC_OPTIMISM || ALCHEMY_RPC_URLS.optimism || PUBLIC_RPC_DEFAULTS.optimism,
+      base: process.env.UNI_RPC_BASE || ALCHEMY_RPC_URLS.base || PUBLIC_RPC_DEFAULTS.base,
+      polygon: process.env.UNI_RPC_POLYGON || ALCHEMY_RPC_URLS.polygon || PUBLIC_RPC_DEFAULTS.polygon,
+    },
+    fallbackRpcUrls: {
+      ethereum: process.env.UNI_FALLBACK_RPC_ETHEREUM || PUBLIC_RPC_DEFAULTS.ethereum,
+      arbitrum: process.env.UNI_FALLBACK_RPC_ARBITRUM || PUBLIC_RPC_DEFAULTS.arbitrum,
+      optimism: process.env.UNI_FALLBACK_RPC_OPTIMISM || PUBLIC_RPC_DEFAULTS.optimism,
+      base: process.env.UNI_FALLBACK_RPC_BASE || PUBLIC_RPC_DEFAULTS.base,
+      polygon: process.env.UNI_FALLBACK_RPC_POLYGON || PUBLIC_RPC_DEFAULTS.polygon,
     },
     scanTimeoutMs: parseInt(process.env.UNI_SCAN_TIMEOUT_MS, 10) || 20_000,
   },
@@ -64,8 +101,10 @@ const config = {
     hedgeClosingTimeoutMs: parseInt(process.env.HEDGE_CLOSING_TIMEOUT_MS, 10) || 90_000,
     hedgeCancelTimeoutMs: parseInt(process.env.HEDGE_CANCEL_TIMEOUT_MS, 10) || 300_000,
     protectedPoolRefreshMs: parseInt(process.env.PROTECTED_POOL_REFRESH_INTERVAL_MS, 10) || 600_000,
+    uniswapOperationPollMs: parseInt(process.env.UNISWAP_OPERATION_POLL_INTERVAL_MS, 10) || 3_000,
     deltaNeutralLoopMs: parseInt(process.env.DELTA_NEUTRAL_LOOP_INTERVAL_MS, 10) || 2_000,
     deltaNeutralEvalMs: parseInt(process.env.DELTA_NEUTRAL_EVAL_INTERVAL_MS, 10) || 30_000,
+    lpOrchestratorEvalMs: parseInt(process.env.LP_ORCHESTRATOR_EVAL_INTERVAL_MS, 10) || 30_000,
     telegramPollMs: parseInt(process.env.TELEGRAM_POLL_INTERVAL_MS, 10) || 3_000,
     telegramConfigRefreshMs: parseInt(process.env.TELEGRAM_CONFIG_REFRESH_INTERVAL_MS, 10) || 60_000,
     telegramLongPollTimeoutSec: parseInt(process.env.TELEGRAM_LONG_POLL_TIMEOUT_SEC, 10) || 20,

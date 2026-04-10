@@ -1,0 +1,223 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  background: rgba(5, 9, 16, 0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  justify-content: flex-end;
+  animation: fadeIn 0.18s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.drawer {
+  width: min(560px, 100vw);
+  height: 100vh;
+  background: linear-gradient(180deg, rgba(11, 18, 26, 0.98), rgba(8, 13, 19, 0.96));
+  border-left: 1px solid var(--uni-border);
+  display: flex;
+  flex-direction: column;
+  color: var(--uni-text-0);
+  box-shadow: -24px 0 60px rgba(3, 9, 16, 0.6);
+  animation: slideIn 0.22s ease-out;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--uni-border);
+}
+
+.eyebrow {
+  color: var(--uni-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.title {
+  margin: 4px 0 2px;
+  font-size: 1.05rem;
+  color: var(--uni-text-0);
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--uni-text-3);
+}
+
+.closeBtn {
+  background: transparent;
+  border: 1px solid var(--uni-border);
+  color: var(--uni-text-1);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 20px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.loading,
+.empty,
+.error {
+  padding: 20px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--uni-text-2);
+}
+
+.error {
+  color: var(--uni-red);
+  background: rgba(255, 125, 125, 0.08);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 125, 125, 0.3);
+}
+
+.muted { color: var(--uni-text-3); }
+
+/* ───────── Entry ───────── */
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--uni-border);
+  background: rgba(255, 255, 255, 0.015);
+  border-left-width: 3px;
+}
+
+.tone_ok      { border-left-color: var(--uni-green); }
+.tone_warn    { border-left-color: var(--uni-amber); }
+.tone_urgent  { border-left-color: var(--uni-red); }
+.tone_info    { border-left-color: var(--uni-cyan); }
+.tone_muted   { border-left-color: rgba(150, 150, 150, 0.4); }
+
+.entryHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.entryIcon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.entryHeading {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.entryKind {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--uni-text-1);
+}
+
+.entryDecision {
+  color: var(--uni-text-0);
+  font-weight: 800;
+}
+
+.entryTime {
+  font-size: 0.7rem;
+  color: var(--uni-text-3);
+  white-space: nowrap;
+}
+
+.entryReason,
+.entryAction {
+  font-size: 0.78rem;
+  color: var(--uni-text-1);
+  padding-left: 25px;
+}
+
+.entryReason code,
+.entryAction code {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  background: rgba(102, 225, 219, 0.1);
+  color: var(--uni-cyan);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.entryNumbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px;
+  margin-top: 4px;
+  margin-left: 25px;
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--uni-bg-1);
+  border: 1px solid var(--uni-border);
+}
+
+.cellLabel {
+  font-size: 0.6rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cellValue {
+  font-size: 0.78rem;
+  color: var(--uni-text-0);
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.entryVerification {
+  font-size: 0.78rem;
+  color: var(--uni-text-1);
+  padding-left: 25px;
+}
+
+.drifts {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 0.74rem;
+  color: var(--uni-amber);
+}
+
+.drifts code {
+  background: rgba(255, 191, 95, 0.1);
+  color: var(--uni-amber);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
