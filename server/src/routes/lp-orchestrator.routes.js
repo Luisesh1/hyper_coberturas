@@ -2,6 +2,7 @@ const { Router } = require('express');
 const asyncHandler = require('../middleware/async-handler');
 const { authenticate } = require('../middleware/auth.middleware');
 const { validate } = require('../middleware/validate.middleware');
+const { requireIntParam } = require('../middleware/parse-params');
 const lpOrchestratorService = require('../services/lp-orchestrator.service');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
 const {
@@ -13,15 +14,6 @@ const {
 
 const router = Router();
 router.use(authenticate);
-
-function parseId(req, res) {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id < 1) {
-    res.status(400).json({ success: false, error: 'ID invalido' });
-    return null;
-  }
-  return id;
-}
 
 router.get('/', asyncHandler(async (req, res) => {
   const includeArchived = req.query.includeArchived === 'true';
@@ -38,8 +30,7 @@ router.post('/', validate(createOrchestratorSchema), asyncHandler(async (req, re
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const data = await lpOrchestratorRepository.getById(req.user.userId, id);
   if (!data) {
     return res.status(404).json({ success: false, error: 'Orquestador no encontrado' });
@@ -48,8 +39,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id/action-log', asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const limit = Math.min(500, Number(req.query.limit) || 100);
   const data = await lpOrchestratorRepository.listActionLog(
     req.user.userId,
@@ -59,9 +49,28 @@ router.get('/:id/action-log', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+router.get('/:id/protection-ops', asyncHandler(async (req, res) => {
+  const id = requireIntParam(req, 'id');
+  const limit = Math.min(200, Number(req.query.limit) || 50);
+  const orch = await lpOrchestratorRepository.getById(req.user.userId, id);
+  if (!orch) {
+    return res.status(404).json({ success: false, error: 'Orquestador no encontrado' });
+  }
+  const protectedPoolId = orch.activeProtectedPoolId;
+  if (!protectedPoolId) {
+    return res.json({ success: true, data: { rebalances: [], hedges: [] } });
+  }
+  const hedgeRepo = require('../repositories/hedge.repository');
+  const rebalanceRepo = require('../repositories/protected-pool-delta-rebalance.repository');
+  const [rebalances, hedges] = await Promise.all([
+    rebalanceRepo.listByProtectedPoolId(protectedPoolId, { limit }),
+    hedgeRepo.loadByProtectedPoolId(protectedPoolId),
+  ]);
+  res.json({ success: true, data: { rebalances, hedges } });
+}));
+
 router.post('/:id/evaluate', asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const result = await lpOrchestratorService.evaluateOne(req.user.userId, id);
   const data = await lpOrchestratorRepository.getById(req.user.userId, id);
   res.json({ success: true, data: { result, orchestrator: data } });
@@ -75,16 +84,14 @@ router.post('/:id/evaluate', asyncHandler(async (req, res) => {
  * de evaluación de fondo.
  */
 router.post('/:id/reconcile', asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const result = await lpOrchestratorService.reconcileOne(req.user.userId, id);
   const data = await lpOrchestratorRepository.getById(req.user.userId, id);
   res.json({ success: true, data: { result, orchestrator: data } });
 }));
 
 router.post('/:id/attach-lp', validate(attachLpSchema), asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const data = await lpOrchestratorService.attachLp({
     userId: req.user.userId,
     orchestratorId: id,
@@ -97,8 +104,7 @@ router.post('/:id/attach-lp', validate(attachLpSchema), asyncHandler(async (req,
 // del orquestador. Útil cuando un attach-lp falló (ej. server reinició a
 // medio camino) y el LP quedó creado on-chain pero sin vincular.
 router.get('/:id/adoptable-lps', asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const data = await lpOrchestratorService.discoverAdoptableLps(req.user.userId, id);
   res.json({ success: true, data });
 }));
@@ -108,8 +114,7 @@ router.get('/:id/adoptable-lps', asyncHandler(async (req, res) => {
 // recién firmado: usa el positionIdentifier que el usuario eligió desde
 // la lista de adoptable-lps.
 router.post('/:id/adopt-lp', asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const { positionIdentifier, protectionConfig } = req.body || {};
   const data = await lpOrchestratorService.adoptLp(req.user.userId, id, {
     positionIdentifier,
@@ -119,8 +124,7 @@ router.post('/:id/adopt-lp', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/record-tx-finalized', validate(recordTxFinalizedSchema), asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const data = await lpOrchestratorService.recordTxFinalized({
     userId: req.user.userId,
     orchestratorId: id,
@@ -130,8 +134,7 @@ router.post('/:id/record-tx-finalized', validate(recordTxFinalizedSchema), async
 }));
 
 router.post('/:id/kill-lp', validate(killLpSchema), asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const data = await lpOrchestratorService.killLp({
     userId: req.user.userId,
     orchestratorId: id,
@@ -141,8 +144,7 @@ router.post('/:id/kill-lp', validate(killLpSchema), asyncHandler(async (req, res
 }));
 
 router.post('/:id/archive', asyncHandler(async (req, res) => {
-  const id = parseId(req, res);
-  if (id == null) return;
+  const id = requireIntParam(req, 'id');
   const data = await lpOrchestratorService.archive({
     userId: req.user.userId,
     orchestratorId: id,

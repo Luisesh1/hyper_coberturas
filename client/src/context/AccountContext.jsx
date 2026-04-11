@@ -2,56 +2,44 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import { tradingApi } from '../services/api';
 import { formatAccountIdentity } from '../utils/hyperliquidAccounts';
 import { useNotifications } from './NotificationsContext';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 
 const AccountContext = createContext(null);
 
 export function AccountProvider({ children }) {
   const { addNotification } = useNotifications();
+  const { run, loading: isLoadingAccount } = useAsyncAction();
   const [account, setAccount] = useState(null);
-  const [isLoadingAccount, setIsLoadingAccount] = useState(false);
 
   const refreshAccount = useCallback(async ({ accountId, force = false } = {}) => {
     if (!accountId) {
       setAccount(null);
       return null;
     }
-
-    setIsLoadingAccount(true);
-    try {
+    return run(async () => {
       const data = await tradingApi.getAccount({ accountId, refresh: force });
       setAccount(data);
       return data;
-    } catch (err) {
-      addNotification('error', `Error al cargar cuenta: ${err.message}`);
-      throw err;
-    } finally {
-      setIsLoadingAccount(false);
-    }
-  }, [addNotification]);
+    }, 'Error al cargar cuenta');
+  }, [run]);
 
   const openPosition = useCallback(async (params) => {
-    try {
+    return run(async () => {
       const result = await tradingApi.openPosition(params);
       addNotification('success', `${formatAccountIdentity(result.account)}\n${params.side.toUpperCase()} ${params.asset} abierto a mercado`);
       await refreshAccount({ accountId: params.accountId, force: true });
       return result;
-    } catch (err) {
-      addNotification('error', `Error al abrir: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification, refreshAccount]);
+    }, 'Error al abrir');
+  }, [addNotification, refreshAccount, run]);
 
   const closePosition = useCallback(async (params) => {
-    try {
+    return run(async () => {
       const result = await tradingApi.closePosition(params);
       addNotification('success', `${formatAccountIdentity(result.account)}\nPosicion ${params.asset} cerrada a mercado`);
       await refreshAccount({ accountId: params.accountId, force: true });
       return result;
-    } catch (err) {
-      addNotification('error', `Error al cerrar: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification, refreshAccount]);
+    }, 'Error al cerrar');
+  }, [addNotification, refreshAccount, run]);
 
   const value = useMemo(() => ({
     account,

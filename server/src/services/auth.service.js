@@ -20,7 +20,7 @@ const {
   ValidationError,
 } = require('../errors/app-error');
 
-const SALT_ROUNDS = 12;
+const SALT_ROUNDS = config.auth.saltRounds;
 
 function signToken(user) {
   return jwt.sign(

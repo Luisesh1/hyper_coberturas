@@ -812,7 +812,7 @@ class LpOrchestratorService {
         strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
       });
       nextPhase = 'idle';
-      this.notifier.lpKilled(orch).catch(() => {});
+      this.notifier.lpKilled(orch).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
     }
 
     if (!verification.ok && verification.severity === 'critical') {
@@ -822,7 +822,7 @@ class LpOrchestratorService {
         nextEligibleAttemptAt: Date.now() + FAILED_COOLDOWN_MS,
         cooldownReason: 'verification_failed',
       });
-      this.notifier.verificationFailed(orch, { drifts: verification.drifts, action }).catch(() => {});
+      this.notifier.verificationFailed(orch, { drifts: verification.drifts, action }).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
     } else {
       await this.repo.updatePhase(userId, orchestratorId, {
         phase: nextPhase,
@@ -831,8 +831,8 @@ class LpOrchestratorService {
         cooldownReason: null,
       });
       // Una acción exitosa resuelve el estado urgent: limpiamos el alert.
-      await this.repo.clearUrgentAlert(userId, orchestratorId).catch(() => {});
-      this.notifier.actionFinalized(orch, { action, drifts: verification.drifts }).catch(() => {});
+      await this.repo.clearUrgentAlert(userId, orchestratorId).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
+      this.notifier.actionFinalized(orch, { action, drifts: verification.drifts }).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
     }
 
     await this.repo.appendActionLog({
@@ -1068,6 +1068,9 @@ class LpOrchestratorService {
     };
     let pool = null;
     const canInspectDirectly = typeof this.uniswapService.inspectPositionByIdentifier === 'function';
+    // Usamos lightweight para la mayoría de evaluaciones (ahorra RPC).
+    // Si no tenemos priceAtOpen previo, hacemos UN scan completo para resolverlo.
+    const hasPriceAtOpen = orch.lastEvaluation?.poolSnapshot?.priceAtOpen != null;
     if (canInspectDirectly) {
       try {
         pool = await this.uniswapService.inspectPositionByIdentifier({
@@ -1076,7 +1079,7 @@ class LpOrchestratorService {
           network: orch.network,
           version: orch.version,
           positionIdentifier: orch.activePositionIdentifier,
-          lightweight: true,
+          lightweight: hasPriceAtOpen,
         });
       } catch (err) {
         this.logger.warn('lp_orchestrator_direct_inspect_failed', {
@@ -1173,7 +1176,7 @@ class LpOrchestratorService {
           payload: { consecutiveMissingDetections },
           createdAt: now,
         });
-        this.notifier.positionMissing(orch).catch(() => {});
+        this.notifier.positionMissing(orch).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
         return { decision: 'failed' };
       }
     }
@@ -1191,9 +1194,35 @@ class LpOrchestratorService {
 
     const snapshotHash = computeSnapshotHash(pool);
 
+    // Carry-forward: el scan lightweight omite priceAtOpen y valuación
+    // inicial para ahorrar RPC. Si el snapshot anterior ya los resolvió,
+    // los preservamos para que la UI y la contabilidad los tengan siempre.
+    const prevSnapshot = orch.lastEvaluation?.poolSnapshot || null;
+    if (prevSnapshot && prevSnapshot.priceAtOpen != null) {
+      const carryFields = [
+        'priceAtOpen', 'priceAtOpenAccuracy', 'priceAtOpenSource', 'priceAtOpenBlock',
+      ];
+      for (const field of carryFields) {
+        if (pool[field] == null || pool[field] === 'unavailable') {
+          pool[field] = prevSnapshot[field] ?? pool[field];
+        }
+      }
+    }
+    if (prevSnapshot) {
+      const valuationFields = [
+        'initialValueUsd', 'initialValueUsdAccuracy', 'initialValueUsdSource',
+        'initialAmount0', 'initialAmount1',
+      ];
+      for (const field of valuationFields) {
+        if (pool[field] == null && prevSnapshot[field] != null) {
+          pool[field] = prevSnapshot[field];
+        }
+      }
+    }
+
     // 2) Delta de contabilidad del LP (fees acumuladas + deriva de precio).
     //    Gas y slippage de swaps se aplican en recordTxFinalized.
-    const prevSnapshot = orch.lastEvaluation?.poolSnapshot || null;
+
     const delta = this.accounting.computeAccountingDelta(prevSnapshot, pool);
     let newAccounting = this.accounting.applyAccountingDelta(orch.accounting, delta);
 

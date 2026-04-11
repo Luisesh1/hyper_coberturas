@@ -7,6 +7,7 @@ import {
   formatCompactPrice, formatRelativeTimestamp, getValuationAccuracyBadge,
   getValuationSourceLabel, shortAddress,
 } from '../utils/pool-formatters';
+import { computePoolPermissions } from '../utils/pool-permissions';
 import RangeTrack from './RangeTrack';
 import styles from './ProtectedPoolCard.module.css';
 
@@ -93,34 +94,19 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
       ? Number(snapshot.timeInRangePct)
       : null;
   const unclaimedFees = Number(snapshot.unclaimedFeesUsd);
-  const hasUnsupportedV4Hooks = protection.version === 'v4'
-    && snapshot.hooks
-    && snapshot.hooks !== '0x0000000000000000000000000000000000000000';
   const initialValueLabel = getValuationAccuracyBadge(snapshot.initialValueUsdAccuracy);
   const initialValueSource = getValuationSourceLabel(snapshot.initialValueUsdSource);
   const openPriceLabel = getValuationAccuracyBadge(snapshot.priceAtOpenAccuracy);
   const openPriceSource = getValuationSourceLabel(snapshot.priceAtOpenSource);
-  const canClaim = ['v3', 'v4'].includes(protection.version)
-    && walletState?.isConnected
-    && walletState.chainId === snapshot.chainId
-    && protection.walletAddress?.toLowerCase() === walletState.address?.toLowerCase()
-    && !hasUnsupportedV4Hooks
-    && unclaimedFees > 0;
-  const canManage = ['v3', 'v4'].includes(protection.version)
-    && walletState?.isConnected
-    && walletState.chainId === snapshot.chainId
-    && protection.walletAddress?.toLowerCase() === walletState.address?.toLowerCase()
-    && !hasUnsupportedV4Hooks;
 
-  const manageTitle = !walletState?.isConnected
-    ? 'Conecta tu wallet para gestionar esta posición'
-    : walletState.chainId !== snapshot.chainId
-      ? 'Cambia a la red correcta en tu wallet'
-      : protection.walletAddress?.toLowerCase() !== walletState.address?.toLowerCase()
-        ? 'Esta wallet no es dueña de la posición'
-        : hasUnsupportedV4Hooks
-          ? 'Hooks no soportados en gestión V4'
-        : '';
+  const { canClaim, canManage, manageTitle, hasUnsupportedV4Hooks } = computePoolPermissions({
+    walletState,
+    ownerAddress: protection.walletAddress,
+    chainId: snapshot.chainId,
+    version: protection.version,
+    hooks: snapshot.hooks,
+    unclaimedFees,
+  });
 
   const modeLabel = isDeltaNeutral ? 'Delta Neutral' : isDynamic ? 'Dinámica' : 'Estática';
   const modeBadgeCls = isDeltaNeutral ? styles.badgeDeltaNeutral : isDynamic ? styles.badgeDynamic : styles.badgeNeutral;

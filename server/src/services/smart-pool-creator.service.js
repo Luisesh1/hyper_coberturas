@@ -15,28 +15,13 @@ const {
   ZERO_HOOKS_ADDRESS,
 } = require('./uniswap-v4-helpers.service');
 
-const { SUPPORTED_NETWORKS } = uniswapService;
-
-const ERC20_ABI = [
-  'function balanceOf(address account) external view returns (uint256)',
-  'function symbol() external view returns (string)',
-  'function decimals() external view returns (uint8)',
-];
-
-const V3_FACTORY_ABI = [
-  'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address)',
-];
-
-const V3_POOL_ABI = [
-  'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)',
-  'function tickSpacing() external view returns (int24)',
-  'function token0() external view returns (address)',
-  'function token1() external view returns (address)',
-];
-
-const V4_STATE_VIEW_ABI = [
-  'function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)',
-];
+const { SUPPORTED_NETWORKS } = require('./uniswap/networks');
+const {
+  ERC20_ABI,
+  V3_FACTORY_ABI,
+  V3_POOL_ABI,
+  V4_STATE_VIEW_ABI,
+} = require('./uniswap/abis');
 
 const DEFAULT_FEE_TIERS = [100, 500, 3000, 10000];
 const DEFAULT_MAX_SLIPPAGE_BPS = 50;

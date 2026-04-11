@@ -2,11 +2,13 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import { hedgeApi } from '../services/api';
 import { formatAccountIdentity } from '../utils/hyperliquidAccounts';
 import { useNotifications } from './NotificationsContext';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 
 const HedgeContext = createContext(null);
 
 export function HedgeProvider({ children }) {
   const { addNotification } = useNotifications();
+  const { run } = useAsyncAction();
   const [hedges, setHedges] = useState([]);
 
   const handleHedgeEvent = useCallback((msg) => {
@@ -35,34 +37,24 @@ export function HedgeProvider({ children }) {
   }, [addNotification]);
 
   const refreshHedges = useCallback(async ({ accountId } = {}) => {
-    try {
+    return run(async () => {
       const data = await hedgeApi.getAll({ accountId });
       setHedges(data);
       return data;
-    } catch (err) {
-      addNotification('error', `Error al cargar coberturas: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification]);
+    }, 'Error al cargar coberturas');
+  }, [run]);
 
   const createHedge = useCallback(async (params) => {
-    try {
-      return await hedgeApi.create(params);
-    } catch (err) {
-      addNotification('error', `Error al crear cobertura: ${err.message}`);
-      throw err;
-    }
-  }, [addNotification]);
+    return run(() => hedgeApi.create(params), 'Error al crear cobertura');
+  }, [run]);
 
   const cancelHedge = useCallback(async (id) => {
-    try {
+    return run(async () => {
       const hedge = await hedgeApi.cancel(id);
       setHedges((prev) => prev.map((item) => (item.id === id ? hedge : item)));
       addNotification('info', `Cobertura cancelada\n${formatAccountIdentity(hedge.account)} · #${id}`);
-    } catch (err) {
-      addNotification('error', `Error al cancelar: ${err.message}`);
-    }
-  }, [addNotification]);
+    }, 'Error al cancelar').catch(() => {});
+  }, [addNotification, run]);
 
   const value = useMemo(() => ({
     hedges,

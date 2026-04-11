@@ -7,7 +7,7 @@ const bcrypt = require('bcryptjs');
 const logger = require('../services/logger.service');
 const { runMigrations } = require('./migrator');
 
-const IS_PROD = process.env.NODE_ENV === 'production';
+const { IS_PROD } = require('../config');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -59,7 +59,8 @@ async function seedDevAdmin({
   if (rows.length > 0) return; // ya hay usuarios
 
   const now = Date.now();
-  const hash = await bcrypt.hash(password, 12);
+  const config = require('../config');
+  const hash = await bcrypt.hash(password, config.auth.saltRounds);
   const { rows: [admin] } = await pool.query(
     `INSERT INTO users (username, password_hash, name, role, active, created_at, updated_at)
      VALUES ($1, $2, $3, 'superuser', true, $4, $4) RETURNING id`,

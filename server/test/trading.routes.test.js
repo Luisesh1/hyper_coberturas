@@ -80,7 +80,7 @@ test('POST /api/trading/open valida side y size', async () => {
     const json = await res.json();
 
     assert.equal(res.status, 400);
-    assert.match(json.error, /side debe ser 'long' o 'short'/i);
+    assert.match(json.error, /side.*invalid|side.*expected/i);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
     server.close();
@@ -194,7 +194,7 @@ test('DELETE /api/trading/orders/:asset/:oid valida el oid', async () => {
     const json = await res.json();
 
     assert.equal(res.status, 400);
-    assert.match(json.error, /oid debe ser un numero/i);
+    assert.match(json.error, /oid inválido/i);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
     server.close();

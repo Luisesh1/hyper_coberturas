@@ -8,6 +8,16 @@ const optionalPositiveIntField = z.preprocess((value) => (
   value == null || value === '' ? undefined : value
 ), z.number().int().positive().optional());
 
+// Refinements compartidos para schemas con token pair + rango de precios
+const refineRangeOrder = {
+  fn: (data) => data.rangeLowerPrice < data.rangeUpperPrice,
+  opts: { message: 'rangeLowerPrice debe ser menor que rangeUpperPrice' },
+};
+const refineDistinctTokens = {
+  fn: (data) => data.token0Address.toLowerCase() !== data.token1Address.toLowerCase(),
+  opts: { message: 'token0Address y token1Address deben ser distintos' },
+};
+
 const scannedPoolSchema = z.object({
   mode: z.string(),
   version: z.string(),
@@ -169,13 +179,8 @@ const createPositionPrepareSchema = positionActionBaseSchema.extend({
     amount: z.string().min(1).optional(),
     enabled: z.boolean().optional(),
   })).optional(),
-}).refine(
-  (data) => data.rangeLowerPrice < data.rangeUpperPrice,
-  { message: 'rangeLowerPrice debe ser menor que rangeUpperPrice' },
-).refine(
-  (data) => data.token0Address.toLowerCase() !== data.token1Address.toLowerCase(),
-  { message: 'token0Address y token1Address deben ser distintos' },
-);
+}).refine(refineRangeOrder.fn, refineRangeOrder.opts)
+  .refine(refineDistinctTokens.fn, refineDistinctTokens.opts);
 
 const closeToUsdcPrepareSchema = positionActionBaseSchema.extend({
   positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
@@ -234,13 +239,8 @@ const smartCreateFundingPlanSchema = z.object({
     amount: z.string().min(1).optional(),
     enabled: z.boolean().optional(),
   })).optional(),
-}).refine(
-  (data) => data.rangeLowerPrice < data.rangeUpperPrice,
-  { message: 'rangeLowerPrice debe ser menor que rangeUpperPrice' },
-).refine(
-  (data) => data.token0Address.toLowerCase() !== data.token1Address.toLowerCase(),
-  { message: 'token0Address y token1Address deben ser distintos' },
-);
+}).refine(refineRangeOrder.fn, refineRangeOrder.opts)
+  .refine(refineDistinctTokens.fn, refineDistinctTokens.opts);
 
 module.exports = {
   createProtectedPoolSchema,

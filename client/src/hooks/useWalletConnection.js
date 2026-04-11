@@ -440,6 +440,21 @@ export function useWalletConnection() {
   return useContext(WalletContext);
 }
 
+/**
+ * Subconjunto ligero del estado de wallet, memoizado.
+ * Evita duplicar el useMemo idéntico en cada página que necesita walletState.
+ */
+export function useWalletState() {
+  const conn = useWalletConnection();
+  return useMemo(() => ({
+    address: conn?.address,
+    chainId: conn?.chainId,
+    isConnected: conn?.isConnected,
+    hasProvider: conn?.hasProvider,
+    connector: conn?.connector,
+  }), [conn?.address, conn?.chainId, conn?.isConnected, conn?.hasProvider, conn?.connector]);
+}
+
 export {
   buildPreparedTransactionRequest,
   buildTransactionParams,

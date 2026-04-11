@@ -376,7 +376,7 @@ test('POST /api/uniswap/protected-pools/:id/deactivate valida el id', async () =
     const json = await res.json();
 
     assert.equal(res.status, 400);
-    assert.match(json.error, /ID invalido/i);
+    assert.match(json.error, /id inválido/i);
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
     server.close();

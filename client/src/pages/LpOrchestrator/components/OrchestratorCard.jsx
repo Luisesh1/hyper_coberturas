@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import OrchestratorRangeBar from './OrchestratorRangeBar';
 import AccountingPanel from './AccountingPanel';
+import ProtectionOpsPanel from './ProtectionOpsPanel';
 import { formatUsd, formatRelativeTimestamp } from '../../UniswapPools/utils/pool-formatters';
 import styles from './OrchestratorCard.module.css';
 
@@ -215,6 +216,11 @@ export default function OrchestratorCard({
           ?? orchestrator.lastEvaluation?.poolSnapshot?.unclaimedFeesUsd
           ?? null
         }
+      />
+
+      <ProtectionOpsPanel
+        orchestratorId={orchestrator.id}
+        hasProtection={!!orchestrator.activeProtectedPoolId}
       />
 
       <details

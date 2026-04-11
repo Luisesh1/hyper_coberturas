@@ -164,6 +164,30 @@ async function saveCycle(hedgeId, cycle, executor) {
   );
 }
 
+async function loadByProtectedPoolId(protectedPoolId) {
+  const { rows } = await db.query(
+    `SELECT h.*,
+            a.alias AS account_alias,
+            a.address AS account_address,
+            a.is_default AS account_is_default,
+            COALESCE(json_agg(c ORDER BY c.cycle_id) FILTER (WHERE c.id IS NOT NULL), '[]') AS cycles_json
+     FROM hedges h
+     LEFT JOIN hyperliquid_accounts a ON a.id = h.hyperliquid_account_id
+     LEFT JOIN cycles c ON c.hedge_id = h.id
+     WHERE h.protected_pool_id = $1
+     GROUP BY h.id, a.id
+     ORDER BY h.id`,
+    [protectedPoolId]
+  );
+
+  return rows.map((row) => {
+    const cycles = Array.isArray(row.cycles_json)
+      ? row.cycles_json
+      : JSON.parse(row.cycles_json || '[]');
+    return rowToHedge(row, cycles);
+  });
+}
+
 async function unlinkByProtectedPoolId(protectedPoolId) {
   await db.query(
     `UPDATE hedges
@@ -198,6 +222,7 @@ async function saveHedgeWithCycle(hedge, cycle) {
 module.exports = {
   deleteByProtectedPoolIds,
   loadAllByUser,
+  loadByProtectedPoolId,
   create,
   save,
   saveCycle,

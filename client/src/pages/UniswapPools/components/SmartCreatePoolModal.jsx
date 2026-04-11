@@ -1,21 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { formatCompactPrice, formatUsd } from '../utils/pool-formatters';
-import { formatNumber } from '../../../utils/formatters';
-import { getExplorerLink } from '../utils/pool-helpers';
-import { uniswapApi } from '../../../services/api';
-import { useWalletExecution, WALLET_EXECUTION_STATE } from '../../../hooks/useWalletExecution';
 import styles from './SmartCreatePoolModal.module.css';
-import { STEP, FEE_TIERS } from './smart-create/constants';
-import {
-  buildSelectionMap,
-  getSelectedPreset,
-  computeCustomAmounts,
-  buildOptionalPoolContext,
-  deriveFundingIssue,
-  formatFundingIssueTitle,
-} from './smart-create/helpers';
-import PresetCard from './smart-create/PresetCard';
+import { STEP } from './smart-create/constants';
+import useSmartCreateFlow from './smart-create/useSmartCreateFlow';
 import StepPill from './smart-create/StepPill';
+import StepPoolSelection from './smart-create/StepPoolSelection';
+import StepRangeConfig from './smart-create/StepRangeConfig';
+import StepFunding from './smart-create/StepFunding';
+import StepReview from './smart-create/StepReview';
+import StepSigning from './smart-create/StepSigning';
+import StepDone from './smart-create/StepDone';
+import StepError from './smart-create/StepError';
 
 export default function SmartCreatePoolModal({
   wallet,
@@ -26,428 +19,11 @@ export default function SmartCreatePoolModal({
   onClose,
   onFinalized,
 }) {
-  const network = defaults?.network || 'arbitrum';
-  const version = defaults?.version || 'v3';
-  const [step, setStep] = useState(STEP.POOL);
-  const [fee, setFee] = useState(() => Number(defaults?.fee) || 3000);
-  const [token0Address, setToken0Address] = useState(() => defaults?.token0Address || '');
-  const [token1Address, setToken1Address] = useState(() => defaults?.token1Address || '');
-  const [customToken0, setCustomToken0] = useState('');
-  const [customToken1, setCustomToken1] = useState('');
-  const [totalUsdTarget, setTotalUsdTarget] = useState(() => (
-    defaults?.totalUsdTarget != null ? String(defaults.totalUsdTarget) : '1000'
-  ));
-  const [rangeMode, setRangeMode] = useState('auto');
-  const [selectedPreset, setSelectedPreset] = useState('balanced');
-  const [customLowerPrice, setCustomLowerPrice] = useState('');
-  const [customUpperPrice, setCustomUpperPrice] = useState('');
-  const [customWeightToken0, setCustomWeightToken0] = useState('50');
-  const [maxSlippageBps, setMaxSlippageBps] = useState('50');
-  const [importTokenAddress, setImportTokenAddress] = useState('');
-  const [importedFundingTokens, setImportedFundingTokens] = useState([]);
-  const [assetSelections, setAssetSelections] = useState({});
-  const [hasFundingEdits, setHasFundingEdits] = useState(false);
-  const [tokenList, setTokenList] = useState([]);
-  const [suggestions, setSuggestions] = useState(null);
-  const [availableAssets, setAvailableAssets] = useState([]);
-  const [fundingPlan, setFundingPlan] = useState(null);
-  const [fundingIssue, setFundingIssue] = useState(null);
-  const [prepareData, setPrepareData] = useState(null);
-  const [txHashes, setTxHashes] = useState([]);
-  const [completedTxIndex, setCompletedTxIndex] = useState(-1);
-  const [currentTxIndex, setCurrentTxIndex] = useState(-1);
-  const [failedTxLabel, setFailedTxLabel] = useState('');
-  const [error, setError] = useState('');
-  const [loadingMessage, setLoadingMessage] = useState('');
-  const [isBusy, setIsBusy] = useState(false);
-  const execution = useWalletExecution();
-  const autoAnalyzedRef = useRef(false);
-  const isMountedRef = useRef(true);
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => { isMountedRef.current = false; };
-  }, []);
+  const flow = useSmartCreateFlow({ wallet, defaults, onFinalized });
 
   const networkOptions = Array.isArray(meta?.networks) ? meta.networks : [{ id: 'ethereum', label: 'Ethereum', versions: ['v3'] }];
-  const selectedNetwork = networkOptions.find((item) => item.id === network) || networkOptions[0];
+  const selectedNetwork = networkOptions.find((item) => item.id === flow.network) || networkOptions[0];
   const explorerUrl = selectedNetwork?.explorerUrl || null;
-
-  useEffect(() => {
-    async function loadTokenList() {
-      try {
-        const data = await uniswapApi.getSmartCreateTokenList(network);
-        setTokenList(Array.isArray(data) ? data : []);
-      } catch (err) {
-        setTokenList([]);
-        setError(err.message || 'No se pudo cargar la lista de tokens.');
-      }
-    }
-
-    loadTokenList().catch(() => {});
-  }, [network]);
-
-  useEffect(() => {
-    setStep(STEP.POOL);
-    setSuggestions(null);
-    setAvailableAssets([]);
-    setFundingPlan(null);
-    setFundingIssue(null);
-    setPrepareData(null);
-    setTxHashes([]);
-    setAssetSelections({});
-    setImportedFundingTokens([]);
-    setImportTokenAddress('');
-    setError('');
-    setHasFundingEdits(false);
-    // Permitimos volver a auto-analizar si la red/versión cambian.
-    autoAnalyzedRef.current = false;
-  }, [network, version]);
-
-  useEffect(() => {
-    if (!execution.normalizedError?.message) return;
-    setError(execution.normalizedError.message);
-  }, [execution.normalizedError]);
-
-  useEffect(() => {
-    setTxHashes(execution.txHashes);
-    setCompletedTxIndex(execution.progress.completed - 1);
-    setCurrentTxIndex(execution.currentTx?.index ?? -1);
-
-    if (execution.state === WALLET_EXECUTION_STATE.PREFLIGHT) {
-      setLoadingMessage('Validando transacciones antes de abrir la wallet...');
-      return;
-    }
-    if (execution.state === WALLET_EXECUTION_STATE.AWAITING_WALLET) {
-      setLoadingMessage(execution.currentTx?.label
-        ? `Firma "${execution.currentTx.label}" en tu wallet...`
-        : 'Firma la transacción en tu wallet...');
-      setStep(STEP.SIGNING);
-      return;
-    }
-    if (execution.state === WALLET_EXECUTION_STATE.BROADCAST_SUBMITTED || execution.state === WALLET_EXECUTION_STATE.NETWORK_CONFIRMING) {
-      setLoadingMessage(execution.currentTx?.label
-        ? `Esperando confirmación on-chain de "${execution.currentTx.label}"...`
-        : 'Esperando confirmación on-chain...');
-      setStep(STEP.SIGNING);
-      return;
-    }
-    if (execution.state === WALLET_EXECUTION_STATE.FINALIZE_PENDING) {
-      setLoadingMessage('Conciliando recibos y finalizando la creación del LP...');
-      setStep(STEP.SIGNING);
-      return;
-    }
-    if (execution.state === WALLET_EXECUTION_STATE.DONE) {
-      setLoadingMessage('');
-      setStep(STEP.DONE);
-      return;
-    }
-    if (execution.state === WALLET_EXECUTION_STATE.NEEDS_RECONCILE || execution.state === WALLET_EXECUTION_STATE.FAILED) {
-      setLoadingMessage('');
-      setStep(STEP.ERROR);
-      return;
-    }
-    if (execution.state === WALLET_EXECUTION_STATE.IDLE) {
-      setLoadingMessage('');
-    }
-  }, [execution.currentTx, execution.progress.completed, execution.state, execution.txHashes]);
-
-  // `handleAnalyzePool` no está memoizado y cambia de identidad cada render.
-  // Lo dejamos accesible vía ref para que el efecto de auto-análisis pueda
-  // invocar siempre la versión actual sin entrar en el array de dependencias
-  // (no podemos meterlo sin loops).
-  const handleAnalyzePoolRef = useRef(null);
-
-  // Si el modal se abre con el par/fee/capital ya pre-cargados (p. ej. desde
-  // el flujo de creación de orquestador), saltamos automáticamente el paso 1
-  // disparando el análisis del pool una sola vez. El usuario aún puede usar
-  // "Volver" para editar los valores.
-  useEffect(() => {
-    if (autoAnalyzedRef.current) return;
-    if (!wallet?.address) return;
-    if (step !== STEP.POOL) return;
-    if (!defaults?.token0Address || !defaults?.token1Address) return;
-    if (!defaults?.fee || !defaults?.totalUsdTarget) return;
-    autoAnalyzedRef.current = true;
-    handleAnalyzePoolRef.current?.().catch(() => {});
-  }, [wallet?.address, defaults?.token0Address, defaults?.token1Address, defaults?.fee, defaults?.totalUsdTarget, step]);
-
-  const tokenOptions = useMemo(() => (
-    tokenList.map((token) => ({
-      label: `${token.symbol} (${token.address.slice(0, 6)}…${token.address.slice(-4)})`,
-      value: token.address,
-    }))
-  ), [tokenList]);
-
-  const activeRange = useMemo(() => {
-    if (!suggestions) return null;
-    if (rangeMode === 'auto') return getSelectedPreset(suggestions, selectedPreset);
-    const customAmounts = computeCustomAmounts(suggestions, totalUsdTarget, customWeightToken0);
-    return {
-      preset: 'custom',
-      label: 'Personalizado',
-      rangeLowerPrice: Number(customLowerPrice || 0),
-      rangeUpperPrice: Number(customUpperPrice || 0),
-      widthPct: suggestions.currentPrice > 0
-        ? (((Number(customUpperPrice || 0) - Number(customLowerPrice || 0)) / Number(suggestions.currentPrice)) * 100)
-        : 0,
-      targetWeightToken0Pct: Number(customWeightToken0 || 0),
-      amount0Desired: customAmounts.amount0Desired,
-      amount1Desired: customAmounts.amount1Desired,
-    };
-  }, [customLowerPrice, customUpperPrice, customWeightToken0, rangeMode, selectedPreset, suggestions, totalUsdTarget]);
-
-  const normalizedFundingSelections = useMemo(() => (
-    Object.entries(assetSelections)
-      .filter(([, value]) => value?.enabled)
-      .map(([assetId, value]) => ({
-        assetId,
-        amount: value.amount,
-        enabled: true,
-      }))
-  ), [assetSelections]);
-
-  handleAnalyzePoolRef.current = handleAnalyzePool;
-  async function handleAnalyzePool() {
-    if (!wallet?.address) {
-      setError('Conecta tu wallet antes de crear una posición LP.');
-      return;
-    }
-
-    const resolvedToken0 = customToken0.trim() || token0Address;
-    const resolvedToken1 = customToken1.trim() || token1Address;
-    if (!resolvedToken0 || !resolvedToken1) {
-      setError('Selecciona o importa ambos tokens del par.');
-      return;
-    }
-    if (resolvedToken0.toLowerCase() === resolvedToken1.toLowerCase()) {
-      setError('Los tokens del par deben ser distintos.');
-      return;
-    }
-    if (!Number(totalUsdTarget) || Number(totalUsdTarget) <= 0) {
-      setError('Define un valor total objetivo mayor que cero.');
-      return;
-    }
-
-    setError('');
-    setIsBusy(true);
-    setLoadingMessage('Analizando el pool y calculando presets de rango con ATR...');
-    try {
-      const data = await uniswapApi.smartCreateSuggest({
-        network,
-        version,
-        walletAddress: wallet.address,
-        token0Address: resolvedToken0,
-        token1Address: resolvedToken1,
-        fee,
-        totalUsdTarget: Number(totalUsdTarget),
-      });
-      setToken0Address(resolvedToken0);
-      setToken1Address(resolvedToken1);
-      setSuggestions(data);
-      setFundingIssue(null);
-      setSelectedPreset(data?.suggestions?.[1]?.preset || data?.suggestions?.[0]?.preset || 'balanced');
-      setCustomLowerPrice(String(data?.suggestions?.[1]?.rangeLowerPrice || data?.suggestions?.[0]?.rangeLowerPrice || ''));
-      setCustomUpperPrice(String(data?.suggestions?.[1]?.rangeUpperPrice || data?.suggestions?.[0]?.rangeUpperPrice || ''));
-      setCustomWeightToken0(String(data?.suggestions?.[1]?.targetWeightToken0Pct || data?.suggestions?.[0]?.targetWeightToken0Pct || '50'));
-      setStep(STEP.RANGE);
-    } catch (err) {
-      setError(err.message || 'No se pudo analizar el pool.');
-      setStep(STEP.ERROR);
-    } finally {
-      setIsBusy(false);
-      setLoadingMessage('');
-    }
-  }
-
-  async function refreshFundingPlan({ preserveSelections = false } = {}) {
-    if (!wallet?.address || !activeRange) return;
-    setError('');
-    setIsBusy(true);
-    setLoadingMessage('Construyendo plan de fondeo y swaps...');
-
-    try {
-      const assetsData = await uniswapApi.getSmartCreateAssets({
-        network,
-        walletAddress: wallet.address,
-        importTokenAddresses: importedFundingTokens,
-      });
-      if (!isMountedRef.current) return;
-      setAvailableAssets(assetsData.assets || []);
-      const plan = await uniswapApi.smartCreateFundingPlan({
-        network,
-        version,
-        walletAddress: wallet.address,
-        token0Address,
-        token1Address,
-        fee,
-        totalUsdTarget: Number(totalUsdTarget),
-        targetWeightToken0Pct: Number(activeRange.targetWeightToken0Pct),
-        rangeLowerPrice: Number(activeRange.rangeLowerPrice),
-        rangeUpperPrice: Number(activeRange.rangeUpperPrice),
-        maxSlippageBps: Number(maxSlippageBps || 50),
-        importTokenAddresses: importedFundingTokens,
-        fundingSelections: preserveSelections ? normalizedFundingSelections : undefined,
-        ...buildOptionalPoolContext(suggestions),
-      });
-      if (!isMountedRef.current) return;
-
-      setAvailableAssets(plan.availableFundingAssets || assetsData.assets || []);
-      setFundingPlan(plan);
-      setFundingIssue(null);
-      if (!preserveSelections || !hasFundingEdits) {
-        setAssetSelections(buildSelectionMap(plan.selectedFundingAssets || []));
-      }
-      setStep(STEP.FUNDING);
-    } catch (err) {
-      if (!isMountedRef.current) return;
-      setFundingPlan(null);
-      setFundingIssue(deriveFundingIssue(err));
-      setError('');
-      setStep(STEP.FUNDING);
-    } finally {
-      if (isMountedRef.current) {
-        setIsBusy(false);
-        setLoadingMessage('');
-      }
-    }
-  }
-
-  async function handleContinueToFunding() {
-    if (!activeRange?.rangeLowerPrice || !activeRange?.rangeUpperPrice) {
-      setError('Define un rango válido antes de continuar.');
-      return;
-    }
-    if (!Number(activeRange.targetWeightToken0Pct) || Number(activeRange.targetWeightToken0Pct) <= 0 || Number(activeRange.targetWeightToken0Pct) >= 100) {
-      setError('El balance objetivo entre activos debe estar entre 0% y 100%.');
-      return;
-    }
-    setHasFundingEdits(false);
-    await refreshFundingPlan({ preserveSelections: false });
-  }
-
-  // Aplica la selección recomendada por el optimizador del server: limpia
-  // las selecciones manuales y deja solo los assetIds que minimizan swaps,
-  // luego re-pide el plan al backend para reflejar el nuevo swapCount.
-  async function handleApplyRecommended() {
-    const recommended = fundingPlan?.recommendedFundingSelection;
-    if (!Array.isArray(recommended) || recommended.length === 0) return;
-    const recommendedMap = {};
-    for (const item of recommended) {
-      const asset = (availableAssets || []).find((a) => a.id === item.assetId);
-      if (!asset) continue;
-      recommendedMap[item.assetId] = {
-        enabled: true,
-        amount: asset.usableBalance || asset.balance,
-      };
-    }
-    setAssetSelections(recommendedMap);
-    setHasFundingEdits(true);
-    // Re-pedir el plan con la nueva selección
-    await refreshFundingPlan({ preserveSelections: true });
-  }
-
-  async function handlePrepareReview() {
-    if (!fundingPlan) {
-      setError('Genera primero un plan de fondeo.');
-      return;
-    }
-    setError('');
-    setIsBusy(true);
-    setLoadingMessage('Validando el plan final y preparando transacciones...');
-    try {
-      const data = await uniswapApi.prepareCreatePosition({
-        network,
-        version,
-        walletAddress: wallet.address,
-        token0Address,
-        token1Address,
-        fee,
-        totalUsdTarget: Number(totalUsdTarget),
-        targetWeightToken0Pct: Number(activeRange.targetWeightToken0Pct),
-        rangeLowerPrice: Number(activeRange.rangeLowerPrice),
-        rangeUpperPrice: Number(activeRange.rangeUpperPrice),
-        maxSlippageBps: Number(maxSlippageBps || 50),
-        importTokenAddresses: importedFundingTokens,
-        fundingSelections: normalizedFundingSelections,
-        ...buildOptionalPoolContext(suggestions),
-      });
-      setPrepareData(data);
-      setFundingIssue(null);
-      setStep(STEP.REVIEW);
-    } catch (err) {
-      setFundingIssue(deriveFundingIssue(err));
-      setError('');
-      setStep(STEP.FUNDING);
-    } finally {
-      setIsBusy(false);
-      setLoadingMessage('');
-    }
-  }
-
-  async function handleExecute() {
-    if (!prepareData?.txPlan?.length) {
-      setError('No hay transacciones preparadas para firmar.');
-      return;
-    }
-    if (prepareData.expiresAt && Date.now() > prepareData.expiresAt) {
-      setError('El plan expiró, los precios pueden haber cambiado. Vuelve a preparar las transacciones.');
-      setStep(STEP.REVIEW);
-      return;
-    }
-    setError('');
-    setFailedTxLabel('');
-
-    const finalizeResult = await execution.runPlan({
-      action: 'create-position',
-      chainId: prepareData.txPlan[0]?.chainId || null,
-      txPlan: prepareData.txPlan,
-      finalizePayload: {
-        network,
-        version,
-        walletAddress: wallet.address,
-      },
-      finalizeKind: 'position_action',
-    });
-
-    if (finalizeResult?.status === 'done') {
-      onFinalized?.({ txHashes: finalizeResult.txHashes || execution.txHashes, finalizeResult });
-    } else if (!finalizeResult && execution.currentTx?.label) {
-      setFailedTxLabel(execution.currentTx.label);
-    }
-  }
-
-  function handleReset() {
-    setStep(STEP.POOL);
-    setSuggestions(null);
-    setAvailableAssets([]);
-    setFundingPlan(null);
-    setFundingIssue(null);
-    setPrepareData(null);
-    setTxHashes([]);
-    setCompletedTxIndex(-1);
-    setCurrentTxIndex(-1);
-    setFailedTxLabel('');
-    setAssetSelections({});
-    setImportedFundingTokens([]);
-    setImportTokenAddress('');
-    setError('');
-    setHasFundingEdits(false);
-    execution.reset();
-  }
-
-  function handleAddFundingImport() {
-    const normalized = importTokenAddress.trim();
-    if (!normalized) return;
-    if (!importedFundingTokens.includes(normalized)) {
-      setImportedFundingTokens((prev) => [...prev, normalized]);
-    }
-    setImportTokenAddress('');
-    setHasFundingEdits(true);
-  }
-
-  const reviewFundingAssets = prepareData?.fundingPlan?.selectedFundingAssets || fundingPlan?.selectedFundingAssets || [];
-  const reviewSwapPlan = prepareData?.swapPlan || fundingPlan?.swapPlan || [];
-  const fundingDiagnostics = fundingPlan || fundingIssue?.details || null;
 
   return (
     <div className={styles.overlay} onClick={onClose}>
@@ -477,664 +53,141 @@ export default function SmartCreatePoolModal({
         </div>
 
         <div className={styles.stepper}>
-          <StepPill label="1. Pool" active={step === STEP.POOL} done={[STEP.RANGE, STEP.FUNDING, STEP.REVIEW, STEP.SIGNING, STEP.DONE].includes(step)} />
-          <StepPill label="2. Rango" active={step === STEP.RANGE} done={[STEP.FUNDING, STEP.REVIEW, STEP.SIGNING, STEP.DONE].includes(step)} />
-          <StepPill label="3. Fondeo" active={step === STEP.FUNDING} done={[STEP.REVIEW, STEP.SIGNING, STEP.DONE].includes(step)} />
-          <StepPill label="4. Review" active={step === STEP.REVIEW || step === STEP.SIGNING || step === STEP.DONE} done={[STEP.SIGNING, STEP.DONE].includes(step)} />
+          <StepPill label="1. Pool" active={flow.step === STEP.POOL} done={[STEP.RANGE, STEP.FUNDING, STEP.REVIEW, STEP.SIGNING, STEP.DONE].includes(flow.step)} />
+          <StepPill label="2. Rango" active={flow.step === STEP.RANGE} done={[STEP.FUNDING, STEP.REVIEW, STEP.SIGNING, STEP.DONE].includes(flow.step)} />
+          <StepPill label="3. Fondeo" active={flow.step === STEP.FUNDING} done={[STEP.REVIEW, STEP.SIGNING, STEP.DONE].includes(flow.step)} />
+          <StepPill label="4. Review" active={flow.step === STEP.REVIEW || flow.step === STEP.SIGNING || flow.step === STEP.DONE} done={[STEP.SIGNING, STEP.DONE].includes(flow.step)} />
         </div>
 
-        {isBusy && (
+        {flow.isBusy && (
           <section className={styles.section}>
             <div className={styles.loading}>
               <div className={styles.spinner} />
-              <p>{loadingMessage || 'Trabajando...'}</p>
+              <p>{flow.loadingMessage || 'Trabajando...'}</p>
             </div>
           </section>
         )}
 
-        {!isBusy && step === STEP.POOL && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Paso 1: Selección del pool</span>
-            </div>
-
-            <div className={styles.summaryGrid}>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Red activa</span>
-                <strong className={styles.tileValue}>{selectedNetwork?.label || network}</strong>
-              </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Versión activa</span>
-                <strong className={styles.tileValue}>{String(version).toUpperCase()}</strong>
-              </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Wallet conectada</span>
-                <strong className={styles.tileValue}>{wallet?.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'No conectada'}</strong>
-              </div>
-            </div>
-
-            <div className={styles.fieldGrid}>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Fee</span>
-                <div className={styles.buttonGroup}>
-                  {FEE_TIERS.map((tier) => (
-                    <button
-                      key={tier.value}
-                      type="button"
-                      className={`${styles.tierBtn} ${fee === tier.value ? styles.tierBtnSelected : ''}`}
-                      onClick={() => setFee(tier.value)}
-                    >
-                      {tier.label}
-                    </button>
-                  ))}
-                </div>
-              </label>
-
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Valor total objetivo (USD)</span>
-                <input
-                  type="number"
-                  value={totalUsdTarget}
-                  onChange={(event) => setTotalUsdTarget(event.target.value)}
-                  min="1"
-                />
-              </label>
-
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Token 0</span>
-                <select className={styles.select} value={token0Address} onChange={(event) => setToken0Address(event.target.value)}>
-                  <option value="">— Selecciona token —</option>
-                  {tokenOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  placeholder="O pega dirección custom"
-                  value={customToken0}
-                  onChange={(event) => setCustomToken0(event.target.value)}
-                />
-              </label>
-
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Token 1</span>
-                <select className={styles.select} value={token1Address} onChange={(event) => setToken1Address(event.target.value)}>
-                  <option value="">— Selecciona token —</option>
-                  {tokenOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  placeholder="O pega dirección custom"
-                  value={customToken1}
-                  onChange={(event) => setCustomToken1(event.target.value)}
-                />
-              </label>
-            </div>
-
-            {error && <div className={styles.error}>{error}</div>}
-
-            <button type="button" className={styles.primaryBtn} onClick={handleAnalyzePool}>
-              Analizar pool y rango
-            </button>
-          </section>
+        {!flow.isBusy && flow.step === STEP.POOL && (
+          <StepPoolSelection
+            wallet={wallet}
+            selectedNetwork={selectedNetwork}
+            network={flow.network}
+            version={flow.version}
+            fee={flow.fee}
+            setFee={flow.setFee}
+            totalUsdTarget={flow.totalUsdTarget}
+            setTotalUsdTarget={flow.setTotalUsdTarget}
+            token0Address={flow.token0Address}
+            setToken0Address={flow.setToken0Address}
+            token1Address={flow.token1Address}
+            setToken1Address={flow.setToken1Address}
+            customToken0={flow.customToken0}
+            setCustomToken0={flow.setCustomToken0}
+            customToken1={flow.customToken1}
+            setCustomToken1={flow.setCustomToken1}
+            tokenOptions={flow.tokenOptions}
+            error={flow.error}
+            handleAnalyzePool={flow.handleAnalyzePool}
+          />
         )}
 
-        {!isBusy && step === STEP.RANGE && suggestions && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Paso 2: Rango y composición</span>
-            </div>
-
-            <div className={styles.balanceRow}>
-              <span>Precio actual: {formatNumber(suggestions.currentPrice, 4)}</span>
-              <span>ATR 14h: {suggestions.atr14 ? formatNumber(suggestions.atr14, 4) : 'Fallback %'}</span>
-              <span>Tick spacing: {suggestions.tickSpacing}</span>
-              <span>Valor objetivo: {formatUsd(Number(totalUsdTarget || 0))}</span>
-            </div>
-
-            <div className={styles.modeToggle}>
-              <button
-                type="button"
-                className={`${styles.modeBtn} ${rangeMode === 'auto' ? styles.modeBtnActive : ''}`}
-                onClick={() => setRangeMode('auto')}
-              >
-                Auto por ATR
-              </button>
-              <button
-                type="button"
-                className={`${styles.modeBtn} ${rangeMode === 'custom' ? styles.modeBtnActive : ''}`}
-                onClick={() => setRangeMode('custom')}
-              >
-                Personalizado
-              </button>
-            </div>
-
-            {rangeMode === 'auto' && (
-              <div className={styles.presetsGrid}>
-                {suggestions.suggestions.map((item) => (
-                  <PresetCard
-                    key={item.preset}
-                    preset={item}
-                    selected={selectedPreset === item.preset}
-                    onClick={() => setSelectedPreset(item.preset)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {rangeMode === 'custom' && (
-              <div className={styles.fieldGrid}>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Precio inferior</span>
-                  <input type="number" value={customLowerPrice} onChange={(event) => setCustomLowerPrice(event.target.value)} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Precio superior</span>
-                  <input type="number" value={customUpperPrice} onChange={(event) => setCustomUpperPrice(event.target.value)} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Balance objetivo Token 0 (%)</span>
-                  <input type="number" value={customWeightToken0} min="1" max="99" onChange={(event) => setCustomWeightToken0(event.target.value)} />
-                </label>
-              </div>
-            )}
-
-            {activeRange && (
-              <div className={styles.summaryGrid}>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Rango final</span>
-                  <strong className={styles.tileValue}>
-                    ${formatCompactPrice(activeRange.rangeLowerPrice)} — ${formatCompactPrice(activeRange.rangeUpperPrice)}
-                  </strong>
-                </div>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Token 0</span>
-                  <strong className={styles.tileValue}>{formatNumber(activeRange.targetWeightToken0Pct, 1)}%</strong>
-                </div>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Token 1</span>
-                  <strong className={styles.tileValue}>{formatNumber(100 - activeRange.targetWeightToken0Pct, 1)}%</strong>
-                </div>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Montos estimados</span>
-                  <strong className={styles.tileValue}>
-                    {formatNumber(Number(activeRange.amount0Desired || 0), 4)} / {formatNumber(Number(activeRange.amount1Desired || 0), 4)}
-                  </strong>
-                </div>
-              </div>
-            )}
-
-            {error && <div className={styles.error}>{error}</div>}
-
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.secondaryBtn} onClick={handleReset}>
-                ← Volver
-              </button>
-              <button type="button" className={styles.primaryBtn} onClick={handleContinueToFunding}>
-                Continuar a fondeo
-              </button>
-            </div>
-          </section>
+        {!flow.isBusy && flow.step === STEP.RANGE && flow.suggestions && (
+          <StepRangeConfig
+            suggestions={flow.suggestions}
+            totalUsdTarget={flow.totalUsdTarget}
+            rangeMode={flow.rangeMode}
+            setRangeMode={flow.setRangeMode}
+            selectedPreset={flow.selectedPreset}
+            setSelectedPreset={flow.setSelectedPreset}
+            customLowerPrice={flow.customLowerPrice}
+            setCustomLowerPrice={flow.setCustomLowerPrice}
+            customUpperPrice={flow.customUpperPrice}
+            setCustomUpperPrice={flow.setCustomUpperPrice}
+            customWeightToken0={flow.customWeightToken0}
+            setCustomWeightToken0={flow.setCustomWeightToken0}
+            activeRange={flow.activeRange}
+            error={flow.error}
+            handleReset={flow.handleReset}
+            handleContinueToFunding={flow.handleContinueToFunding}
+          />
         )}
 
-        {!isBusy && step === STEP.FUNDING && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Paso 3: Capital fuente y swaps</span>
-            </div>
-
-            <div className={styles.noticeCard}>
-              <strong>Fondeo en {selectedNetwork?.label || network}</strong>
-              <p>Solo se usan activos disponibles en la red seleccionada. Fondos en otras redes no se consideran automáticamente.</p>
-            </div>
-
-            {fundingDiagnostics?.gasReserve && (
-              <div className={styles.noticeCard}>
-                <strong>Reserva de gas</strong>
-                <p>
-                  Se reservarán {fundingDiagnostics.gasReserve.reservedAmount} {fundingDiagnostics.gasReserve.symbol} para comisiones.
-                </p>
-              </div>
-            )}
-
-            {fundingDiagnostics && (
-              <div className={styles.summaryGrid}>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Red de fondeo</span>
-                  <strong className={styles.tileValue}>{selectedNetwork?.label || network}</strong>
-                </div>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Balance nativo</span>
-                  <strong className={styles.tileValue}>
-                    {formatNumber(Number(fundingDiagnostics?.gasReserve?.nativeBalance || fundingDiagnostics?.nativeBalance?.balance || 0), 6)} {fundingDiagnostics?.gasReserve?.symbol || fundingDiagnostics?.nativeBalance?.symbol || ''}
-                  </strong>
-                </div>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Total disponible</span>
-                  <strong className={styles.tileValue}>
-                    {formatUsd(Number(fundingDiagnostics?.usableFundingUsd || 0))}
-                  </strong>
-                  <span style={{ color: '#97a9bd', fontSize: '0.72rem' }}>
-                    {(fundingDiagnostics?.availableFundingAssets || []).length} activos ·{' '}
-                    {formatNumber(Number(fundingDiagnostics?.gasReserve?.usableNative || fundingDiagnostics?.usableNative?.balance || 0), 6)} {fundingDiagnostics?.gasReserve?.symbol || ''} nativo
-                  </span>
-                </div>
-                <div className={styles.summaryTile}>
-                  <span className={styles.tileLabel}>Objetivo / desplegable</span>
-                  <strong className={styles.tileValue}>
-                    {formatUsd(Number(fundingDiagnostics?.totalUsdTarget || Number(totalUsdTarget || 0)))} / {formatUsd(Number(fundingDiagnostics?.fundingPlan?.estimatedPoolValueUsd || fundingDiagnostics?.deployableUsd || 0))}
-                  </strong>
-                </div>
-              </div>
-            )}
-
-            {fundingIssue && (
-              <div className={styles.error}>
-                <strong>{formatFundingIssueTitle(fundingIssue)}</strong>
-                <div>{fundingIssue.message}</div>
-                {fundingIssue.details?.missingUsd > 0 && (
-                  <div>Falta estimada: {formatUsd(fundingIssue.details.missingUsd)}</div>
-                )}
-                {(fundingIssue.details?.warnings || []).length > 0 && (
-                  <div style={{ marginTop: '8px' }}>
-                    <div style={{ fontSize: '0.78rem', color: '#f5a623', marginBottom: '4px' }}>
-                      Diagnóstico por activo:
-                    </div>
-                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '0.78rem', color: '#97a9bd' }}>
-                      {fundingIssue.details.warnings.map((warning, index) => (
-                        <li key={index}>{warning}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                <div className={styles.inlineActions}>
-                  <button type="button" className={styles.secondaryBtn} onClick={onClose}>
-                    Cambiar red en la página
-                  </button>
-                  <button type="button" className={styles.secondaryBtn} onClick={() => setStep(STEP.POOL)}>
-                    Reducir monto objetivo
-                  </button>
-                  <button type="button" className={styles.secondaryBtn} onClick={() => refreshFundingPlan({ preserveSelections: true })}>
-                    Reintentar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className={styles.inlineActions}>
-              <input
-                type="text"
-                placeholder="Importar token por dirección"
-                value={importTokenAddress}
-                onChange={(event) => setImportTokenAddress(event.target.value)}
-              />
-              <button type="button" className={styles.secondaryBtn} onClick={handleAddFundingImport}>
-                Añadir token
-              </button>
-            </div>
-
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Slippage máximo (bps)</span>
-              <input
-                type="number"
-                value={maxSlippageBps}
-                min="1"
-                max="200"
-                onChange={(event) => {
-                  setMaxSlippageBps(event.target.value);
-                  setHasFundingEdits(true);
-                }}
-              />
-            </label>
-
-            <div className={styles.assetList}>
-              {availableAssets.map((asset) => {
-                const selection = assetSelections[asset.id] || { enabled: false, amount: '' };
-                return (
-                  <div key={asset.id} className={styles.assetRow}>
-                    <label className={styles.assetCheckbox}>
-                      <input
-                        type="checkbox"
-                        checked={selection.enabled}
-                        onChange={(event) => {
-                          setAssetSelections((prev) => ({
-                            ...prev,
-                            [asset.id]: {
-                              enabled: event.target.checked,
-                              amount: prev[asset.id]?.amount || asset.usableBalance || asset.balance,
-                            },
-                          }));
-                          setHasFundingEdits(true);
-                        }}
-                      />
-                      <span>{asset.symbol}</span>
-                    </label>
-                    <span className={styles.assetMeta}>Balance: {formatNumber(Number(asset.balance || 0), 6)}</span>
-                    <span className={styles.assetMeta}>Usable: {formatNumber(Number(asset.usableBalance || asset.balance || 0), 6)}</span>
-                    <input
-                      type="number"
-                      value={selection.amount || ''}
-                      disabled={!selection.enabled}
-                      onChange={(event) => {
-                        setAssetSelections((prev) => ({
-                          ...prev,
-                          [asset.id]: {
-                            enabled: prev[asset.id]?.enabled ?? true,
-                            amount: event.target.value,
-                          },
-                        }));
-                        setHasFundingEdits(true);
-                      }}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-
-            {fundingPlan && (
-              <>
-                <div className={styles.summaryGrid}>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Pool estimado</span>
-                    <strong className={styles.tileValue}>{formatUsd(fundingPlan.fundingPlan?.estimatedPoolValueUsd || 0)}</strong>
-                  </div>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Directo</span>
-                    <strong className={styles.tileValue}>{formatUsd(fundingPlan.fundingPlan?.directValueUsd || 0)}</strong>
-                  </div>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Por swaps</span>
-                    <strong className={styles.tileValue}>{formatUsd(fundingPlan.fundingPlan?.swapValueUsd || 0)}</strong>
-                  </div>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Swaps</span>
-                    <strong className={styles.tileValue}>{fundingPlan.swapPlan?.length || 0}</strong>
-                  </div>
-                </div>
-
-                {/* Sugerencia del optimizador: si la selección actual genera
-                    más swaps que la recomendada, mostramos un banner para
-                    aplicar la configuración óptima en 1 click. */}
-                {(() => {
-                  const currentSwaps = fundingPlan.swapPlan?.length || 0;
-                  const recSwaps = fundingPlan.recommendedSwapCount;
-                  const recSelection = fundingPlan.recommendedFundingSelection || [];
-                  if (recSwaps == null || recSelection.length === 0) return null;
-                  if (recSwaps >= currentSwaps) return null;
-
-                  const recSymbols = recSelection
-                    .map((item) => (availableAssets || []).find((a) => a.id === item.assetId)?.symbol)
-                    .filter(Boolean)
-                    .join(', ');
-                  return (
-                    <div className={styles.recommendationBanner}>
-                      <div>
-                        <strong>Configuración óptima detectada:</strong>{' '}
-                        usar {recSymbols} reduce de {currentSwaps} a {recSwaps} swap{recSwaps === 1 ? '' : 's'}
-                        {' '}(menos firmas, menos gas).
-                      </div>
-                      <button
-                        type="button"
-                        className={styles.primaryBtn}
-                        onClick={handleApplyRecommended}
-                        disabled={isBusy}
-                      >
-                        Aplicar recomendación
-                      </button>
-                    </div>
-                  );
-                })()}
-
-                <div className={styles.txList}>
-                  <h4>Swaps planeados</h4>
-                  {(fundingPlan.swapPlan || []).length === 0 && (
-                    <div className={styles.txItem}>
-                      <span className={styles.txLabel}>No hacen falta swaps; la wallet ya puede fondear el LP directamente.</span>
-                    </div>
-                  )}
-                  {(fundingPlan.swapPlan || []).map((swap, index) => (
-                    <div key={`${swap.sourceAssetId}-${index}`} className={styles.txItem}>
-                      <span className={styles.txLabel}>
-                        {swap.requiresWrapNative ? `Wrap ${swap.sourceSymbol} y ` : ''}
-                        swap {swap.amountIn} {swap.tokenIn.symbol} → {swap.estimatedAmountOut} {swap.tokenOut.symbol} (fee {FEE_TIERS.find((tier) => tier.value === swap.fee)?.label || swap.fee})
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {error && <div className={styles.error}>{error}</div>}
-
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.secondaryBtn} onClick={() => setStep(STEP.RANGE)}>
-                ← Ajustar rango
-              </button>
-              <button type="button" className={styles.secondaryBtn} onClick={() => refreshFundingPlan({ preserveSelections: true })}>
-                Recalcular plan
-              </button>
-              <button type="button" className={styles.primaryBtn} onClick={handlePrepareReview} disabled={!fundingPlan}>
-                Revisar y preparar firma
-              </button>
-            </div>
-          </section>
+        {!flow.isBusy && flow.step === STEP.FUNDING && (
+          <StepFunding
+            selectedNetwork={selectedNetwork}
+            network={flow.network}
+            totalUsdTarget={flow.totalUsdTarget}
+            fundingDiagnostics={flow.fundingDiagnostics}
+            fundingIssue={flow.fundingIssue}
+            fundingPlan={flow.fundingPlan}
+            availableAssets={flow.availableAssets}
+            assetSelections={flow.assetSelections}
+            setAssetSelections={flow.setAssetSelections}
+            setHasFundingEdits={flow.setHasFundingEdits}
+            importTokenAddress={flow.importTokenAddress}
+            setImportTokenAddress={flow.setImportTokenAddress}
+            handleAddFundingImport={flow.handleAddFundingImport}
+            maxSlippageBps={flow.maxSlippageBps}
+            setMaxSlippageBps={flow.setMaxSlippageBps}
+            error={flow.error}
+            isBusy={flow.isBusy}
+            setStep={flow.setStep}
+            onClose={onClose}
+            refreshFundingPlan={flow.refreshFundingPlan}
+            handleApplyRecommended={flow.handleApplyRecommended}
+            handlePrepareReview={flow.handlePrepareReview}
+          />
         )}
 
-        {!isBusy && step === STEP.REVIEW && prepareData && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Paso 4: Review y firma</span>
-            </div>
-
-            <div className={styles.summaryGrid}>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Red / versión</span>
-                <strong className={styles.tileValue}>{selectedNetwork?.label || network} · {String(version).toUpperCase()}</strong>
-              </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Wallet</span>
-                <strong className={styles.tileValue}>{wallet?.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'No conectada'}</strong>
-              </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Pool</span>
-                <strong className={styles.tileValue}>{prepareData.quoteSummary?.token0?.symbol} / {prepareData.quoteSummary?.token1?.symbol}</strong>
-              </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Fee</span>
-                <strong className={styles.tileValue}>{FEE_TIERS.find((item) => item.value === fee)?.label}</strong>
-              </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Rango</span>
-                <strong className={styles.tileValue}>
-                  ${formatCompactPrice(activeRange?.rangeLowerPrice)} — ${formatCompactPrice(activeRange?.rangeUpperPrice)}
-                </strong>
-              </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Gas reservado</span>
-                <strong className={styles.tileValue}>
-                  {prepareData.fundingPlan?.gasReserve?.reservedAmount} {prepareData.fundingPlan?.gasReserve?.symbol}
-                </strong>
-              </div>
-            </div>
-
-            <div className={styles.txList}>
-              <h4>Activos fuente seleccionados</h4>
-              {reviewFundingAssets.map((asset) => (
-                <div key={`${asset.assetId}-${asset.fundingRole}`} className={styles.txItem}>
-                  <span className={styles.txLabel}>
-                    {asset.useAmount} {asset.symbol} · {asset.fundingRole === 'swap_source' ? 'Swap source' : 'Aporte directo'}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div className={styles.txList}>
-              <h4>Transacciones a firmar ({prepareData.txPlan?.length || 0})</h4>
-              {prepareData.txPlan?.map((tx, index) => (
-                <div key={`${tx.kind}-${index}`} className={styles.txItem}>
-                  <span className={styles.txLabel}>{tx.label || `Tx ${index + 1}`}</span>
-                </div>
-              ))}
-            </div>
-
-            {reviewSwapPlan?.length > 0 && (
-              <div className={styles.txList}>
-                <h4>Swaps</h4>
-                {reviewSwapPlan.map((swap, index) => (
-                  <div key={`${swap.sourceAssetId}-${index}`} className={styles.txItem}>
-                    <span className={styles.txLabel}>
-                      {swap.amountIn} {swap.tokenIn.symbol} → min {swap.amountOutMinimum} {swap.tokenOut.symbol}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {(prepareData.warnings || []).length > 0 && (
-              <div className={styles.noticeCard}>
-                <strong>Advertencias</strong>
-                {(prepareData.warnings || []).map((warning) => (
-                  <p key={warning}>{warning}</p>
-                ))}
-              </div>
-            )}
-
-            {error && <div className={styles.error}>{error}</div>}
-
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.secondaryBtn} onClick={() => setStep(STEP.FUNDING)}>
-                ← Volver a fondeo
-              </button>
-              <button type="button" className={styles.primaryBtn} onClick={handleExecute}>
-                Firmar con wallet
-              </button>
-            </div>
-          </section>
+        {!flow.isBusy && flow.step === STEP.REVIEW && flow.prepareData && (
+          <StepReview
+            wallet={wallet}
+            selectedNetwork={selectedNetwork}
+            network={flow.network}
+            version={flow.version}
+            fee={flow.fee}
+            activeRange={flow.activeRange}
+            prepareData={flow.prepareData}
+            reviewFundingAssets={flow.reviewFundingAssets}
+            reviewSwapPlan={flow.reviewSwapPlan}
+            error={flow.error}
+            setStep={flow.setStep}
+            handleExecute={flow.handleExecute}
+          />
         )}
 
-        {step === STEP.SIGNING && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>
-                Transacción {Math.min(currentTxIndex + 1, prepareData?.txPlan?.length || 0)} de {prepareData?.txPlan?.length || 0}
-              </span>
-            </div>
-            <div className={styles.txProgressList}>
-              {(prepareData?.txPlan || []).map((tx, index) => {
-                const label = tx?.label || `Transacción ${index + 1}`;
-                const isDone = index <= completedTxIndex;
-                const isActive = index === currentTxIndex && !isDone;
-                const hash = txHashes[index] || null;
-                const txLink = hash && explorerUrl ? getExplorerLink(explorerUrl, 'tx', hash) : null;
-                return (
-                  <div
-                    key={`${tx?.kind}-${index}`}
-                    className={`${styles.txStepItem} ${isDone ? styles.txStepDone : ''} ${isActive ? styles.txStepActive : ''} ${!isDone && !isActive ? styles.txStepPending : ''}`}
-                  >
-                    <span className={styles.txStepIcon}>
-                      {isDone ? '✓' : isActive ? '' : '○'}
-                    </span>
-                    <span className={styles.txStepLabel}>{label}</span>
-                    {isDone && hash && (
-                      <span className={styles.txStepHash}>
-                        {txLink
-                          ? <a href={txLink} target="_blank" rel="noopener noreferrer" className={styles.txLink}>{hash.slice(0, 10)}…</a>
-                          : <span>{hash.slice(0, 10)}…</span>
-                        }
-                      </span>
-                    )}
-                    {isActive && <span className={styles.txStepSpinner} />}
-                  </div>
-                );
-              })}
-            </div>
-            <div className={styles.loading}>
-              <p>{loadingMessage || 'Firma cada transacción en tu wallet...'}</p>
-            </div>
-          </section>
+        {flow.step === STEP.SIGNING && (
+          <StepSigning
+            prepareData={flow.prepareData}
+            completedTxIndex={flow.completedTxIndex}
+            currentTxIndex={flow.currentTxIndex}
+            txHashes={flow.txHashes}
+            explorerUrl={explorerUrl}
+            loadingMessage={flow.loadingMessage}
+          />
         )}
 
-        {step === STEP.DONE && (
-          <section className={styles.section}>
-            <div className={styles.success}>
-              <div className={styles.checkmark}>✓</div>
-              <p>Posición LP creada correctamente.</p>
-            </div>
-            {txHashes.length > 0 && (
-              <div className={styles.txList}>
-                <h4>Transacciones confirmadas ({txHashes.length})</h4>
-                {txHashes.map((hash, index) => {
-                  const label = prepareData?.txPlan?.[index]?.label || `Transacción ${index + 1}`;
-                  const txLink = explorerUrl ? getExplorerLink(explorerUrl, 'tx', hash) : null;
-                  return (
-                    <div key={hash} className={styles.txItem}>
-                      <span className={styles.txLabel}>
-                        {label}
-                        {' — '}
-                        {txLink
-                          ? <a href={txLink} target="_blank" rel="noopener noreferrer" className={styles.txLink}>{hash.slice(0, 14)}…{hash.slice(-6)}</a>
-                          : <span className={styles.hint}>{hash.slice(0, 14)}…{hash.slice(-6)}</span>
-                        }
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.primaryBtn} onClick={onClose}>
-                Cerrar
-              </button>
-            </div>
-          </section>
+        {flow.step === STEP.DONE && (
+          <StepDone
+            txHashes={flow.txHashes}
+            prepareData={flow.prepareData}
+            explorerUrl={explorerUrl}
+            onClose={onClose}
+          />
         )}
 
-        {step === STEP.ERROR && (
-          <section className={styles.section}>
-            <div className={styles.errorBox}>
-              <p>{error || 'Ocurrió un error en el wizard de creación LP.'}</p>
-
-              {completedTxIndex >= 0 && txHashes.length > 0 && (
-                <div className={styles.txList}>
-                  <h4>Transacciones completadas exitosamente</h4>
-                  {txHashes.map((hash, index) => {
-                    const label = prepareData?.txPlan?.[index]?.label || `Transacción ${index + 1}`;
-                    const txLink = explorerUrl ? getExplorerLink(explorerUrl, 'tx', hash) : null;
-                    return (
-                      <div key={hash} className={styles.txItem}>
-                        <span className={styles.txLabel}>
-                          {label}
-                          {' — '}
-                          {txLink
-                            ? <a href={txLink} target="_blank" rel="noopener noreferrer" className={styles.txLink}>{hash.slice(0, 10)}…</a>
-                            : <span>{hash.slice(0, 10)}…</span>
-                          }
-                        </span>
-                      </div>
-                    );
-                  })}
-                  <p className={styles.hint}>
-                    El plan ya quedó parcialmente ejecutado on-chain. Antes de volver a intentarlo, revisa estas transacciones y genera un plan nuevo desde estado fresco.
-                  </p>
-                </div>
-              )}
-
-              {failedTxLabel && (
-                <p className={styles.hint}>Transacción fallida: {failedTxLabel}</p>
-              )}
-
-              <div className={styles.buttonGroup}>
-                <button type="button" className={styles.secondaryBtn} onClick={handleReset}>
-                  Empezar de nuevo
-                </button>
-                <button type="button" className={styles.secondaryBtn} onClick={onClose}>
-                  Cerrar
-                </button>
-              </div>
-            </div>
-          </section>
+        {flow.step === STEP.ERROR && (
+          <StepError
+            error={flow.error}
+            completedTxIndex={flow.completedTxIndex}
+            txHashes={flow.txHashes}
+            prepareData={flow.prepareData}
+            explorerUrl={explorerUrl}
+            failedTxLabel={flow.failedTxLabel}
+            handleReset={flow.handleReset}
+            onClose={onClose}
+          />
         )}
       </div>
     </div>

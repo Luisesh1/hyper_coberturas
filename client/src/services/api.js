@@ -3,6 +3,14 @@ import { createHttpClient } from '../shared/api/httpClient';
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
+function buildQueryString(params) {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value != null && value !== '') qs.set(key, String(value));
+  }
+  return qs.size ? `?${qs.toString()}` : '';
+}
+
 // Sólo en dev: forwardea errores HTTP del cliente al buffer del DevLogPanel
 // para que aparezcan correlacionados con los del server vía requestId.
 // En build de producción este import lo elimina Vite por tree-shaking.
@@ -64,18 +72,10 @@ export const marketApi = {
 // Trading
 // ------------------------------------------------------------------
 export const tradingApi = {
-  getAccount:    ({ accountId, refresh } = {}) => {
-    const params = new URLSearchParams();
-    if (accountId != null) params.set('accountId', String(accountId));
-    if (refresh) params.set('refresh', '1');
-    return request('GET', `/trading/account${params.size ? `?${params.toString()}` : ''}`);
-  },
-  getOpenOrders: ({ accountId, refresh } = {}) => {
-    const params = new URLSearchParams();
-    if (accountId != null) params.set('accountId', String(accountId));
-    if (refresh) params.set('refresh', '1');
-    return request('GET', `/trading/orders${params.size ? `?${params.toString()}` : ''}`);
-  },
+  getAccount:    ({ accountId, refresh } = {}) =>
+    request('GET', `/trading/account${buildQueryString({ accountId, refresh: refresh ? '1' : null })}`),
+  getOpenOrders: ({ accountId, refresh } = {}) =>
+    request('GET', `/trading/orders${buildQueryString({ accountId, refresh: refresh ? '1' : null })}`),
 
   openPosition: ({ accountId, asset, side, size, leverage, marginMode, limitPrice }) =>
     request('POST', '/trading/open', { accountId, asset, side, size, leverage, marginMode, limitPrice }),
@@ -83,11 +83,8 @@ export const tradingApi = {
   closePosition: ({ accountId, asset, size }) =>
     request('POST', '/trading/close', { accountId, asset, size }),
 
-  cancelOrder: (asset, oid, { accountId } = {}) => {
-    const params = new URLSearchParams();
-    if (accountId != null) params.set('accountId', String(accountId));
-    return request('DELETE', `/trading/orders/${asset}/${oid}${params.size ? `?${params.toString()}` : ''}`);
-  },
+  cancelOrder: (asset, oid, { accountId } = {}) =>
+    request('DELETE', `/trading/orders/${asset}/${oid}${buildQueryString({ accountId })}`),
 
   setSLTP: ({ accountId, asset, side, size, slPrice, tpPrice }) =>
     request('POST', '/trading/sltp', { accountId, asset, side, size, slPrice, tpPrice }),
@@ -97,11 +94,8 @@ export const tradingApi = {
 // Hedge
 // ------------------------------------------------------------------
 export const hedgeApi = {
-  getAll:  ({ accountId } = {}) => {
-    const params = new URLSearchParams();
-    if (accountId != null) params.set('accountId', String(accountId));
-    return request('GET', `/hedge${params.size ? `?${params.toString()}` : ''}`);
-  },
+  getAll:  ({ accountId } = {}) =>
+    request('GET', `/hedge${buildQueryString({ accountId })}`),
   getById: (id) => request('GET', `/hedge/${id}`),
 
   create: ({ accountId, asset, entryPrice, exitPrice, size, leverage, label, direction }) =>
@@ -121,16 +115,10 @@ export const settingsApi = {
   getEtherscan: ()                  => request('GET',  '/settings/etherscan'),
   saveWallet:   ({ privateKey, address }) =>
     request('PUT', '/settings/wallet', { privateKey, address }),
-  getHyperliquidAccounts: (refreshAccountId) => {
-    const params = new URLSearchParams();
-    if (refreshAccountId != null) params.set('refreshAccountId', String(refreshAccountId));
-    return request('GET', `/settings/hyperliquid-accounts${params.size ? `?${params.toString()}` : ''}`);
-  },
-  getHyperliquidAccountSummary: (accountId, { refresh = false } = {}) => {
-    const params = new URLSearchParams();
-    if (refresh) params.set('refresh', '1');
-    return request('GET', `/settings/hyperliquid-accounts/${accountId}/summary${params.size ? `?${params.toString()}` : ''}`);
-  },
+  getHyperliquidAccounts: (refreshAccountId) =>
+    request('GET', `/settings/hyperliquid-accounts${buildQueryString({ refreshAccountId })}`),
+  getHyperliquidAccountSummary: (accountId, { refresh = false } = {}) =>
+    request('GET', `/settings/hyperliquid-accounts/${accountId}/summary${buildQueryString({ refresh: refresh ? '1' : null })}`),
   createHyperliquidAccount: ({ alias, address, privateKey, isDefault }) =>
     request('POST', '/settings/hyperliquid-accounts', { alias, address, privateKey, isDefault }),
   updateHyperliquidAccount: (id, { alias, address, privateKey, isDefault }) =>
@@ -283,6 +271,10 @@ export const lpOrchestratorApi = {
   getActionLog: (id, { limit } = {}) => {
     const qs = limit ? `?limit=${limit}` : '';
     return request('GET', `/lp-orchestrators/${id}/action-log${qs}`);
+  },
+  getProtectionOps: (id, { limit } = {}) => {
+    const qs = limit ? `?limit=${limit}` : '';
+    return request('GET', `/lp-orchestrators/${id}/protection-ops${qs}`);
   },
 };
 

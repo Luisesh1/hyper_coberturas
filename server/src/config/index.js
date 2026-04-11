@@ -83,6 +83,9 @@ const config = {
       process.env.SETTINGS_ENCRYPTION_KEY ||
       (IS_PROD ? '' : getDefaultDevEncryptionKey()),
   },
+  auth: {
+    saltRounds: parseInt(process.env.AUTH_SALT_ROUNDS, 10) || 12,
+  },
   trading: {
     defaultLeverage: parseInt(process.env.DEFAULT_LEVERAGE, 10) || 10,
     marginMode: process.env.MARGIN_MODE || 'cross',
@@ -169,4 +172,5 @@ function validateConfig() {
 validateConfig();
 
 module.exports = config;
+module.exports.IS_PROD = IS_PROD;
 module.exports.buildAlchemyRpcUrls = buildAlchemyRpcUrls;

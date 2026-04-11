@@ -3,7 +3,7 @@ import { settingsApi, uniswapApi, tradingApi } from '../../services/api';
 import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
-import { useWalletConnection } from '../../hooks/useWalletConnection';
+import { useWalletConnection, useWalletState } from '../../hooks/useWalletConnection';
 import { mergeResultProtections } from './utils/pool-sorting';
 import { getPoolSortScore } from './utils/pool-sorting';
 import { sortProtectedPools } from './utils/pool-sorting';
@@ -66,13 +66,7 @@ export default function UniswapPoolsPage() {
   const [showSmartCreate, setShowSmartCreate] = useState(false);
   const { dialog, confirm } = useConfirmAction();
   const walletConn = useWalletConnection() || EMPTY_WALLET_CONNECTION;
-  const walletState = useMemo(() => ({
-    address: walletConn.address,
-    chainId: walletConn.chainId,
-    isConnected: walletConn.isConnected,
-    hasProvider: walletConn.hasProvider,
-    connector: walletConn.connector,
-  }), [walletConn.address, walletConn.chainId, walletConn.isConnected, walletConn.hasProvider, walletConn.connector]);
+  const walletState = useWalletState();
   const positionActionDefaults = useMemo(
     () => ({ network, version, walletAddress: walletState.address }),
     [network, version, walletState.address],

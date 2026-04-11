@@ -1,3 +1,4 @@
+const { IS_PROD } = require('../config');
 const logger = require('../services/logger.service');
 const { buildErrorEnvelope } = require('../shared/platform/http/response-envelope');
 
@@ -18,8 +19,6 @@ function errorHandler(err, req, res, _next) {
     message: rawMessage,
   });
 
-  // En producción, no exponer mensajes internos en errores 500
-  const IS_PROD = process.env.NODE_ENV === 'production';
   const safeMessage = (IS_PROD && status >= 500)
     ? 'Error interno del servidor'
     : rawMessage;

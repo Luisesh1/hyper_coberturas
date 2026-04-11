@@ -2,6 +2,7 @@ const { Router } = require('express');
 const asyncHandler = require('../middleware/async-handler');
 const { authenticate } = require('../middleware/auth.middleware');
 const { validate } = require('../middleware/validate.middleware');
+const { requireIntParam } = require('../middleware/parse-params');
 const uniswapService = require('../services/uniswap.service');
 const uniswapProtectionService = require('../services/uniswap-protection.service');
 const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
@@ -64,10 +65,7 @@ router.get('/protected-pools', asyncHandler(async (req, res) => {
 }));
 
 async function handleProtectedPoolDiagnostics(req, res) {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id < 1) {
-    return res.status(400).json({ success: false, error: 'ID invalido' });
-  }
+  const id = requireIntParam(req, 'id');
   const diagnostics = await uniswapProtectionService.diagnoseDeltaNeutral(req.user.userId, id);
   res.json({ success: true, data: diagnostics });
 }
@@ -83,10 +81,7 @@ router.post('/protected-pools/refresh', asyncHandler(async (req, res) => {
 }));
 
 router.post('/protected-pools/:id/refresh-snapshot', asyncHandler(async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id < 1) {
-    return res.status(400).json({ success: false, error: 'ID invalido' });
-  }
+  const id = requireIntParam(req, 'id');
   const data = await protectedPoolRefreshService.refreshProtection(req.user.userId, id);
   res.json({ success: true, data });
 }));
@@ -100,11 +95,7 @@ router.post('/protected-pools', validate(createProtectedPoolSchema), asyncHandle
 }));
 
 router.post('/protected-pools/:id/deactivate', asyncHandler(async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id < 1) {
-    return res.status(400).json({ success: false, error: 'ID invalido' });
-  }
-
+  const id = requireIntParam(req, 'id');
   const data = await uniswapProtectionService.deactivateProtectedPool(req.user.userId, id);
   res.json({ success: true, data });
 }));
@@ -117,10 +108,7 @@ router.post('/protected-pools/:id/deactivate', asyncHandler(async (req, res) => 
  * funciona sobre cualquier protección (activa o inactiva) del usuario.
  */
 router.post('/protected-pools/:id/force-close-hedge', asyncHandler(async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id < 1) {
-    return res.status(400).json({ success: false, error: 'ID invalido' });
-  }
+  const id = requireIntParam(req, 'id');
   const protection = await protectedPoolRepository.getById(req.user.userId, id);
   if (!protection) {
     return res.status(404).json({ success: false, error: 'Protección no encontrada' });
@@ -196,10 +184,7 @@ router.post('/claim-fees/finalize', validate(claimFeesFinalizeSchema), asyncHand
 }));
 
 router.get('/operations/:id', asyncHandler(async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id < 1) {
-    return res.status(400).json({ success: false, error: 'ID invalido' });
-  }
+  const id = requireIntParam(req, 'id');
   const data = await uniswapOperationService.getOperation(req.user.userId, id);
   res.json({ success: true, data });
 }));

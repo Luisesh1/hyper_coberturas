@@ -3,13 +3,12 @@ const cors = require('cors');
 const helmet = require('helmet');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const config = require('./config');
+const { IS_PROD } = require('./config');
 const routes = require('./routes');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 const { requestContext } = require('./middleware/request-context.middleware');
 const { requestLogger } = require('./middleware/request-logger.middleware');
 const { buildSuccessEnvelope } = require('./shared/platform/http/response-envelope');
-
-const IS_PROD = config.server.nodeEnv === 'production';
 
 const app = express();
 

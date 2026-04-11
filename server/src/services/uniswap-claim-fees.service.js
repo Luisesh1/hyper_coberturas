@@ -1,6 +1,5 @@
 const { ethers } = require('ethers');
 const { ValidationError, ExternalServiceError } = require('../errors/app-error');
-const uniswapService = require('./uniswap.service');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
 const protectedPoolRepo = require('../repositories/protected-uniswap-pool.repository');
 const logger = require('./logger.service');
@@ -15,20 +14,12 @@ const {
   normalizeHooksAddress,
 } = require('./uniswap-v4-helpers.service');
 
-const { SUPPORTED_NETWORKS } = uniswapService;
+const { SUPPORTED_NETWORKS } = require('./uniswap/networks');
 
-// --- ABI fragments for write operations ---------------------------------
-
-const V3_COLLECT_ABI = [
-  'function collect(tuple(uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max) params) payable returns (uint128 amount0, uint128 amount1)',
-  'function ownerOf(uint256 tokenId) view returns (address)',
-  'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
-];
-
-const ERC20_ABI = [
-  'function symbol() view returns (string)',
-  'function decimals() view returns (uint8)',
-];
+const {
+  ERC20_ABI,
+  V3_POSITION_MANAGER_ABI: V3_COLLECT_ABI,
+} = require('./uniswap/abis');
 
 const MAX_UINT128 = (1n << 128n) - 1n;
 

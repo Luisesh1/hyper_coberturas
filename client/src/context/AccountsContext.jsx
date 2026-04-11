@@ -1,28 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { settingsApi } from '../services/api';
-import { useNotifications } from './NotificationsContext';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 
 const AccountsContext = createContext(null);
 
 export function AccountsProvider({ children }) {
-  const { addNotification } = useNotifications();
+  const { run, loading: isLoadingAccounts } = useAsyncAction();
   const [accounts, setAccounts] = useState([]);
-  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
 
   const refreshAccounts = useCallback(async ({ refreshAccountId } = {}) => {
-    setIsLoadingAccounts(true);
-    try {
+    return run(async () => {
       const data = await settingsApi.getHyperliquidAccounts(refreshAccountId);
       setAccounts(Array.isArray(data) ? data : []);
       return data;
-    } catch (err) {
-      addNotification('error', `Error al cargar cuentas: ${err.message}`);
+    }, 'Error al cargar cuentas').catch(() => {
       setAccounts([]);
-      throw err;
-    } finally {
-      setIsLoadingAccounts(false);
-    }
-  }, [addNotification]);
+    });
+  }, [run]);
 
   const refreshAccountSummary = useCallback(async (accountId, { force = false } = {}) => {
     if (!accountId) return null;

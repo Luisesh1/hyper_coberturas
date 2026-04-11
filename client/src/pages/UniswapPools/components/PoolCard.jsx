@@ -10,13 +10,12 @@ import {
   getValuationSourceLabel,
   shortAddress,
 } from '../utils/pool-formatters';
+import { computePoolPermissions } from '../utils/pool-permissions';
 import RangeTrack from './RangeTrack';
 import styles from './PoolCard.module.css';
 
 export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletState, onClaimFees }) {
   const isLpPosition = pool.mode === 'lp_position' || pool.mode === 'lp_positions';
-  const isV4 = pool.version === 'v4';
-  const hasUnsupportedV4Hooks = isV4 && pool.hooks && pool.hooks !== '0x0000000000000000000000000000000000000000';
   const protectionState = getProtectionButtonState(pool, hasAccounts);
   const status = getPoolStatus(pool);
   const pnlValue = Number(pool.pnlTotalUsd);
@@ -31,19 +30,17 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
   const initialValueSource = getValuationSourceLabel(pool.initialValueUsdSource);
   const openPriceSource = getValuationSourceLabel(pool.priceAtOpenSource);
   const unclaimedFees = Number(pool.unclaimedFeesUsd);
-  const canClaim = isLpPosition
-    && ['v3', 'v4'].includes(pool.version)
-    && walletState?.isConnected
-    && walletState.chainId === pool.chainId
-    && pool.owner?.toLowerCase() === walletState.address?.toLowerCase()
-    && !hasUnsupportedV4Hooks
-    && unclaimedFees > 0;
-  const canManage = isLpPosition
-    && ['v3', 'v4'].includes(pool.version)
-    && walletState?.isConnected
-    && walletState.chainId === pool.chainId
-    && pool.owner?.toLowerCase() === walletState.address?.toLowerCase()
-    && !hasUnsupportedV4Hooks;
+
+  const { canClaim: canClaimRaw, canManage: canManageRaw, manageTitle, hasUnsupportedV4Hooks } = computePoolPermissions({
+    walletState,
+    ownerAddress: pool.owner,
+    chainId: pool.chainId,
+    version: pool.version,
+    hooks: pool.hooks,
+    unclaimedFees,
+  });
+  const canClaim = isLpPosition && canClaimRaw;
+  const canManage = isLpPosition && canManageRaw;
 
   const toneCls = pool.protection
     ? styles.card_protected
@@ -55,17 +52,6 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
 
   const pnlTone = Number.isFinite(pnlValue) ? (pnlValue > 0 ? styles.positive : pnlValue < 0 ? styles.negative : '') : '';
   const yieldTone = Number.isFinite(yieldValue) ? (yieldValue > 0 ? styles.positive : yieldValue < 0 ? styles.negative : '') : '';
-
-  // Tooltip for disabled manage buttons
-  const manageTitle = !walletState?.isConnected
-    ? 'Conecta tu wallet para gestionar esta posición'
-    : walletState.chainId !== pool.chainId
-      ? 'Cambia a la red correcta en tu wallet'
-      : pool.owner?.toLowerCase() !== walletState.address?.toLowerCase()
-        ? 'Esta wallet no es la dueña de la posición'
-        : hasUnsupportedV4Hooks
-          ? 'Hooks no soportados en gestión V4'
-        : '';
 
   const lpActionButtons = [
     { action: 'increase-liquidity', label: 'Liquidez', icon: '➕', title: 'Agregar más liquidez a esta posición' },

@@ -13,6 +13,7 @@ const hedgeRegistry    = require('../services/hedge.registry');
 const { authenticate } = require('../middleware/auth.middleware');
 const { validate } = require('../middleware/validate.middleware');
 const asyncHandler = require('../middleware/async-handler');
+const { requireIntParam, optionalIntQuery } = require('../middleware/parse-params');
 const { createHedgeSchema } = require('../schemas/hedge.schema');
 
 const router = Router();
@@ -29,10 +30,7 @@ const hedgeWriteLimiter = rateLimit({
 });
 
 router.get('/', asyncHandler(async (req, res) => {
-  const accountId = req.query.accountId ? Number(req.query.accountId) : null;
-  if (req.query.accountId && (isNaN(accountId) || accountId < 1)) {
-    return res.status(400).json({ success: false, error: 'accountId inválido' });
-  }
+  const accountId = optionalIntQuery(req, 'accountId');
   const services = accountId != null
     ? [await hedgeRegistry.getOrCreate(req.user.userId, accountId)]
     : await hedgeRegistry.getOrCreateAllForUser(req.user.userId);
@@ -43,8 +41,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) return res.status(400).json({ success: false, error: 'ID inválido' });
+  const id = requireIntParam(req, 'id');
   const services = await hedgeRegistry.getOrCreateAllForUser(req.user.userId);
   const hedge = services
     .map((svc) => svc.hedges.get(id))
@@ -61,8 +58,7 @@ router.post('/', hedgeWriteLimiter, validate(createHedgeSchema), asyncHandler(as
 }));
 
 router.delete('/:id', hedgeWriteLimiter, asyncHandler(async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) return res.status(400).json({ success: false, error: 'ID invalido' });
+  const id = requireIntParam(req, 'id');
   const services = await hedgeRegistry.getOrCreateAllForUser(req.user.userId);
   const svc = services.find((item) => item.hedges.has(id));
   if (!svc) return res.status(404).json({ success: false, error: 'Cobertura no encontrada' });

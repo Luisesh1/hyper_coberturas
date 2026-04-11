@@ -1,0 +1,193 @@
+.block {
+  border: 1px solid var(--uni-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.015);
+  overflow: hidden;
+}
+
+.summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 13px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--uni-text-1);
+  font-weight: 700;
+  list-style: none;
+  user-select: none;
+}
+
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.summaryHint {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--uni-text-3);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.body {
+  padding: 4px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.loading {
+  text-align: center;
+  padding: 14px 0;
+  color: var(--uni-text-3);
+  font-size: 0.78rem;
+}
+
+.empty {
+  text-align: center;
+  padding: 14px 0;
+  color: var(--uni-text-3);
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
+/* ───────── Sections ───────── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionTitle {
+  font-size: 0.62rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  padding: 0 2px;
+  color: var(--uni-amber);
+}
+
+/* ───────── Table ───────── */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.table th {
+  font-size: 0.6rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 800;
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--uni-border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 5px 6px;
+  color: var(--uni-text-1);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  border-bottom: 1px solid rgba(93, 115, 137, 0.12);
+  white-space: nowrap;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.positive { color: var(--uni-green); }
+.negative { color: var(--uni-red); }
+.neutral  { color: var(--uni-text-2); }
+.muted    { color: var(--uni-text-3); font-family: inherit; }
+
+.reason {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: inherit;
+  font-size: 0.68rem;
+}
+
+.dirShort { color: var(--uni-red); }
+.dirLong  { color: var(--uni-green); }
+
+/* ───────── Hedge summary row ───────── */
+.hedgeRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hedgeCard {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--uni-bg-1);
+  border: 1px solid var(--uni-border);
+}
+
+.hedgeLabel {
+  font-size: 0.6rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 800;
+}
+
+.hedgeValue {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--uni-text-0);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.hedgeStatus {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ───────── Cycle table ───────── */
+.cycleSection {
+  margin-top: 4px;
+}
+
+.cycleSectionTitle {
+  font-size: 0.58rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 800;
+  margin-bottom: 4px;
+  padding: 0 2px;
+}
+
+@media (max-width: 540px) {
+  .table {
+    font-size: 0.65rem;
+  }
+  .table td {
+    font-size: 0.64rem;
+  }
+  .reason {
+    max-width: 80px;
+  }
+}

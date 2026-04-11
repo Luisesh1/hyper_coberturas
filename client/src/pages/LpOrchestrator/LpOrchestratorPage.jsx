@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { settingsApi, lpOrchestratorApi, uniswapApi } from '../../services/api';
-import { useWalletConnection } from '../../hooks/useWalletConnection';
+import { useWalletConnection, useWalletState } from '../../hooks/useWalletConnection';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
 import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
@@ -42,13 +42,7 @@ export default function LpOrchestratorPage() {
   const { dialog, confirm } = useConfirmAction();
   const walletConn = useWalletConnection();
 
-  const walletState = useMemo(() => ({
-    address: walletConn.address,
-    chainId: walletConn.chainId,
-    isConnected: walletConn.isConnected,
-    hasProvider: walletConn.hasProvider,
-    connector: walletConn.connector,
-  }), [walletConn.address, walletConn.chainId, walletConn.isConnected, walletConn.hasProvider]);
+  const walletState = useWalletState();
 
   const refresh = useCallback(async () => {
     setIsLoading(true);

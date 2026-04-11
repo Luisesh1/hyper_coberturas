@@ -40,11 +40,14 @@ const {
   getExplorerLink,
 } = require('./uniswap/scan-helpers');
 
-const ERC20_ABI = [
-  'function symbol() view returns (string)',
-  'function decimals() view returns (uint8)',
-  'function balanceOf(address owner) view returns (uint256)',
-];
+const {
+  ERC20_ABI,
+  V3_FACTORY_ABI,
+  V3_POOL_ABI,
+  V3_POSITION_MANAGER_ABI,
+  V4_STATE_VIEW_ABI,
+  V4_POSITION_MANAGER_ABI,
+} = require('./uniswap/abis');
 
 const V1_EXCHANGE_ABI = [
   'function totalSupply() view returns (uint256)',
@@ -53,41 +56,6 @@ const V1_EXCHANGE_ABI = [
 const V2_PAIR_ABI = [
   'function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)',
   'function totalSupply() view returns (uint256)',
-];
-
-const V3_FACTORY_ABI = [
-  'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address)',
-];
-
-const V3_POOL_ABI = [
-  'function liquidity() view returns (uint128)',
-  'function tickSpacing() view returns (int24)',
-  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
-  'function feeGrowthGlobal0X128() view returns (uint256)',
-  'function feeGrowthGlobal1X128() view returns (uint256)',
-  'function ticks(int24 tick) view returns (uint128 liquidityGross, int128 liquidityNet, uint256 feeGrowthOutside0X128, uint256 feeGrowthOutside1X128, int56 tickCumulativeOutside, uint160 secondsPerLiquidityOutsideX128, uint32 secondsOutside, bool initialized)',
-];
-
-const V3_POSITION_MANAGER_ABI = [
-  'function balanceOf(address owner) view returns (uint256)',
-  'function ownerOf(uint256 tokenId) view returns (address)',
-  'function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)',
-  'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
-  'function mint(tuple(address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline) params) payable returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)',
-];
-
-const V4_STATE_VIEW_ABI = [
-  'function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)',
-  'function getLiquidity(bytes32) view returns (uint128)',
-  'function getPositionInfo(bytes32 poolId, bytes32 positionId) view returns (uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128)',
-  'function getFeeGrowthInside(bytes32 poolId, int24 tickLower, int24 tickUpper) view returns (uint256 feeGrowthInside0X128, uint256 feeGrowthInside1X128)',
-];
-
-const V4_POSITION_MANAGER_ABI = [
-  'function ownerOf(uint256 tokenId) view returns (address)',
-  'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks), uint256)',
-  'function getPositionLiquidity(uint256 tokenId) view returns (uint128 liquidity)',
-  'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
 ];
 
 const EVENT_ABIS = {
@@ -106,155 +74,12 @@ const tokenCache = new Map();
 const receiptCache = new Map();
 const blockCache = new Map();
 
-const RPC_DEFAULTS = config.uniswap.rpcUrls;
-const FALLBACK_RPC_DEFAULTS = config.uniswap.fallbackRpcUrls;
+const { SUPPORTED_NETWORKS } = require('./uniswap/networks');
 
 function annotatePoolsForUser(args) {
   const { annotatePoolsWithProtection } = require('./uniswap-protection.service');
   return annotatePoolsWithProtection(args);
 }
-
-const SUPPORTED_NETWORKS = {
-  ethereum: {
-    id: 'ethereum',
-    label: 'Ethereum',
-    chainId: 1,
-    nativeSymbol: 'ETH',
-    explorerUrl: 'https://etherscan.io',
-    rpcUrl: RPC_DEFAULTS.ethereum,
-    fallbackRpcUrl: FALLBACK_RPC_DEFAULTS.ethereum,
-    versions: ['v1', 'v2', 'v3', 'v4'],
-    deployments: {
-      v1: {
-        kind: 'factory',
-        eventSource: '0xc0a47dFe034B400B47bDaD5FecDa2621De6c4d95',
-      },
-      v2: {
-        kind: 'factory',
-        eventSource: '0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f',
-      },
-      v3: {
-        kind: 'factory',
-        eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-        positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
-      },
-      v4: {
-        kind: 'poolManager',
-        eventSource: '0x000000000004444c5dc75cB358380D2e3dE08A90',
-        stateView: '0x7ffe42c4a5deea5b0fec41c94c136cf115597227',
-        positionManager: '0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e',
-      },
-    },
-  },
-  arbitrum: {
-    id: 'arbitrum',
-    label: 'Arbitrum One',
-    chainId: 42161,
-    nativeSymbol: 'ETH',
-    explorerUrl: 'https://arbiscan.io',
-    rpcUrl: RPC_DEFAULTS.arbitrum,
-    fallbackRpcUrl: FALLBACK_RPC_DEFAULTS.arbitrum,
-    versions: ['v2', 'v3', 'v4'],
-    deployments: {
-      v2: {
-        kind: 'factory',
-        eventSource: '0xf1D7CC64Fb4452F05c498126312eBE29f30Fbcf9',
-      },
-      v3: {
-        kind: 'factory',
-        eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-        positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
-      },
-      v4: {
-        kind: 'poolManager',
-        eventSource: '0x360e68faccca8ca495c1b759fd9eee466db9fb32',
-        stateView: '0x76fd297e2d437cd7f76d50f01afe6160f86e9990',
-        positionManager: '0xd88f38f930b7952f2db2432cb002e7abbf3dd869',
-      },
-    },
-  },
-  base: {
-    id: 'base',
-    label: 'Base',
-    chainId: 8453,
-    nativeSymbol: 'ETH',
-    explorerUrl: 'https://basescan.org',
-    rpcUrl: RPC_DEFAULTS.base,
-    fallbackRpcUrl: FALLBACK_RPC_DEFAULTS.base,
-    versions: ['v2', 'v3', 'v4'],
-    deployments: {
-      v2: {
-        kind: 'factory',
-        eventSource: '0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6',
-      },
-      v3: {
-        kind: 'factory',
-        eventSource: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
-        positionManager: '0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1',
-      },
-      v4: {
-        kind: 'poolManager',
-        eventSource: '0x498581ff718922c3f8e6a244956af099b2652b2b',
-        stateView: '0xa3c0c9b65bad0b08107aa264b0f3db444b867a71',
-        positionManager: '0x7c5f5a4bbd8fd63184577525326123b519429bdc',
-      },
-    },
-  },
-  optimism: {
-    id: 'optimism',
-    label: 'Optimism',
-    chainId: 10,
-    nativeSymbol: 'ETH',
-    explorerUrl: 'https://optimistic.etherscan.io',
-    rpcUrl: RPC_DEFAULTS.optimism,
-    fallbackRpcUrl: FALLBACK_RPC_DEFAULTS.optimism,
-    versions: ['v2', 'v3', 'v4'],
-    deployments: {
-      v2: {
-        kind: 'factory',
-        eventSource: '0x0c3c1c532F1e39EdF36BE9Fe0bE1410313E074Bf',
-      },
-      v3: {
-        kind: 'factory',
-        eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-        positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
-      },
-      v4: {
-        kind: 'poolManager',
-        eventSource: '0x9a13f98cb987694c9f086b1f5eb990eea8264ec3',
-        stateView: '0xc18a3169788f4f75a170290584eca6395c75ecdb',
-        positionManager: '0x3c3ea4b57a46241e54610e5f022e5c45859a1017',
-      },
-    },
-  },
-  polygon: {
-    id: 'polygon',
-    label: 'Polygon',
-    chainId: 137,
-    nativeSymbol: 'POL',
-    explorerUrl: 'https://polygonscan.com',
-    rpcUrl: RPC_DEFAULTS.polygon,
-    fallbackRpcUrl: FALLBACK_RPC_DEFAULTS.polygon,
-    versions: ['v2', 'v3', 'v4'],
-    deployments: {
-      v2: {
-        kind: 'factory',
-        eventSource: '0x9e5A52f57b3038F1B8EeE45F28b3C1967e22799C',
-      },
-      v3: {
-        kind: 'factory',
-        eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-        positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
-      },
-      v4: {
-        kind: 'poolManager',
-        eventSource: '0x67366782805870060151383f4bbff9dab53e5cd6',
-        stateView: '0x5ea1bd7974c8a611cbab0bdcafcb1d9cc9b3ba5a',
-        positionManager: '0x1ec2ebf4f37e7363fdfe3551602425af0b3ceef9',
-      },
-    },
-  },
-};
 
 function getSupportMatrix() {
   const networks = Object.values(SUPPORTED_NETWORKS).map((network) => ({
@@ -1290,6 +1115,26 @@ async function inspectPositionByIdentifier({
     const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
     const tickSpacing = Number(await pool.tickSpacing().catch(() => 0));
 
+    // Cuando NO es lightweight, intentamos obtener el bloque de mint vía
+    // Etherscan NFT transfers para que enrichV3Record pueda resolver
+    // el precio histórico (priceAtOpen).
+    let mintInfo = { txHash: null, blockNumber: null, createdAt: null };
+    if (!lightweight && apiKey) {
+      try {
+        const nftRows = await fetchWalletNftTransfers(apiKey, networkConfig, normalizedWallet, pmAddress);
+        const { firstInbound } = collectHeldTokenIds(normalizedWallet, nftRows.rows);
+        const inbound = firstInbound.get(String(positionIdentifier));
+        if (inbound) {
+          mintInfo = inbound;
+        }
+      } catch (err) {
+        logger.warn('inspect_position_nft_transfer_lookup_failed', {
+          positionIdentifier,
+          error: err.message,
+        });
+      }
+    }
+
     const record = {
       id: `v3:${networkConfig.id}:${positionIdentifier}`,
       mode: 'lp_position',
@@ -1299,14 +1144,14 @@ async function inspectPositionByIdentifier({
       chainId: networkConfig.chainId,
       creator: normalizedWallet,
       owner: normalizedWallet,
-      txHash: null,
-      blockNumber: null,
-      mintBlockNumber: null,
-      createdAt: null,
-      openedAt: null,
+      txHash: mintInfo.txHash,
+      blockNumber: mintInfo.blockNumber,
+      mintBlockNumber: mintInfo.blockNumber,
+      createdAt: mintInfo.createdAt,
+      openedAt: mintInfo.createdAt,
       explorerUrl: networkConfig.explorerUrl,
       source: 'direct_position_inspect',
-      completeness: 'lightweight',
+      completeness: lightweight ? 'lightweight' : 'full',
       token0Address: normalizeAddress(position.token0),
       token1Address: normalizeAddress(position.token1),
       poolAddress: normalizeAddress(poolAddress),
@@ -1335,6 +1180,23 @@ async function inspectPositionByIdentifier({
     const decodedInfo = decodeV4PositionInfo(positionInfo);
     const poolId = computeV4PoolId(poolKey);
 
+    let mintInfo = { txHash: null, blockNumber: null, createdAt: null };
+    if (!lightweight && apiKey) {
+      try {
+        const nftRows = await fetchWalletNftTransfers(apiKey, networkConfig, normalizedWallet, pmAddress);
+        const { firstInbound } = collectHeldTokenIds(normalizedWallet, nftRows.rows);
+        const inbound = firstInbound.get(String(positionIdentifier));
+        if (inbound) {
+          mintInfo = inbound;
+        }
+      } catch (err) {
+        logger.warn('inspect_position_nft_transfer_lookup_failed', {
+          positionIdentifier,
+          error: err.message,
+        });
+      }
+    }
+
     const record = {
       id: `v4:${networkConfig.id}:${positionIdentifier}`,
       mode: 'lp_position',
@@ -1344,14 +1206,14 @@ async function inspectPositionByIdentifier({
       chainId: networkConfig.chainId,
       creator: normalizedWallet,
       owner: normalizedWallet,
-      txHash: null,
-      blockNumber: null,
-      mintBlockNumber: null,
-      createdAt: null,
-      openedAt: null,
+      txHash: mintInfo.txHash,
+      blockNumber: mintInfo.blockNumber,
+      mintBlockNumber: mintInfo.blockNumber,
+      createdAt: mintInfo.createdAt,
+      openedAt: mintInfo.createdAt,
       explorerUrl: networkConfig.explorerUrl,
       source: 'direct_position_inspect',
-      completeness: 'lightweight',
+      completeness: lightweight ? 'lightweight' : 'full',
       token0Address: normalizeAddress(poolKey.currency0),
       token1Address: normalizeAddress(poolKey.currency1),
       poolAddress: null,
