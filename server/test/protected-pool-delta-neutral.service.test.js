@@ -239,8 +239,74 @@ test('evaluateProtection con decision hold nunca persiste rebalance_pending', as
   assert.equal(decisions.at(-1).finalStrategyStatus, result.status);
 });
 
+test('_buildPreflight permite ejecutar con drift entre 11 y 25 USD', async () => {
+  const service = new ProtectedPoolDeltaNeutralService();
+
+  const preflight = await service._buildPreflight({
+    protection: {
+      leverage: 7,
+      snapshotStatus: 'ready',
+      minOrderNotionalUsd: null,
+    },
+    hl: {
+      getClearinghouseState: async () => ({ withdrawable: '1000' }),
+    },
+    strategyState: {
+      status: 'tracking',
+      nextEligibleAttemptAt: null,
+      cooldownReason: null,
+    },
+    currentPrice: 2500,
+    tracking: {
+      trackingErrorQty: 0.0048,
+      trackingErrorUsd: 12,
+    },
+    bands: {
+      estimatedCostUsd: 0.01,
+    },
+    decision: 'rebalance_partial',
+  });
+
+  assert.equal(preflight.ok, true);
+  assert.equal(preflight.status, 'rebalance_pending');
+});
+
+test('_buildPreflight sigue bloqueando drift por debajo de 11 USD', async () => {
+  const service = new ProtectedPoolDeltaNeutralService();
+
+  const preflight = await service._buildPreflight({
+    protection: {
+      leverage: 7,
+      snapshotStatus: 'ready',
+      minOrderNotionalUsd: null,
+    },
+    hl: {
+      getClearinghouseState: async () => ({ withdrawable: '1000' }),
+    },
+    strategyState: {
+      status: 'tracking',
+      nextEligibleAttemptAt: null,
+      cooldownReason: null,
+    },
+    currentPrice: 2500,
+    tracking: {
+      trackingErrorQty: 0.004,
+      trackingErrorUsd: 10,
+    },
+    bands: {
+      estimatedCostUsd: 0.01,
+    },
+    decision: 'rebalance_partial',
+  });
+
+  assert.equal(preflight.ok, false);
+  assert.equal(preflight.reason, 'below_min_order_notional');
+});
+
 test('evaluateProtection deja risk_paused cuando la distancia a liquidacion es demasiado baja', async () => {
   const decisions = [];
+  let openCalls = 0;
+  let closeCalls = 0;
   const protection = buildDeltaNeutralProtection({
     strategyState: {
       status: 'healthy',
@@ -261,7 +327,7 @@ test('evaluateProtection deja risk_paused cuando la distancia a liquidacion es d
       getOrCreate: async () => ({
         getPosition: async () => ({
           asset: 'ETH',
-          szi: '-0.01',
+          szi: '-0.001',
           liquidationPx: 2650,
           leverage: { type: 'isolated', value: 7 },
           unrealizedPnl: 0,
@@ -270,7 +336,16 @@ test('evaluateProtection deja risk_paused cuando la distancia a liquidacion es d
         getCandleSnapshot: async () => [],
       }),
     },
-    getTradingService: async () => ({}),
+    getTradingService: async () => ({
+      openPosition: async () => {
+        openCalls += 1;
+        return { fillPrice: 2500 };
+      },
+      closePosition: async () => {
+        closeCalls += 1;
+        return { closePrice: 2500 };
+      },
+    }),
     marketService: {
       getAssetContexts: async () => [],
     },
@@ -289,6 +364,8 @@ test('evaluateProtection deja risk_paused cuando la distancia a liquidacion es d
   assert.equal(result.lastDecision, 'hold');
   assert.equal(decisions.at(-1).finalStrategyStatus, 'risk_paused');
   assert.equal(decisions.at(-1).riskGateTriggered, true);
+  assert.equal(openCalls, 0);
+  assert.equal(closeCalls, 0);
 });
 
 test('evaluateProtection degrada a spot_stale si falla spot y el snapshot esta viejo', async () => {

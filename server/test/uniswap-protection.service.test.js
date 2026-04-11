@@ -451,6 +451,7 @@ test('createProtectedPool crea una proteccion delta-neutral con defaults y boots
   assert.equal(protectionWrites[0].minRebalanceNotionalUsd, DEFAULT_MIN_REBALANCE_NOTIONAL_USD);
   assert.equal(protectionWrites[0].maxSlippageBps, DEFAULT_MAX_SLIPPAGE_BPS);
   assert.equal(protectionWrites[0].twapMinNotionalUsd, DEFAULT_TWAP_MIN_NOTIONAL_USD);
+  assert.equal(protectionWrites[0].minOrderNotionalUsd, 11);
   assert.equal(protectionWrites[0].initialConfiguredHedgeNotionalUsd, 2500);
   assert.equal(protectionWrites[0].marginMode, 'isolated');
   assert.ok(protectionWrites[0].strategyState);
@@ -563,7 +564,7 @@ test('diagnoseDeltaNeutral usa trading service real y devuelve warnings parciale
     executionMode: 'auto',
     maxSpreadBps: 30,
     maxExecutionFeeUsd: 25,
-    minOrderNotionalUsd: 25,
+    minOrderNotionalUsd: null,
     twapSlices: 5,
     twapDurationSec: 60,
     rangeLowerPrice: 2000,
@@ -649,6 +650,7 @@ test('diagnoseDeltaNeutral usa trading service real y devuelve warnings parciale
   assert.equal(diagnostics.checks.hyperliquid.position.asset, 'ETH');
   assert.equal(diagnostics.checks.hyperliquid.position.side, 'short');
   assert.equal(diagnostics.checks.hyperliquid.openOrders, null);
+  assert.equal(diagnostics.configuration.minOrderNotionalUsd, 11);
   assert.equal(diagnostics.spot.source, 'snapshot');
   assert.ok(Array.isArray(diagnostics.warnings));
   assert.match(diagnostics.warnings[0], /open_orders_unavailable/i);
