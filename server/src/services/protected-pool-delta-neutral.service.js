@@ -639,6 +639,8 @@ class ProtectedPoolDeltaNeutralService {
     bbo = null,
   }) {
     const resolvedAccountState = accountState || await hl.getClearinghouseState().catch(() => null);
+    const hasProtectionCooldownReason = Boolean(protection)
+      && Object.prototype.hasOwnProperty.call(protection, 'cooldownReason');
     const withdrawable = Number(resolvedAccountState?.withdrawable || 0);
     const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
     const increaseNotionalUsd = targetIncreaseQty * currentPrice;
@@ -660,7 +662,7 @@ class ProtectedPoolDeltaNeutralService {
         ok: false,
         status: strategyState.status || 'tracking',
         reason: 'cooldown_active',
-        executionSkippedBecause: protection.cooldownReason || strategyState.cooldownReason || 'cooldown_active',
+        executionSkippedBecause: (hasProtectionCooldownReason ? protection.cooldownReason : strategyState.cooldownReason) || 'cooldown_active',
       };
     }
     if (decision !== 'hold' && tracking.trackingErrorUsd < Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD)) {

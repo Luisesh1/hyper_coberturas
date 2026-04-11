@@ -189,10 +189,12 @@ function normalizeStrategyState(state = {}) {
 }
 
 function isCooldownActive(protection, strategyState, now = Date.now()) {
+  const hasProtectionCooldownField = Boolean(protection)
+    && Object.prototype.hasOwnProperty.call(protection, 'nextEligibleAttemptAt');
   const nextEligibleAttemptAt = Number(
-    protection?.nextEligibleAttemptAt
-    ?? strategyState?.nextEligibleAttemptAt
-    ?? 0
+    hasProtectionCooldownField
+      ? protection?.nextEligibleAttemptAt
+      : strategyState?.nextEligibleAttemptAt
   );
   return Number.isFinite(nextEligibleAttemptAt) && nextEligibleAttemptAt > now;
 }
@@ -267,7 +269,7 @@ function buildCooldown(error, strategyState, { fallbackMs = RATE_LIMIT_COOLDOWN_
       status: 'rate_limited',
     };
   }
-  if (lowered.includes('margen insuficiente')) {
+  if (lowered.includes('margen insuficiente') || lowered.includes('insufficient margin')) {
     return {
       nextEligibleAttemptAt: Date.now() + MARGIN_COOLDOWN_MS,
       cooldownReason: message,
