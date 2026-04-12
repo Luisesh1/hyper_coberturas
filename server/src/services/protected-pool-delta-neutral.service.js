@@ -13,6 +13,7 @@ const {
 } = require('./delta-neutral-math.service');
 const hyperliquidStreamService = require('./hyperliquid-stream.service');
 const rpcBudgetManager = require('./rpc-budget-manager.service');
+const settingsService = require('./settings.service');
 const {
   computeSnapshotHash,
   normalizeProtectionSnapshot,
@@ -30,11 +31,14 @@ const {
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,
   DEFAULT_MAX_SPREAD_BPS,
+  DEFAULT_MAX_EXECUTION_FEE_USD,
   DEFAULT_MIN_ORDER_NOTIONAL_USD,
   DEFAULT_TWAP_SLICES,
   DEFAULT_TWAP_DURATION_SEC,
   DEFAULT_EMERGENCY_IOC_NOTIONAL_USD,
   DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+  DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
+  DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
   ESTIMATED_TAKER_FEE_RATE,
   MARGIN_COOLDOWN_MS,
   clampNonNegative,
@@ -65,6 +69,7 @@ class ProtectedPoolDeltaNeutralService {
     this.marketService = deps.marketService || marketService;
     this.hyperliquidStreamService = deps.hyperliquidStreamService || hyperliquidStreamService;
     this.rpcBudgetManager = deps.rpcBudgetManager || rpcBudgetManager;
+    this.settingsService = deps.settingsService || settingsService;
     this.logger = deps.logger || logger;
     this.loopMs = deps.loopMs || config.intervals.deltaNeutralLoopMs || 2_000;
     this.fullEvalMs = deps.fullEvalMs || config.intervals.deltaNeutralEvalMs || 30_000;
@@ -86,6 +91,17 @@ class ProtectedPoolDeltaNeutralService {
       inspectRefreshes: 0,
       fullScans: 0,
       truthRefreshDeferred: 0,
+    };
+  }
+
+  async _getRiskControls(userId) {
+    const controls = await this.settingsService.getDeltaNeutralRiskControls(userId).catch((err) => {
+      this.logger.warn('delta_neutral_risk_controls_load_failed', { userId, error: err.message });
+      return null;
+    });
+    return {
+      riskPauseLiqDistancePct: Number(controls?.riskPauseLiqDistancePct) || DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
+      marginTopUpLiqDistancePct: Number(controls?.marginTopUpLiqDistancePct) || DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
     };
   }
 
@@ -641,6 +657,7 @@ class ProtectedPoolDeltaNeutralService {
     const resolvedAccountState = accountState || await hl.getClearinghouseState().catch(() => null);
     const hasProtectionCooldownReason = Boolean(protection)
       && Object.prototype.hasOwnProperty.call(protection, 'cooldownReason');
+    const cooldownReason = ((hasProtectionCooldownReason ? protection.cooldownReason : strategyState.cooldownReason) || '').trim();
     const withdrawable = Number(resolvedAccountState?.withdrawable || 0);
     const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
     const increaseNotionalUsd = targetIncreaseQty * currentPrice;
@@ -657,12 +674,13 @@ class ProtectedPoolDeltaNeutralService {
         executionSkippedBecause: `snapshot_${snapshotStatus}`,
       };
     }
-    if (cooldownActive) {
+    const marginCooldownActive = cooldownActive && cooldownReason === 'insufficient_margin';
+    if (cooldownActive && !(marginCooldownActive && (targetIncreaseQty <= 0 || requiredMarginUsd <= withdrawable))) {
       return {
         ok: false,
         status: strategyState.status || 'tracking',
         reason: 'cooldown_active',
-        executionSkippedBecause: (hasProtectionCooldownReason ? protection.cooldownReason : strategyState.cooldownReason) || 'cooldown_active',
+        executionSkippedBecause: cooldownReason || 'cooldown_active',
       };
     }
     if (decision !== 'hold' && tracking.trackingErrorUsd < Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD)) {
@@ -687,6 +705,14 @@ class ProtectedPoolDeltaNeutralService {
         status: 'tracking',
         reason: 'spread_too_wide',
         executionSkippedBecause: 'spread_too_wide',
+      };
+    }
+    if (Number(bands?.estimatedCostUsd || 0) > Number(protection.maxExecutionFeeUsd ?? DEFAULT_MAX_EXECUTION_FEE_USD)) {
+      return {
+        ok: false,
+        status: 'tracking',
+        reason: 'estimated_execution_fee_too_high',
+        executionSkippedBecause: 'estimated_execution_fee_too_high',
       };
     }
 
@@ -1072,6 +1098,7 @@ class ProtectedPoolDeltaNeutralService {
     const position = await hl.getPosition(activeProtection.inferredAsset).catch((err) => { logger.warn('getPosition failed in rebalance check', { poolId: activeProtection.id, asset: activeProtection.inferredAsset, error: err.message }); return null; });
     const actualQty = position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
     const currentBoundarySide = getCurrentBoundarySide(activeProtection, currentPrice);
+    const riskControls = await this._getRiskControls(activeProtection.userId);
     const marginModeVerified = position ? isIsolatedPosition(position) : true;
     const distanceToLiqPct = computeLiquidationDistancePct(position, currentPrice);
     const fundingAccumUsd = position?.cumFunding?.sinceOpen != null ? Number(position.cumFunding.sinceOpen) : clampNonNegative(strategyState.fundingAccumUsd, 0);
@@ -1211,12 +1238,12 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     if (Number.isFinite(distanceToLiqPct)) {
-      if (distanceToLiqPct <= 7) {
+      if (distanceToLiqPct <= riskControls.riskPauseLiqDistancePct) {
         forcedStatus = 'risk_paused';
         nextState.lastError = 'La distancia a liquidacion es demasiado baja.';
         riskGateTriggered = true;
         riskGateReason = nextState.lastError;
-      } else if (distanceToLiqPct <= 10) {
+      } else if (distanceToLiqPct <= riskControls.marginTopUpLiqDistancePct) {
         const toppedUp = await this._maybeTopUpMargin({
           protection: activeProtection,
           hl,
@@ -1643,9 +1670,16 @@ class ProtectedPoolDeltaNeutralService {
   async _runTwap({ protection, tradingService, hl, currentPrice, driftQty, actualQty = 0 }) {
     const direction = driftQty > 0 ? 'increase' : 'decrease';
     const totalQty = Math.abs(driftQty);
-    const slicesPlanned = DEFAULT_TWAP_SLICES;
+    const slicesPlanned = Math.max(
+      1,
+      Math.floor(Number(protection.twapSlices ?? DEFAULT_TWAP_SLICES) || DEFAULT_TWAP_SLICES)
+    );
     const sliceQty = totalQty / slicesPlanned;
-    const sliceDelayMs = Math.floor((DEFAULT_TWAP_DURATION_SEC * 1000) / Math.max(slicesPlanned - 1, 1));
+    const twapDurationSec = Math.max(
+      0,
+      Number(protection.twapDurationSec ?? DEFAULT_TWAP_DURATION_SEC) || DEFAULT_TWAP_DURATION_SEC
+    );
+    const sliceDelayMs = Math.floor((twapDurationSec * 1000) / Math.max(slicesPlanned - 1, 1));
     const session = { cancelRequested: false };
     this.twapSessions.set(protection.id, session);
 
