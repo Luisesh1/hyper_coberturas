@@ -14,12 +14,14 @@ const {
 const hyperliquidStreamService = require('./hyperliquid-stream.service');
 const rpcBudgetManager = require('./rpc-budget-manager.service');
 const settingsService = require('./settings.service');
+const telegramRegistry = require('./telegram.registry');
 const {
   computeSnapshotHash,
   normalizeProtectionSnapshot,
   validateNormalizedProtectionSnapshot,
 } = require('./delta-neutral-snapshot.service');
 const MAX_SNAPSHOT_FALLBACK_AGE_MS = 2 * 60_000;
+const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
 const NEAR_ZERO_TARGET_QTY = 1e-6;
 const {
   DEFAULT_BAND_MODE,
@@ -85,6 +87,7 @@ class ProtectedPoolDeltaNeutralService {
     this.lastEvalAt = new Map();
     this.twapSessions = new Map();
     this.rvCache = new Map();
+    this.blockNotifLastSentAt = new Map();
     this.hybridStats = {
       marketTicks: 0,
       truthRefreshes: 0,
@@ -421,6 +424,35 @@ class ProtectedPoolDeltaNeutralService {
         error: err.message,
       });
     });
+  }
+
+  async _notifyBlock(protection, { blockType, reason, detail, extra = {} }) {
+    const throttleKey = `${protection.id}:${blockType}`;
+    const now = Date.now();
+    const lastSent = this.blockNotifLastSentAt.get(throttleKey) || 0;
+    if ((now - lastSent) < BLOCK_NOTIFICATION_THROTTLE_MS) return;
+
+    this.blockNotifLastSentAt.set(throttleKey, now);
+
+    if (this.blockNotifLastSentAt.size > 500) {
+      const cutoff = now - 60 * 60_000;
+      for (const [k, ts] of this.blockNotifLastSentAt) {
+        if (ts < cutoff) this.blockNotifLastSentAt.delete(k);
+      }
+    }
+
+    try {
+      const tg = await telegramRegistry.getOrCreate(protection.userId);
+      if (tg && tg.enabled) {
+        await tg.notifyDeltaNeutralBlock({ protection, blockType, reason, detail, extra });
+      }
+    } catch (err) {
+      this.logger.warn('delta_neutral_block_telegram_failed', {
+        protectionId: protection.id,
+        blockType,
+        error: err.message,
+      });
+    }
   }
 
   async _refreshProtectionSnapshot(protection) {
@@ -929,6 +961,11 @@ class ProtectedPoolDeltaNeutralService {
         riskGateTriggered: false,
         createdAt: Date.now(),
       });
+      this._notifyBlock(current, {
+        blockType: 'snapshot_invalid',
+        reason: invalidState.lastError,
+        detail: snapshotMeta.validation.reasons.join(', '),
+      }).catch(() => {});
       return null;
     }
 
@@ -1230,6 +1267,12 @@ class ProtectedPoolDeltaNeutralService {
         riskGateTriggered,
         liquidationDistancePct: distanceToLiqPct,
       });
+      const riskBlockType = !marginModeVerified ? 'risk_paused_margin_mode' : 'risk_paused_manual_long';
+      this._notifyBlock(activeProtection, {
+        blockType: riskBlockType,
+        reason: nextState.lastError,
+        extra: { liquidationDistancePct: distanceToLiqPct },
+      }).catch(() => {});
       return nextState;
     }
 
@@ -1389,6 +1432,43 @@ class ProtectedPoolDeltaNeutralService {
       marketSpreadBps: preflight.spreadBps ?? null,
     });
 
+    // --- Block notifications ---
+    if (riskGateTriggered && forcedStatus) {
+      const riskBlockType = forcedStatus === 'risk_paused'
+        ? 'risk_paused_liq_distance'
+        : 'margin_pending_topup';
+      this._notifyBlock(activeProtection, {
+        blockType: riskBlockType,
+        reason: riskGateReason,
+        extra: { liquidationDistancePct: distanceToLiqPct },
+      }).catch(() => {});
+    }
+    if (!preflight.ok && preflight.reason !== 'below_min_order_notional'
+        && effectiveShouldRebalance && rebalanceDecision.decision !== 'hold') {
+      const preflightExtra = {};
+      if (preflight.reason === 'insufficient_margin') {
+        preflightExtra.withdrawable = preflight.withdrawable;
+        preflightExtra.requiredMargin = (Math.max(Number(tracking.trackingErrorQty || 0), 0) * currentPrice)
+          / Math.max(Number(activeProtection.leverage || 1), 1);
+      }
+      if (preflight.reason === 'spread_too_wide') {
+        preflightExtra.spreadBps = liveMarket?.bbo?.spreadBps;
+        preflightExtra.maxSpreadBps = activeProtection.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS;
+      }
+      if (preflight.reason === 'estimated_execution_fee_too_high') {
+        preflightExtra.estimatedCost = rebalanceDecision.bands?.estimatedCostUsd;
+        preflightExtra.maxCost = activeProtection.maxExecutionFeeUsd ?? DEFAULT_MAX_EXECUTION_FEE_USD;
+      }
+      if (preflight.reason === 'cooldown_active') {
+        preflightExtra.cooldownReason = preflight.executionSkippedBecause;
+      }
+      this._notifyBlock(activeProtection, {
+        blockType: preflight.reason === 'estimated_execution_fee_too_high' ? 'execution_fee_too_high' : preflight.reason,
+        reason: preflight.executionSkippedBecause,
+        extra: preflightExtra,
+      }).catch(() => {});
+    }
+
     if (riskPausedCanReduce) {
       if (!preflight.ok) return nextState;
       // Reduce permitido — fall through a _executeRebalance
@@ -1521,6 +1601,17 @@ class ProtectedPoolDeltaNeutralService {
         finalStrategyStatus: failedState.status,
         riskGateTriggered: false,
       });
+      const execBlockType = cooldown.status === 'rate_limited' ? 'rate_limited'
+        : cooldown.status === 'margin_pending' ? 'margin_pending_execution'
+        : cooldown.status === 'spot_stale' ? 'spot_stale'
+        : null;
+      if (execBlockType) {
+        this._notifyBlock(protection, {
+          blockType: execBlockType,
+          reason: cooldown.cooldownReason,
+          detail: err.message,
+        }).catch(() => {});
+      }
       throw err;
     }
 

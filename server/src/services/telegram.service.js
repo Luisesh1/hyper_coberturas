@@ -282,6 +282,47 @@ class TelegramService {
     ];
     return this.send(lines.filter(Boolean).join('\n'));
   }
+  // ------------------------------------------------------------------
+  // Bloqueos de proteccion delta-neutral
+  // ------------------------------------------------------------------
+
+  notifyDeltaNeutralBlock({ protection, blockType, reason, detail, extra = {} }) {
+    const labels = {
+      insufficient_margin:       { emoji: '💸', title: 'Margen insuficiente' },
+      spread_too_wide:           { emoji: '📊', title: 'Spread demasiado amplio' },
+      execution_fee_too_high:    { emoji: '🏷️', title: 'Costo de ejecucion muy alto' },
+      snapshot_invalid:          { emoji: '📸', title: 'Snapshot no disponible' },
+      cooldown_active:           { emoji: '⏳', title: 'Cooldown activo' },
+      risk_paused_margin_mode:   { emoji: '🛑', title: 'Proteccion pausada — modo margen' },
+      risk_paused_manual_long:   { emoji: '🛑', title: 'Proteccion pausada — posicion manual' },
+      risk_paused_liq_distance:  { emoji: '🛑', title: 'Proteccion pausada — liquidacion cercana' },
+      margin_pending_topup:      { emoji: '⚠️', title: 'Top-up de margen fallido' },
+      rate_limited:              { emoji: '🚦', title: 'Rate limit de Hyperliquid' },
+      margin_pending_execution:  { emoji: '💸', title: 'Margen insuficiente en ejecucion' },
+      spot_stale:                { emoji: '📡', title: 'Precio spot obsoleto' },
+    };
+    const meta = labels[blockType] || { emoji: '⚠️', title: 'Bloqueo delta-neutral' };
+    const pair = `${protection.token0Symbol || '?'}/${protection.token1Symbol || '?'}`;
+    const when = new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+
+    const lines = [
+      `${meta.emoji} <b>${meta.title}</b>`,
+      `Proteccion: <b>#${protection.id}</b> | ${pair}`,
+      `Activo: <b>${protection.inferredAsset || 'N/A'}</b>`,
+      reason ? `Motivo: ${reason}` : null,
+      detail ? `Detalle: ${detail}` : null,
+      extra.withdrawable != null ? `Disponible: $${this._fmtPrice(extra.withdrawable)}` : null,
+      extra.requiredMargin != null ? `Requerido: $${this._fmtPrice(extra.requiredMargin)}` : null,
+      extra.spreadBps != null ? `Spread: ${Number(extra.spreadBps).toFixed(1)} bps` : null,
+      extra.maxSpreadBps != null ? `Limite spread: ${Number(extra.maxSpreadBps).toFixed(1)} bps` : null,
+      extra.estimatedCost != null ? `Costo estimado: $${this._fmtPrice(extra.estimatedCost)}` : null,
+      extra.maxCost != null ? `Limite costo: $${this._fmtPrice(extra.maxCost)}` : null,
+      extra.liquidationDistancePct != null ? `Distancia a liquidacion: ${Number(extra.liquidationDistancePct).toFixed(1)}%` : null,
+      extra.cooldownReason ? `Cooldown por: ${extra.cooldownReason}` : null,
+      `Fecha: ${when}`,
+    ];
+    return this.send(lines.filter(Boolean).join('\n'));
+  }
 }
 
 module.exports = TelegramService;
