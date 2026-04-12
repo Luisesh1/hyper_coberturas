@@ -6,6 +6,10 @@ const {
   computeVolatilityStats,
   deriveBandSettings,
 } = require('../src/services/protected-pool-delta-neutral.service');
+const {
+  buildCooldown,
+  isCooldownActive,
+} = require('../src/services/protected-pool-delta-neutral.helpers');
 
 function buildDeltaNeutralProtection(overrides = {}) {
   return {
@@ -301,6 +305,59 @@ test('_buildPreflight sigue bloqueando drift por debajo de 11 USD', async () => 
 
   assert.equal(preflight.ok, false);
   assert.equal(preflight.reason, 'below_min_order_notional');
+});
+
+test('isCooldownActive ignora strategyState heredado cuando protection ya define nextEligibleAttemptAt nulo', () => {
+  const active = isCooldownActive(
+    { nextEligibleAttemptAt: null },
+    { nextEligibleAttemptAt: Date.now() + 60_000 },
+  );
+
+  assert.equal(active, false);
+});
+
+test('_buildPreflight usa cooldownReason persistido y no hereda uno obsoleto del strategyState', async () => {
+  const service = new ProtectedPoolDeltaNeutralService();
+
+  const preflight = await service._buildPreflight({
+    protection: {
+      leverage: 7,
+      snapshotStatus: 'ready',
+      nextEligibleAttemptAt: Date.now() + 60_000,
+      cooldownReason: null,
+    },
+    hl: {
+      getClearinghouseState: async () => ({ withdrawable: '1000' }),
+    },
+    strategyState: {
+      status: 'tracking',
+      nextEligibleAttemptAt: Date.now() + 120_000,
+      cooldownReason: 'stale_margin_reason',
+    },
+    currentPrice: 2500,
+    tracking: {
+      trackingErrorQty: 0.0048,
+      trackingErrorUsd: 12,
+    },
+    bands: {
+      estimatedCostUsd: 0.01,
+    },
+    decision: 'rebalance_partial',
+  });
+
+  assert.equal(preflight.ok, false);
+  assert.equal(preflight.reason, 'cooldown_active');
+  assert.equal(preflight.executionSkippedBecause, 'cooldown_active');
+});
+
+test('buildCooldown trata "insufficient margin" como cooldown de margen', () => {
+  const cooldown = buildCooldown(new Error('Insufficient margin available for order'), {
+    status: 'tracking',
+  });
+
+  assert.equal(cooldown.status, 'margin_pending');
+  assert.match(String(cooldown.cooldownReason), /insufficient margin/i);
+  assert.equal(Number.isFinite(cooldown.nextEligibleAttemptAt), true);
 });
 
 test('evaluateProtection deja risk_paused cuando la distancia a liquidacion es demasiado baja', async () => {
