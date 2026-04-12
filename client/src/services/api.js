@@ -132,6 +132,12 @@ export const settingsApi = {
   getAlchemy:    ()                 => request('GET',  '/settings/alchemy'),
   saveAlchemy:   ({ apiKey })       => request('PUT',  '/settings/alchemy', { apiKey }),
   testAlchemy:   ()                 => request('POST', '/settings/alchemy/test'),
+  getDeltaNeutralRiskControls: ()   => request('GET',  '/settings/delta-neutral-risk-controls'),
+  saveDeltaNeutralRiskControls: ({ riskPauseLiqDistancePct, marginTopUpLiqDistancePct }) =>
+    request('PUT', '/settings/delta-neutral-risk-controls', {
+      riskPauseLiqDistancePct,
+      marginTopUpLiqDistancePct,
+    }),
 };
 
 // ------------------------------------------------------------------

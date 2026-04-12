@@ -1,8 +1,42 @@
 const settingsRepository = require('../repositories/settings.repository');
 const hyperliquidAccountsService = require('./hyperliquid-accounts.service');
 const { decryptValue, encryptJson, ENCRYPTED_PREFIX } = require('./settings.crypto');
+const {
+  DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
+  DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
+} = require('./protected-pool-delta-neutral.helpers');
 
 const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan', 'alchemy']);
+const DELTA_NEUTRAL_RISK_KEY = 'delta_neutral_risk_controls';
+const deltaNeutralRiskCache = new Map();
+
+function getDefaultDeltaNeutralRiskControls() {
+  return {
+    riskPauseLiqDistancePct: DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
+    marginTopUpLiqDistancePct: DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
+  };
+}
+
+function normalizeDeltaNeutralRiskControls(value = {}) {
+  const defaults = getDefaultDeltaNeutralRiskControls();
+  const parsedRiskPauseLiqDistancePct = Number(value?.riskPauseLiqDistancePct);
+  const parsedMarginTopUpLiqDistancePct = Number(value?.marginTopUpLiqDistancePct);
+  const riskPauseLiqDistancePct = Number.isFinite(parsedRiskPauseLiqDistancePct) && parsedRiskPauseLiqDistancePct > 0
+    ? parsedRiskPauseLiqDistancePct
+    : defaults.riskPauseLiqDistancePct;
+  let marginTopUpLiqDistancePct = Number.isFinite(parsedMarginTopUpLiqDistancePct) && parsedMarginTopUpLiqDistancePct > 0
+    ? parsedMarginTopUpLiqDistancePct
+    : defaults.marginTopUpLiqDistancePct;
+
+  if (marginTopUpLiqDistancePct <= riskPauseLiqDistancePct) {
+    marginTopUpLiqDistancePct = Math.max(defaults.marginTopUpLiqDistancePct, riskPauseLiqDistancePct + 1);
+  }
+
+  return {
+    riskPauseLiqDistancePct,
+    marginTopUpLiqDistancePct,
+  };
+}
 
 async function getSetting(userId, key) {
   const row = await settingsRepository.getByKey(userId, key);
@@ -80,10 +114,33 @@ async function setAlchemy(userId, alchemy) {
   await setSetting(userId, 'alchemy', alchemy);
 }
 
+async function getDeltaNeutralRiskControls(userId) {
+  if (deltaNeutralRiskCache.has(userId)) {
+    return deltaNeutralRiskCache.get(userId);
+  }
+
+  const stored = await getSetting(userId, DELTA_NEUTRAL_RISK_KEY);
+  const normalized = normalizeDeltaNeutralRiskControls(stored);
+  if (!stored) {
+    await setSetting(userId, DELTA_NEUTRAL_RISK_KEY, normalized);
+  }
+  deltaNeutralRiskCache.set(userId, normalized);
+  return normalized;
+}
+
+async function setDeltaNeutralRiskControls(userId, controls) {
+  const normalized = normalizeDeltaNeutralRiskControls(controls);
+  await setSetting(userId, DELTA_NEUTRAL_RISK_KEY, normalized);
+  deltaNeutralRiskCache.set(userId, normalized);
+  return normalized;
+}
+
 module.exports = {
   ENCRYPTED_PREFIX,
   decryptValue,
   encryptJson,
+  getDefaultDeltaNeutralRiskControls,
+  normalizeDeltaNeutralRiskControls,
   getTelegram,
   listTelegramConfigs,
   setTelegram,
@@ -93,4 +150,6 @@ module.exports = {
   setEtherscan,
   getAlchemy,
   setAlchemy,
+  getDeltaNeutralRiskControls,
+  setDeltaNeutralRiskControls,
 };

@@ -32,6 +32,14 @@ function maskToken(token) {
   return token.slice(0, 6) + '***';
 }
 
+function parsePositiveNumber(value, fieldName) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ValidationError(`${fieldName} debe ser un numero positivo`);
+  }
+  return parsed;
+}
+
 // ------------------------------------------------------------------
 // Rutas
 // ------------------------------------------------------------------
@@ -41,6 +49,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const tg     = await settingsService.getTelegram(userId);
   const wallet = await settingsService.getWallet(userId);
   const accounts = await hyperliquidAccountsService.listAccounts(userId);
+  const deltaNeutralRiskControls = await settingsService.getDeltaNeutralRiskControls(userId);
   res.json({
     success: true,
     data: {
@@ -61,6 +70,7 @@ router.get('/', asyncHandler(async (req, res) => {
       alchemy: {
         hasApiKey: !!(await settingsService.getAlchemy(userId)).apiKey,
       },
+      deltaNeutralRiskControls,
       hyperliquidAccounts: {
         count: accounts.length,
         hasDefault: accounts.some((account) => account.isDefault),
@@ -259,6 +269,26 @@ router.post('/alchemy/test', asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const result = await uniswapService.testUserAlchemyKey(userId);
   res.json({ success: true, data: result });
+}));
+
+router.get('/delta-neutral-risk-controls', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const controls = await settingsService.getDeltaNeutralRiskControls(userId);
+  res.json({ success: true, data: controls });
+}));
+
+router.put('/delta-neutral-risk-controls', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const riskPauseLiqDistancePct = parsePositiveNumber(req.body.riskPauseLiqDistancePct, 'riskPauseLiqDistancePct');
+  const marginTopUpLiqDistancePct = parsePositiveNumber(req.body.marginTopUpLiqDistancePct, 'marginTopUpLiqDistancePct');
+  if (marginTopUpLiqDistancePct <= riskPauseLiqDistancePct) {
+    throw new ValidationError('marginTopUpLiqDistancePct debe ser mayor que riskPauseLiqDistancePct');
+  }
+  const controls = await settingsService.setDeltaNeutralRiskControls(userId, {
+    riskPauseLiqDistancePct,
+    marginTopUpLiqDistancePct,
+  });
+  res.json({ success: true, data: controls });
 }));
 
 module.exports = router;

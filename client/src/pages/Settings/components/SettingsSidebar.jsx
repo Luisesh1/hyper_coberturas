@@ -2,6 +2,7 @@ import styles from './SettingsSidebar.module.css';
 
 const SECTIONS = [
   { key: 'accounts', icon: '◈', label: 'Cuentas Hyperliquid', hint: 'Wallets y API keys' },
+  { key: 'deltaNeutralRisk', icon: '△', label: 'Delta-neutral riesgo', hint: 'Umbrales del hedge' },
   { key: 'telegram', icon: '✉', label: 'Telegram', hint: 'Notificaciones' },
   { key: 'etherscan', icon: '🧭', label: 'Etherscan', hint: 'Escaneo de pools' },
   { key: 'alchemy', icon: '⛓', label: 'Alchemy RPC', hint: 'Nodo RPC personal' },
