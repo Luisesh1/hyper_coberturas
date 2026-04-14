@@ -10,11 +10,19 @@ const { runMigrations } = require('./migrator');
 const { IS_PROD } = require('../config');
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  ...(process.env.DATABASE_URL
+    ? { connectionString: process.env.DATABASE_URL }
+    : {
+        host: process.env.PGHOST || 'localhost',
+        port: Number(process.env.PGPORT || 5432),
+        user: process.env.PGUSER,
+        password: process.env.PGPASSWORD,
+        database: process.env.PGDATABASE,
+      }),
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
-  ...(IS_PROD && { ssl: { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' } }),
+  ...(IS_PROD && process.env.DB_SSL !== 'false' && { ssl: { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' } }),
 });
 
 pool.on('error', (err) => logger.error('db_pool_error', { error: err.message }));

@@ -22,6 +22,7 @@ server/dist/
 
 # ── Datos persistentes generados en runtime ──────────────────────────────────
 server/data/
+backups/
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log

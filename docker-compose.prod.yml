@@ -89,6 +89,7 @@ services:
       NODE_ENV: production
       CLIENT_URL: "${CLIENT_URL:?CLIENT_URL requerido (ej: https://tudominio.com) — ver DEPLOYMENT.md}"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-testbot}:${POSTGRES_PASSWORD:?requerido}@postgres:5432/${POSTGRES_DB:-testbot}"
+      DB_SSL: "false"
     volumes:
       - server_data:/app/data
     depends_on:
@@ -126,4 +127,4 @@ volumes:
 networks:
   testbot-net:
     name: testbot-network
-    driver: bridge
+    external: true

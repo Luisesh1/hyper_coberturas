@@ -148,8 +148,9 @@ function validateConfig() {
     if (!process.env.SETTINGS_ENCRYPTION_KEY || INSECURE_VALUES.has(process.env.SETTINGS_ENCRYPTION_KEY)) {
       errors.push('SETTINGS_ENCRYPTION_KEY debe ser un valor seguro y único en producción');
     }
-    if (!process.env.DATABASE_URL) {
-      errors.push('DATABASE_URL es requerido en producción');
+    const hasPgVars = process.env.PGHOST && process.env.PGUSER && process.env.PGPASSWORD && process.env.PGDATABASE;
+    if (!process.env.DATABASE_URL && !hasPgVars) {
+      errors.push('DATABASE_URL (o PGHOST/PGUSER/PGPASSWORD/PGDATABASE) es requerido en producción');
     }
     if (config.server.clientUrl === '*') {
       errors.push('CLIENT_URL=* no está permitido en producción (configura un origen concreto)');
