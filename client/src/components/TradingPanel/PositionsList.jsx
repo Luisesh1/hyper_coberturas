@@ -76,6 +76,10 @@ export function PositionsList({
                 <span className={styles.detailVal}>{posSize.toFixed(4)} {pos.asset}</span>
               </div>
               <div className={styles.posDetail}>
+                <span className={styles.detailLabel}>Valor</span>
+                <span className={styles.detailVal}>{markPx ? `$${(posSize * markPx).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</span>
+              </div>
+              <div className={styles.posDetail}>
                 <span className={styles.detailLabel}>Entrada</span>
                 <span className={styles.detailVal}>${entryPx.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
               </div>
@@ -83,12 +87,19 @@ export function PositionsList({
                 <span className={styles.detailLabel}>Actual</span>
                 <span className={styles.detailVal}>{markPx ? `$${markPx.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '—'}</span>
               </div>
-              {pos.liquidationPrice && (
-                <div className={styles.posDetail}>
-                  <span className={styles.detailLabel}>Liquidacion</span>
-                  <span className={`${styles.detailVal} ${styles.liqPrice}`}>${parseFloat(pos.liquidationPrice).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                </div>
-              )}
+              {pos.liquidationPrice && (() => {
+                const liqPx = parseFloat(pos.liquidationPrice);
+                const distPct = markPx && liqPx ? ((Math.abs(markPx - liqPx) / markPx) * 100) : null;
+                return (
+                  <div className={styles.posDetail}>
+                    <span className={styles.detailLabel}>Liquidacion</span>
+                    <span className={`${styles.detailVal} ${styles.liqPrice}`}>
+                      ${liqPx.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      {distPct != null && <span className={styles.liqDist}> ({distPct.toFixed(1)}%)</span>}
+                    </span>
+                  </div>
+                );
+              })()}
               <div className={styles.posDetail}>
                 <span className={styles.detailLabel}>Margen</span>
                 <span className={styles.detailVal}>${marginUsed.toFixed(2)}</span>

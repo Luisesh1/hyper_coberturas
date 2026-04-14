@@ -7,6 +7,7 @@ import { EmptyState } from '../../components/shared/EmptyState';
 import OrchestratorCard from './components/OrchestratorCard';
 import CreateOrchestratorWizard from './components/CreateOrchestratorWizard';
 import ActionLogDrawer from './components/ActionLogDrawer';
+import OrchestratorIssueModal from './components/OrchestratorIssueModal';
 import PositionActionModal from '../UniswapPools/components/PositionActionModal';
 import SmartCreatePoolModal from '../UniswapPools/components/SmartCreatePoolModal';
 import SmartAddLiquidityModal from '../UniswapPools/components/SmartAddLiquidityModal';
@@ -39,6 +40,8 @@ export default function LpOrchestratorPage() {
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [logDrawerFor, setLogDrawerFor] = useState(null); // orchestrator
+  const [issueModalFor, setIssueModalFor] = useState(null);
+  const [resolvingIssueId, setResolvingIssueId] = useState(null);
   const { dialog, confirm } = useConfirmAction();
   const walletConn = useWalletConnection();
 
@@ -93,6 +96,39 @@ export default function LpOrchestratorPage() {
       setEvaluatingId(null);
     }
   };
+
+  const handleResolveIssue = useCallback(async (orch) => {
+    if (!orch?.id) return;
+    setResolvingIssueId(orch.id);
+    setEvaluatingId(orch.id);
+    setError('');
+
+    let reconcileError = null;
+    try {
+      await lpOrchestratorApi.reconcile(orch.id);
+    } catch (err) {
+      reconcileError = err;
+    }
+
+    try {
+      await lpOrchestratorApi.evaluate(orch.id);
+      await refresh();
+      setIssueModalFor(null);
+      if (reconcileError) {
+        setError(`La reevaluacion corrio, pero la reconciliacion previa fallo: ${reconcileError.message || 'error desconocido'}`);
+      }
+    } catch (err) {
+      const baseMessage = err.message || 'No se pudo forzar la reevaluacion.';
+      if (reconcileError) {
+        setError(`La reconciliacion y la reevaluacion fallaron: ${reconcileError.message || 'error desconocido'} / ${baseMessage}`);
+      } else {
+        setError(baseMessage);
+      }
+    } finally {
+      setResolvingIssueId(null);
+      setEvaluatingId(null);
+    }
+  }, [refresh]);
 
   const handleAction = (action, orchestrator, pool) => {
     if (!walletConn.isConnected) {
@@ -592,6 +628,7 @@ export default function LpOrchestratorPage() {
             onCreateNewLp={handleCreateNewLp}
             onAdoptLp={handleAdoptLp}
             onShowLog={setLogDrawerFor}
+            onShowIssue={setIssueModalFor}
           />
         ))}
       </div>
@@ -680,6 +717,19 @@ export default function LpOrchestratorPage() {
         <ActionLogDrawer
           orchestrator={logDrawerFor}
           onClose={() => setLogDrawerFor(null)}
+        />
+      )}
+
+      {issueModalFor && (
+        <OrchestratorIssueModal
+          orchestrator={issueModalFor}
+          isResolving={resolvingIssueId === issueModalFor.id}
+          onClose={() => setIssueModalFor(null)}
+          onResolve={handleResolveIssue}
+          onShowLog={(orch) => {
+            setIssueModalFor(null);
+            setLogDrawerFor(orch);
+          }}
         />
       )}
 

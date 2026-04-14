@@ -1,0 +1,75 @@
+# ──────────────────────────────────────────────
+# .dockerignore de la raiz — aplica al build context
+# cuando se usa `context: .` (ej. nginx/Dockerfile.prod).
+# ──────────────────────────────────────────────
+
+# Dependencias (se instalan dentro del contenedor)
+node_modules/
+server/node_modules/
+client/node_modules/
+
+# Secretos — NUNCA deben entrar a la imagen
+.env
+.env.*
+!.env.example
+server/.env
+client/.env
+!server/.env.example
+!client/.env.example
+
+# Builds y artefactos
+server/dist/
+client/dist/
+client/dist-temp/
+client/build/
+client/build-verify/
+client/build-tmp/
+client/build-check/
+client/dist.precheck-root-owned/
+client/dist.precheck-root-owned.premerge-root-owned/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+
+# Tests y CI
+.github/
+e2e/
+playwright-report/
+test-results/
+playwright.config.js
+
+# Datos persistentes locales
+server/data/
+
+# Docker
+.docker/
+Dockerfile
+**/Dockerfile
+docker-compose*.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+.claude/
+.cursor/
+
+# Documentacion que no es necesaria en la imagen
+*.md
+!README.md

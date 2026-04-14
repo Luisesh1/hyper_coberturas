@@ -952,8 +952,22 @@ async function findByPositionIdentifier(positionIdentifier, network, version, ex
   return rows.map(mapIdentityRow);
 }
 
+async function clearCooldown(userId, id, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET next_eligible_attempt_at = NULL,
+            cooldown_reason = NULL,
+            updated_at = $3
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [userId, id, Date.now()]
+  );
+  return rows[0]?.id || null;
+}
+
 module.exports = {
   create,
+  clearCooldown,
   deactivate,
   findByPositionIdentifier,
   findReusableByIdentity,

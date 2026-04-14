@@ -19,12 +19,17 @@ const DEFAULT_TWAP_DURATION_SEC = 60;
 const DEFAULT_EMERGENCY_IOC_NOTIONAL_USD = 250;
 const DEFAULT_GAMMA_TIGHTEN_THRESHOLD = 0.2;
 const DEFAULT_MAX_AUTO_TOPUPS_PER_24H = 3;
+const DEFAULT_MIN_AUTO_TOPUP_CAP_USD = 300;
+const DEFAULT_AUTO_TOPUP_CAP_PCT_OF_INITIAL = 25;
+const DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD = 100;
 const DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT = 7;
 const DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT = 10;
+const EXCHANGE_MIN_NOTIONAL_USD = 10;
 const RATE_LIMIT_COOLDOWN_MS = 5 * 60_000;
 const STALE_SPOT_COOLDOWN_MS = 60_000;
 const MARGIN_COOLDOWN_MS = 2 * 60_000;
-const ESTIMATED_TAKER_FEE_RATE = 0.0005;
+const BELOW_NOTIONAL_COOLDOWN_MS = 30_000;
+const ESTIMATED_TAKER_FEE_RATE = 0.00025;
 const DELTA_NEUTRAL_STATUSES = new Set([
   'bootstrapping',
   'healthy',
@@ -141,6 +146,8 @@ function buildInitialStrategyState({
     lastObservedBoundarySide: null,
     lastTopUpAt: null,
     topUpWindowStartedAt: Date.now(),
+    topUpMaxCount24h: DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+    topUpCapUsd: DEFAULT_MIN_AUTO_TOPUP_CAP_USD,
     lastError: null,
     deactivationRequestedAt: null,
     lastDecision: null,
@@ -172,6 +179,10 @@ function buildInitialStrategyState({
     lastTrackedMidPrice: null,
     lastFullScanAt: null,
     lastMissingDetectedAt: null,
+    positionMissingSince: null,
+    positionMissingConsecutiveCount: 0,
+    lastPositionReadAt: null,
+    lastPositionReadSource: null,
   };
 }
 
@@ -185,8 +196,14 @@ function normalizeStrategyState(state = {}) {
     topUpCount24h: clampNonNegative(safeState.topUpCount24h),
     topUpUsd24h: clampNonNegative(safeState.topUpUsd24h),
     topUpWindowStartedAt,
+    topUpMaxCount24h: clampNonNegative(safeState.topUpMaxCount24h, DEFAULT_MAX_AUTO_TOPUPS_PER_24H),
+    topUpCapUsd: clampNonNegative(safeState.topUpCapUsd, DEFAULT_MIN_AUTO_TOPUP_CAP_USD),
     marginModeVerified: safeState.marginModeVerified !== false,
     nextEligibleAttemptAt: safeState.nextEligibleAttemptAt != null ? Number(safeState.nextEligibleAttemptAt) : null,
+    positionMissingSince: safeState.positionMissingSince != null ? Number(safeState.positionMissingSince) : null,
+    positionMissingConsecutiveCount: clampNonNegative(safeState.positionMissingConsecutiveCount),
+    lastPositionReadAt: safeState.lastPositionReadAt != null ? Number(safeState.lastPositionReadAt) : null,
+    lastPositionReadSource: safeState.lastPositionReadSource || null,
   };
 }
 
@@ -283,6 +300,13 @@ function buildCooldown(error, strategyState, { fallbackMs = RATE_LIMIT_COOLDOWN_
       nextEligibleAttemptAt: Date.now() + STALE_SPOT_COOLDOWN_MS,
       cooldownReason: message,
       status: 'spot_stale',
+    };
+  }
+  if (lowered.includes('minimum value') || lowered.includes('order too small')) {
+    return {
+      nextEligibleAttemptAt: Date.now() + BELOW_NOTIONAL_COOLDOWN_MS,
+      cooldownReason: 'below_exchange_minimum_notional',
+      status: 'tracking',
     };
   }
   return {
@@ -382,10 +406,15 @@ module.exports = {
   DEFAULT_EMERGENCY_IOC_NOTIONAL_USD,
   DEFAULT_GAMMA_TIGHTEN_THRESHOLD,
   DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+  DEFAULT_MIN_AUTO_TOPUP_CAP_USD,
+  DEFAULT_AUTO_TOPUP_CAP_PCT_OF_INITIAL,
+  DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
   DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
   DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
+  EXCHANGE_MIN_NOTIONAL_USD,
   ESTIMATED_TAKER_FEE_RATE,
   MARGIN_COOLDOWN_MS,
+  BELOW_NOTIONAL_COOLDOWN_MS,
   clampNonNegative,
   estimateExecutionCostUsd,
   safeJsonClone,

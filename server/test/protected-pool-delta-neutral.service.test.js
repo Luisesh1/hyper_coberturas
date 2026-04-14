@@ -10,6 +10,9 @@ const {
   buildCooldown,
   isCooldownActive,
 } = require('../src/services/protected-pool-delta-neutral.helpers');
+const {
+  parseArgs,
+} = require('../src/scripts/debug-delta-neutral-position-gap');
 
 function buildDeltaNeutralProtection(overrides = {}) {
   return {
@@ -172,7 +175,7 @@ test('runTwap registra slices completados cuando queda parcial', async () => {
   assert.ok(result.executedQty > 0);
 });
 
-test('_ensureIsolatedMarginBuffer no intenta fondear margen si la posicion aun no existe', async () => {
+test('_ensureIsolatedMarginBuffer fondea margen incluso al abrir desde posicion cero', async () => {
   const service = new ProtectedPoolDeltaNeutralService();
   let leverageUpdates = 0;
   let marginUpdates = 0;
@@ -192,7 +195,7 @@ test('_ensureIsolatedMarginBuffer no intenta fondear margen si la posicion aun n
   }, 2500, 0.1, 0);
 
   assert.equal(leverageUpdates, 1);
-  assert.equal(marginUpdates, 0);
+  assert.equal(marginUpdates, 1);
 });
 
 test('evaluateProtection con decision hold nunca persiste rebalance_pending', async () => {
@@ -307,6 +310,115 @@ test('_buildPreflight sigue bloqueando drift por debajo de 11 USD', async () => 
   assert.equal(preflight.reason, 'below_min_order_notional');
 });
 
+test('_buildPreflight aplica floor de exchange aunque minOrderNotionalUsd sea menor a 10', async () => {
+  const service = new ProtectedPoolDeltaNeutralService();
+
+  const preflight = await service._buildPreflight({
+    protection: {
+      leverage: 7,
+      snapshotStatus: 'ready',
+      minOrderNotionalUsd: 5,
+    },
+    hl: {
+      getClearinghouseState: async () => ({ withdrawable: '1000' }),
+    },
+    strategyState: {
+      status: 'tracking',
+      nextEligibleAttemptAt: null,
+      cooldownReason: null,
+    },
+    currentPrice: 2500,
+    tracking: {
+      trackingErrorQty: 0.003,
+      trackingErrorUsd: 7.5,
+    },
+    bands: {
+      estimatedCostUsd: 0.01,
+    },
+    decision: 'rebalance_partial',
+  });
+
+  assert.equal(preflight.ok, false);
+  assert.equal(preflight.reason, 'below_min_order_notional');
+});
+
+test('_buildPreflight refresca withdrawable por HTTP si el estado cacheado llega en cero', async () => {
+  const service = new ProtectedPoolDeltaNeutralService({
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    },
+  });
+
+  const preflight = await service._buildPreflight({
+    protection: {
+      leverage: 7,
+      snapshotStatus: 'ready',
+      minOrderNotionalUsd: null,
+    },
+    hl: {
+      getClearinghouseState: async () => ({ withdrawable: '1000' }),
+    },
+    strategyState: {
+      status: 'tracking',
+      nextEligibleAttemptAt: null,
+      cooldownReason: null,
+    },
+    accountState: {
+      withdrawable: '0',
+    },
+    currentPrice: 2500,
+    tracking: {
+      trackingErrorQty: 0.0048,
+      trackingErrorUsd: 12,
+    },
+    bands: {
+      estimatedCostUsd: 0.01,
+    },
+    decision: 'rebalance_partial',
+  });
+
+  assert.equal(preflight.ok, true);
+  assert.equal(preflight.withdrawable, 1000);
+});
+
+test('_reconcileHedgeFills consulta fills usando la cuenta HL y no la wallet del LP', async () => {
+  const service = new ProtectedPoolDeltaNeutralService({
+    logger: {
+      warn: () => {},
+      error: () => {},
+    },
+  });
+
+  const protection = buildDeltaNeutralProtection({
+    walletAddress: '0x00000000000000000000000000000000000000AA',
+    createdAt: 1_000,
+  });
+
+  let receivedAddress = 'unset';
+  const hl = {
+    address: '0x00000000000000000000000000000000000000FF',
+    getUserFills: async (address) => {
+      receivedAddress = address;
+      return [{
+        time: 2_000,
+        coin: 'ETH',
+        closedPnl: '1.25',
+        fee: '0.07',
+      }];
+    },
+  };
+
+  const result = await service._reconcileHedgeFills(protection, hl, 0);
+
+  assert.equal(receivedAddress, undefined);
+  assert.equal(result.realizedDelta, 1.25);
+  assert.equal(result.feeDelta, 0.07);
+  assert.equal(result.lastFillTime, 2_000);
+  assert.equal(result.fillsCount, 1);
+});
+
 test('isCooldownActive ignora strategyState heredado cuando protection ya define nextEligibleAttemptAt nulo', () => {
   const active = isCooldownActive(
     { nextEligibleAttemptAt: null },
@@ -358,6 +470,188 @@ test('buildCooldown trata "insufficient margin" como cooldown de margen', () => 
   assert.equal(cooldown.status, 'margin_pending');
   assert.match(String(cooldown.cooldownReason), /insufficient margin/i);
   assert.equal(Number.isFinite(cooldown.nextEligibleAttemptAt), true);
+});
+
+test('buildCooldown trata "minimum value" como cooldown de notional bajo', () => {
+  const cooldown = buildCooldown(
+    new Error('Order must have minimum value of $10. asset=1'),
+    { status: 'tracking' },
+  );
+
+  assert.equal(cooldown.status, 'tracking');
+  assert.equal(cooldown.cooldownReason, 'below_exchange_minimum_notional');
+  assert.ok(cooldown.nextEligibleAttemptAt <= Date.now() + 30_000);
+  assert.ok(cooldown.nextEligibleAttemptAt > Date.now());
+});
+
+test('script de debug parsea argumentos de replay', () => {
+  const parsed = parseArgs([
+    '--protectionId', '19',
+    '--ticks', '8',
+    '--simulate-missing-position-every', '2',
+    '--dry-run',
+  ]);
+
+  assert.equal(parsed.protectionId, 19);
+  assert.equal(parsed.ticks, 8);
+  assert.equal(parsed.simulateMissingPositionEvery, 2);
+  assert.equal(parsed.dryRun, true);
+});
+
+test('evaluateProtection entra en reconciling ante una sola lectura faltante con evidencia reciente', async () => {
+  const decisions = [];
+  let tradingCalls = 0;
+  const protection = buildDeltaNeutralProtection({
+    hedgeSize: 0.042,
+    hedgeNotionalUsd: 105,
+    strategyState: {
+      status: 'tracking',
+      lastActualQty: 0.042,
+      lastExecutionOutcome: 'success',
+      lastExecutionAttemptAt: Date.now() - 5_000,
+      lastReconciledFillsAt: Date.now() - 30_000,
+      positionMissingConsecutiveCount: 0,
+    },
+  });
+  const repo = {
+    getById: async () => protection,
+    updateStrategyState: async (_userId, _id, payload) => {
+      protection.strategyState = payload.strategyState;
+      protection.hedgeSize = payload.hedgeSize ?? protection.hedgeSize;
+      protection.hedgeNotionalUsd = payload.hedgeNotionalUsd ?? protection.hedgeNotionalUsd;
+    },
+  };
+  const service = new ProtectedPoolDeltaNeutralService({
+    protectedPoolRepository: repo,
+    protectionDecisionLogRepository: {
+      create: async (payload) => decisions.push(payload),
+    },
+    hlRegistry: {
+      getOrCreate: async () => ({
+        getPosition: async () => null,
+        getClearinghouseState: async () => ({ withdrawable: '1000' }),
+        getCandleSnapshot: async () => [],
+        getUserFills: async () => [],
+      }),
+    },
+    getTradingService: async () => ({
+      openPosition: async () => {
+        tradingCalls += 1;
+      },
+      closePosition: async () => {
+        tradingCalls += 1;
+      },
+    }),
+    marketService: {
+      getAssetContexts: async () => [],
+    },
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    },
+    ...makeHybridTestDeps(),
+  });
+  service._fetchSpot = async () => ({ priceCurrent: 2500 });
+
+  const result = await service.evaluateProtection(protection);
+
+  assert.equal(result.status, 'reconciling');
+  assert.equal(result.lastDecisionReason, 'position_unconfirmed');
+  assert.equal(result.positionMissingConsecutiveCount, 1);
+  assert.equal(result.lastPositionReadSource, 'missing_unconfirmed_after_retry');
+  assert.equal(result.lastActualQty, 0.042);
+  assert.equal(result.truthPending, true);
+  assert.equal(decisions.at(-1).executionSkippedBecause, 'position_unconfirmed');
+  assert.equal(tradingCalls, 0);
+});
+
+test('evaluateProtection confirma ausencia tras lecturas faltantes consecutivas y puede caer en insufficient_margin real', async () => {
+  const decisions = [];
+  const protection = buildDeltaNeutralProtection({
+    hedgeSize: 0.042,
+    hedgeNotionalUsd: 105,
+    strategyState: {
+      status: 'tracking',
+      lastActualQty: 0.042,
+      lastExecutionOutcome: 'success',
+      lastExecutionAttemptAt: Date.now() - 5_000,
+      lastReconciledFillsAt: Date.now() - 30_000,
+      positionMissingConsecutiveCount: 1,
+      positionMissingSince: Date.now() - 30_000,
+    },
+  });
+  const repo = {
+    getById: async () => protection,
+    updateStrategyState: async (_userId, _id, payload) => {
+      protection.strategyState = payload.strategyState;
+      protection.hedgeSize = payload.hedgeSize ?? protection.hedgeSize;
+      protection.hedgeNotionalUsd = payload.hedgeNotionalUsd ?? protection.hedgeNotionalUsd;
+      protection.cooldownReason = payload.cooldownReason ?? protection.cooldownReason;
+      protection.nextEligibleAttemptAt = payload.nextEligibleAttemptAt ?? protection.nextEligibleAttemptAt;
+    },
+  };
+  const service = new ProtectedPoolDeltaNeutralService({
+    protectedPoolRepository: repo,
+    protectionDecisionLogRepository: {
+      create: async (payload) => decisions.push(payload),
+    },
+    hlRegistry: {
+      getOrCreate: async () => ({
+        getPosition: async () => null,
+        getClearinghouseState: async () => ({ withdrawable: '0' }),
+        getCandleSnapshot: async () => [],
+        getUserFills: async () => [],
+      }),
+    },
+    getTradingService: async () => ({}),
+    marketService: {
+      getAssetContexts: async () => [],
+    },
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    },
+    ...makeHybridTestDeps(),
+  });
+  service._fetchSpot = async () => ({ priceCurrent: 2500 });
+
+  const result = await service.evaluateProtection(protection);
+
+  assert.notEqual(result.status, 'reconciling');
+  assert.equal(result.positionMissingConsecutiveCount, 2);
+  assert.equal(result.lastPositionReadSource, 'missing_confirmed_after_retry');
+  assert.equal(decisions.at(-1).executionSkippedBecause, 'insufficient_margin');
+});
+
+test('_notifyBlock deduplica cooldown_active inmediato tras insufficient_margin', async () => {
+  const sent = [];
+  const service = new ProtectedPoolDeltaNeutralService({
+    telegramRegistry: {
+      getOrCreate: async () => ({
+        enabled: true,
+        notifyDeltaNeutralBlock: async (payload) => sent.push(payload),
+      }),
+    },
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    },
+  });
+
+  await service._notifyBlock(buildDeltaNeutralProtection(), {
+    blockType: 'insufficient_margin',
+    reason: 'insufficient_margin',
+  });
+  await service._notifyBlock(buildDeltaNeutralProtection(), {
+    blockType: 'cooldown_active',
+    reason: 'insufficient_margin',
+  });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].blockType, 'insufficient_margin');
 });
 
 test('evaluateProtection deja risk_paused cuando la distancia a liquidacion es demasiado baja', async () => {

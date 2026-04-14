@@ -22,7 +22,10 @@ const {
 } = require('./delta-neutral-snapshot.service');
 const MAX_SNAPSHOT_FALLBACK_AGE_MS = 2 * 60_000;
 const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
+const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
 const NEAR_ZERO_TARGET_QTY = 1e-6;
+const POSITION_MISSING_CONFIRMATION_COUNT = 2;
+const POSITION_MISSING_GRACE_MS = 15 * 60_000;
 const {
   DEFAULT_BAND_MODE,
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
@@ -39,8 +42,12 @@ const {
   DEFAULT_TWAP_DURATION_SEC,
   DEFAULT_EMERGENCY_IOC_NOTIONAL_USD,
   DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+  DEFAULT_MIN_AUTO_TOPUP_CAP_USD,
+  DEFAULT_AUTO_TOPUP_CAP_PCT_OF_INITIAL,
+  DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
   DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
   DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
+  EXCHANGE_MIN_NOTIONAL_USD,
   ESTIMATED_TAKER_FEE_RATE,
   MARGIN_COOLDOWN_MS,
   clampNonNegative,
@@ -72,6 +79,7 @@ class ProtectedPoolDeltaNeutralService {
     this.hyperliquidStreamService = deps.hyperliquidStreamService || hyperliquidStreamService;
     this.rpcBudgetManager = deps.rpcBudgetManager || rpcBudgetManager;
     this.settingsService = deps.settingsService || settingsService;
+    this.telegramRegistry = deps.telegramRegistry || telegramRegistry;
     this.logger = deps.logger || logger;
     this.loopMs = deps.loopMs || config.intervals.deltaNeutralLoopMs || 2_000;
     this.fullEvalMs = deps.fullEvalMs || config.intervals.deltaNeutralEvalMs || 30_000;
@@ -105,7 +113,19 @@ class ProtectedPoolDeltaNeutralService {
     return {
       riskPauseLiqDistancePct: Number(controls?.riskPauseLiqDistancePct) || DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
       marginTopUpLiqDistancePct: Number(controls?.marginTopUpLiqDistancePct) || DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
+      maxAutoTopUpsPer24h: Number(controls?.maxAutoTopUpsPer24h) || DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+      minAutoTopUpCapUsd: Number(controls?.minAutoTopUpCapUsd) || DEFAULT_MIN_AUTO_TOPUP_CAP_USD,
+      autoTopUpCapPctOfInitial: Number(controls?.autoTopUpCapPctOfInitial) || DEFAULT_AUTO_TOPUP_CAP_PCT_OF_INITIAL,
+      minAutoTopUpFloorUsd: Number(controls?.minAutoTopUpFloorUsd) >= 0 ? Number(controls.minAutoTopUpFloorUsd) : DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
     };
+  }
+
+  _computeAutoTopUpCapUsd(protection, riskControls) {
+    return Math.max(
+      Number(riskControls?.minAutoTopUpCapUsd) || DEFAULT_MIN_AUTO_TOPUP_CAP_USD,
+      (Number(riskControls?.autoTopUpCapPctOfInitial) || DEFAULT_AUTO_TOPUP_CAP_PCT_OF_INITIAL) / 100
+        * Number(protection.initialConfiguredHedgeNotionalUsd || protection.configuredHedgeNotionalUsd || 0)
+    );
   }
 
   start() {
@@ -360,11 +380,16 @@ class ProtectedPoolDeltaNeutralService {
 
     let fills = [];
     try {
-      fills = await hl.getUserFills(protection.walletAddress);
+      // El cliente `hl` ya está vinculado a la cuenta Hyperliquid correcta.
+      // Si forzamos `protection.walletAddress` aquí, terminamos consultando
+      // la wallet del LP y no la cuenta de trading del hedge. En ese caso los
+      // fills del short no aparecen y el PnL realizado queda falsamente en 0.
+      fills = await hl.getUserFills();
     } catch (err) {
       this.logger.warn('hedge_fills_fetch_failed', {
         protectionId: protection?.id,
         asset: protection?.inferredAsset,
+        queriedAddress: hl?.address || null,
         error: err.message,
       });
       return { realizedDelta: 0, feeDelta: 0, lastFillTime: since, fillsCount: 0 };
@@ -426,13 +451,177 @@ class ProtectedPoolDeltaNeutralService {
     });
   }
 
-  async _notifyBlock(protection, { blockType, reason, detail, extra = {} }) {
-    const throttleKey = `${protection.id}:${blockType}`;
+  _normalizeBlockReason(reason = '') {
+    const normalized = String(reason || '').trim().toLowerCase();
+    if (!normalized) return 'unknown';
+    if (normalized.includes('insufficient_margin') || normalized.includes('insufficient margin') || normalized.includes('margen insuficiente')) {
+      return 'insufficient_margin';
+    }
+    if (normalized.includes('cooldown_active') || normalized.includes('cooldown activo')) {
+      return 'cooldown_active';
+    }
+    return normalized.replace(/\s+/g, '_');
+  }
+
+  _serializePositionSnapshot(position) {
+    if (!position) return null;
+    return {
+      coin: position.coin || null,
+      szi: position.szi != null ? Number(position.szi) : null,
+      liquidationPx: position.liquidationPx != null ? Number(position.liquidationPx) : null,
+      unrealizedPnl: position.unrealizedPnl != null ? Number(position.unrealizedPnl) : null,
+      leverage: position.leverage || null,
+      cumFunding: position.cumFunding || null,
+    };
+  }
+
+  _hasRecentSuccessfulExecution(strategyState, now = Date.now()) {
+    const outcome = String(strategyState?.lastExecutionOutcome || '').trim().toLowerCase();
+    const recentAttemptAt = Number(strategyState?.lastExecutionAttemptAt || strategyState?.lastRebalanceAt || 0);
+    if (!recentAttemptAt || !['success', 'partial', 'pending'].includes(outcome)) return false;
+    return (now - recentAttemptAt) <= POSITION_MISSING_GRACE_MS;
+  }
+
+  _hasRecentFillEvidence(strategyState, now = Date.now()) {
+    const lastReconciledFillsAt = Number(strategyState?.lastReconciledFillsAt || 0);
+    if (!lastReconciledFillsAt) return false;
+    return (now - lastReconciledFillsAt) <= POSITION_MISSING_GRACE_MS;
+  }
+
+  _extractShortQty(position) {
+    return position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
+  }
+
+  async _readPositionAttempt(hl, protection, label) {
+    try {
+      const position = await hl.getPosition(protection.inferredAsset);
+      return { position, error: null, label };
+    } catch (err) {
+      this.logger.warn('delta_neutral_get_position_failed', {
+        protectionId: protection.id,
+        accountId: protection.accountId,
+        asset: protection.inferredAsset,
+        readLabel: label,
+        error: err.message,
+      });
+      return { position: null, error: err, label };
+    }
+  }
+
+  async _observeHedgePosition({ protection, hl, strategyState, forceReason = null }) {
     const now = Date.now();
+    const fallbackActualQty = Math.max(Number(
+      strategyState?.lastActualQty
+      ?? protection?.hedgeSize
+      ?? 0
+    ) || 0, 0);
+    const first = await this._readPositionAttempt(hl, protection, 'primary');
+    const firstActualQty = this._extractShortQty(first.position);
+
+    if (first.position) {
+      return {
+        position: first.position,
+        rawPosition: first.position,
+        actualQtyRaw: firstActualQty,
+        effectiveActualQty: firstActualQty,
+        positionObserved: true,
+        positionMissingUnconfirmed: false,
+        positionMissingConfirmed: false,
+        positionMissingSince: null,
+        positionMissingConsecutiveCount: 0,
+        lastPositionReadAt: now,
+        lastPositionReadSource: firstActualQty > 0 ? 'short_position' : 'non_short_position',
+        readCount: 1,
+        fallbackActualQty,
+      };
+    }
+
+    const missingHints = {
+      lastActualQty: fallbackActualQty > 1e-8,
+      recentExecution: this._hasRecentSuccessfulExecution(strategyState, now),
+      recentFills: this._hasRecentFillEvidence(strategyState, now),
+    };
+    const shouldVerifyMissing = Object.values(missingHints).some(Boolean);
+    const priorMissingCount = Number(strategyState?.positionMissingConsecutiveCount || 0);
+    const missingSince = Number(strategyState?.positionMissingSince || now);
+
+    if (!shouldVerifyMissing) {
+      return {
+        position: null,
+        rawPosition: null,
+        actualQtyRaw: 0,
+        effectiveActualQty: 0,
+        positionObserved: false,
+        positionMissingUnconfirmed: false,
+        positionMissingConfirmed: true,
+        positionMissingSince: missingSince,
+        positionMissingConsecutiveCount: priorMissingCount + 1,
+        lastPositionReadAt: now,
+        lastPositionReadSource: 'missing_without_recent_evidence',
+        readCount: 1,
+        fallbackActualQty,
+      };
+    }
+
+    const second = await this._readPositionAttempt(hl, protection, 'retry');
+    const secondActualQty = this._extractShortQty(second.position);
+    if (second.position) {
+      return {
+        position: second.position,
+        rawPosition: second.position,
+        actualQtyRaw: secondActualQty,
+        effectiveActualQty: secondActualQty,
+        positionObserved: true,
+        positionMissingUnconfirmed: false,
+        positionMissingConfirmed: false,
+        positionMissingSince: null,
+        positionMissingConsecutiveCount: 0,
+        lastPositionReadAt: now,
+        lastPositionReadSource: secondActualQty > 0 ? 'retry_short_position' : 'retry_non_short_position',
+        readCount: 2,
+        fallbackActualQty,
+      };
+    }
+
+    const consecutiveMissing = priorMissingCount + 1;
+    const positionMissingConfirmed = consecutiveMissing >= POSITION_MISSING_CONFIRMATION_COUNT
+      || forceReason === 'restart_reconcile';
+    return {
+      position: null,
+      rawPosition: null,
+      actualQtyRaw: 0,
+      effectiveActualQty: positionMissingConfirmed ? 0 : fallbackActualQty,
+      positionObserved: false,
+      positionMissingUnconfirmed: !positionMissingConfirmed,
+      positionMissingConfirmed,
+      positionMissingSince: missingSince,
+      positionMissingConsecutiveCount: consecutiveMissing,
+      lastPositionReadAt: now,
+      lastPositionReadSource: positionMissingConfirmed ? 'missing_confirmed_after_retry' : 'missing_unconfirmed_after_retry',
+      readCount: 2,
+      fallbackActualQty,
+      missingHints,
+    };
+  }
+
+  async _notifyBlock(protection, { blockType, reason, detail, extra = {} }) {
+    const normalizedReason = this._normalizeBlockReason(reason || detail || blockType);
+    const semanticKey = `semantic:${protection.id}:${normalizedReason}`;
+    const throttleKey = `block:${protection.id}:${blockType}:${normalizedReason}`;
+    const now = Date.now();
+    const lastSemanticSent = this.blockNotifLastSentAt.get(semanticKey) || 0;
     const lastSent = this.blockNotifLastSentAt.get(throttleKey) || 0;
+    if (
+      blockType === 'cooldown_active'
+      && normalizedReason === 'insufficient_margin'
+      && (now - lastSemanticSent) < BLOCK_NOTIFICATION_DEDUPE_MS
+    ) {
+      return;
+    }
     if ((now - lastSent) < BLOCK_NOTIFICATION_THROTTLE_MS) return;
 
     this.blockNotifLastSentAt.set(throttleKey, now);
+    this.blockNotifLastSentAt.set(semanticKey, now);
 
     if (this.blockNotifLastSentAt.size > 500) {
       const cutoff = now - 60 * 60_000;
@@ -442,7 +631,7 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     try {
-      const tg = await telegramRegistry.getOrCreate(protection.userId);
+      const tg = await this.telegramRegistry.getOrCreate(protection.userId);
       if (tg && tg.enabled) {
         await tg.notifyDeltaNeutralBlock({ protection, blockType, reason, detail, extra });
       }
@@ -685,18 +874,37 @@ class ProtectedPoolDeltaNeutralService {
     accountState = null,
     assetContext = null,
     bbo = null,
+    positionObserved = false,
+    positionReadSource = null,
+    positionMissingUnconfirmed = false,
   }) {
-    const resolvedAccountState = accountState || await hl.getClearinghouseState().catch(() => null);
+    let resolvedAccountState = accountState || await hl.getClearinghouseState().catch(() => null);
     const hasProtectionCooldownReason = Boolean(protection)
       && Object.prototype.hasOwnProperty.call(protection, 'cooldownReason');
     const cooldownReason = ((hasProtectionCooldownReason ? protection.cooldownReason : strategyState.cooldownReason) || '').trim();
-    const withdrawable = Number(resolvedAccountState?.withdrawable || 0);
     const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
     const increaseNotionalUsd = targetIncreaseQty * currentPrice;
-    const requiredMarginUsd = increaseNotionalUsd / Math.max(Number(protection.leverage || 1), 1);
+    let requiredMarginUsd = increaseNotionalUsd / Math.max(Number(protection.leverage || 1), 1);
+    let withdrawable = Number(resolvedAccountState?.withdrawable || 0);
     const cooldownActive = isCooldownActive(protection, strategyState);
     const snapshotStatus = protection.snapshotStatus || 'ready';
     const resolvedAssetContext = assetContext || (() => null)();
+
+    if (targetIncreaseQty > 0 && withdrawable <= 0) {
+      const freshAccountState = await hl.getClearinghouseState().catch(() => null);
+      const freshWithdrawable = Number(freshAccountState?.withdrawable || 0);
+      if (freshAccountState && freshWithdrawable !== withdrawable) {
+        this.logger.info?.('delta_neutral_withdrawable_refreshed', {
+          protectionId: protection.id,
+          accountId: protection.accountId,
+          asset: protection.inferredAsset,
+          cachedWithdrawable: withdrawable,
+          freshWithdrawable,
+        });
+        resolvedAccountState = freshAccountState;
+        withdrawable = freshWithdrawable;
+      }
+    }
 
     if (snapshotStatus !== 'ready') {
       return {
@@ -704,6 +912,11 @@ class ProtectedPoolDeltaNeutralService {
         status: 'snapshot_invalid',
         reason: `snapshot_${snapshotStatus}`,
         executionSkippedBecause: `snapshot_${snapshotStatus}`,
+        withdrawable,
+        requiredMarginUsd,
+        positionObserved,
+        positionReadSource,
+        positionMissingUnconfirmed,
       };
     }
     const marginCooldownActive = cooldownActive && cooldownReason === 'insufficient_margin';
@@ -713,14 +926,28 @@ class ProtectedPoolDeltaNeutralService {
         status: strategyState.status || 'tracking',
         reason: 'cooldown_active',
         executionSkippedBecause: cooldownReason || 'cooldown_active',
+        withdrawable,
+        requiredMarginUsd,
+        positionObserved,
+        positionReadSource,
+        positionMissingUnconfirmed,
       };
     }
-    if (decision !== 'hold' && tracking.trackingErrorUsd < Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD)) {
+    const effectiveMinOrderNotionalUsd = Math.max(
+      Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
+      EXCHANGE_MIN_NOTIONAL_USD,
+    );
+    if (decision !== 'hold' && tracking.trackingErrorUsd < effectiveMinOrderNotionalUsd) {
       return {
         ok: false,
         status: 'tracking',
         reason: 'below_min_order_notional',
         executionSkippedBecause: 'below_min_order_notional',
+        withdrawable,
+        requiredMarginUsd,
+        positionObserved,
+        positionReadSource,
+        positionMissingUnconfirmed,
       };
     }
     if (targetIncreaseQty > 0 && requiredMarginUsd > withdrawable) {
@@ -729,6 +956,11 @@ class ProtectedPoolDeltaNeutralService {
         status: 'margin_pending',
         reason: 'insufficient_margin',
         executionSkippedBecause: 'insufficient_margin',
+        withdrawable,
+        requiredMarginUsd,
+        positionObserved,
+        positionReadSource,
+        positionMissingUnconfirmed,
       };
     }
     if (Number.isFinite(Number(bbo?.spreadBps)) && Number(bbo.spreadBps) > Number(protection.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS)) {
@@ -737,6 +969,11 @@ class ProtectedPoolDeltaNeutralService {
         status: 'tracking',
         reason: 'spread_too_wide',
         executionSkippedBecause: 'spread_too_wide',
+        withdrawable,
+        requiredMarginUsd,
+        positionObserved,
+        positionReadSource,
+        positionMissingUnconfirmed,
       };
     }
     if (Number(bands?.estimatedCostUsd || 0) > Number(protection.maxExecutionFeeUsd ?? DEFAULT_MAX_EXECUTION_FEE_USD)) {
@@ -745,6 +982,11 @@ class ProtectedPoolDeltaNeutralService {
         status: 'tracking',
         reason: 'estimated_execution_fee_too_high',
         executionSkippedBecause: 'estimated_execution_fee_too_high',
+        withdrawable,
+        requiredMarginUsd,
+        positionObserved,
+        positionReadSource,
+        positionMissingUnconfirmed,
       };
     }
 
@@ -754,9 +996,13 @@ class ProtectedPoolDeltaNeutralService {
       reason: 'preflight_ok',
       executionSkippedBecause: null,
       withdrawable,
+      requiredMarginUsd,
       fundingRate: resolvedAssetContext?.fundingRate != null ? Number(resolvedAssetContext.fundingRate) : null,
       spreadBps: Number.isFinite(Number(bbo?.spreadBps)) ? Number(bbo.spreadBps) : null,
       estimatedExecutionCostUsd: bands.estimatedCostUsd,
+      positionObserved,
+      positionReadSource,
+      positionMissingUnconfirmed,
     };
   }
 
@@ -1132,8 +1378,14 @@ class ProtectedPoolDeltaNeutralService {
 
     const rvStats = await this._getVolatilityStats(hl, activeProtection.inferredAsset);
     const band = deriveBandSettings(activeProtection, rvStats, metrics, currentPrice);
-    const position = await hl.getPosition(activeProtection.inferredAsset).catch((err) => { logger.warn('getPosition failed in rebalance check', { poolId: activeProtection.id, asset: activeProtection.inferredAsset, error: err.message }); return null; });
-    const actualQty = position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
+    const positionObservation = await this._observeHedgePosition({
+      protection: activeProtection,
+      hl,
+      strategyState,
+      forceReason,
+    });
+    const position = positionObservation.position;
+    const actualQty = positionObservation.effectiveActualQty;
     const currentBoundarySide = getCurrentBoundarySide(activeProtection, currentPrice);
     const riskControls = await this._getRiskControls(activeProtection.userId);
     const marginModeVerified = position ? isIsolatedPosition(position) : true;
@@ -1183,7 +1435,16 @@ class ProtectedPoolDeltaNeutralService {
       lpPnlUsd,
       distanceToLiqPct,
       marginModeVerified,
-      topUpCapUsd: Math.max(300, 0.25 * Number(activeProtection.initialConfiguredHedgeNotionalUsd || activeProtection.configuredHedgeNotionalUsd || 0)),
+      positionMissingSince: positionObservation.positionMissingConfirmed || positionObservation.positionMissingUnconfirmed
+        ? positionObservation.positionMissingSince
+        : null,
+      positionMissingConsecutiveCount: positionObservation.positionMissingConfirmed || positionObservation.positionMissingUnconfirmed
+        ? positionObservation.positionMissingConsecutiveCount
+        : 0,
+      lastPositionReadAt: positionObservation.lastPositionReadAt,
+      lastPositionReadSource: positionObservation.lastPositionReadSource,
+      topUpMaxCount24h: Number(riskControls.maxAutoTopUpsPer24h) || DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+      topUpCapUsd: this._computeAutoTopUpCapUsd(activeProtection, riskControls),
       lastObservedBoundarySide: currentBoundarySide,
       trackingMode: this.trackingMode,
       truthAgeMs,
@@ -1224,6 +1485,87 @@ class ProtectedPoolDeltaNeutralService {
     nextState.lastSpotFailureAt = spotFailureReason ? Date.now() : (strategyState.lastSpotFailureAt || null);
     nextState.lastSpotFailureReason = spotFailureReason || null;
     nextState.truthPending = normalizeStrategyState(activeProtection.strategyState).truthPending === true;
+
+    this.logger.info?.('delta_neutral_position_observed', {
+      protectionId: activeProtection.id,
+      accountId: activeProtection.accountId,
+      asset: activeProtection.inferredAsset,
+      forceReason: forceReason || null,
+      positionObserved: positionObservation.positionObserved,
+      positionReadSource: positionObservation.lastPositionReadSource,
+      positionReadCount: positionObservation.readCount,
+      positionMissingUnconfirmed: positionObservation.positionMissingUnconfirmed,
+      positionMissingConfirmed: positionObservation.positionMissingConfirmed,
+      actualQtyRaw: positionObservation.actualQtyRaw,
+      actualQtyEffective: actualQty,
+      lastActualQty: Number(strategyState.lastActualQty || 0),
+      lastExecutionOutcome: strategyState.lastExecutionOutcome || null,
+      lastReconciledFillsAt: Number(strategyState.lastReconciledFillsAt || 0) || null,
+      rawPosition: this._serializePositionSnapshot(positionObservation.rawPosition),
+    });
+
+    if (positionObservation.positionMissingUnconfirmed) {
+      nextState.status = 'reconciling';
+      nextState.truthPending = true;
+      nextState.lastError = 'Lectura de posicion no confirmada; se reintentara antes de reabrir el hedge.';
+      nextState.lastDecision = 'hold';
+      nextState.lastDecisionReason = 'position_unconfirmed';
+      nextState.nextEligibleAttemptAt = null;
+      nextState.cooldownReason = null;
+      nextState.lastMissingDetectedAt = Date.now();
+
+      this.logger.warn?.('delta_neutral_position_gap_unconfirmed', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        forceReason: forceReason || null,
+        positionReadSource: positionObservation.lastPositionReadSource,
+        positionMissingConsecutiveCount: positionObservation.positionMissingConsecutiveCount,
+        fallbackActualQty: positionObservation.fallbackActualQty,
+        targetQty: metrics.targetQty,
+        trackingErrorUsd: tracking.trackingErrorUsd,
+      });
+
+      await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
+        strategyState: nextState,
+        priceCurrent: currentPrice,
+        hedgeSize: actualQty,
+        hedgeNotionalUsd: actualQty * currentPrice,
+        snapshotStatus: snapshotMeta.validation.status,
+        snapshotFreshAt: snapshotMeta.snapshotFreshAt,
+        snapshotHash: snapshotMeta.snapshotHash,
+        nextEligibleAttemptAt: null,
+        cooldownReason: null,
+        lastDecision: nextState.lastDecision,
+        lastDecisionReason: nextState.lastDecisionReason,
+        trackingErrorQty: tracking.trackingErrorQty,
+        trackingErrorUsd: tracking.trackingErrorUsd,
+        executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
+      });
+      await this._persistDecision(activeProtection, {
+        decision: nextState.lastDecision,
+        reason: nextState.lastDecisionReason,
+        strategyStatus: nextState.status,
+        spotSource,
+        snapshotStatus: snapshotMeta.validation.status,
+        snapshotFreshnessMs: Math.max(Date.now() - Number(snapshotMeta.snapshotFreshAt || Date.now()), 0),
+        executionSkippedBecause: 'position_unconfirmed',
+        executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
+        estimatedCostUsd: rebalanceDecision.bands.estimatedCostUsd,
+        targetQty: metrics.targetQty,
+        actualQty,
+        trackingErrorQty: tracking.trackingErrorQty,
+        trackingErrorUsd: tracking.trackingErrorUsd,
+        currentPrice,
+        finalStrategyStatus: nextState.status,
+        riskGateTriggered: false,
+        liquidationDistancePct: distanceToLiqPct,
+        modelConfidence: nextState.modelConfidence,
+        basisSpreadBps: nextState.basisSpreadBps,
+        zoneState: nextState.zoneState,
+      });
+      return nextState;
+    }
 
     let riskGateTriggered = false;
     let riskGateReason = null;
@@ -1293,6 +1635,7 @@ class ProtectedPoolDeltaNeutralService {
           currentPrice,
           actualQty,
           strategyState: nextState,
+          riskControls,
         });
         if (!toppedUp.allowed && !toppedUp.success) {
           forcedStatus = 'risk_paused';
@@ -1329,6 +1672,19 @@ class ProtectedPoolDeltaNeutralService {
       || (timerDue && driftUsd >= (activeProtection.minRebalanceNotionalUsd ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD))
       || (!position && metrics.targetQty > 0.0000001);
 
+    if (!position && metrics.targetQty > 0.0000001) {
+      this.logger.info?.('delta_neutral_restart_reconcile_candidate', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        positionReadSource: positionObservation.lastPositionReadSource,
+        positionMissingConfirmed: positionObservation.positionMissingConfirmed,
+        targetQty: metrics.targetQty,
+        actualQty,
+        trackingErrorUsd: tracking.trackingErrorUsd,
+      });
+    }
+
     if (forceReduceNearZero && rebalanceDecision.decision === 'hold') {
       rebalanceDecision.decision = 'rebalance_full';
     }
@@ -1345,8 +1701,43 @@ class ProtectedPoolDeltaNeutralService {
       accountState: liveMarket?.clearinghouseState || null,
       assetContext: liveMarket?.assetContext || null,
       bbo: liveMarket?.bbo || null,
+      positionObserved: positionObservation.positionObserved,
+      positionReadSource: positionObservation.lastPositionReadSource,
+      positionMissingUnconfirmed: positionObservation.positionMissingUnconfirmed,
     });
     const effectiveShouldRebalance = shouldRebalance && !minDwellActive && !confidenceBlocksIncrease;
+
+    this.logger.info?.('delta_neutral_preflight_result', {
+      protectionId: activeProtection.id,
+      accountId: activeProtection.accountId,
+      asset: activeProtection.inferredAsset,
+      forceReason: forceReason || null,
+      positionObserved: positionObservation.positionObserved,
+      positionReadSource: positionObservation.lastPositionReadSource,
+      positionMissingUnconfirmed: positionObservation.positionMissingUnconfirmed,
+      actualQty,
+      targetQty: metrics.targetQty,
+      trackingErrorUsd: tracking.trackingErrorUsd,
+      withdrawable: preflight.withdrawable ?? null,
+      requiredMarginUsd: preflight.requiredMarginUsd ?? null,
+      preflightOk: preflight.ok,
+      preflightReason: preflight.reason,
+      executionSkippedBecause: preflight.executionSkippedBecause,
+    });
+    if (preflight.reason === 'insufficient_margin') {
+      this.logger.warn?.('delta_neutral_insufficient_margin_blocked', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        positionObserved: positionObservation.positionObserved,
+        positionReadSource: positionObservation.lastPositionReadSource,
+        actualQty,
+        targetQty: metrics.targetQty,
+        trackingErrorUsd: tracking.trackingErrorUsd,
+        withdrawable: preflight.withdrawable ?? null,
+        requiredMarginUsd: preflight.requiredMarginUsd ?? null,
+      });
+    }
 
     nextState.status = normalizeEvaluationStatus({
       decision: rebalanceDecision.decision,
@@ -1443,13 +1834,16 @@ class ProtectedPoolDeltaNeutralService {
         extra: { liquidationDistancePct: distanceToLiqPct },
       }).catch(() => {});
     }
-    if (!preflight.ok && preflight.reason !== 'below_min_order_notional'
-        && effectiveShouldRebalance && rebalanceDecision.decision !== 'hold') {
+    if (!preflight.ok && effectiveShouldRebalance && rebalanceDecision.decision !== 'hold') {
       const preflightExtra = {};
       if (preflight.reason === 'insufficient_margin') {
         preflightExtra.withdrawable = preflight.withdrawable;
-        preflightExtra.requiredMargin = (Math.max(Number(tracking.trackingErrorQty || 0), 0) * currentPrice)
-          / Math.max(Number(activeProtection.leverage || 1), 1);
+        preflightExtra.requiredMargin = preflight.requiredMarginUsd ?? ((Math.max(Number(tracking.trackingErrorQty || 0), 0) * currentPrice)
+          / Math.max(Number(activeProtection.leverage || 1), 1));
+        preflightExtra.positionObserved = positionObservation.positionObserved;
+        preflightExtra.actualQty = actualQty;
+        preflightExtra.targetQty = metrics.targetQty;
+        preflightExtra.positionReadSource = positionObservation.lastPositionReadSource;
       }
       if (preflight.reason === 'spread_too_wide') {
         preflightExtra.spreadBps = liveMarket?.bbo?.spreadBps;
@@ -1461,6 +1855,13 @@ class ProtectedPoolDeltaNeutralService {
       }
       if (preflight.reason === 'cooldown_active') {
         preflightExtra.cooldownReason = preflight.executionSkippedBecause;
+      }
+      if (preflight.reason === 'below_min_order_notional') {
+        preflightExtra.driftUsd = tracking.trackingErrorUsd;
+        preflightExtra.minNotionalUsd = Math.max(
+          Number(activeProtection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
+          EXCHANGE_MIN_NOTIONAL_USD,
+        );
       }
       this._notifyBlock(activeProtection, {
         blockType: preflight.reason === 'estimated_execution_fee_too_high' ? 'execution_fee_too_high' : preflight.reason,
@@ -1504,12 +1905,38 @@ class ProtectedPoolDeltaNeutralService {
     strategyState,
     reason,
   }) {
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      this.logger.error('delta_neutral_execute_rebalance_invalid_price', {
+        protectionId: protection.id,
+        currentPrice,
+      });
+      return strategyState;
+    }
     const driftQty = Number(metrics.targetQty) - Number(actualQty);
     const driftUsd = Math.abs(driftQty) * currentPrice;
     if (!Number.isFinite(driftQty) || Math.abs(driftQty) < 1e-8) {
       return strategyState;
     }
     if (strategyState.status === 'risk_paused' && driftQty > 0) {
+      return strategyState;
+    }
+    const minNotionalUsd = Math.max(
+      Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
+      EXCHANGE_MIN_NOTIONAL_USD,
+    );
+    if (driftUsd < minNotionalUsd) {
+      this.logger.info?.('delta_neutral_drift_below_exchange_minimum', {
+        protectionId: protection.id,
+        asset: protection.inferredAsset,
+        driftQty,
+        driftUsd,
+        minNotionalUsd,
+      });
+      this._notifyBlock(protection, {
+        blockType: 'below_min_order_notional',
+        reason: `Drift $${driftUsd.toFixed(2)} < minimo $${minNotionalUsd}`,
+        extra: { driftUsd, minNotionalUsd },
+      }).catch(() => {});
       return strategyState;
     }
 
@@ -1734,12 +2161,13 @@ class ProtectedPoolDeltaNeutralService {
         marginMode: 'isolated',
       });
       const fillPrice = Number(result.fillPrice || currentPrice);
+      const executedQty = result.filledQty != null ? result.filledQty : driftQty;
       return {
-        partial: false,
+        partial: result.filledQty != null && result.filledQty < driftQty * 0.99,
         fillPrice,
-        executedQty: driftQty,
-        executionFeeUsd: Math.abs(fillPrice * driftQty * ESTIMATED_TAKER_FEE_RATE),
-        slippageUsd: Math.abs(fillPrice - currentPrice) * driftQty,
+        executedQty,
+        executionFeeUsd: Math.abs(fillPrice * executedQty * ESTIMATED_TAKER_FEE_RATE),
+        slippageUsd: Math.abs(fillPrice - currentPrice) * executedQty,
       };
     }
 
@@ -1749,12 +2177,13 @@ class ProtectedPoolDeltaNeutralService {
       size: reduceQty,
     });
     const fillPrice = Number(result.closePrice || currentPrice);
+    const executedQty = result.filledQty != null ? result.filledQty : reduceQty;
     return {
-      partial: false,
+      partial: result.filledQty != null && result.filledQty < reduceQty * 0.99,
       fillPrice,
-      executedQty: reduceQty,
-      executionFeeUsd: Math.abs(fillPrice * reduceQty * ESTIMATED_TAKER_FEE_RATE),
-      slippageUsd: Math.abs(fillPrice - currentPrice) * reduceQty,
+      executedQty,
+      executionFeeUsd: Math.abs(fillPrice * executedQty * ESTIMATED_TAKER_FEE_RATE),
+      slippageUsd: Math.abs(fillPrice - currentPrice) * executedQty,
     };
   }
 
@@ -1808,8 +2237,9 @@ class ProtectedPoolDeltaNeutralService {
             size: qty,
           });
         lastFillPrice = Number(sliceResult.fillPrice || sliceResult.closePrice || currentPrice);
-        totalFees += Math.abs(lastFillPrice * qty * ESTIMATED_TAKER_FEE_RATE);
-        totalSlippage += Math.abs(lastFillPrice - currentPrice) * qty;
+        const actualSliceQty = sliceResult.filledQty != null ? sliceResult.filledQty : qty;
+        totalFees += Math.abs(lastFillPrice * actualSliceQty * ESTIMATED_TAKER_FEE_RATE);
+        totalSlippage += Math.abs(lastFillPrice - currentPrice) * actualSliceQty;
         completed += 1;
       }
     } catch (err) {
@@ -2000,9 +2430,6 @@ class ProtectedPoolDeltaNeutralService {
   async _ensureIsolatedMarginBuffer(protection, hl, currentPrice, qtyToAdd, actualQty = 0) {
     const assetMeta = await hl.getAssetMeta(protection.inferredAsset);
     await hl.updateLeverage(assetMeta.index, false, protection.leverage);
-    if (Number(actualQty || 0) <= 0) {
-      return;
-    }
     const notionalUsd = Math.abs(qtyToAdd) * currentPrice;
     const marginUsd = Math.ceil((notionalUsd / Math.max(Number(protection.leverage || 1), 1)) * 1.2);
     if (marginUsd > 0) {
@@ -2027,23 +2454,26 @@ class ProtectedPoolDeltaNeutralService {
     };
   }
 
-  async _maybeTopUpMargin({ protection, hl, currentPrice, actualQty, strategyState }) {
+  async _maybeTopUpMargin({ protection, hl, currentPrice, actualQty, strategyState, riskControls = null }) {
     const refreshed = this._refreshTopUpWindow(strategyState);
     const topUpCount24h = refreshed.topUpCount24h;
     const topUpUsd24h = refreshed.topUpUsd24h;
     const currentHedgeNotionalUsd = actualQty * currentPrice;
-    const topUpUsd = Math.max(100, 0.1 * currentHedgeNotionalUsd);
-    const maxAutoTopUpUsdPer24h = Math.max(
-      300,
-      0.25 * Number(protection.initialConfiguredHedgeNotionalUsd || protection.configuredHedgeNotionalUsd || 0)
-    );
+    const minFloorUsd = Number(riskControls?.minAutoTopUpFloorUsd) >= 0 ? Number(riskControls.minAutoTopUpFloorUsd) : DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD;
+    const topUpUsd = Math.max(minFloorUsd, 0.1 * currentHedgeNotionalUsd);
+    const maxAutoTopUpsPer24h = Number(riskControls?.maxAutoTopUpsPer24h) || DEFAULT_MAX_AUTO_TOPUPS_PER_24H;
+    const maxAutoTopUpUsdPer24h = this._computeAutoTopUpCapUsd(protection, riskControls);
 
-    if (topUpCount24h >= DEFAULT_MAX_AUTO_TOPUPS_PER_24H) {
+    if (topUpCount24h >= maxAutoTopUpsPer24h) {
       return {
         allowed: false,
         success: false,
         reason: 'Se alcanzo el maximo de auto top-ups en 24h.',
-        strategyState: refreshed,
+        strategyState: {
+          ...refreshed,
+          topUpMaxCount24h: maxAutoTopUpsPer24h,
+          topUpCapUsd: maxAutoTopUpUsdPer24h,
+        },
       };
     }
     if ((topUpUsd24h + topUpUsd) > maxAutoTopUpUsdPer24h) {
@@ -2051,7 +2481,11 @@ class ProtectedPoolDeltaNeutralService {
         allowed: false,
         success: false,
         reason: 'Se alcanzo el cap diario de auto top-up.',
-        strategyState: refreshed,
+        strategyState: {
+          ...refreshed,
+          topUpMaxCount24h: maxAutoTopUpsPer24h,
+          topUpCapUsd: maxAutoTopUpUsdPer24h,
+        },
       };
     }
     if (strategyState.lastTopUpAt && (Date.now() - Number(strategyState.lastTopUpAt)) < 15 * 60_000) {
@@ -2059,7 +2493,11 @@ class ProtectedPoolDeltaNeutralService {
         allowed: true,
         success: false,
         reason: 'Cooldown de auto top-up activo.',
-        strategyState: refreshed,
+        strategyState: {
+          ...refreshed,
+          topUpMaxCount24h: maxAutoTopUpsPer24h,
+          topUpCapUsd: maxAutoTopUpUsdPer24h,
+        },
       };
     }
 
@@ -2072,6 +2510,8 @@ class ProtectedPoolDeltaNeutralService {
         strategyState: {
           ...strategyState,
           ...refreshed,
+          topUpMaxCount24h: maxAutoTopUpsPer24h,
+          topUpCapUsd: maxAutoTopUpUsdPer24h,
           topUpCount24h: topUpCount24h + 1,
           topUpUsd24h: topUpUsd24h + topUpUsd,
           lastTopUpAt: Date.now(),
@@ -2082,7 +2522,11 @@ class ProtectedPoolDeltaNeutralService {
         allowed: true,
         success: false,
         reason: err.message,
-        strategyState: refreshed,
+        strategyState: {
+          ...refreshed,
+          topUpMaxCount24h: maxAutoTopUpsPer24h,
+          topUpCapUsd: maxAutoTopUpUsdPer24h,
+        },
       };
     }
   }

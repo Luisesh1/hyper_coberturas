@@ -22,7 +22,6 @@ server/dist/
 
 # ── Datos persistentes generados en runtime ──────────────────────────────────
 server/data/
-server/db.sqlite
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log

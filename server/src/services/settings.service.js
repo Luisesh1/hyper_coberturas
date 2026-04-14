@@ -4,6 +4,10 @@ const { decryptValue, encryptJson, ENCRYPTED_PREFIX } = require('./settings.cryp
 const {
   DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
   DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
+  DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+  DEFAULT_MIN_AUTO_TOPUP_CAP_USD,
+  DEFAULT_AUTO_TOPUP_CAP_PCT_OF_INITIAL,
+  DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
 } = require('./protected-pool-delta-neutral.helpers');
 
 const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan', 'alchemy']);
@@ -14,6 +18,10 @@ function getDefaultDeltaNeutralRiskControls() {
   return {
     riskPauseLiqDistancePct: DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
     marginTopUpLiqDistancePct: DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
+    maxAutoTopUpsPer24h: DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
+    minAutoTopUpCapUsd: DEFAULT_MIN_AUTO_TOPUP_CAP_USD,
+    autoTopUpCapPctOfInitial: DEFAULT_AUTO_TOPUP_CAP_PCT_OF_INITIAL,
+    minAutoTopUpFloorUsd: DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
   };
 }
 
@@ -27,6 +35,22 @@ function normalizeDeltaNeutralRiskControls(value = {}) {
   let marginTopUpLiqDistancePct = Number.isFinite(parsedMarginTopUpLiqDistancePct) && parsedMarginTopUpLiqDistancePct > 0
     ? parsedMarginTopUpLiqDistancePct
     : defaults.marginTopUpLiqDistancePct;
+  const parsedMaxAutoTopUpsPer24h = Number(value?.maxAutoTopUpsPer24h);
+  const parsedMinAutoTopUpCapUsd = Number(value?.minAutoTopUpCapUsd);
+  const parsedAutoTopUpCapPctOfInitial = Number(value?.autoTopUpCapPctOfInitial);
+  const parsedMinAutoTopUpFloorUsd = Number(value?.minAutoTopUpFloorUsd);
+  const maxAutoTopUpsPer24h = Number.isFinite(parsedMaxAutoTopUpsPer24h) && parsedMaxAutoTopUpsPer24h > 0
+    ? Math.floor(parsedMaxAutoTopUpsPer24h)
+    : defaults.maxAutoTopUpsPer24h;
+  const minAutoTopUpCapUsd = Number.isFinite(parsedMinAutoTopUpCapUsd) && parsedMinAutoTopUpCapUsd > 0
+    ? parsedMinAutoTopUpCapUsd
+    : defaults.minAutoTopUpCapUsd;
+  const autoTopUpCapPctOfInitial = Number.isFinite(parsedAutoTopUpCapPctOfInitial) && parsedAutoTopUpCapPctOfInitial > 0
+    ? parsedAutoTopUpCapPctOfInitial
+    : defaults.autoTopUpCapPctOfInitial;
+  const minAutoTopUpFloorUsd = Number.isFinite(parsedMinAutoTopUpFloorUsd) && parsedMinAutoTopUpFloorUsd >= 0
+    ? parsedMinAutoTopUpFloorUsd
+    : defaults.minAutoTopUpFloorUsd;
 
   if (marginTopUpLiqDistancePct <= riskPauseLiqDistancePct) {
     marginTopUpLiqDistancePct = Math.max(defaults.marginTopUpLiqDistancePct, riskPauseLiqDistancePct + 1);
@@ -35,6 +59,10 @@ function normalizeDeltaNeutralRiskControls(value = {}) {
   return {
     riskPauseLiqDistancePct,
     marginTopUpLiqDistancePct,
+    maxAutoTopUpsPer24h,
+    minAutoTopUpCapUsd,
+    autoTopUpCapPctOfInitial,
+    minAutoTopUpFloorUsd,
   };
 }
 

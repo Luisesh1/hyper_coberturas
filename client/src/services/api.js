@@ -133,11 +133,26 @@ export const settingsApi = {
   saveAlchemy:   ({ apiKey })       => request('PUT',  '/settings/alchemy', { apiKey }),
   testAlchemy:   ()                 => request('POST', '/settings/alchemy/test'),
   getDeltaNeutralRiskControls: ()   => request('GET',  '/settings/delta-neutral-risk-controls'),
-  saveDeltaNeutralRiskControls: ({ riskPauseLiqDistancePct, marginTopUpLiqDistancePct }) =>
+  saveDeltaNeutralRiskControls: ({
+    riskPauseLiqDistancePct,
+    marginTopUpLiqDistancePct,
+    maxAutoTopUpsPer24h,
+    minAutoTopUpCapUsd,
+    autoTopUpCapPctOfInitial,
+    minAutoTopUpFloorUsd,
+  }) =>
     request('PUT', '/settings/delta-neutral-risk-controls', {
       riskPauseLiqDistancePct,
       marginTopUpLiqDistancePct,
+      maxAutoTopUpsPer24h,
+      minAutoTopUpCapUsd,
+      autoTopUpCapPctOfInitial,
+      minAutoTopUpFloorUsd,
     }),
+  getDeltaNeutralTopUpCounters: () =>
+    request('GET', '/settings/delta-neutral-top-up-counters'),
+  resetDeltaNeutralTopUpCounter: (protectionId) =>
+    request('POST', `/settings/delta-neutral-top-up-counters/${protectionId}/reset`, {}),
 };
 
 // ------------------------------------------------------------------

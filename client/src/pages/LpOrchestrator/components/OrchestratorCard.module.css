@@ -32,6 +32,14 @@
   gap: 12px;
 }
 
+.headerBadges {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .headerInfo {
   flex: 1;
   min-width: 0;
@@ -83,6 +91,51 @@
 .badge_urgent  { color: var(--uni-red); border-color: rgba(255, 125, 125, 0.6); animation: pulse 2s ease-in-out infinite; }
 .badge_info    { color: var(--uni-cyan); border-color: rgba(102, 225, 219, 0.4); }
 .badge_muted   { color: var(--uni-text-3); }
+
+.issueChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.issueChip:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+
+.issueChipIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 900;
+  background: currentColor;
+  color: #081019;
+}
+
+.issueChip_urgent {
+  color: var(--uni-red);
+  background: rgba(255, 125, 125, 0.12);
+  box-shadow: 0 0 0 1px rgba(255, 125, 125, 0.14);
+}
+
+.issueChip_warn {
+  color: var(--uni-amber);
+  background: rgba(255, 191, 95, 0.12);
+  box-shadow: 0 0 0 1px rgba(255, 191, 95, 0.12);
+}
 
 @keyframes pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(255, 125, 125, 0.4); }

@@ -3,6 +3,7 @@ import OrchestratorRangeBar from './OrchestratorRangeBar';
 import AccountingPanel from './AccountingPanel';
 import ProtectionOpsPanel from './ProtectionOpsPanel';
 import { formatUsd, formatRelativeTimestamp } from '../../UniswapPools/utils/pool-formatters';
+import { getOrchestratorIssue } from './orchestratorIssueState';
 import styles from './OrchestratorCard.module.css';
 
 const PHASE_LABELS = {
@@ -64,6 +65,7 @@ export default function OrchestratorCard({
   onCreateNewLp,
   onAdoptLp,
   onShowLog,
+  onShowIssue,
 }) {
   const phaseInfo = PHASE_LABELS[orchestrator.phase] || { label: orchestrator.phase, tone: 'muted' };
   const evaluation = orchestrator.lastEvaluation?.evaluation;
@@ -148,6 +150,7 @@ export default function OrchestratorCard({
   }, [orchestrator.phase, recommendCollect]);
 
   const strategyConfig = orchestrator.strategyConfig || {};
+  const issue = useMemo(() => getOrchestratorIssue(orchestrator), [orchestrator]);
 
   return (
     <article className={`${styles.card} ${styles[phaseInfo.tone]}`}>
@@ -166,9 +169,22 @@ export default function OrchestratorCard({
             )}
           </span>
         </div>
-        <span className={`${styles.badge} ${styles[`badge_${phaseInfo.tone}`]}`}>
-          {phaseInfo.label}
-        </span>
+        <div className={styles.headerBadges}>
+          {issue && (
+            <button
+              type="button"
+              className={`${styles.issueChip} ${styles[`issueChip_${issue.tone}`]}`}
+              onClick={() => onShowIssue?.(orchestrator)}
+              title="Ver detalle del problema del orquestador"
+            >
+              <span className={styles.issueChipIcon}>{issue.icon}</span>
+              {issue.chipLabel}
+            </button>
+          )}
+          <span className={`${styles.badge} ${styles[`badge_${phaseInfo.tone}`]}`}>
+            {phaseInfo.label}
+          </span>
+        </div>
       </header>
 
       {banner && (

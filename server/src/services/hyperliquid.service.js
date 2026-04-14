@@ -63,6 +63,7 @@ class HyperliquidService {
   constructor({ privateKey, address } = {}) {
     this.wallet = null;
     this.signerAddress = null;
+    this._lastNonce = 0;
     this.accountAddress = address ? ethers.getAddress(address) : null;
     this.address = this.accountAddress;
     if (privateKey) {
@@ -227,7 +228,9 @@ class HyperliquidService {
     if (!this.wallet) {
       throw new Error('Wallet no configurada. Configura la clave privada en Settings.');
     }
-    const nonce = Date.now();
+    const now = Date.now();
+    const nonce = Math.max(now, this._lastNonce + 1);
+    this._lastNonce = nonce;
     const signature = await this._signAction(action, nonce, vaultAddress);
 
     const payload = {
@@ -314,11 +317,13 @@ class HyperliquidService {
       }
     }
 
-    // Extraer oid del resting order (GTC/ALO) o del fill inmediato
+    // Extraer oid y datos de fill del resting order (GTC/ALO) o del fill inmediato
     const status = statuses[0] || {};
     const oid = status.resting?.oid ?? status.filled?.oid ?? null;
+    const filledSz = status.filled?.totalSz != null ? parseFloat(status.filled.totalSz) : null;
+    const avgPx = status.filled?.avgPx != null ? parseFloat(status.filled.avgPx) : null;
 
-    return { oid, result };
+    return { oid, filledSz, avgPx, result };
   }
 
   /**
@@ -592,7 +597,7 @@ class HyperliquidService {
       type: 'updateIsolatedMargin',
       asset: assetIndex,
       isBuy,
-      ntli: Math.ceil(usdAmount),  // HL espera entero USD; siempre redondear arriba
+      ntli: Math.round(usdAmount * 1_000_000),  // HL espera micro-USD (6 decimales)
     };
 
     const result = await this._sendAction(action);

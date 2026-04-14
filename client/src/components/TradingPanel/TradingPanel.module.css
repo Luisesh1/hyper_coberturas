@@ -505,6 +505,7 @@
 .positive  { color: var(--green) !important; }
 .negative  { color: var(--red) !important; }
 .liqPrice  { color: var(--orange) !important; }
+.liqDist   { color: var(--text-muted); font-size: 0.85em; }
 
 /* ── Ordenes abiertas ──────────────────────────────────────────── */
 .ordersHeader {

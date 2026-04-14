@@ -18,6 +18,7 @@ const hlRegistry      = require('../services/hyperliquid.registry');
 const hedgeRegistry   = require('../services/hedge.registry');
 const balanceCacheService = require('../services/balance-cache.service');
 const hyperliquidAccountsService = require('../services/hyperliquid-accounts.service');
+const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const settingsService = require('../services/settings.service');
 const uniswapService  = require('../services/uniswap.service');
 const logger = require('../services/logger.service');
@@ -30,6 +31,14 @@ router.use(authenticate);
 function maskToken(token) {
   if (!token || token.length < 8) return token ? '***' : '';
   return token.slice(0, 6) + '***';
+}
+
+function parseNonNegativeNumber(value, fieldName) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new ValidationError(`${fieldName} debe ser un numero mayor o igual a cero`);
+  }
+  return parsed;
 }
 
 function parsePositiveNumber(value, fieldName) {
@@ -281,14 +290,86 @@ router.put('/delta-neutral-risk-controls', asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const riskPauseLiqDistancePct = parsePositiveNumber(req.body.riskPauseLiqDistancePct, 'riskPauseLiqDistancePct');
   const marginTopUpLiqDistancePct = parsePositiveNumber(req.body.marginTopUpLiqDistancePct, 'marginTopUpLiqDistancePct');
+  const maxAutoTopUpsPer24h = parsePositiveNumber(req.body.maxAutoTopUpsPer24h, 'maxAutoTopUpsPer24h');
+  const minAutoTopUpCapUsd = parsePositiveNumber(req.body.minAutoTopUpCapUsd, 'minAutoTopUpCapUsd');
+  const autoTopUpCapPctOfInitial = parsePositiveNumber(req.body.autoTopUpCapPctOfInitial, 'autoTopUpCapPctOfInitial');
+  const minAutoTopUpFloorUsd = parseNonNegativeNumber(req.body.minAutoTopUpFloorUsd, 'minAutoTopUpFloorUsd');
   if (marginTopUpLiqDistancePct <= riskPauseLiqDistancePct) {
     throw new ValidationError('marginTopUpLiqDistancePct debe ser mayor que riskPauseLiqDistancePct');
   }
   const controls = await settingsService.setDeltaNeutralRiskControls(userId, {
     riskPauseLiqDistancePct,
     marginTopUpLiqDistancePct,
+    maxAutoTopUpsPer24h,
+    minAutoTopUpCapUsd,
+    autoTopUpCapPctOfInitial,
+    minAutoTopUpFloorUsd,
   });
   res.json({ success: true, data: controls });
+}));
+
+router.get('/delta-neutral-top-up-counters', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const protections = await protectedPoolRepository.listActiveByUser(userId);
+  const data = protections
+    .filter((protection) => protection.protectionMode === 'delta_neutral')
+    .map((protection) => {
+      const state = protection.strategyState || {};
+      return {
+        protectionId: protection.id,
+        pair: `${protection.token0Symbol}/${protection.token1Symbol}`,
+        asset: protection.inferredAsset,
+        status: protection.status,
+        strategyStatus: state.status || null,
+        topUpCount24h: Number(state.topUpCount24h || 0),
+        topUpUsd24h: Number(state.topUpUsd24h || 0),
+        topUpWindowStartedAt: state.topUpWindowStartedAt != null ? Number(state.topUpWindowStartedAt) : null,
+        topUpCapUsd: Number(state.topUpCapUsd || 0),
+        topUpMaxCount24h: Number(state.topUpMaxCount24h || 0),
+        lastTopUpAt: state.lastTopUpAt != null ? Number(state.lastTopUpAt) : null,
+        lastError: state.lastError || null,
+      };
+    });
+  res.json({ success: true, data });
+}));
+
+router.post('/delta-neutral-top-up-counters/:id/reset', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const id = Number(req.params.id);
+  const protection = await protectedPoolRepository.getById(userId, id);
+  if (!protection) {
+    return res.status(404).json({ success: false, error: 'Proteccion no encontrada' });
+  }
+  if (protection.protectionMode !== 'delta_neutral') {
+    throw new ValidationError('La proteccion indicada no usa delta-neutral');
+  }
+  const strategyState = {
+    ...(protection.strategyState || {}),
+    topUpCount24h: 0,
+    topUpUsd24h: 0,
+    topUpWindowStartedAt: Date.now(),
+    lastTopUpAt: null,
+    lastError: null,
+  };
+  await protectedPoolRepository.updateStrategyState(userId, id, {
+    strategyState,
+  });
+  await protectedPoolRepository.clearCooldown(userId, id);
+  const updated = await protectedPoolRepository.getById(userId, id);
+  res.json({
+    success: true,
+    data: {
+      protectionId: updated.id,
+      topUpCount24h: Number(updated.strategyState?.topUpCount24h || 0),
+      topUpUsd24h: Number(updated.strategyState?.topUpUsd24h || 0),
+      topUpWindowStartedAt: updated.strategyState?.topUpWindowStartedAt != null
+        ? Number(updated.strategyState.topUpWindowStartedAt)
+        : null,
+      lastError: updated.strategyState?.lastError || null,
+      nextEligibleAttemptAt: updated.nextEligibleAttemptAt,
+      cooldownReason: updated.cooldownReason,
+    },
+  });
 }));
 
 module.exports = router;

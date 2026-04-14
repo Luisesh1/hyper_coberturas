@@ -88,6 +88,7 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
     ? (netProtPnl > 0 ? styles.positive : netProtPnl < 0 ? styles.negative : '')
     : '';
   const topUpCap = strategyState?.topUpCapUsd ?? Math.max(300, 0.25 * Number(protection.initialConfiguredHedgeNotionalUsd || protection.configuredHedgeNotionalUsd || 0));
+  const topUpMaxCount24h = strategyState?.topUpMaxCount24h ?? 3;
   const timeInRangePct = protection.timeInRangePct != null
     ? Number(protection.timeInRangePct)
     : snapshot.timeInRangePct != null
@@ -356,7 +357,7 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
               <MetaChip label="Distancia a liquidación" value={strategyState?.distanceToLiqPct != null ? `${formatNumber(strategyState.distanceToLiqPct, 2)}%` : '—'} />
               <MetaChip label="P&L neto de cobertura" value={formatSignedUsd(strategyState?.netProtectionPnlUsd)} valueClass={netTone} />
               <MetaChip label="Capital recargado hoy" value={`${formatUsd(strategyState?.topUpUsd24h)} / ${formatUsd(topUpCap)}`} />
-              <MetaChip label="Recargas automáticas realizadas hoy" value={`${strategyState?.topUpCount24h || 0} de 3`} />
+              <MetaChip label="Recargas automáticas realizadas hoy" value={`${strategyState?.topUpCount24h || 0} de ${topUpMaxCount24h}`} />
             </>}
           </div>
 

@@ -88,9 +88,8 @@ class TradingService {
       tif: limitPrice ? 'Gtc' : 'Ioc',
     });
 
-    const statuses = result?.result?.response?.data?.statuses || [];
-    const fillPx = (statuses[0] || {}).filled?.px;
-    const fillPrice = fillPx ? parseFloat(fillPx) : parseFloat(orderPrice);
+    const fillPrice = result.avgPx || parseFloat(orderPrice);
+    const filledQty = result.filledSz;
 
     const openResult = {
       success: true,
@@ -103,6 +102,7 @@ class TradingService {
       marginMode: isCross ? 'cross' : 'isolated',
       orderPrice,
       fillPrice,
+      filledQty,
       result,
     };
     this.tg.notifyTradeOpen(openResult);
@@ -154,19 +154,27 @@ class TradingService {
       tif: 'Ioc',
     });
 
+    if (result.filledSz != null && result.filledSz === 0) {
+      throw new Error(`IOC close para ${assetName} no produjo fill`);
+    }
+
+    const actualClosedSize = result.filledSz != null ? result.filledSz : closeSize;
+    const actualClosePrice = result.avgPx || parseFloat(closePrice);
+
     const closeResult = {
       success: true,
       action: 'close',
       account: this.account,
       asset: assetName,
       closedSide: isLong ? 'long' : 'short',
-      closedSize: closeSize,
+      closedSize: actualClosedSize,
       openPrice: Number.isFinite(entryPrice) ? entryPrice : null,
-      closePrice,
+      closePrice: actualClosePrice,
+      filledQty: result.filledSz,
       pnl: this._estimateClosedPnl({
         entryPrice,
-        closePrice,
-        size: closeSize,
+        closePrice: actualClosePrice,
+        size: actualClosedSize,
         isLong,
       }),
       result,

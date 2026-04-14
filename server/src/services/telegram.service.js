@@ -300,6 +300,7 @@ class TelegramService {
       rate_limited:              { emoji: '🚦', title: 'Rate limit de Hyperliquid' },
       margin_pending_execution:  { emoji: '💸', title: 'Margen insuficiente en ejecucion' },
       spot_stale:                { emoji: '📡', title: 'Precio spot obsoleto' },
+      below_min_order_notional:  { emoji: '📏', title: 'Orden por debajo del minimo del exchange' },
     };
     const meta = labels[blockType] || { emoji: '⚠️', title: 'Bloqueo delta-neutral' };
     const pair = `${protection.token0Symbol || '?'}/${protection.token1Symbol || '?'}`;
@@ -311,6 +312,10 @@ class TelegramService {
       `Activo: <b>${protection.inferredAsset || 'N/A'}</b>`,
       reason ? `Motivo: ${reason}` : null,
       detail ? `Detalle: ${detail}` : null,
+      extra.positionObserved != null ? `Posicion detectada: ${extra.positionObserved ? 'si' : 'no'}` : null,
+      extra.positionReadSource ? `Lectura posicion: ${extra.positionReadSource}` : null,
+      extra.actualQty != null ? `Actual qty: ${Number(extra.actualQty).toFixed(6)}` : null,
+      extra.targetQty != null ? `Target qty: ${Number(extra.targetQty).toFixed(6)}` : null,
       extra.withdrawable != null ? `Disponible: $${this._fmtPrice(extra.withdrawable)}` : null,
       extra.requiredMargin != null ? `Requerido: $${this._fmtPrice(extra.requiredMargin)}` : null,
       extra.spreadBps != null ? `Spread: ${Number(extra.spreadBps).toFixed(1)} bps` : null,
@@ -319,6 +324,8 @@ class TelegramService {
       extra.maxCost != null ? `Limite costo: $${this._fmtPrice(extra.maxCost)}` : null,
       extra.liquidationDistancePct != null ? `Distancia a liquidacion: ${Number(extra.liquidationDistancePct).toFixed(1)}%` : null,
       extra.cooldownReason ? `Cooldown por: ${extra.cooldownReason}` : null,
+      extra.driftUsd != null ? `Drift: $${Number(extra.driftUsd).toFixed(2)}` : null,
+      extra.minNotionalUsd != null ? `Minimo requerido: $${Number(extra.minNotionalUsd).toFixed(2)}` : null,
       `Fecha: ${when}`,
     ];
     return this.send(lines.filter(Boolean).join('\n'));
