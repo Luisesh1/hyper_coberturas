@@ -217,7 +217,14 @@ class ProtectedPoolDeltaNeutralService {
       this.hyperliquidStreamService.getMidPrice(protection.inferredAsset).catch(() => null),
       this.hyperliquidStreamService.getBbo(protection.inferredAsset).catch(() => null),
       this.hyperliquidStreamService.getActiveAssetCtx(protection.inferredAsset).catch(() => null),
-      this.hyperliquidStreamService.getClearinghouseState(user).catch(() => null),
+      this.hyperliquidStreamService.getClearinghouseState(user).catch((err) => {
+        this.logger.warn('hl_clearinghouse_market_ctx_failed', {
+          protectionId: protection.id,
+          user,
+          error: err.message,
+        });
+        return null;
+      }),
     ]);
     const hlPrice = Number(bbo?.mid ?? mid?.price ?? assetContext?.midPx ?? assetContext?.markPx);
     let source = 'unavailable';
@@ -878,7 +885,14 @@ class ProtectedPoolDeltaNeutralService {
     positionReadSource = null,
     positionMissingUnconfirmed = false,
   }) {
-    let resolvedAccountState = accountState || await hl.getClearinghouseState().catch(() => null);
+    let resolvedAccountState = accountState || await hl.getClearinghouseState().catch((err) => {
+      this.logger.warn('hl_clearinghouse_preflight_failed', {
+        protectionId: protection.id,
+        accountId: protection.accountId,
+        error: err.message,
+      });
+      return null;
+    });
     const hasProtectionCooldownReason = Boolean(protection)
       && Object.prototype.hasOwnProperty.call(protection, 'cooldownReason');
     const cooldownReason = ((hasProtectionCooldownReason ? protection.cooldownReason : strategyState.cooldownReason) || '').trim();
@@ -891,7 +905,14 @@ class ProtectedPoolDeltaNeutralService {
     const resolvedAssetContext = assetContext || (() => null)();
 
     if (targetIncreaseQty > 0 && withdrawable <= 0) {
-      const freshAccountState = await hl.getClearinghouseState().catch(() => null);
+      const freshAccountState = await hl.getClearinghouseState().catch((err) => {
+        this.logger.warn('hl_clearinghouse_preflight_refresh_failed', {
+          protectionId: protection.id,
+          accountId: protection.accountId,
+          error: err.message,
+        });
+        return null;
+      });
       const freshWithdrawable = Number(freshAccountState?.withdrawable || 0);
       if (freshAccountState && freshWithdrawable !== withdrawable) {
         this.logger.info?.('delta_neutral_withdrawable_refreshed', {
@@ -1219,7 +1240,14 @@ class ProtectedPoolDeltaNeutralService {
     const tradingService = await this.getTradingService(activeProtection.userId, activeProtection.accountId);
     let liveMarket = marketContext || await this._getHybridMarketContext(activeProtection).catch(() => null);
     if (!liveMarket?.clearinghouseState) {
-      const fallbackAccountState = await hl.getClearinghouseState().catch(() => null);
+      const fallbackAccountState = await hl.getClearinghouseState().catch((err) => {
+        this.logger.warn('hl_clearinghouse_live_market_fallback_failed', {
+          protectionId: activeProtection.id,
+          accountId: activeProtection.accountId,
+          error: err.message,
+        });
+        return null;
+      });
       if (fallbackAccountState) {
         liveMarket = {
           ...(liveMarket || {}),
@@ -1269,7 +1297,14 @@ class ProtectedPoolDeltaNeutralService {
         snapshotMeta = this._normalizeSnapshot(activeProtection, activeProtection.poolSnapshot);
         liveMarket = await this._getHybridMarketContext(activeProtection).catch(() => liveMarket);
         if (!liveMarket?.clearinghouseState) {
-          const fallbackAccountState = await hl.getClearinghouseState().catch(() => null);
+          const fallbackAccountState = await hl.getClearinghouseState().catch((err) => {
+            this.logger.warn('hl_clearinghouse_post_truth_refresh_failed', {
+              protectionId: activeProtection.id,
+              accountId: activeProtection.accountId,
+              error: err.message,
+            });
+            return null;
+          });
           if (fallbackAccountState) {
             liveMarket = {
               ...(liveMarket || {}),

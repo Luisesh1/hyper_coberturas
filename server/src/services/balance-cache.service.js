@@ -26,8 +26,32 @@ function startRefreshLoop() {
   refreshTimer.unref?.();
 }
 
-function normalizeSnapshot(accountState = {}, openOrders = []) {
-  const marginSummary = accountState.marginSummary || {};
+/**
+ * Convierte un campo crudo (string o number) a Number, distinguiendo
+ * "falta el campo" (undefined/null) de "valor invalido" (NaN) de "cero real".
+ * Lanza en casos de payload corrupto para que el cache NO almacene datos basura
+ * y los consumidores puedan distinguir error de balance cero.
+ */
+function strictNumber(raw, path) {
+  if (raw == null) {
+    throw new Error(`hl_balance_field_missing:${path}`);
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new Error(`hl_balance_field_not_finite:${path}:${raw}`);
+  }
+  return n;
+}
+
+function normalizeSnapshot(accountState, openOrders = []) {
+  if (!accountState || typeof accountState !== 'object') {
+    throw new Error('hl_clearinghouse_state_missing');
+  }
+  if (!accountState.marginSummary || typeof accountState.marginSummary !== 'object') {
+    throw new Error('hl_margin_summary_missing');
+  }
+
+  const marginSummary = accountState.marginSummary;
   const positions = (accountState.assetPositions || [])
     .filter((item) => parseFloat(item.position?.szi || 0) !== 0)
     .map((item) => ({
@@ -43,10 +67,10 @@ function normalizeSnapshot(accountState = {}, openOrders = []) {
     }));
 
   return {
-    accountValue: Number(marginSummary.accountValue || 0),
-    totalMarginUsed: Number(marginSummary.totalMarginUsed || 0),
-    totalNtlPos: Number(marginSummary.totalNtlPos || 0),
-    withdrawable: Number(accountState.withdrawable || 0),
+    accountValue: strictNumber(marginSummary.accountValue, 'marginSummary.accountValue'),
+    totalMarginUsed: strictNumber(marginSummary.totalMarginUsed, 'marginSummary.totalMarginUsed'),
+    totalNtlPos: strictNumber(marginSummary.totalNtlPos, 'marginSummary.totalNtlPos'),
+    withdrawable: strictNumber(accountState.withdrawable, 'withdrawable'),
     positions,
     openOrders: Array.isArray(openOrders) ? openOrders : [],
     lastUpdatedAt: Date.now(),
@@ -138,12 +162,21 @@ async function enrichAccounts(userId, accounts, { forceAccountId = null } = {}) 
       return {
         ...account,
         balanceUsd: balance.balanceUsd,
+        balanceStatus: 'ok',
+        balanceError: null,
         lastBalanceUpdatedAt: balance.lastUpdatedAt,
       };
-    } catch {
+    } catch (err) {
+      logger.warn('enrich_account_balance_failed', {
+        userId,
+        accountId: account.id,
+        error: err.message,
+      });
       return {
         ...account,
         balanceUsd: null,
+        balanceStatus: 'unavailable',
+        balanceError: err.message,
         lastBalanceUpdatedAt: null,
       };
     }
