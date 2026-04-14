@@ -300,6 +300,17 @@ export const lpOrchestratorApi = {
 };
 
 // ------------------------------------------------------------------
+// Orchestrator Metrics (pagina /metricas)
+// ------------------------------------------------------------------
+export const metricsApi = {
+  getSnapshots: (id, { startAt, endAt, limit } = {}) => {
+    const qs = buildQueryString({ startAt, endAt, limit });
+    return request('GET', `/orchestrator-metrics/${id}/snapshots${qs}`);
+  },
+  getCurrent: (id) => request('GET', `/orchestrator-metrics/${id}/current`, null, { timeoutMs: 30_000 }),
+};
+
+// ------------------------------------------------------------------
 // Strategies / Indicators / Bots
 // ------------------------------------------------------------------
 export const strategiesApi = {

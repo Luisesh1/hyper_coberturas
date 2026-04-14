@@ -13,6 +13,7 @@ import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
 import UniswapPoolsPage from './pages/UniswapPools/UniswapPoolsPage';
 import LpOrchestratorPage from './pages/LpOrchestrator/LpOrchestratorPage';
+import MetricasPage from './pages/Metricas/MetricasPage';
 import StrategyStudioPage from './pages/StrategyStudio/StrategyStudioPage';
 import BotsPage from './pages/Bots/BotsPage';
 import BacktestingPage from './pages/Backtesting/BacktestingPage';
@@ -34,6 +35,7 @@ const BASE_NAV = [
   { id: 'bots', path: '/bots', label: 'Bots', activeClass: 'modeBtnActive', title: 'Bots' },
   { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
   { id: 'lp-orchestrator', path: '/lp-orchestrator', label: '🎛 Orquestador LP', activeClass: 'modeBtnActive', title: 'Orquestador LP' },
+  { id: 'metricas', path: '/metricas', label: '📊 Metricas', activeClass: 'modeBtnActive', title: 'Metricas' },
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
 
@@ -153,6 +155,7 @@ function AppContent() {
               <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
               <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
               <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
+              <Route path="/metricas"   element={<MetricasPage />} />
               <Route path="/config"     element={<SettingsPage />} />
               {/* Ruta oculta — no aparece en el navbar. Acciones de
                   recovery / mantenimiento manual. Acceso por URL directo. */}

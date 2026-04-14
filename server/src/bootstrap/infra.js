@@ -8,6 +8,7 @@ const protectedPoolRefreshService = require('../services/protected-pool-refresh.
 const protectedPoolDynamicService = require('../services/protected-pool-dynamic.service');
 const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
 const lpOrchestratorMonitorService = require('../services/lp-orchestrator-monitor.service');
+const orchestratorMetricsService = require('../services/orchestrator-metrics.service');
 const uniswapOperationService = require('../services/uniswap-operation.service');
 const telegramCommandService = require('../services/telegram-command.service');
 const etherscanQueueService = require('../services/etherscan-queue.service');
@@ -66,6 +67,7 @@ async function bootstrapInfra(httpServer) {
   protectedPoolDynamicService.start();
   protectedPoolDeltaNeutralService.start();
   lpOrchestratorMonitorService.start();
+  orchestratorMetricsService.start();
   uniswapOperationService.start();
   telegramCommandService.start();
   backtestQueueService.start();
@@ -77,6 +79,7 @@ async function bootstrapInfra(httpServer) {
       protectedPoolDynamicService.stop();
       protectedPoolDeltaNeutralService.stop();
       lpOrchestratorMonitorService.stop();
+      orchestratorMetricsService.stop();
       uniswapOperationService.stop();
       telegramCommandService.stop();
       etherscanQueueService.shutdown();
