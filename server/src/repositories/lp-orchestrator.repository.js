@@ -178,6 +178,23 @@ async function listActiveForLoop(executor) {
   return rows.map(mapRow);
 }
 
+/**
+ * Lista orquestadores activos para captura de metricas (snapshots horarios).
+ * A diferencia de `listActiveForLoop`, NO respeta el cooldown
+ * (`next_eligible_attempt_at`): las metricas son observabilidad pura y deben
+ * capturarse siempre, incluso cuando el orquestador este en `failed` /
+ * `rate_limited` / `margin_pending`. El cooldown fue diseñado para gating
+ * de operaciones de trading, no de lectura.
+ */
+async function listForMetricsCapture(executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT * FROM lp_orchestrators
+       WHERE status = 'active'
+       ORDER BY user_id, id`
+  );
+  return rows.map(mapRow);
+}
+
 async function updatePhase(userId, id, {
   phase,
   lastError,
@@ -464,6 +481,7 @@ module.exports = {
   getById,
   listForUser,
   listActiveForLoop,
+  listForMetricsCapture,
   updatePhase,
   updateActiveLp,
   updateStrategyState,

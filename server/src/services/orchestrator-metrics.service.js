@@ -77,7 +77,11 @@ class OrchestratorMetricsService {
     let failed = 0;
 
     try {
-      const orchestrators = await lpOrchestratorRepository.listActiveForLoop();
+      // Usamos `listForMetricsCapture` (no `listActiveForLoop`) para NO
+      // omitir orquestadores con cooldown activo. Las metricas son
+      // observabilidad; el cooldown solo debe afectar operaciones de
+      // trading, no lectura de balances.
+      const orchestrators = await lpOrchestratorRepository.listForMetricsCapture();
       for (const orch of orchestrators) {
         if (orch.status !== 'active') continue;
         try {

@@ -43,6 +43,10 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
   const [snapshots, setSnapshots] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // Valores live on-chain — fetcheados on-demand via boton de refresh.
+  // NO se persisten (no crean snapshot), solo sobrescriben el header.
+  const [liveStats, setLiveStats] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Load historical snapshots
   useEffect(() => {
@@ -70,17 +74,47 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
     return () => { cancelled = true; };
   }, [orchestrator.id, range?.id, range?.ms]);
 
-  // Derived stats
+  // Cambiar de orchestrator o rango descarta el override live.
+  useEffect(() => {
+    setLiveStats(null);
+  }, [orchestrator.id, range?.id, range?.ms]);
+
+  // Derived stats. Si el usuario presiono "Refrescar", priorizamos liveStats
+  // (valores on-chain actuales) para el header; el delta se sigue calculando
+  // contra el primer snapshot del rango.
   const stats = useMemo(() => {
-    if (!snapshots.length) {
-      return { current: null, first: null, deltaUsd: 0, deltaPct: 0 };
+    if (!snapshots.length && !liveStats) {
+      return { current: null, first: null, deltaUsd: 0, deltaPct: 0, isLive: false };
     }
-    const first = snapshots[0];
-    const current = snapshots[snapshots.length - 1];
-    const deltaUsd = Number(current.totalUsd) - Number(first.totalUsd);
-    const deltaPct = first.totalUsd > 0 ? (deltaUsd / Number(first.totalUsd)) * 100 : 0;
-    return { current, first, deltaUsd, deltaPct };
-  }, [snapshots]);
+    const first = snapshots[0] || null;
+    const snapCurrent = snapshots[snapshots.length - 1] || null;
+    const current = liveStats || snapCurrent;
+    const baselineTotal = first ? Number(first.totalUsd) : (current ? Number(current.totalUsd) : 0);
+    const deltaUsd = current ? Number(current.totalUsd) - baselineTotal : 0;
+    const deltaPct = baselineTotal > 0 ? (deltaUsd / baselineTotal) * 100 : 0;
+    return { current, first, deltaUsd, deltaPct, isLive: Boolean(liveStats) };
+  }, [snapshots, liveStats]);
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const data = await metricsApi.getCurrent(orchestrator.id);
+      if (data && data.totalUsd != null) {
+        setLiveStats({
+          capturedAt: data.capturedAt || Date.now(),
+          totalUsd: data.totalUsd,
+          walletUsd: data.walletUsd,
+          lpUsd: data.lpUsd,
+          hlAccountUsd: data.hlAccountUsd,
+        });
+      }
+    } catch (err) {
+      setError(err?.message || 'Error refrescando');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Render chart
   useEffect(() => {
@@ -244,9 +278,23 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
             {orchestrator.accountId != null ? ' · hedge activo' : ' · sin hedge'}
             {' · '}
             {orchestrator.status}
+            {stats.isLive && (
+              <span className={styles.liveBadge} title={`Datos live de ${fmtDateTime(stats.current?.capturedAt)}`}>
+                {' · live'}
+              </span>
+            )}
           </span>
         </div>
         <div className={styles.cardStats}>
+          <button
+            type="button"
+            className={styles.refreshBtn}
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title="Consulta on-chain al momento — no persiste snapshot"
+          >
+            {refreshing ? '⟳ Refrescando…' : '⟳ Refrescar'}
+          </button>
           <div className={styles.stat}>
             <span className={styles.statLabel}>Total actual</span>
             <span className={styles.statValue}>

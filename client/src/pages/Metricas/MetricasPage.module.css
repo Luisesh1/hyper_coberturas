@@ -150,6 +150,39 @@
   min-width: 110px;
 }
 
+.refreshBtn {
+  appearance: none;
+  background: transparent;
+  color: var(--uni-cyan);
+  border: 1px solid var(--uni-border, rgba(255,255,255,0.15));
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: center;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.refreshBtn:hover:not(:disabled) {
+  border-color: var(--uni-cyan);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.refreshBtn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.liveBadge {
+  color: var(--uni-cyan);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .statLabel {
   font-size: 0.68rem;
   text-transform: uppercase;
