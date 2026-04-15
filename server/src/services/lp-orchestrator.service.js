@@ -921,11 +921,57 @@ class LpOrchestratorService {
       return { skipped: 'no_active_lp', reconciled: false };
     }
     const result = await this._reconcileActivePosition(orch);
+
+    // Si la reconciliacion encontro una posicion viva Y el orquestador
+    // estaba en `failed` por `position_not_found`, lo rescatamos: limpiamos
+    // el phase, cooldown y contador de missing detections. Esto cubre el
+    // caso donde una accion "reduce-liquidity" puso al orquestador en
+    // missing_pending -> failed porque un tick transitorio del RPC/scan
+    // no vio la posicion, pero on-chain sigue viva. Sin este reset, el
+    // usuario llamaba /reconcile y la respuesta decia que la pool existe
+    // pero el orquestador seguia en failed hasta que expirara el cooldown.
+    let recovered = false;
+    if (result.pool && orch.phase === 'failed' && orch.lastError === 'position_not_found') {
+      const now = Date.now();
+      await this.repo.updatePhase(userId, orchestratorId, {
+        phase: 'lp_active',
+        lastError: null,
+        nextEligibleAttemptAt: null,
+        cooldownReason: null,
+        updatedAt: now,
+      });
+      await this.repo.updateStrategyState(userId, orchestratorId, {
+        strategyState: {
+          ...(orch.strategyState || {}),
+          consecutiveMissingDetections: 0,
+          lastMissingDetectedAt: null,
+        },
+      });
+      await this.repo.appendActionLog({
+        orchestratorId,
+        kind: 'recovery',
+        reason: 'position_recovered_via_reconcile',
+        payload: {
+          oldIdentifier: result.oldIdentifier,
+          identifier: result.pool.identifier != null ? String(result.pool.identifier) : null,
+          liquidity: result.pool.liquidity != null ? String(result.pool.liquidity) : null,
+        },
+        createdAt: now,
+      });
+      this.logger.info('lp_orchestrator_position_recovered', {
+        orchestratorId,
+        oldIdentifier: result.oldIdentifier,
+        identifier: result.pool.identifier,
+      });
+      recovered = true;
+    }
+
     return {
       reconciled: result.reconciled,
       hasPool: Boolean(result.pool),
       oldIdentifier: result.oldIdentifier,
       newIdentifier: result.pool?.identifier ? String(result.pool.identifier) : null,
+      recovered,
     };
   }
 
@@ -1188,6 +1234,34 @@ class LpOrchestratorService {
           consecutiveMissingDetections: 0,
           lastMissingDetectedAt: null,
         },
+      });
+      orch = await this.repo.getById(orch.userId, orch.id);
+    }
+
+    // Auto-recovery: si el orquestador venia en `failed` por
+    // `position_not_found` pero ahora hemos encontrado una pool viva
+    // (reconcile o inspect), limpiamos el estado de error y el cooldown
+    // para que el loop siga operando normalmente.
+    if (orch.phase === 'failed' && orch.lastError === 'position_not_found') {
+      await this.repo.updatePhase(orch.userId, orch.id, {
+        phase: 'lp_active',
+        lastError: null,
+        nextEligibleAttemptAt: null,
+        cooldownReason: null,
+      });
+      await this.repo.appendActionLog({
+        orchestratorId: orch.id,
+        kind: 'recovery',
+        reason: 'position_auto_recovered',
+        payload: {
+          identifier: pool.identifier != null ? String(pool.identifier) : null,
+          liquidity: pool.liquidity != null ? String(pool.liquidity) : null,
+        },
+        createdAt: Date.now(),
+      });
+      this.logger.info('lp_orchestrator_position_auto_recovered', {
+        orchestratorId: orch.id,
+        identifier: pool.identifier,
       });
       orch = await this.repo.getById(orch.userId, orch.id);
     }
