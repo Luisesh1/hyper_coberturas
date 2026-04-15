@@ -10,7 +10,14 @@
  */
 
 const httpClient = require('../shared/platform/http/http-client');
+const config = require('../config');
 const logger = require('./logger.service');
+const {
+  computeBackoffMs,
+  extractTelegramRetryAfterMs,
+  isTelegramRetryableError,
+  sleep,
+} = require('./external-service-helpers');
 
 class TelegramService {
   /**
@@ -21,6 +28,8 @@ class TelegramService {
     this.token   = token;
     this.chatId  = chatId;
     this.enabled = !!(token && chatId);
+    this._sendQueue = Promise.resolve();
+    this._nextRequestAt = 0;
   }
 
   /**
@@ -38,17 +47,61 @@ class TelegramService {
 
   async _request(method, payload) {
     if (!this.enabled) return null;
-    try {
-      const { data } = await httpClient.post(
-        `https://api.telegram.org/bot${this.token}/${method}`,
-        payload,
-        { timeout: 5000 }
-      );
-      return data;
-    } catch (err) {
-      logger.error('telegram_api_error', { method, error: err.message });
+    const task = async () => {
+      const minIntervalMs = config.services?.telegram?.sendMinIntervalMs || 400;
+      const maxAttempts = Math.max(1, Number(config.services?.telegram?.retryMaxAttempts) || 4);
+
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const waitMs = Math.max(0, this._nextRequestAt - Date.now());
+        if (waitMs > 0) {
+          await sleep(waitMs);
+        }
+
+        try {
+          const { data } = await httpClient.post(
+            `https://api.telegram.org/bot${this.token}/${method}`,
+            payload,
+            { timeout: 5000 }
+          );
+          this._nextRequestAt = Date.now() + minIntervalMs;
+          return data;
+        } catch (err) {
+          const retryAfterMs = extractTelegramRetryAfterMs(err);
+          const retryable = isTelegramRetryableError(err);
+          const lastAttempt = attempt >= maxAttempts - 1;
+          if (!retryable || lastAttempt) {
+            logger.error('telegram_api_error', {
+              method,
+              error: err.message,
+              retryAfterMs: retryAfterMs || null,
+              attempt: attempt + 1,
+            });
+            return null;
+          }
+
+          const delayMs = retryAfterMs || computeBackoffMs(attempt, {
+            baseMs: minIntervalMs,
+            capMs: 8_000,
+            jitterMs: 250,
+          });
+          this._nextRequestAt = Date.now() + delayMs;
+          logger.warn('telegram_api_retry_scheduled', {
+            method,
+            attempt: attempt + 1,
+            delayMs,
+            retryAfterMs: retryAfterMs || null,
+            error: err.message,
+          });
+          await sleep(delayMs);
+        }
+      }
+
       return null;
-    }
+    };
+
+    const queuedTask = this._sendQueue.then(task, task);
+    this._sendQueue = queuedTask.catch(() => null);
+    return queuedTask;
   }
 
   /**

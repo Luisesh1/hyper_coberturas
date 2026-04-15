@@ -45,6 +45,8 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
   const originalGetTelegram = settingsService.getTelegram;
   const originalGetWallet = settingsService.getWallet;
   const originalGetEtherscan = settingsService.getEtherscan;
+  const originalGetAlchemy = settingsService.getAlchemy;
+  const originalGetDeltaNeutralRiskControls = settingsService.getDeltaNeutralRiskControls;
   const originalListAccounts = hyperliquidAccountsService.listAccounts;
 
   settingsService.getTelegram = async () => ({
@@ -59,6 +61,13 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
   });
   settingsService.getEtherscan = async () => ({
     apiKey: 'secret-key',
+  });
+  settingsService.getAlchemy = async () => ({
+    apiKey: 'alchemy-secret',
+  });
+  settingsService.getDeltaNeutralRiskControls = async () => ({
+    riskPauseLiqDistancePct: 7,
+    marginTopUpLiqDistancePct: 10,
   });
   hyperliquidAccountsService.listAccounts = async () => ([
     { id: 1, isDefault: true },
@@ -89,6 +98,8 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
     settingsService.getTelegram = originalGetTelegram;
     settingsService.getWallet = originalGetWallet;
     settingsService.getEtherscan = originalGetEtherscan;
+    settingsService.getAlchemy = originalGetAlchemy;
+    settingsService.getDeltaNeutralRiskControls = originalGetDeltaNeutralRiskControls;
     hyperliquidAccountsService.listAccounts = originalListAccounts;
     server.close();
   }

@@ -4,6 +4,10 @@ const logger = require('./logger.service');
 
 const CACHE_TTL_MS = config.intervals.balanceCacheTtlMs;
 const REFRESH_INTERVAL_MS = config.intervals.balanceRefreshMs;
+// Tick corto para escanear candidatos; el refresh real se hace por entrada
+// cuando toca su turno (staggered). Esto evita el spike de N requests
+// simultaneos contra Hyperliquid cada 30-60s.
+const TICK_MS = Math.max(2_000, Math.min(10_000, Math.floor(REFRESH_INTERVAL_MS / 6)));
 
 const cache = new Map();
 let refreshTimer = null;
@@ -12,17 +16,41 @@ function key(userId, accountId) {
   return `${userId}:${accountId}`;
 }
 
+/**
+ * Devuelve un offset determinista (0..REFRESH_INTERVAL_MS) por cuenta para
+ * distribuir los refreshes en la ventana. Asi, 4 cuentas se refrescan en
+ * 4 instantes distintos del ciclo, no simultaneamente.
+ */
+function staggerOffset(userId, accountId) {
+  const hash = (Number(userId) * 2654435761 + Number(accountId) * 1597334677) >>> 0;
+  return hash % REFRESH_INTERVAL_MS;
+}
+
+function shouldRefresh(entry, now) {
+  if (entry.isRefreshing) return false;
+  if (!entry.lastUpdatedAt) return true;
+  const age = now - entry.lastUpdatedAt;
+  if (age < REFRESH_INTERVAL_MS) return false;
+
+  // Alinea al offset: solo refresca si pasamos su "slot" en el ciclo actual.
+  const offset = staggerOffset(entry.userId, entry.accountId);
+  const posInCycle = now % REFRESH_INTERVAL_MS;
+  const slotWindow = TICK_MS + 500; // tolerancia
+  const relative = (posInCycle - offset + REFRESH_INTERVAL_MS) % REFRESH_INTERVAL_MS;
+  return relative <= slotWindow;
+}
+
 function startRefreshLoop() {
   if (refreshTimer) return;
 
   refreshTimer = setInterval(() => {
+    const now = Date.now();
     for (const entry of cache.values()) {
       if (!entry.userId || !entry.accountId) continue;
-      if (entry.isRefreshing) continue;
-      if ((Date.now() - (entry.lastUpdatedAt || 0)) < REFRESH_INTERVAL_MS) continue;
+      if (!shouldRefresh(entry, now)) continue;
       refreshSnapshot(entry.userId, entry.accountId).catch((err) => logger.warn('background balance refresh failed', { userId: entry.userId, accountId: entry.accountId, error: err.message }));
     }
-  }, REFRESH_INTERVAL_MS);
+  }, TICK_MS);
   refreshTimer.unref?.();
 }
 

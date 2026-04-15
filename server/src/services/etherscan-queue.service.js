@@ -27,7 +27,7 @@ function createEtherscanQueueClient({
   axiosInstance = httpClient,
   apiUrl = ETHERSCAN_API_URL,
   timeoutMs = config.uniswap.scanTimeoutMs,
-  maxRequestsPerSecond = 3,
+  maxRequestsPerSecond = config.services?.etherscan?.maxRequestsPerSecond || 3,
   now = () => Date.now(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,

@@ -16,12 +16,22 @@ const httpClient = require('../shared/platform/http/http-client');
 const config = require('../config');
 const logger = require('./logger.service');
 const { isStableSymbol } = require('./uniswap/pricing');
+const {
+  computeBackoffMs,
+  isAlchemyRateLimitError,
+  sleep,
+} = require('./external-service-helpers');
 
 const HL_INFO_URL = `${config.hyperliquid.apiUrl}/info`;
 
 // Cache de precios HL: 60s (evita pegar a HL por cada orquestador)
 let _hlMidsCache = { value: null, at: 0 };
 const HL_MIDS_CACHE_TTL_MS = 60_000;
+let _alchemyLastDispatchAt = 0;
+let _alchemyInFlight = 0;
+let _alchemyTimer = null;
+const _alchemyQueue = [];
+const _alchemyTokenMetadataCache = new Map();
 
 async function getHyperliquidMids() {
   if (_hlMidsCache.value && (Date.now() - _hlMidsCache.at) < HL_MIDS_CACHE_TTL_MS) {
@@ -58,17 +68,95 @@ function normalizeSymbol(sym) {
 }
 
 async function alchemyRpc(network, method, params) {
-  const url = config.uniswap.rpcUrls[network];
-  if (!url) throw new Error(`RPC no configurado para ${network}`);
-  const { data } = await httpClient.post(
-    url,
-    { jsonrpc: '2.0', id: 1, method, params },
-    { timeout: 15_000 }
-  );
-  if (data.error) {
-    throw new Error(data.error.message || `RPC error: ${method}`);
+  return new Promise((resolve, reject) => {
+    _alchemyQueue.push({ network, method, params, resolve, reject });
+    scheduleAlchemyQueue();
+  });
+}
+
+function scheduleAlchemyQueue() {
+  if (_alchemyTimer || _alchemyQueue.length === 0) return;
+
+  const maxConcurrent = Math.max(1, Number(config.services?.alchemy?.maxConcurrent) || 2);
+  if (_alchemyInFlight >= maxConcurrent) return;
+
+  const minIntervalMs = Math.max(0, Number(config.services?.alchemy?.minIntervalMs) || 120);
+  const waitMs = Math.max(0, (_alchemyLastDispatchAt + minIntervalMs) - Date.now());
+  _alchemyTimer = setTimeout(() => {
+    _alchemyTimer = null;
+    void processAlchemyQueue();
+  }, waitMs);
+}
+
+async function processAlchemyQueue() {
+  const maxConcurrent = Math.max(1, Number(config.services?.alchemy?.maxConcurrent) || 2);
+
+  while (_alchemyQueue.length > 0 && _alchemyInFlight < maxConcurrent) {
+    const job = _alchemyQueue.shift();
+    _alchemyInFlight += 1;
+    _alchemyLastDispatchAt = Date.now();
+    executeAlchemyJob(job)
+      .then(job.resolve)
+      .catch(job.reject)
+      .finally(() => {
+        _alchemyInFlight = Math.max(0, _alchemyInFlight - 1);
+        scheduleAlchemyQueue();
+      });
   }
-  return data.result;
+}
+
+async function executeAlchemyJob(job) {
+  const url = config.uniswap.rpcUrls[job.network];
+  if (!url) throw new Error(`RPC no configurado para ${job.network}`);
+
+  const maxAttempts = Math.max(1, Number(config.services?.alchemy?.retryMaxAttempts) || 4);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const { data } = await httpClient.post(
+        url,
+        { jsonrpc: '2.0', id: 1, method: job.method, params: job.params },
+        { timeout: 15_000 }
+      );
+      if (data.error) {
+        throw new Error(data.error.message || `RPC error: ${job.method}`);
+      }
+      return data.result;
+    } catch (err) {
+      const retryable = isAlchemyRateLimitError(err);
+      const lastAttempt = attempt >= maxAttempts - 1;
+      if (!retryable || lastAttempt) {
+        throw err;
+      }
+
+      const delayMs = computeBackoffMs(attempt, {
+        baseMs: 500,
+        capMs: 10_000,
+        jitterMs: 250,
+      });
+      logger.warn('alchemy_rpc_retry_scheduled', {
+        network: job.network,
+        method: job.method,
+        attempt: attempt + 1,
+        delayMs,
+        error: err.message,
+      });
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error(`RPC error: ${job.method}`);
+}
+
+async function getTokenMetadata(network, contractAddress) {
+  const key = `${network}:${String(contractAddress).toLowerCase()}`;
+  const ttlMs = Math.max(60_000, Number(config.services?.alchemy?.metadataCacheTtlMs) || (6 * 60 * 60_000));
+  const cached = _alchemyTokenMetadataCache.get(key);
+  if (cached && (Date.now() - cached.at) < ttlMs) {
+    return cached.value;
+  }
+  const value = await alchemyRpc(network, 'alchemy_getTokenMetadata', [contractAddress]);
+  _alchemyTokenMetadataCache.set(key, { value, at: Date.now() });
+  return value;
 }
 
 /**
@@ -122,14 +210,14 @@ async function getAllTokenBalancesUsd(walletAddress, { network = 'arbitrum' } = 
 
   // 3) Metadata + valuacion (concurrencia limitada a 5)
   const chunks = [];
-  const BATCH = 5;
+  const BATCH = Math.max(1, Number(config.services?.alchemy?.maxConcurrent) || 2);
   for (let i = 0; i < tokenBalances.length; i += BATCH) {
     chunks.push(tokenBalances.slice(i, i + BATCH));
   }
   for (const chunk of chunks) {
     await Promise.all(chunk.map(async (tb) => {
       try {
-        const meta = await alchemyRpc(network, 'alchemy_getTokenMetadata', [tb.contractAddress]);
+        const meta = await getTokenMetadata(network, tb.contractAddress);
         const decimals = Number(meta?.decimals ?? 18);
         const symbol = normalizeSymbol(meta?.symbol || '?');
         const balance = Number(BigInt(tb.tokenBalance)) / Math.pow(10, decimals);

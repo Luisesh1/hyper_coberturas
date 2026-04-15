@@ -30,9 +30,16 @@ function toChartTime(ms) {
   return Math.floor(Number(ms) / 1000);
 }
 
+function fmtDateTime(ms) {
+  const d = new Date(Number(ms));
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export default function OrchestratorMetricChart({ orchestrator, range }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
+  const tooltipRef = useRef(null);
   const [snapshots, setSnapshots] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -145,9 +152,80 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
 
     chart.timeScale().fitContent();
 
+    // --- Tooltip on hover ---
+    // Index por timestamp (segundos UTC) para lookup O(1) en cada movimiento.
+    const byTime = new Map();
+    for (const s of snapshots) {
+      byTime.set(toChartTime(s.capturedAt), s);
+    }
+    const tooltipEl = tooltipRef.current;
+    const containerEl = containerRef.current;
+
+    const handleCrosshair = (param) => {
+      if (!tooltipEl || !containerEl) return;
+      if (
+        !param.point
+        || param.time == null
+        || param.point.x < 0 || param.point.y < 0
+        || param.point.x > containerEl.clientWidth
+        || param.point.y > containerEl.clientHeight
+      ) {
+        tooltipEl.style.display = 'none';
+        return;
+      }
+
+      const snap = byTime.get(Number(param.time));
+      if (!snap) {
+        tooltipEl.style.display = 'none';
+        return;
+      }
+
+      tooltipEl.innerHTML = `
+        <div class="${styles.tooltipDate}">${fmtDateTime(snap.capturedAt)}</div>
+        <div class="${styles.tooltipRow}">
+          <span><span class="${styles.legendSwatch}" style="background:${COLOR_TOTAL}"></span>Total</span>
+          <strong>${fmtUsd(snap.totalUsd)}</strong>
+        </div>
+        <div class="${styles.tooltipRow}">
+          <span><span class="${styles.legendSwatch}" style="background:${COLOR_WALLET}"></span>Wallet</span>
+          <strong>${fmtUsd(snap.walletUsd)}</strong>
+        </div>
+        <div class="${styles.tooltipRow}">
+          <span><span class="${styles.legendSwatch}" style="background:${COLOR_LP}"></span>LP</span>
+          <strong>${fmtUsd(snap.lpUsd)}</strong>
+        </div>
+        <div class="${styles.tooltipRow}">
+          <span><span class="${styles.legendSwatch}" style="background:${COLOR_HL}"></span>HL</span>
+          <strong>${fmtUsd(snap.hlAccountUsd)}</strong>
+        </div>
+      `;
+      tooltipEl.style.display = 'block';
+
+      // Posicionar tooltip cerca del cursor sin salir del contenedor.
+      const tooltipWidth = tooltipEl.offsetWidth || 180;
+      const tooltipHeight = tooltipEl.offsetHeight || 100;
+      const margin = 12;
+      let left = param.point.x + margin;
+      if (left + tooltipWidth + margin > containerEl.clientWidth) {
+        left = param.point.x - tooltipWidth - margin;
+      }
+      let top = param.point.y + margin;
+      if (top + tooltipHeight + margin > containerEl.clientHeight) {
+        top = param.point.y - tooltipHeight - margin;
+      }
+      if (left < 0) left = margin;
+      if (top < 0) top = margin;
+      tooltipEl.style.left = `${left}px`;
+      tooltipEl.style.top = `${top}px`;
+    };
+
+    chart.subscribeCrosshairMove(handleCrosshair);
+
     return () => {
+      chart.unsubscribeCrosshairMove(handleCrosshair);
       chart.remove();
       chartRef.current = null;
+      if (tooltipEl) tooltipEl.style.display = 'none';
     };
   }, [snapshots]);
 
@@ -212,6 +290,7 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
       </div>
 
       <div className={styles.chartContainer} ref={containerRef}>
+        <div ref={tooltipRef} className={styles.chartTooltip} style={{ display: 'none' }} />
         {loading && <div className={styles.loading}>Cargando…</div>}
         {error && <div className={styles.empty}>Error: {error}</div>}
         {!loading && !error && !snapshots.length && (

@@ -17,6 +17,11 @@ const { encode: msgpackEncode } = require('@msgpack/msgpack');
 const config = require('../config');
 const { numericEqual } = require('../utils/format');
 const logger = require('./logger.service');
+const hlWeightBudget = require('./hl-weight-budget.service');
+const {
+  computeBackoffMs,
+  isHyperliquidRetryableError,
+} = require('./external-service-helpers');
 
 const INFO_URL = `${config.hyperliquid.apiUrl}/info`;
 const EXCHANGE_URL = `${config.hyperliquid.apiUrl}/exchange`;
@@ -83,26 +88,80 @@ class HyperliquidService {
   // Helpers internos
   // ------------------------------------------------------------------
 
-  async _post(url, body) {
-    try {
-      const response = await httpClient.post(url, body, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 10000,
-      });
-      const data = response.data;
+  /**
+   * POST a HL con:
+   *  - Registro de weight global (observabilidad, ver hl-weight-budget)
+   *  - Manejo de 429 + Retry-After con exponential backoff (max 3 intentos)
+   * Los errores de aplicacion (status "err") NO se reintentan.
+   */
+  async _post(url, body, { endpoint = null, maxRetries } = {}) {
+    // Registra weight antes del envio; si 429, cuenta igual (es el costo real).
+    if (endpoint) hlWeightBudget.record(endpoint);
 
-      // Hyperliquid devuelve errores de aplicacion con HTTP 200 y status "err"
-      if (data?.status === 'err') {
-        throw new Error(data.response || 'Error en Hyperliquid API');
+    const isInfoRequest = url === INFO_URL;
+    const safeMaxRetries = Number.isFinite(maxRetries)
+      ? maxRetries
+      : (isInfoRequest ? Math.max(1, Number(config.hyperliquid?.infoRetryMaxAttempts) || 3) : 0);
+
+    let attempt = 0;
+    let lastErr = null;
+
+    while (attempt <= safeMaxRetries) {
+      try {
+        const response = await httpClient.post(url, body, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10_000,
+        });
+        const data = response.data;
+
+        // Hyperliquid devuelve errores de aplicacion con HTTP 200 y status "err"
+        if (data?.status === 'err') {
+          throw new Error(data.response || 'Error en Hyperliquid API');
+        }
+        return data;
+      } catch (err) {
+        lastErr = err;
+        const retryable = isInfoRequest && isHyperliquidRetryableError(err);
+
+        if (retryable && attempt < safeMaxRetries) {
+          const retryAfterHeader = err.response?.headers?.['retry-after'];
+          const retryAfterMs = Number(retryAfterHeader) > 0
+            ? Number(retryAfterHeader) * 1000
+            : computeBackoffMs(attempt, {
+              baseMs: Number(config.hyperliquid?.infoRetryBaseMs) || 350,
+              capMs: 10_000,
+              jitterMs: 250,
+            });
+          logger.warn('hl_retry_scheduled', {
+            endpoint,
+            requestType: body?.type || null,
+            attempt: attempt + 1,
+            retryAfterMs,
+            budget: hlWeightBudget.getSnapshot(),
+            error: err.message,
+          });
+          await sleep(retryAfterMs);
+          attempt += 1;
+          continue;
+        }
+
+        // Errores propios (no-response) o error aplicativo: NO reintentar.
+        if (err.message && !err.response) throw err;
+
+        // Otros errores HTTP: devolver mensaje enriquecido del servidor.
+        const message = err.response?.data?.error || err.response?.data || err.message;
+        throw new Error(`[HL API] ${message}`);
       }
-
-      return data;
-    } catch (err) {
-      if (err.message && !err.response) throw err; // re-lanzar errores propios
-      const message =
-        err.response?.data?.error || err.response?.data || err.message;
-      throw new Error(`[HL API] ${message}`);
     }
+
+    // Se agotaron los reintentos.
+    const message = lastErr?.response?.data?.error
+      || lastErr?.response?.data
+      || lastErr?.message
+      || 'rate_limited';
+    const finalErr = new Error(`[HL API] ${message}`);
+    finalErr.rateLimited = true;
+    throw finalErr;
   }
 
   /**
@@ -168,31 +227,31 @@ class HyperliquidService {
 
   /** Obtiene todos los precios mid de todos los activos */
   async getAllMids() {
-    return this._post(INFO_URL, { type: 'allMids' });
+    return this._post(INFO_URL, { type: 'allMids' }, { endpoint: 'allMids' });
   }
 
   /** Obtiene metadatos del exchange: lista de activos, sus indices, etc. */
   async getMeta() {
-    return this._post(INFO_URL, { type: 'meta' });
+    return this._post(INFO_URL, { type: 'meta' }, { endpoint: 'meta' });
   }
 
   /** Obtiene el estado completo de la cuenta (balances, posiciones) */
   async getClearinghouseState(address) {
     const userAddress = address || this.address;
     if (!userAddress) throw new Error('Direccion de wallet no configurada');
-    return this._post(INFO_URL, { type: 'clearinghouseState', user: userAddress });
+    return this._post(INFO_URL, { type: 'clearinghouseState', user: userAddress }, { endpoint: 'clearinghouseState' });
   }
 
   /** Obtiene las ordenes abiertas del usuario */
   async getOpenOrders(address) {
     const userAddress = address || this.address;
     if (!userAddress) throw new Error('Direccion de wallet no configurada');
-    return this._post(INFO_URL, { type: 'openOrders', user: userAddress });
+    return this._post(INFO_URL, { type: 'openOrders', user: userAddress }, { endpoint: 'openOrders' });
   }
 
   /** Obtiene el precio mark y el funding rate de un activo */
   async getMetaAndAssetCtxs() {
-    return this._post(INFO_URL, { type: 'metaAndAssetCtxs' });
+    return this._post(INFO_URL, { type: 'metaAndAssetCtxs' }, { endpoint: 'metaAndAssetCtxs' });
   }
 
   /** Obtiene velas OHLCV de Hyperliquid */
@@ -205,14 +264,14 @@ class HyperliquidService {
         startTime,
         endTime,
       },
-    });
+    }, { endpoint: 'candleSnapshot' });
   }
 
   /** Historial de trades de un usuario */
   async getUserFills(address) {
     const userAddress = address || this.address;
     if (!userAddress) throw new Error('Direccion de wallet no configurada');
-    return this._post(INFO_URL, { type: 'userFills', user: userAddress });
+    return this._post(INFO_URL, { type: 'userFills', user: userAddress }, { endpoint: 'userFills' });
   }
 
   // ------------------------------------------------------------------

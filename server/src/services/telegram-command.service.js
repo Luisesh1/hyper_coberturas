@@ -7,6 +7,12 @@ const telegramRegistry = require('./telegram.registry');
 const hyperliquidAccountsService = require('./hyperliquid-accounts.service');
 const hyperliquidRegistry = require('./hyperliquid.registry');
 const TradingService = require('./trading.service');
+const {
+  computeBackoffMs,
+  extractTelegramRetryAfterMs,
+  isTelegramRetryableError,
+  sleep,
+} = require('./external-service-helpers');
 
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
 const DEFAULT_CONFIG_REFRESH_MS = 60_000;
@@ -191,7 +197,55 @@ class TelegramCommandService {
       commandScopesSynced: new Set(),
       timer: null,
       stopped: false,
+      nextAllowedAt: 0,
     };
+  }
+
+  async _telegramPost(poller, method, payload, timeoutMs) {
+    const minIntervalMs = config.services?.telegram?.sendMinIntervalMs || 400;
+    const maxAttempts = Math.max(1, Number(config.services?.telegram?.retryMaxAttempts) || 4);
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const waitMs = Math.max(0, Number(poller?.nextAllowedAt || 0) - Date.now());
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
+
+      try {
+        const response = await this.axios.post(
+          `https://api.telegram.org/bot${poller.token}/${method}`,
+          payload,
+          { timeout: timeoutMs }
+        );
+        poller.nextAllowedAt = Date.now() + minIntervalMs;
+        return response;
+      } catch (err) {
+        const retryAfterMs = extractTelegramRetryAfterMs(err);
+        const retryable = isTelegramRetryableError(err);
+        const lastAttempt = attempt >= maxAttempts - 1;
+        if (!retryable || lastAttempt) {
+          throw err;
+        }
+
+        const delayMs = retryAfterMs || computeBackoffMs(attempt, {
+          baseMs: minIntervalMs,
+          capMs: 8_000,
+          jitterMs: 250,
+        });
+        poller.nextAllowedAt = Date.now() + delayMs;
+        this.logger.warn('telegram_command_retry_scheduled', {
+          method,
+          attempt: attempt + 1,
+          delayMs,
+          retryAfterMs: retryAfterMs || null,
+          tokenSuffix: poller.token.slice(-6),
+          error: err.message,
+        });
+        await sleep(delayMs);
+      }
+    }
+
+    return null;
   }
 
   async _syncCommands(poller) {
@@ -203,8 +257,9 @@ class TelegramCommandService {
       if (poller.commandScopesSynced.has(chatId)) continue;
 
       try {
-        await this.axios.post(
-          `https://api.telegram.org/bot${poller.token}/setMyCommands`,
+        await this._telegramPost(
+          poller,
+          'setMyCommands',
           {
             commands: TELEGRAM_COMMANDS,
             scope: {
@@ -212,9 +267,7 @@ class TelegramCommandService {
               chat_id: chatId,
             },
           },
-          {
-            timeout: 5000,
-          }
+          5000
         );
         poller.commandScopesSynced.add(chatId);
       } catch (err) {
@@ -256,18 +309,18 @@ class TelegramCommandService {
 
   async _pollOnce(poller) {
     if (!this.running || poller.stopped) return;
+    let nextDelayMs = 0;
 
     try {
-      const { data } = await this.axios.post(
-        `https://api.telegram.org/bot${poller.token}/getUpdates`,
+      const { data } = await this._telegramPost(
+        poller,
+        'getUpdates',
         {
           offset: poller.offset,
           timeout: this.longPollTimeoutSec,
           allowed_updates: ['message', 'callback_query'],
         },
-        {
-          timeout: (this.longPollTimeoutSec + 5) * 1000,
-        }
+        (this.longPollTimeoutSec + 5) * 1000
       );
 
       const updates = Array.isArray(data?.result) ? data.result : [];
@@ -276,12 +329,14 @@ class TelegramCommandService {
         await this._processUpdate(poller, update);
       }
     } catch (err) {
+      nextDelayMs = extractTelegramRetryAfterMs(err) || this.pollIntervalMs;
       this.logger.warn('telegram_command_get_updates_failed', {
         error: err.message,
+        retryDelayMs: nextDelayMs,
         tokenSuffix: poller.token.slice(-6),
       });
     } finally {
-      this._schedulePoll(poller, 0);
+      this._schedulePoll(poller, nextDelayMs);
     }
   }
 

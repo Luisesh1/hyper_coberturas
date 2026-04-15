@@ -56,6 +56,8 @@ const config = {
   hyperliquid: {
     apiUrl: process.env.HL_API_URL || 'https://api.hyperliquid.xyz',
     wsUrl: process.env.HL_WS_URL || 'wss://api.hyperliquid.xyz/ws',
+    infoRetryMaxAttempts: parseInt(process.env.HL_INFO_RETRY_MAX_ATTEMPTS, 10) || 3,
+    infoRetryBaseMs: parseInt(process.env.HL_INFO_RETRY_BASE_MS, 10) || 350,
   },
   uniswap: {
     rpcUrls: {
@@ -112,12 +114,27 @@ const config = {
     telegramConfigRefreshMs: parseInt(process.env.TELEGRAM_CONFIG_REFRESH_INTERVAL_MS, 10) || 60_000,
     telegramLongPollTimeoutSec: parseInt(process.env.TELEGRAM_LONG_POLL_TIMEOUT_SEC, 10) || 20,
     botEvalMs: parseInt(process.env.BOT_EVAL_INTERVAL_MS, 10) || 15_000,
-    balanceCacheTtlMs: parseInt(process.env.BALANCE_CACHE_TTL_MS, 10) || 30_000,
-    balanceRefreshMs: parseInt(process.env.BALANCE_REFRESH_INTERVAL_MS, 10) || 30_000,
+    balanceCacheTtlMs: parseInt(process.env.BALANCE_CACHE_TTL_MS, 10) || 60_000,
+    balanceRefreshMs: parseInt(process.env.BALANCE_REFRESH_INTERVAL_MS, 10) || 60_000,
     wsReconnectDelayMs: parseInt(process.env.WS_RECONNECT_DELAY_MS, 10) || 5_000,
     wsPingIntervalMs: parseInt(process.env.WS_PING_INTERVAL_MS, 10) || 30_000,
     wsWatchdogIntervalMs: parseInt(process.env.WS_WATCHDOG_INTERVAL_MS, 10) || 60_000,
     wsWatchdogMaxSilenceMs: parseInt(process.env.WS_WATCHDOG_MAX_SILENCE_MS, 10) || 90_000,
+  },
+  services: {
+    telegram: {
+      sendMinIntervalMs: parseInt(process.env.TELEGRAM_SEND_MIN_INTERVAL_MS, 10) || 400,
+      retryMaxAttempts: parseInt(process.env.TELEGRAM_RETRY_MAX_ATTEMPTS, 10) || 4,
+    },
+    alchemy: {
+      maxConcurrent: parseInt(process.env.ALCHEMY_MAX_CONCURRENT_REQUESTS, 10) || 2,
+      minIntervalMs: parseInt(process.env.ALCHEMY_MIN_INTERVAL_MS, 10) || 120,
+      retryMaxAttempts: parseInt(process.env.ALCHEMY_RETRY_MAX_ATTEMPTS, 10) || 4,
+      metadataCacheTtlMs: parseInt(process.env.ALCHEMY_METADATA_CACHE_TTL_MS, 10) || (6 * 60 * 60_000),
+    },
+    etherscan: {
+      maxRequestsPerSecond: parseInt(process.env.ETHERSCAN_MAX_REQUESTS_PER_SECOND, 10) || 3,
+    },
   },
   deltaNeutral: {
     trackingMode: process.env.DELTA_NEUTRAL_TRACKING_MODE || 'hybrid',
