@@ -166,3 +166,108 @@ test('telegram command service ignora chats no autorizados', async () => {
   assert.deepEqual(tradingCalls, []);
   assert.deepEqual(calls, []);
 });
+
+test('/start incluye reply keyboard persistente con accesos rápidos', async () => {
+  const { service, calls, poller } = buildService();
+
+  await service._handleMessage(poller, {
+    chat: { id: '999' },
+    text: '/start',
+  });
+
+  const helpMsg = calls.find((c) => c.type === 'send' && /Bot Hyperliquid/.test(c.text || ''));
+  assert.ok(helpMsg, 'debe enviar mensaje de ayuda');
+  assert.equal(helpMsg.options.replyMarkup.is_persistent, true);
+  assert.deepEqual(helpMsg.options.replyMarkup.keyboard[0], [{ text: '📈 Resumen' }, { text: '🔔 Alertas' }]);
+});
+
+test('/silenciar persiste silencedUntil y refresca el registry', async () => {
+  const saved = [];
+  const refreshed = [];
+  const { service, calls, poller } = buildService({
+    settingsService: {
+      listTelegramConfigs: async () => [],
+      getTelegramNotificationPrefs: async () => ({
+        silencedUntil: null,
+        quietHours: null,
+        categories: { hedge: true, trade: true, runtime: true, deltaNeutralBlock: true },
+        digest: { enabled: true, windowMs: 30_000, minEvents: 3 },
+      }),
+      setTelegramNotificationPrefs: async (userId, patch) => {
+        saved.push({ userId, patch });
+        return patch;
+      },
+    },
+    telegramRegistry: {
+      refreshPrefs: async (userId) => { refreshed.push(userId); },
+    },
+  });
+
+  await service._handleMessage(poller, {
+    chat: { id: '999' },
+    text: '/silenciar 30m',
+  });
+
+  assert.equal(saved.length, 1);
+  assert.ok(saved[0].patch.silencedUntil > Date.now());
+  assert.deepEqual(refreshed, [1]);
+  assert.match(calls[0].text, /Silencio activo/);
+});
+
+test('callback tg:cfg:cat alterna una categoría', async () => {
+  const saved = [];
+  const { service, calls, poller } = buildService({
+    settingsService: {
+      listTelegramConfigs: async () => [],
+      getTelegramNotificationPrefs: async () => ({
+        silencedUntil: null,
+        quietHours: null,
+        categories: { hedge: true, trade: true, runtime: true, deltaNeutralBlock: true },
+        digest: { enabled: true, windowMs: 30_000, minEvents: 3 },
+      }),
+      setTelegramNotificationPrefs: async (userId, patch) => {
+        saved.push(patch);
+      },
+    },
+    telegramRegistry: {
+      refreshPrefs: async () => {},
+    },
+  });
+
+  await service._handleCallback(poller, {
+    id: 'cb-1',
+    data: 'tg:cfg:cat:hedge:0',
+    message: { chat: { id: '999' } },
+  });
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].categories.hedge, false);
+  const configMsg = calls.find((c) => c.type === 'send' && /Configuración de alertas/.test(c.text || ''));
+  assert.ok(configMsg, 'debe redibujar el menu de config');
+});
+
+test('/alertas muestra items del ring buffer con paginación', async () => {
+  const TelegramService = require('../src/services/telegram.service');
+  // Limpiamos e insertamos alertas conocidas para userId=1
+  TelegramService.listRecentAlerts(1);
+  const now = Date.now();
+  for (let i = 0; i < 15; i += 1) {
+    TelegramService.recordAlert(1, {
+      timestamp: now - i * 1000,
+      category: 'runtime',
+      severity: 'medium',
+      title: `alerta ${i}`,
+    });
+  }
+
+  const { service, calls, poller } = buildService();
+  await service._handleMessage(poller, { chat: { id: '999' }, text: '/alertas' });
+
+  const msg = calls.find((c) => c.type === 'send' && /Alertas recientes/.test(c.text || ''));
+  assert.ok(msg);
+  assert.match(msg.text, /alerta 14/);
+  // Con 15 items y ALERTS_PAGE_SIZE=10, debe haber paginación
+  assert.ok(msg.options.replyMarkup?.inline_keyboard, 'debe incluir teclado de paginación');
+  const buttons = msg.options.replyMarkup.inline_keyboard[0];
+  assert.ok(buttons.some((b) => /Next/.test(b.text)));
+});

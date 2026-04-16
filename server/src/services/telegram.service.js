@@ -19,26 +19,179 @@ const {
   sleep,
 } = require('./external-service-helpers');
 
+// ------------------------------------------------------------------
+// Alert ring buffer (compartido entre todas las instancias)
+// Sirve de fuente de datos para /alertas. Se resetea al reiniciar.
+// ------------------------------------------------------------------
+const ALERT_BUFFER_MAX_ITEMS = 50;
+const ALERT_BUFFER_WINDOW_MS = 24 * 60 * 60 * 1000;
+const alertBufferByUser = new Map();
+
+function recordAlert(userId, alert) {
+  if (!userId) return;
+  const key = String(userId);
+  const list = alertBufferByUser.get(key) || [];
+  list.push({
+    timestamp: Number(alert.timestamp) || Date.now(),
+    category: alert.category || 'other',
+    severity: alert.severity || 'medium',
+    title: String(alert.title || '').slice(0, 120),
+    summary: String(alert.summary || '').slice(0, 250),
+  });
+  while (list.length > ALERT_BUFFER_MAX_ITEMS) list.shift();
+  const cutoff = Date.now() - ALERT_BUFFER_WINDOW_MS;
+  while (list.length && list[0].timestamp < cutoff) list.shift();
+  alertBufferByUser.set(key, list);
+}
+
+function listRecentAlerts(userId, { limit = 20 } = {}) {
+  const list = alertBufferByUser.get(String(userId)) || [];
+  const cutoff = Date.now() - ALERT_BUFFER_WINDOW_MS;
+  return list.filter((a) => a.timestamp >= cutoff).slice(-limit).reverse();
+}
+
+// ------------------------------------------------------------------
+// Digest buffer para eventos runtime
+// ------------------------------------------------------------------
+const digestBuffers = new Map(); // `${userId}:${botId}` -> { items, timer, botKey }
+
+function _isQuietHour(prefs, now = new Date()) {
+  if (!prefs?.quietHours) return false;
+  const { start, end, tz } = prefs.quietHours;
+  try {
+    const hhmm = now.toLocaleTimeString('en-GB', {
+      timeZone: tz || 'America/Mexico_City',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    if (start <= end) return hhmm >= start && hhmm < end;
+    return hhmm >= start || hhmm < end;
+  } catch {
+    return false;
+  }
+}
+
+function _shouldSuppress(prefs, category, severity, now = Date.now()) {
+  if (!prefs) return null;
+  if (prefs.categories && prefs.categories[category] === false) {
+    return 'category_disabled';
+  }
+  if (severity === 'critical') return null;
+  if (prefs.silencedUntil && Number(prefs.silencedUntil) > now) return 'silenced';
+  if (_isQuietHour(prefs)) return 'quiet_hours';
+  return null;
+}
+
 class TelegramService {
   /**
    * @param {string} token  - Bot token de Telegram
    * @param {string} chatId - Chat ID destino
    */
-  constructor(token = '', chatId = '') {
+  constructor(token = '', chatId = '', options = {}) {
     this.token   = token;
     this.chatId  = chatId;
     this.enabled = !!(token && chatId);
     this._sendQueue = Promise.resolve();
     this._nextRequestAt = 0;
+    this.userId = options.userId != null ? Number(options.userId) : null;
+    this.notificationPrefs = options.notificationPrefs || null;
+    this.getPrefs = typeof options.getPrefs === 'function' ? options.getPrefs : null;
   }
 
   /**
    * Actualiza token y chatId en tiempo de ejecución (sin reiniciar el servidor).
    */
-  configure(token, chatId) {
+  configure(token, chatId, options = {}) {
     this.token   = token  || '';
     this.chatId  = chatId || '';
     this.enabled = !!(this.token && this.chatId);
+    if (options.userId !== undefined) {
+      this.userId = options.userId != null ? Number(options.userId) : null;
+    }
+    if (options.notificationPrefs !== undefined) {
+      this.notificationPrefs = options.notificationPrefs || null;
+    }
+    if (options.getPrefs !== undefined) {
+      this.getPrefs = typeof options.getPrefs === 'function' ? options.getPrefs : null;
+    }
+  }
+
+  setNotificationPrefs(prefs) {
+    this.notificationPrefs = prefs || null;
+  }
+
+  async _resolvePrefs() {
+    if (this.getPrefs && this.userId) {
+      try {
+        return await this.getPrefs(this.userId);
+      } catch (err) {
+        logger.warn('telegram_prefs_resolve_failed', { error: err.message });
+      }
+    }
+    return this.notificationPrefs;
+  }
+
+  _firstLine(text) {
+    return String(text || '').split('\n')[0].replace(/<[^>]+>/g, '').trim();
+  }
+
+  async _dispatch(meta, text, options = {}) {
+    const category = meta.category || 'other';
+    const severity = meta.severity || 'medium';
+    const title = meta.title || this._firstLine(text);
+    const summary = meta.summary || this._firstLine(text);
+
+    recordAlert(this.userId, { category, severity, title, summary });
+
+    const prefs = await this._resolvePrefs();
+    const suppressReason = _shouldSuppress(prefs, category, severity);
+    if (suppressReason) {
+      (logger.debug || logger.info)?.call(logger, 'telegram.notification_suppressed', {
+        userId: this.userId,
+        category,
+        severity,
+        reason: suppressReason,
+      });
+      return null;
+    }
+
+    if (category === 'runtime' && prefs?.digest?.enabled && meta.botId != null) {
+      return this._bufferDigest({ prefs, meta, text, options });
+    }
+
+    return this.send(text, options);
+  }
+
+  _bufferDigest({ prefs, meta, text, options }) {
+    const key = `${this.userId || 0}:${meta.botId}`;
+    const entry = digestBuffers.get(key) || { items: [], timer: null, botKey: meta.botKey || `Bot #${meta.botId}` };
+    entry.items.push({ text, options, at: Date.now(), line: this._firstLine(text) });
+    entry.botKey = meta.botKey || entry.botKey;
+    digestBuffers.set(key, entry);
+
+    if (!entry.timer) {
+      entry.timer = setTimeout(() => {
+        const snap = digestBuffers.get(key);
+        digestBuffers.delete(key);
+        if (!snap) return;
+        if (snap.items.length >= (prefs.digest.minEvents || 3)) {
+          const secs = Math.round((prefs.digest.windowMs || 30_000) / 1000);
+          const lines = [
+            `🤖 <b>${snap.botKey}</b> — ${snap.items.length} eventos en ${secs}s`,
+            ...snap.items.slice(0, 10).map((item, idx) => `${idx + 1}. ${item.line}`),
+          ];
+          if (snap.items.length > 10) lines.push(`... y ${snap.items.length - 10} más`);
+          this.send(lines.join('\n')).catch(() => null);
+        } else {
+          for (const item of snap.items) {
+            this.send(item.text, item.options).catch(() => null);
+          }
+        }
+      }, prefs.digest.windowMs || 30_000);
+      entry.timer.unref?.();
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------
@@ -197,7 +350,10 @@ class TelegramService {
       `Tamaño: ${hedge.size} ${hedge.asset}`,
       hedge.label ? `Etiqueta: ${hedge.label}` : null,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    return this._dispatch(
+      { category: 'hedge', severity: 'medium', title: 'Cobertura creada' },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 
   notifyHedgeOpened(hedge) {
@@ -212,7 +368,10 @@ class TelegramService {
       `Tamaño: ${hedge.size} ${hedge.asset} (~$${notional})`,
       hedge.label ? `Cobertura: ${hedge.label}` : null,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    return this._dispatch(
+      { category: 'hedge', severity: 'high', title: `${side} activado` },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 
   notifyHedgePartialCoverage(hedge, payload = {}) {
@@ -226,7 +385,10 @@ class TelegramService {
       payload.message ? `Detalle: ${payload.message}` : null,
       hedge.label ? `Etiqueta: ${hedge.label}` : null,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    return this._dispatch(
+      { category: 'hedge', severity: 'high', title: 'Cobertura parcial' },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 
   notifyHedgeClosed(hedge) {
@@ -247,7 +409,10 @@ class TelegramService {
       pnl ? `PnL: ${pnl}` : null,
       hedge.label ? `Cobertura: ${hedge.label}` : null,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    return this._dispatch(
+      { category: 'hedge', severity: 'high', title: 'Cobertura completada' },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 
   notifyHedgeCancelled(hedge) {
@@ -257,7 +422,10 @@ class TelegramService {
       `Activo: <b>${hedge.asset}</b>`,
       hedge.label ? `Etiqueta: ${hedge.label}` : null,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    return this._dispatch(
+      { category: 'hedge', severity: 'medium', title: 'Cobertura cancelada' },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 
   notifyHedgeError(hedge, err) {
@@ -268,7 +436,10 @@ class TelegramService {
       `Error: ${err.message}`,
       hedge.label ? `Etiqueta: ${hedge.label}` : null,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    return this._dispatch(
+      { category: 'hedge', severity: 'critical', title: 'Error en cobertura' },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 
   // ------------------------------------------------------------------
@@ -286,7 +457,10 @@ class TelegramService {
       `Precio: $${this._fmtPrice(displayPrice)}`,
       `Tamano: ${size} ${asset} (~$${notional})`,
     ];
-    return this.send(lines.join('\n'));
+    return this._dispatch(
+      { category: 'trade', severity: 'critical', title: 'Posicion abierta' },
+      lines.join('\n'),
+    );
   }
 
   notifyTradeClose({ account, asset, closedSide, closedSize, closePrice, openPrice, pnl }) {
@@ -307,7 +481,10 @@ class TelegramService {
       `Tamano: ${closedSize} ${asset}`,
       formattedPnl ? `PnL: ${formattedPnl}` : null,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    return this._dispatch(
+      { category: 'trade', severity: 'critical', title: 'Posicion cerrada' },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 
   notifyBotRuntimeEvent(event, bot, payload = {}) {
@@ -333,7 +510,20 @@ class TelegramService {
       payload.nextRetryAt ? `Proximo reintento: ${new Date(payload.nextRetryAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}` : null,
       `Fecha: ${when}`,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    const severity = event === 'runtime_paused' ? 'critical'
+      : event === 'runtime_recovered' ? 'medium'
+      : 'medium';
+    const botKey = bot?.id ? `Bot #${bot.id}${bot.asset ? ` (${bot.asset})` : ''}` : 'Bot';
+    return this._dispatch(
+      {
+        category: 'runtime',
+        severity,
+        title: meta.title,
+        botId: bot?.id || null,
+        botKey,
+      },
+      lines.filter(Boolean).join('\n'),
+    );
   }
   // ------------------------------------------------------------------
   // Bloqueos de proteccion delta-neutral
@@ -381,8 +571,18 @@ class TelegramService {
       extra.minNotionalUsd != null ? `Minimo requerido: $${Number(extra.minNotionalUsd).toFixed(2)}` : null,
       `Fecha: ${when}`,
     ];
-    return this.send(lines.filter(Boolean).join('\n'));
+    const criticalBlockTypes = new Set(['risk_paused_margin_mode', 'risk_paused_manual_long', 'risk_paused_liq_distance', 'margin_pending_topup']);
+    const severity = criticalBlockTypes.has(blockType) ? 'critical'
+      : blockType === 'insufficient_margin' ? 'high'
+      : 'medium';
+    return this._dispatch(
+      { category: 'deltaNeutralBlock', severity, title: meta.title },
+      lines.filter(Boolean).join('\n'),
+    );
   }
 }
+
+TelegramService.recordAlert = recordAlert;
+TelegramService.listRecentAlerts = listRecentAlerts;
 
 module.exports = TelegramService;

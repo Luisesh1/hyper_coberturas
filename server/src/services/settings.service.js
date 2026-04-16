@@ -14,6 +14,62 @@ const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan', 'alchemy']);
 const DELTA_NEUTRAL_RISK_KEY = 'delta_neutral_risk_controls';
 const deltaNeutralRiskCache = new Map();
 
+const NOTIFICATION_CATEGORIES = ['hedge', 'trade', 'runtime', 'deltaNeutralBlock'];
+
+function getDefaultNotificationPrefs() {
+  return {
+    silencedUntil: null,
+    quietHours: null,
+    categories: { hedge: true, trade: true, runtime: true, deltaNeutralBlock: true },
+    digest: { enabled: true, windowMs: 30_000, minEvents: 3 },
+    lastAccountId: null,
+  };
+}
+
+function normalizeNotificationPrefs(value) {
+  const defaults = getDefaultNotificationPrefs();
+  if (!value || typeof value !== 'object') return defaults;
+
+  const silencedUntilRaw = Number(value.silencedUntil);
+  const silencedUntil = Number.isFinite(silencedUntilRaw) && silencedUntilRaw > Date.now()
+    ? silencedUntilRaw
+    : null;
+
+  let quietHours = null;
+  if (value.quietHours && typeof value.quietHours === 'object') {
+    const { start, end, tz } = value.quietHours;
+    if (/^\d{2}:\d{2}$/.test(String(start)) && /^\d{2}:\d{2}$/.test(String(end))) {
+      quietHours = {
+        start: String(start),
+        end: String(end),
+        tz: typeof tz === 'string' && tz ? tz : 'America/Mexico_City',
+      };
+    }
+  }
+
+  const rawCategories = value.categories && typeof value.categories === 'object' ? value.categories : {};
+  const categories = {};
+  for (const cat of NOTIFICATION_CATEGORIES) {
+    categories[cat] = rawCategories[cat] !== false;
+  }
+
+  const rawDigest = value.digest && typeof value.digest === 'object' ? value.digest : {};
+  const windowMs = Number(rawDigest.windowMs);
+  const minEvents = Number(rawDigest.minEvents);
+  const digest = {
+    enabled: rawDigest.enabled !== false,
+    windowMs: Number.isFinite(windowMs) && windowMs >= 1000 ? windowMs : defaults.digest.windowMs,
+    minEvents: Number.isFinite(minEvents) && minEvents >= 2 ? Math.floor(minEvents) : defaults.digest.minEvents,
+  };
+
+  const lastAccountIdRaw = Number(value.lastAccountId);
+  const lastAccountId = Number.isFinite(lastAccountIdRaw) && lastAccountIdRaw > 0
+    ? Math.floor(lastAccountIdRaw)
+    : null;
+
+  return { silencedUntil, quietHours, categories, digest, lastAccountId };
+}
+
 function getDefaultDeltaNeutralRiskControls() {
   return {
     riskPauseLiqDistancePct: DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
@@ -80,7 +136,11 @@ async function setSetting(userId, key, value) {
 }
 
 async function getTelegram(userId) {
-  return (await getSetting(userId, 'telegram')) || { token: '', chatId: '' };
+  const stored = (await getSetting(userId, 'telegram')) || { token: '', chatId: '' };
+  return {
+    ...stored,
+    notificationPrefs: normalizeNotificationPrefs(stored.notificationPrefs),
+  };
 }
 
 async function listTelegramConfigs() {
@@ -97,6 +157,7 @@ async function listTelegramConfigs() {
           token,
           chatId,
           enabled: !!(token && chatId),
+          notificationPrefs: normalizeNotificationPrefs(telegram.notificationPrefs),
           updatedAt: row.updated_at != null ? Number(row.updated_at) : null,
         };
       } catch {
@@ -108,6 +169,19 @@ async function listTelegramConfigs() {
 
 async function setTelegram(userId, telegram) {
   await setSetting(userId, 'telegram', telegram);
+}
+
+async function getTelegramNotificationPrefs(userId) {
+  const current = await getTelegram(userId);
+  return current.notificationPrefs;
+}
+
+async function setTelegramNotificationPrefs(userId, patch) {
+  const current = (await getSetting(userId, 'telegram')) || { token: '', chatId: '' };
+  const currentPrefs = normalizeNotificationPrefs(current.notificationPrefs);
+  const merged = normalizeNotificationPrefs({ ...currentPrefs, ...patch });
+  await setSetting(userId, 'telegram', { ...current, notificationPrefs: merged });
+  return merged;
 }
 
 async function getWallet(userId) {
@@ -172,6 +246,11 @@ module.exports = {
   getTelegram,
   listTelegramConfigs,
   setTelegram,
+  getTelegramNotificationPrefs,
+  setTelegramNotificationPrefs,
+  getDefaultNotificationPrefs,
+  normalizeNotificationPrefs,
+  NOTIFICATION_CATEGORIES,
   getWallet,
   setWallet,
   getEtherscan,
