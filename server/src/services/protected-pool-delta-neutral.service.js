@@ -26,6 +26,10 @@ const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
 const NEAR_ZERO_TARGET_QTY = 1e-6;
 const POSITION_MISSING_CONFIRMATION_COUNT = 2;
 const POSITION_MISSING_GRACE_MS = 15 * 60_000;
+// Dust tolerance al verificar cierre en desactivación. Residuos por debajo de
+// max($1, 1% del tamaño original) se consideran polvo y no bloquean deactivate.
+const DEACTIVATION_RESIDUAL_DUST_USD = 1;
+const DEACTIVATION_RESIDUAL_PCT = 0.01;
 const {
   DEFAULT_BAND_MODE,
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
@@ -873,7 +877,7 @@ class ProtectedPoolDeltaNeutralService {
     protection,
     hl,
     strategyState,
-    actualQty: _actualQty,
+    actualQty = 0,
     currentPrice,
     tracking,
     bands,
@@ -898,7 +902,24 @@ class ProtectedPoolDeltaNeutralService {
     const cooldownReason = ((hasProtectionCooldownReason ? protection.cooldownReason : strategyState.cooldownReason) || '').trim();
     const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
     const increaseNotionalUsd = targetIncreaseQty * currentPrice;
-    let requiredMarginUsd = increaseNotionalUsd / Math.max(Number(protection.leverage || 1), 1);
+    const leverage = Math.max(Number(protection.leverage || 1), 1);
+    // En isolated margin, la posición ya tiene `marginUsed` bloqueado. Para
+    // crecer la posición sólo se necesita margen ADICIONAL cuando el nuevo
+    // requerimiento supera al que ya está aparcado en el aislado. Sin este
+    // ajuste, una posición sobre-colateralizada (donde el marginUsed excede
+    // lo que la nueva size requeriría) disparaba `insufficient_margin` aunque
+    // el incremento fuera perfectamente viable sin añadir dinero.
+    const positionEntry = (resolvedAccountState?.assetPositions || []).find(
+      (p) => String(p.position?.coin || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase()
+    );
+    const existingMarginUsd = Number(positionEntry?.position?.marginUsed || 0);
+    const newTotalSize = Math.abs(Number(actualQty || 0)) + targetIncreaseQty;
+    const newTotalRequiredMarginUsd = (newTotalSize * currentPrice) / leverage;
+    const extraMarginNeededUsd = Math.max(0, newTotalRequiredMarginUsd - existingMarginUsd);
+    // `requiredMarginUsd` original (delta/leverage) se conserva en la
+    // respuesta para no romper observabilidad/tests, pero la decisión usa
+    // `extraMarginNeededUsd`.
+    let requiredMarginUsd = increaseNotionalUsd / leverage;
     let withdrawable = Number(resolvedAccountState?.withdrawable || 0);
     const cooldownActive = isCooldownActive(protection, strategyState);
     const snapshotStatus = protection.snapshotStatus || 'ready';
@@ -941,7 +962,7 @@ class ProtectedPoolDeltaNeutralService {
       };
     }
     const marginCooldownActive = cooldownActive && cooldownReason === 'insufficient_margin';
-    if (cooldownActive && !(marginCooldownActive && (targetIncreaseQty <= 0 || requiredMarginUsd <= withdrawable))) {
+    if (cooldownActive && !(marginCooldownActive && (targetIncreaseQty <= 0 || extraMarginNeededUsd <= withdrawable))) {
       return {
         ok: false,
         status: strategyState.status || 'tracking',
@@ -958,7 +979,14 @@ class ProtectedPoolDeltaNeutralService {
       Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
       EXCHANGE_MIN_NOTIONAL_USD,
     );
-    if (decision !== 'hold' && tracking.trackingErrorUsd < effectiveMinOrderNotionalUsd) {
+    // Bypass del mínimo notional cuando es un reduce-only que cierra la
+    // posición por completo: Hyperliquid acepta reduceOnly sub-mínimo si
+    // deja la posición en 0. Sin este bypass, residuos entre $0 y $11
+    // quedan atascados indefinidamente.
+    const isFullCloseReduce = Number(tracking.trackingErrorQty || 0) < 0
+      && actualQty > 0
+      && Math.abs(Number(tracking.trackingErrorQty || 0)) + 1e-8 >= actualQty;
+    if (decision !== 'hold' && tracking.trackingErrorUsd < effectiveMinOrderNotionalUsd && !isFullCloseReduce) {
       return {
         ok: false,
         status: 'tracking',
@@ -971,12 +999,14 @@ class ProtectedPoolDeltaNeutralService {
         positionMissingUnconfirmed,
       };
     }
-    if (targetIncreaseQty > 0 && requiredMarginUsd > withdrawable) {
+    if (targetIncreaseQty > 0 && extraMarginNeededUsd > withdrawable) {
       return {
         ok: false,
         status: 'margin_pending',
         reason: 'insufficient_margin',
         executionSkippedBecause: 'insufficient_margin',
+        extraMarginNeededUsd,
+        existingMarginUsd,
         withdrawable,
         requiredMarginUsd,
         positionObserved,
@@ -1110,10 +1140,36 @@ class ProtectedPoolDeltaNeutralService {
       return { closed: false, reason: 'no_open_position', actualQty: 0 };
     }
 
-    await tradingService.closePosition({
+    const closeResult = await tradingService.closePosition({
       asset: protection.inferredAsset,
       size: actualQty,
     });
+
+    // Verificar que quedó realmente cerrado. Si hay residuo no dust, NO
+    // marcamos la protección como inactive — dejamos que el siguiente tick
+    // o una llamada posterior a forceCloseHedge lo termine.
+    const verifyPrice = Number(closeResult?.closePrice || 0);
+    const residualCheck = await this._verifyHedgeClosed(protection, hl, {
+      expectedPrice: verifyPrice,
+      originalQty: actualQty,
+    });
+    if (!residualCheck.closed) {
+      this.logger.warn('force_close_hedge_partial_residual', {
+        protectionId: protection.id,
+        asset: protection.inferredAsset,
+        originalQty: actualQty,
+        residualQty: residualCheck.residualQty,
+        residualUsd: residualCheck.residualUsd,
+      });
+      return {
+        closed: false,
+        partial: true,
+        actualQty,
+        residualQty: residualCheck.residualQty,
+        residualUsd: residualCheck.residualUsd,
+        reason: 'partial_fill',
+      };
+    }
 
     // Reconcilia fills para que los costos del cierre queden contabilizados.
     try {
@@ -1959,7 +2015,13 @@ class ProtectedPoolDeltaNeutralService {
       Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
       EXCHANGE_MIN_NOTIONAL_USD,
     );
-    if (driftUsd < minNotionalUsd) {
+    // Bypass del mínimo cuando el drift es un reduce-only que cierra la
+    // posición completa (targetQty≈0 y actualQty>0). Permite desmontar
+    // residuos que de otro modo se acumularían indefinidamente.
+    const isFullCloseReduce = driftQty < 0
+      && Number(actualQty) > 0
+      && Math.abs(driftQty) + 1e-8 >= Number(actualQty);
+    if (driftUsd < minNotionalUsd && !isFullCloseReduce) {
       this.logger.info?.('delta_neutral_drift_below_exchange_minimum', {
         protectionId: protection.id,
         asset: protection.inferredAsset,
@@ -2229,7 +2291,6 @@ class ProtectedPoolDeltaNeutralService {
       1,
       Math.floor(Number(protection.twapSlices ?? DEFAULT_TWAP_SLICES) || DEFAULT_TWAP_SLICES)
     );
-    const sliceQty = totalQty / slicesPlanned;
     const twapDurationSec = Math.max(
       0,
       Number(protection.twapDurationSec ?? DEFAULT_TWAP_DURATION_SEC) || DEFAULT_TWAP_DURATION_SEC
@@ -2239,6 +2300,7 @@ class ProtectedPoolDeltaNeutralService {
     this.twapSessions.set(protection.id, session);
 
     let completed = 0;
+    let executedQtyReal = 0;
     let totalFees = 0;
     let totalSlippage = 0;
     let lastFillPrice = currentPrice;
@@ -2254,10 +2316,15 @@ class ProtectedPoolDeltaNeutralService {
         if (session.cancelRequested) {
           throw new Error('TWAP cancelado por desactivacion.');
         }
-        const remainingQty = totalQty - (completed * sliceQty);
-        const qty = index === slicesPlanned - 1 ? remainingQty : sliceQty;
+        // Usar ejecución real acumulada (no la planeada) para calcular
+        // cuánto queda. Así los fills parciales de slices anteriores no se
+        // convierten en "dinero perdido" del plan.
+        const remainingQty = Math.max(totalQty - executedQtyReal, 0);
+        if (remainingQty <= 1e-9) break;
+        const slicesLeft = Math.max(slicesPlanned - index, 1);
+        const qty = index === slicesPlanned - 1 ? remainingQty : Math.min(remainingQty, remainingQty / slicesLeft);
         if (direction === 'increase') {
-          await this._ensureIsolatedMarginBuffer(protection, hl, currentPrice, qty, actualQty + (completed * sliceQty));
+          await this._ensureIsolatedMarginBuffer(protection, hl, currentPrice, qty, actualQty + executedQtyReal);
         }
         const sliceResult = direction === 'increase'
           ? await tradingService.openPosition({
@@ -2272,15 +2339,15 @@ class ProtectedPoolDeltaNeutralService {
             size: qty,
           });
         lastFillPrice = Number(sliceResult.fillPrice || sliceResult.closePrice || currentPrice);
-        const actualSliceQty = sliceResult.filledQty != null ? sliceResult.filledQty : qty;
+        const actualSliceQty = Number.isFinite(Number(sliceResult.filledQty)) ? Number(sliceResult.filledQty) : qty;
+        executedQtyReal += actualSliceQty;
         totalFees += Math.abs(lastFillPrice * actualSliceQty * ESTIMATED_TAKER_FEE_RATE);
         totalSlippage += Math.abs(lastFillPrice - currentPrice) * actualSliceQty;
         completed += 1;
       }
     } catch (err) {
       this.twapSessions.delete(protection.id);
-      const completedQty = completed * sliceQty;
-      const remainingQty = Math.max(totalQty - completedQty, 0);
+      const remainingQty = Math.max(totalQty - executedQtyReal, 0);
       if ((remainingQty * currentPrice) >= DEFAULT_EMERGENCY_IOC_NOTIONAL_USD) {
         try {
           const emergency = await this._runSingleAdjustment({
@@ -2289,15 +2356,17 @@ class ProtectedPoolDeltaNeutralService {
             hl,
             currentPrice,
             driftQty: direction === 'increase' ? remainingQty : -remainingQty,
-            actualQty: actualQty + completedQty,
+            actualQty: actualQty + executedQtyReal,
           });
           totalFees += Number(emergency.executionFeeUsd || 0);
           totalSlippage += Number(emergency.slippageUsd || 0);
           lastFillPrice = Number(emergency.fillPrice || lastFillPrice);
+          const emergencyExecuted = Number.isFinite(Number(emergency.executedQty)) ? Number(emergency.executedQty) : 0;
+          executedQtyReal += emergencyExecuted;
           return {
-            partial: completed > 0,
+            partial: executedQtyReal + 1e-9 < totalQty,
             fillPrice: lastFillPrice,
-            executedQty: completedQty + remainingQty,
+            executedQty: executedQtyReal,
             executionFeeUsd: totalFees,
             slippageUsd: totalSlippage,
             twapSlicesPlanned: slicesPlanned,
@@ -2311,7 +2380,7 @@ class ProtectedPoolDeltaNeutralService {
       return {
         partial: true,
         fillPrice: lastFillPrice,
-        executedQty: completedQty,
+        executedQty: executedQtyReal,
         executionFeeUsd: totalFees,
         slippageUsd: totalSlippage,
         twapSlicesPlanned: slicesPlanned,
@@ -2322,9 +2391,9 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     return {
-      partial: false,
+      partial: executedQtyReal + 1e-9 < totalQty,
       fillPrice: lastFillPrice,
-      executedQty: totalQty,
+      executedQty: executedQtyReal,
       executionFeeUsd: totalFees,
       slippageUsd: totalSlippage,
       twapSlicesPlanned: slicesPlanned,
@@ -2336,12 +2405,37 @@ class ProtectedPoolDeltaNeutralService {
     const strategyState = normalizeStrategyState(protection.strategyState);
     const tradingService = context.tradingService || await this.getTradingService(protection.userId, protection.accountId);
     const hl = context.hl || await this.hlRegistry.getOrCreate(protection.userId, protection.accountId);
-    const position = context.actualQty != null
-      ? { szi: String(-Math.abs(context.actualQty)) }
-      : await hl.getPosition(protection.inferredAsset).catch((err) => { logger.warn('getPosition failed in deactivation', { poolId: protection.id, asset: protection.inferredAsset, error: err.message }); return null; });
-    const actualQty = context.actualQty != null
-      ? context.actualQty
-      : position && Number(position.szi) < 0 ? Math.abs(Number(position.szi)) : 0;
+
+    // Lectura de posición robusta: si el contexto ya la trae (desde el tick
+    // principal) la usamos; si no (p. ej. desde requestDeactivate) pasamos por
+    // _observeHedgePosition, que reintenta y aplica fallback a lastActualQty
+    // ante fallos de red. Evita el bug de "HL.getPosition falla → actualQty=0
+    // → desactivamos sin cerrar el short".
+    let actualQty;
+    if (context.actualQty != null) {
+      actualQty = context.actualQty;
+    } else {
+      const observation = await this._observeHedgePosition({
+        protection,
+        hl,
+        strategyState,
+        forceReason: 'deactivation',
+      }).catch((err) => {
+        logger.warn('observeHedgePosition failed in deactivation', { poolId: protection.id, asset: protection.inferredAsset, error: err.message });
+        return null;
+      });
+      if (observation?.positionMissingUnconfirmed) {
+        // Lectura no confirmada: no desactivamos; reintentamos en el siguiente tick.
+        const nextState = {
+          ...strategyState,
+          status: 'deactivation_pending',
+          lastError: 'Lectura de posición no confirmada; se reintenta cierre antes de desactivar.',
+        };
+        await this.repo.updateStrategyState(protection.userId, protection.id, { strategyState: nextState });
+        return nextState;
+      }
+      actualQty = Number(observation?.effectiveActualQty || 0);
+    }
 
     if (actualQty <= 0) {
       // Reconciliar fills pendientes incluso si la posición ya está cerrada:
@@ -2392,7 +2486,7 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     try {
-      await tradingService.closePosition({
+      const closeResult = await tradingService.closePosition({
         asset: protection.inferredAsset,
         size: actualQty,
       });
@@ -2425,6 +2519,35 @@ class ProtectedPoolDeltaNeutralService {
           error: reconcileErr.message,
         });
       }
+
+      // Verificar que la posición realmente quedó cerrada. Los fills
+      // parciales de IOC pueden dejar un residuo silencioso — sin este
+      // check el short quedaba huérfano tras repo.deactivate().
+      const verifyPrice = Number(closeResult?.closePrice || context.currentPrice || 0);
+      const residualCheck = await this._verifyHedgeClosed(protection, hl, {
+        expectedPrice: verifyPrice,
+        originalQty: actualQty,
+      });
+      if (!residualCheck.closed) {
+        const nextState = {
+          ...strategyState,
+          status: 'deactivation_pending',
+          lastActualQty: residualCheck.residualQty,
+          lastError: `Cierre parcial: residuo ${residualCheck.residualQty.toFixed(8)} (${residualCheck.residualUsd.toFixed(2)} USD). Reintentando.`,
+        };
+        await this.repo.updateStrategyState(protection.userId, protection.id, { strategyState: nextState });
+        this.logger.warn('deactivation_close_partial_residual', {
+          protectionId: protection.id,
+          asset: protection.inferredAsset,
+          originalQty: actualQty,
+          residualQty: residualCheck.residualQty,
+          residualUsd: residualCheck.residualUsd,
+          closedSize: closeResult?.closedSize,
+          requestedSize: closeResult?.requestedSize,
+        });
+        return nextState;
+      }
+
       const deactivatedAt = Date.now();
       const finalRangeMetrics = await timeInRangeService.computeIncrementalRangeMetrics(protection, {
         endAt: deactivatedAt,
@@ -2451,6 +2574,33 @@ class ProtectedPoolDeltaNeutralService {
     }
   }
 
+  /**
+   * Verifica que el hedge haya quedado cerrado tras una llamada a closePosition.
+   * Tolera dust (residuos por debajo de max($1, 1% del tamaño original)).
+   * Devuelve { closed, residualQty, residualUsd }.
+   */
+  async _verifyHedgeClosed(protection, hl, { expectedPrice = 0, originalQty = 0 } = {}) {
+    const rawPosition = await hl.getPosition(protection.inferredAsset).catch((err) => {
+      logger.warn('verifyHedgeClosed_getPosition_failed', { poolId: protection.id, asset: protection.inferredAsset, error: err.message });
+      return undefined; // undefined = read failed, conservador
+    });
+    if (rawPosition === undefined) {
+      // Lectura falló: NO asumir cerrado. Mejor reintentar en el siguiente tick.
+      return { closed: false, residualQty: originalQty, residualUsd: originalQty * expectedPrice, readFailed: true };
+    }
+    const residualQty = rawPosition && Number(rawPosition.szi) < 0
+      ? Math.abs(Number(rawPosition.szi))
+      : 0;
+    const price = Number.isFinite(expectedPrice) && expectedPrice > 0
+      ? expectedPrice
+      : Number(rawPosition?.entryPx) || 0;
+    const residualUsd = residualQty * price;
+    const originalUsd = originalQty * price;
+    const dustThresholdUsd = Math.max(DEACTIVATION_RESIDUAL_DUST_USD, originalUsd * DEACTIVATION_RESIDUAL_PCT);
+    const closed = residualQty <= 0 || residualUsd <= dustThresholdUsd;
+    return { closed, residualQty, residualUsd };
+  }
+
   _estimateRealizedPnl(positionBefore, executionSummary, driftQty) {
     const entryPrice = Number(positionBefore?.entryPx);
     const fillPrice = Number(executionSummary?.fillPrice);
@@ -2465,8 +2615,27 @@ class ProtectedPoolDeltaNeutralService {
   async _ensureIsolatedMarginBuffer(protection, hl, currentPrice, qtyToAdd, actualQty = 0) {
     const assetMeta = await hl.getAssetMeta(protection.inferredAsset);
     await hl.updateLeverage(assetMeta.index, false, protection.leverage);
-    const notionalUsd = Math.abs(qtyToAdd) * currentPrice;
-    const marginUsd = Math.ceil((notionalUsd / Math.max(Number(protection.leverage || 1), 1)) * 1.2);
+    const leverage = Math.max(Number(protection.leverage || 1), 1);
+    const newTotalSize = Math.abs(Number(actualQty || 0)) + Math.abs(Number(qtyToAdd || 0));
+    const newTotalRequiredMarginUsd = (newTotalSize * currentPrice) / leverage;
+
+    // Consultar margen ya bloqueado en la posición isolated para no empujar
+    // margen de más cuando ya está sobre-colateralizada. El buffer del 20%
+    // solo se aplica al delta que realmente falta.
+    let existingMarginUsd = 0;
+    try {
+      const state = await hl.getClearinghouseState();
+      const entry = (state?.assetPositions || []).find(
+        (p) => String(p.position?.coin || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase()
+      );
+      existingMarginUsd = Number(entry?.position?.marginUsed || 0);
+    } catch (err) {
+      logger.warn('ensureIsolatedMarginBuffer_state_failed', { poolId: protection.id, asset: protection.inferredAsset, error: err.message });
+    }
+
+    const shortfallUsd = Math.max(0, newTotalRequiredMarginUsd - existingMarginUsd);
+    if (shortfallUsd <= 0) return;
+    const marginUsd = Math.ceil(shortfallUsd * 1.2);
     if (marginUsd > 0) {
       await hl.updateIsolatedMargin(assetMeta.index, false, marginUsd).catch((err) => logger.warn('updateIsolatedMargin failed', { poolId: protection.id, asset: protection.inferredAsset, marginUsd, error: err.message }));
     }

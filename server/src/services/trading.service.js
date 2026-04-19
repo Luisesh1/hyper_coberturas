@@ -62,9 +62,29 @@ class TradingService {
     const requiredMarginValue = notionalValue / lev;
     const withdrawable = parseFloat(accountState.withdrawable || 0);
 
-    if (requiredMarginValue > withdrawable) {
+    // En isolated margin, el margen ya bloqueado en la posición existente
+    // puede absorber un incremento del mismo lado sin necesitar margen
+    // fresco (posiciones sobre-colateralizadas). Solo exigimos `extraNeeded`
+    // del withdrawable cuando el nuevo notional total supera lo que el
+    // marginUsed actual ya cubre.
+    const positionEntry = (accountState.assetPositions || []).find(
+      (p) => String(p.position?.coin || '').toUpperCase() === assetName
+    );
+    const existingMarginUsd = Number(positionEntry?.position?.marginUsed || 0);
+    const existingSzi = parseFloat(positionEntry?.position?.szi || 0);
+    const sameSide = isBuy ? existingSzi > 0 : existingSzi < 0;
+    let marginShortfall;
+    if (!isCross && sameSide && existingMarginUsd > 0) {
+      const newTotalSize = Math.abs(existingSzi) + parseFloat(size);
+      const newTotalRequiredMargin = (newTotalSize * midPrice) / lev;
+      const extraNeeded = Math.max(0, newTotalRequiredMargin - existingMarginUsd);
+      marginShortfall = extraNeeded > withdrawable ? extraNeeded : 0;
+    } else {
+      marginShortfall = requiredMarginValue > withdrawable ? requiredMarginValue : 0;
+    }
+    if (marginShortfall > 0) {
       throw new Error(
-        `Margen insuficiente: necesitas $${requiredMarginValue.toFixed(2)}, disponible $${withdrawable.toFixed(2)}`
+        `Margen insuficiente: necesitas $${marginShortfall.toFixed(2)}, disponible $${withdrawable.toFixed(2)}`
       );
     }
 
@@ -160,6 +180,9 @@ class TradingService {
 
     const actualClosedSize = result.filledSz != null ? result.filledSz : closeSize;
     const actualClosePrice = result.avgPx || parseFloat(closePrice);
+    // Detectar fill parcial: tolerancia 1% para absorber truncados de szDecimals.
+    const partial = result.filledSz != null
+      && (actualClosedSize + 1e-9) < closeSize * 0.99;
 
     const closeResult = {
       success: true,
@@ -168,9 +191,11 @@ class TradingService {
       asset: assetName,
       closedSide: isLong ? 'long' : 'short',
       closedSize: actualClosedSize,
+      requestedSize: closeSize,
+      partial,
       openPrice: Number.isFinite(entryPrice) ? entryPrice : null,
       closePrice: actualClosePrice,
-      filledQty: result.filledSz,
+      filledQty: actualClosedSize,
       pnl: this._estimateClosedPnl({
         entryPrice,
         closePrice: actualClosePrice,
