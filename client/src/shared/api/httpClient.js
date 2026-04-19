@@ -29,11 +29,17 @@ export function createHttpClient({
     };
 
     try {
+      // GET/HEAD no admiten body. Además, `body: null` también es inválido
+      // en algunos browsers (TypeError: Request with GET/HEAD method cannot
+      // have body). Sólo adjuntamos body cuando realmente hay contenido y el
+      // método lo permite.
+      const methodUpper = String(method || 'GET').toUpperCase();
+      const canHaveBody = methodUpper !== 'GET' && methodUpper !== 'HEAD';
       const response = await fetch(`${baseUrl}${path}`, {
         method,
         signal: controller.signal,
         headers,
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        ...(canHaveBody && body != null ? { body: JSON.stringify(body) } : {}),
       });
 
       const text = await response.text();
