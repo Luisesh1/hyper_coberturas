@@ -872,6 +872,49 @@ class LpOrchestratorService {
     };
   }
 
+  /**
+   * Actualiza strategyConfig y/o protectionConfig del orquestador.
+   * - `strategyConfig` se mergea campo a campo (patch), conservando los
+   *   valores previos para los campos no enviados.
+   * - `protectionConfig` se reemplaza completo (el schema es una union
+   *   enabled/disabled que no tiene sentido mezclar parcialmente).
+   *
+   * Los cambios en `protectionConfig` sólo afectan al próximo LP que se
+   * adjunte: la proteccion activa ya tiene su configuracion copiada en
+   * `protected_uniswap_pools` y mover esos campos en caliente requiere
+   * invariantes adicionales (cerrar posicion, reabrir, etc.).
+   */
+  async updateConfig({ userId, orchestratorId, strategyConfig, protectionConfig }) {
+    const orch = await this._loadOrThrow(userId, orchestratorId);
+    if (orch.status === 'archived') {
+      throw new ValidationError('No se puede editar un orquestador archivado');
+    }
+    if (!strategyConfig && !protectionConfig) {
+      throw new ValidationError('Debe enviarse strategyConfig o protectionConfig');
+    }
+
+    const nextStrategy = strategyConfig
+      ? { ...(orch.strategyConfig || {}), ...strategyConfig }
+      : undefined;
+    const nextProtection = protectionConfig !== undefined ? protectionConfig : undefined;
+
+    await this.repo.updateConfig(userId, orchestratorId, {
+      strategyConfig: nextStrategy,
+      protectionConfig: nextProtection,
+    });
+    await this.repo.appendActionLog({
+      orchestratorId,
+      kind: 'config_updated',
+      action: 'update_config',
+      payload: {
+        changedStrategy: nextStrategy ? Object.keys(strategyConfig) : [],
+        changedProtection: nextProtection !== undefined,
+      },
+      createdAt: Date.now(),
+    });
+    return this.repo.getById(userId, orchestratorId);
+  }
+
   async archive({ userId, orchestratorId }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {

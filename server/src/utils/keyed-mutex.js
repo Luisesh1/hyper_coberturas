@@ -21,7 +21,13 @@ class KeyedMutex {
     try {
       return await fn();
     } finally {
-      this._locks.delete(key);
+      // Solo borrar si nuestra promesa sigue siendo la última; si otra
+      // llamada se encoló después, ella se encargará de limpiarlo.
+      // Sin este guard, A borra la entrada cuando B ya había reemplazado
+      // el valor, y una C posterior cree que no hay lock y entra en paralelo.
+      if (this._locks.get(key) === next) {
+        this._locks.delete(key);
+      }
       releaseFn();
     }
   }

@@ -1,0 +1,62 @@
+.base {
+  display: inline-block;
+  position: relative;
+  overflow: hidden;
+  background: rgba(102, 225, 219, 0.06);
+  border: 1px solid rgba(102, 225, 219, 0.12);
+  border-radius: 8px;
+}
+
+.base::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 100%
+  );
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.line {
+  width: 100%;
+  height: 12px;
+  border-radius: 6px;
+}
+
+.card {
+  display: block;
+  width: 100%;
+  height: 120px;
+  border-radius: 14px;
+}
+
+.circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .base::after { animation: none; }
+}

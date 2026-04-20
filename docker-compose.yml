@@ -77,8 +77,12 @@ services:
       - ./server/.env
     environment:
       NODE_ENV: development
-      CLIENT_URL: "http://localhost:5174"
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-testbot}:${POSTGRES_PASSWORD:?requerido}@postgres:5432/${POSTGRES_DB:-testbot}"
+      CLIENT_URL: "https://hypercover.luisesh1.duckdns.org"
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-testbot}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?requerido}
+      PGDATABASE: ${POSTGRES_DB:-testbot}
     volumes:
       - ./server:/app
       - server_node_modules:/app/node_modules

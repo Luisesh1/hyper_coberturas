@@ -100,6 +100,12 @@ class ProtectedPoolDeltaNeutralService {
     this.twapSessions = new Map();
     this.rvCache = new Map();
     this.blockNotifLastSentAt = new Map();
+    // Cache de `getUserFills` por address: el endpoint pesa 20 del budget
+    // HL y se llamaba cada tick por protección (≈ 95% de utilización del
+    // límite, dominado por userFills). Con TTL de 30 s el drop es ~15×
+    // sin perder reconciliación útil porque los fills llegan en ráfagas
+    // tras una ejecución, no de forma continua.
+    this.userFillsCache = new Map();
     this.hybridStats = {
       marketTicks: 0,
       truthRefreshes: 0,
@@ -376,6 +382,52 @@ class ProtectedPoolDeltaNeutralService {
    * @param {number} sinceMs - timestamp del último fill ya contabilizado
    * @returns {Promise<{ realizedDelta: number, feeDelta: number, lastFillTime: number, fillsCount: number }>}
    */
+  /**
+   * Wrap de `hl.getUserFills()` con cache por address. TTL 30 s cubre el
+   * caso feliz (ningún cambio → seguir con el mismo array) sin sacrificar
+   * la reconciliación: después de cada ejecución llamamos
+   * `_invalidateUserFillsCache(hl)` para forzar un refetch en el próximo
+   * tick. Devuelve `null` cuando el fetch falla (para que el caller
+   * retorne early sin lanzar).
+   */
+  async _getUserFillsCached(hl, protection) {
+    const USER_FILLS_TTL_MS = 30_000;
+    const address = String(hl?.address || '').toLowerCase();
+    const now = Date.now();
+    if (address) {
+      const cached = this.userFillsCache.get(address);
+      if (cached && (now - cached.cachedAt) < USER_FILLS_TTL_MS) {
+        return cached.fills;
+      }
+    }
+    try {
+      // El cliente `hl` ya está vinculado a la cuenta Hyperliquid correcta.
+      // Si forzamos `protection.walletAddress` aquí, terminamos consultando
+      // la wallet del LP y no la cuenta de trading del hedge. En ese caso los
+      // fills del short no aparecen y el PnL realizado queda falsamente en 0.
+      const fills = await hl.getUserFills();
+      const safeFills = Array.isArray(fills) ? fills : [];
+      if (address) {
+        this.userFillsCache.set(address, { fills: safeFills, cachedAt: now });
+      }
+      return safeFills;
+    } catch (err) {
+      this.logger.warn('hedge_fills_fetch_failed', {
+        protectionId: protection?.id,
+        asset: protection?.inferredAsset,
+        queriedAddress: hl?.address || null,
+        error: err.message,
+      });
+      return null;
+    }
+  }
+
+  _invalidateUserFillsCache(hl) {
+    const address = String(hl?.address || '').toLowerCase();
+    if (!address) return;
+    this.userFillsCache.delete(address);
+  }
+
   async _reconcileHedgeFills(protection, hl, sinceMs) {
     if (!hl || typeof hl.getUserFills !== 'function') {
       return { realizedDelta: 0, feeDelta: 0, lastFillTime: Number(sinceMs || 0), fillsCount: 0 };
@@ -389,20 +441,8 @@ class ProtectedPoolDeltaNeutralService {
       since = Number(protection.createdAt);
     }
 
-    let fills = [];
-    try {
-      // El cliente `hl` ya está vinculado a la cuenta Hyperliquid correcta.
-      // Si forzamos `protection.walletAddress` aquí, terminamos consultando
-      // la wallet del LP y no la cuenta de trading del hedge. En ese caso los
-      // fills del short no aparecen y el PnL realizado queda falsamente en 0.
-      fills = await hl.getUserFills();
-    } catch (err) {
-      this.logger.warn('hedge_fills_fetch_failed', {
-        protectionId: protection?.id,
-        asset: protection?.inferredAsset,
-        queriedAddress: hl?.address || null,
-        error: err.message,
-      });
+    const fills = await this._getUserFillsCached(hl, protection);
+    if (fills === null) {
       return { realizedDelta: 0, feeDelta: 0, lastFillTime: since, fillsCount: 0 };
     }
     if (!Array.isArray(fills) || fills.length === 0) {
@@ -903,29 +943,28 @@ class ProtectedPoolDeltaNeutralService {
     const targetIncreaseQty = Math.max(Number(tracking.trackingErrorQty || 0), 0);
     const increaseNotionalUsd = targetIncreaseQty * currentPrice;
     const leverage = Math.max(Number(protection.leverage || 1), 1);
-    // En isolated margin, la posición ya tiene `marginUsed` bloqueado. Para
-    // crecer la posición sólo se necesita margen ADICIONAL cuando el nuevo
-    // requerimiento supera al que ya está aparcado en el aislado. Sin este
-    // ajuste, una posición sobre-colateralizada (donde el marginUsed excede
-    // lo que la nueva size requeriría) disparaba `insufficient_margin` aunque
-    // el incremento fuera perfectamente viable sin añadir dinero.
-    const positionEntry = (resolvedAccountState?.assetPositions || []).find(
-      (p) => String(p.position?.coin || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase()
-    );
-    const existingMarginUsd = Number(positionEntry?.position?.marginUsed || 0);
-    const newTotalSize = Math.abs(Number(actualQty || 0)) + targetIncreaseQty;
-    const newTotalRequiredMarginUsd = (newTotalSize * currentPrice) / leverage;
-    const extraMarginNeededUsd = Math.max(0, newTotalRequiredMarginUsd - existingMarginUsd);
-    // `requiredMarginUsd` original (delta/leverage) se conserva en la
-    // respuesta para no romper observabilidad/tests, pero la decisión usa
-    // `extraMarginNeededUsd`.
     let requiredMarginUsd = increaseNotionalUsd / leverage;
     let withdrawable = Number(resolvedAccountState?.withdrawable || 0);
     const cooldownActive = isCooldownActive(protection, strategyState);
     const snapshotStatus = protection.snapshotStatus || 'ready';
     const resolvedAssetContext = assetContext || (() => null)();
 
-    if (targetIncreaseQty > 0 && withdrawable <= 0) {
+    // Cached clearinghouse state from the WS stream can lag reality: si el
+    // slot isolated fue fondeado recientemente, `assetPositions` viene sin la
+    // posición o con un `marginUsed` obsoleto. Forzamos re-lectura fresca vía
+    // HTTP cuando intentamos crecer la cobertura y la cache se ve incompleta
+    // (withdrawable==0, sin assetPositions, o sin el asset objetivo), no solo
+    // cuando withdrawable<=0. Sin esto, `existingMarginUsd` quedaba en 0 y el
+    // preflight marcaba `insufficient_margin` aunque el slot estuviera
+    // sobre-colateralizado.
+    const asset = String(protection.inferredAsset || '').toUpperCase();
+    const hasAssetPositionInCache = Array.isArray(resolvedAccountState?.assetPositions)
+      && resolvedAccountState.assetPositions.some((p) => String(p?.position?.coin || '').toUpperCase() === asset);
+    const cacheLooksStale = !resolvedAccountState
+      || !Array.isArray(resolvedAccountState.assetPositions)
+      || (Number(actualQty || 0) > 0 && !hasAssetPositionInCache);
+    const shouldRefresh = targetIncreaseQty > 0 && (withdrawable <= 0 || cacheLooksStale);
+    if (shouldRefresh) {
       const freshAccountState = await hl.getClearinghouseState().catch((err) => {
         this.logger.warn('hl_clearinghouse_preflight_refresh_failed', {
           protectionId: protection.id,
@@ -934,19 +973,49 @@ class ProtectedPoolDeltaNeutralService {
         });
         return null;
       });
-      const freshWithdrawable = Number(freshAccountState?.withdrawable || 0);
-      if (freshAccountState && freshWithdrawable !== withdrawable) {
+      if (freshAccountState) {
+        const freshWithdrawable = Number(freshAccountState.withdrawable || 0);
+        const freshHasAsset = Array.isArray(freshAccountState.assetPositions)
+          && freshAccountState.assetPositions.some((p) => String(p?.position?.coin || '').toUpperCase() === asset);
         this.logger.info?.('delta_neutral_withdrawable_refreshed', {
           protectionId: protection.id,
           accountId: protection.accountId,
           asset: protection.inferredAsset,
           cachedWithdrawable: withdrawable,
           freshWithdrawable,
+          cacheHadAsset: hasAssetPositionInCache,
+          freshHasAsset,
         });
         resolvedAccountState = freshAccountState;
         withdrawable = freshWithdrawable;
       }
     }
+
+    // En isolated margin, la posición ya tiene `marginUsed` bloqueado. Para
+    // crecer la posición sólo se necesita margen ADICIONAL cuando el nuevo
+    // requerimiento supera al que ya está aparcado en el aislado. Sin este
+    // ajuste, una posición sobre-colateralizada (donde el marginUsed excede
+    // lo que la nueva size requeriría) disparaba `insufficient_margin` aunque
+    // el incremento fuera perfectamente viable sin añadir dinero.
+    // IMPORTANTE: leer `existingMarginUsd` DESPUÉS del refresh para no usar
+    // datos stale cuando el stream devuelve una snapshot incompleta.
+    const positionEntry = (resolvedAccountState?.assetPositions || []).find(
+      (p) => String(p.position?.coin || '').toUpperCase() === asset
+    );
+    const existingMarginUsd = Number(positionEntry?.position?.marginUsed || 0);
+    const slotRawUsd = Number(positionEntry?.position?.leverage?.rawUsd || 0);
+    const newTotalSize = Math.abs(Number(actualQty || 0)) + targetIncreaseQty;
+    const newTotalRequiredMarginUsd = (newTotalSize * currentPrice) / leverage;
+    const extraMarginNeededUsd = Math.max(0, newTotalRequiredMarginUsd - existingMarginUsd);
+    // HL exige margen del `withdrawable` para el INCREMENTO; el excedente
+    // del slot isolated no se auto-usa. Por eso aquí calculamos la capacidad
+    // total disponible = withdrawable + surplus extraíble del slot
+    // (rawUsd − marginUsed × safetyBuffer). `_ensureIsolatedMarginBuffer`
+    // ejecuta la extracción antes del placeOrder cuando hace falta.
+    const SAFETY_BUFFER_FACTOR = 1.2;
+    const slotSurplusExtractableUsd = Math.max(0, slotRawUsd - existingMarginUsd * SAFETY_BUFFER_FACTOR);
+    const incrementMarginUsd = (targetIncreaseQty * currentPrice) / leverage;
+    const availableForIncrementUsd = withdrawable + slotSurplusExtractableUsd;
 
     if (snapshotStatus !== 'ready') {
       return {
@@ -962,7 +1031,7 @@ class ProtectedPoolDeltaNeutralService {
       };
     }
     const marginCooldownActive = cooldownActive && cooldownReason === 'insufficient_margin';
-    if (cooldownActive && !(marginCooldownActive && (targetIncreaseQty <= 0 || extraMarginNeededUsd <= withdrawable))) {
+    if (cooldownActive && !(marginCooldownActive && (targetIncreaseQty <= 0 || incrementMarginUsd <= availableForIncrementUsd))) {
       return {
         ok: false,
         status: strategyState.status || 'tracking',
@@ -999,7 +1068,10 @@ class ProtectedPoolDeltaNeutralService {
         positionMissingUnconfirmed,
       };
     }
-    if (targetIncreaseQty > 0 && extraMarginNeededUsd > withdrawable) {
+    // `incrementMarginUsd` (margen requerido para la NUEVA size) debe caber en
+    // `withdrawable + slotSurplusExtractable`. Así el block real ocurre solo
+    // cuando ni cross ni la extracción del slot pueden cubrir el incremento.
+    if (targetIncreaseQty > 0 && incrementMarginUsd > availableForIncrementUsd) {
       return {
         ok: false,
         status: 'margin_pending',
@@ -1007,6 +1079,9 @@ class ProtectedPoolDeltaNeutralService {
         executionSkippedBecause: 'insufficient_margin',
         extraMarginNeededUsd,
         existingMarginUsd,
+        slotRawUsd,
+        slotSurplusExtractableUsd,
+        incrementMarginUsd,
         withdrawable,
         requiredMarginUsd,
         positionObserved,
@@ -1827,6 +1902,9 @@ class ProtectedPoolDeltaNeutralService {
         trackingErrorUsd: tracking.trackingErrorUsd,
         withdrawable: preflight.withdrawable ?? null,
         requiredMarginUsd: preflight.requiredMarginUsd ?? null,
+        slotRawUsd: preflight.slotRawUsd ?? null,
+        slotSurplusExtractableUsd: preflight.slotSurplusExtractableUsd ?? null,
+        incrementMarginUsd: preflight.incrementMarginUsd ?? null,
       });
     }
 
@@ -2085,7 +2163,12 @@ class ProtectedPoolDeltaNeutralService {
           actualQty,
         });
       }
+      // Los fills recién ejecutados no aparecerán en el cache de 30 s, así
+      // que lo invalidamos para que el siguiente `_reconcileHedgeFills`
+      // los capture sin esperar al TTL.
+      this._invalidateUserFillsCache(hl);
     } catch (err) {
+      this._invalidateUserFillsCache(hl);
       const failedState = {
         ...strategyState,
         status: executionMode === 'TWAP' ? 'degraded_partial' : 'partial_hedge_warning',
@@ -2616,26 +2699,64 @@ class ProtectedPoolDeltaNeutralService {
     const assetMeta = await hl.getAssetMeta(protection.inferredAsset);
     await hl.updateLeverage(assetMeta.index, false, protection.leverage);
     const leverage = Math.max(Number(protection.leverage || 1), 1);
-    const newTotalSize = Math.abs(Number(actualQty || 0)) + Math.abs(Number(qtyToAdd || 0));
+    const addQty = Math.abs(Number(qtyToAdd || 0));
+    const newTotalSize = Math.abs(Number(actualQty || 0)) + addQty;
     const newTotalRequiredMarginUsd = (newTotalSize * currentPrice) / leverage;
+    // Margen específico del incremento — es lo que HL exige que venga de
+    // `withdrawable` (NO del excedente del slot isolated) cuando añadimos
+    // size a una posición isolated existente. Sin eso, HL responde
+    // "Insufficient margin to place order" aunque el slot tenga buffer.
+    const incrementMarginUsd = (addQty * currentPrice) / leverage;
 
-    // Consultar margen ya bloqueado en la posición isolated para no empujar
-    // margen de más cuando ya está sobre-colateralizada. El buffer del 20%
-    // solo se aplica al delta que realmente falta.
-    let existingMarginUsd = 0;
+    let state = null;
     try {
-      const state = await hl.getClearinghouseState();
-      const entry = (state?.assetPositions || []).find(
-        (p) => String(p.position?.coin || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase()
-      );
-      existingMarginUsd = Number(entry?.position?.marginUsed || 0);
+      state = await hl.getClearinghouseState();
     } catch (err) {
       logger.warn('ensureIsolatedMarginBuffer_state_failed', { poolId: protection.id, asset: protection.inferredAsset, error: err.message });
     }
+    const positionEntry = (state?.assetPositions || []).find(
+      (p) => String(p.position?.coin || '').toUpperCase() === String(protection.inferredAsset || '').toUpperCase()
+    );
+    const existingMarginUsd = Number(positionEntry?.position?.marginUsed || 0);
+    const slotRawUsd = Number(positionEntry?.position?.leverage?.rawUsd || 0);
+    const withdrawable = Number(state?.withdrawable || 0);
 
-    const shortfallUsd = Math.max(0, newTotalRequiredMarginUsd - existingMarginUsd);
-    if (shortfallUsd <= 0) return;
-    const marginUsd = Math.ceil(shortfallUsd * 1.2);
+    // --------------------------------------------------------------------
+    // Paso 1 · Si el slot isolated está sobre-colateralizado Y `withdrawable`
+    //         no cubre el margen incremental → extraer el exceso de vuelta
+    //         a cross. HL admite `ntli` negativo para esto.
+    // --------------------------------------------------------------------
+    const SAFETY_BUFFER_FACTOR = 1.2; // deja 20% sobre marginUsed en el slot
+    const slotSurplusUsd = Math.max(0, slotRawUsd - existingMarginUsd * SAFETY_BUFFER_FACTOR);
+    const withdrawableGapUsd = Math.max(0, incrementMarginUsd * 1.1 - withdrawable);
+    if (withdrawableGapUsd > 0 && slotSurplusUsd > 0) {
+      const toExtractUsd = Math.min(slotSurplusUsd, withdrawableGapUsd);
+      const ntli = -Math.ceil(toExtractUsd);
+      try {
+        await hl.updateIsolatedMargin(assetMeta.index, false, ntli);
+        logger.info?.('ensureIsolatedMarginBuffer_extracted', {
+          poolId: protection.id,
+          asset: protection.inferredAsset,
+          extractedUsd: -ntli,
+          slotRawUsd,
+          existingMarginUsd,
+          withdrawableBefore: withdrawable,
+          incrementMarginUsd,
+        });
+      } catch (err) {
+        logger.warn('updateIsolatedMargin_extract_failed', { poolId: protection.id, asset: protection.inferredAsset, ntli, error: err.message });
+      }
+    }
+
+    // --------------------------------------------------------------------
+    // Paso 2 · Si al total le falta margen (no es sobre-colateralizado),
+    //         fondear el slot con el shortfall (+20% buffer). Este era el
+    //         comportamiento original. Lo conservamos como fallback por si
+    //         la posición está efectivamente sub-fondada.
+    // --------------------------------------------------------------------
+    const totalShortfallUsd = Math.max(0, newTotalRequiredMarginUsd - existingMarginUsd);
+    if (totalShortfallUsd <= 0) return;
+    const marginUsd = Math.ceil(totalShortfallUsd * 1.2);
     if (marginUsd > 0) {
       await hl.updateIsolatedMargin(assetMeta.index, false, marginUsd).catch((err) => logger.warn('updateIsolatedMargin failed', { poolId: protection.id, asset: protection.inferredAsset, marginUsd, error: err.message }));
     }

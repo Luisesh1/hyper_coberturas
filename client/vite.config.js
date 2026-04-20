@@ -13,6 +13,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: devPort,
+    allowedHosts: ['hypercover.luisesh1.duckdns.org'],
     proxy: {
       // Redirigir llamadas /api al backend durante desarrollo
       '/api': {

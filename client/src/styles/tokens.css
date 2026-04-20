@@ -104,4 +104,55 @@
 
   /* ── Font ─────────────────────────────────────────────── */
   --font-mono: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  /* ── Typographic scale ────────────────────────────────── */
+  --fs-2xs: 0.625rem;   /* 10px — small captions, badges */
+  --fs-xs:  0.72rem;    /* ~11.5px — labels/uppercase */
+  --fs-sm:  0.82rem;    /* ~13px — body secundario */
+  --fs-md:  0.92rem;    /* ~14.7px — body principal */
+  --fs-lg:  1.05rem;    /* ~17px — títulos card */
+  --fs-xl:  1.3rem;     /* ~21px — títulos sección */
+  --fs-2xl: 1.75rem;    /* ~28px — títulos página */
+
+  --fw-regular: 500;
+  --fw-medium:  600;
+  --fw-bold:    700;
+  --fw-heavy:   800;
+
+  --lh-tight:   1.2;
+  --lh-normal:  1.45;
+  --lh-loose:   1.6;
+
+  /* ── Spacing scale (4-based) ──────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* ── Focus ring (a11y) ────────────────────────────────── */
+  --focus-ring: 0 0 0 3px rgba(102, 225, 219, 0.35);
+  --focus-ring-danger: 0 0 0 3px rgba(239, 68, 68, 0.35);
+
+  /* ── Uniswap/LP accent palette (antes scoped por página) ── */
+  --uni-bg-0: #081018;
+  --uni-bg-1: #0d1620;
+  --uni-bg-2: #121d29;
+  --uni-bg-3: #172334;
+  --uni-border: rgba(133, 157, 181, 0.16);
+  --uni-border-strong: rgba(133, 157, 181, 0.26);
+  --uni-text-0: #f5f7fb;
+  --uni-text-1: #d9e1eb;
+  --uni-text-2: #abbccf;       /* subido de #97a9bd → mejor AA contrast */
+  --uni-text-3: #7d93a9;       /* subido de #6b7f94 → mejor AA */
+  --uni-cyan: #66e1db;
+  --uni-blue: #5ca3ff;
+  --uni-green: #3dd991;
+  --uni-amber: #ffbf5f;
+  --uni-orange: #ff8f4d;
+  --uni-red: #ff7d7d;
+  --uni-shadow: 0 24px 60px rgba(3, 9, 16, 0.34);
 }

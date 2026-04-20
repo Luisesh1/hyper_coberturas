@@ -88,13 +88,27 @@ router.get('/', asyncHandler(async (req, res) => {
   });
 }));
 
+// Formato de bot token de Telegram: <bot_id>:<secret>
+// Ej.: 1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw
+const TELEGRAM_TOKEN_REGEX = /^\d{6,}:[A-Za-z0-9_-]{30,}$/;
+// chatId: entero positivo o negativo (grupos/canales). Aceptamos "-100..."
+const TELEGRAM_CHAT_ID_REGEX = /^-?\d{5,}$/;
+
 router.put('/telegram', asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const { token, chatId } = req.body;
   if (!token || !chatId) {
     throw new ValidationError('token y chatId son requeridos');
   }
-  const tg = { token: token.trim(), chatId: String(chatId).trim() };
+  const trimmedToken = String(token).trim();
+  const trimmedChatId = String(chatId).trim();
+  if (!TELEGRAM_TOKEN_REGEX.test(trimmedToken)) {
+    throw new ValidationError('token de Telegram con formato inválido (esperado "<id>:<secret>")');
+  }
+  if (!TELEGRAM_CHAT_ID_REGEX.test(trimmedChatId)) {
+    throw new ValidationError('chatId de Telegram inválido (debe ser entero numérico)');
+  }
+  const tg = { token: trimmedToken, chatId: trimmedChatId };
   await settingsService.setTelegram(userId, tg);
   await tgRegistry.reload(userId);
   await telegramCommandService.refreshConfigs().catch((err) => logger.warn('telegram config refresh failed', { error: err.message }));

@@ -7,6 +7,7 @@ const lpOrchestratorService = require('../services/lp-orchestrator.service');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
 const {
   createOrchestratorSchema,
+  updateOrchestratorConfigSchema,
   attachLpSchema,
   recordTxFinalizedSchema,
   killLpSchema,
@@ -139,6 +140,17 @@ router.post('/:id/kill-lp', validate(killLpSchema), asyncHandler(async (req, res
     userId: req.user.userId,
     orchestratorId: id,
     mode: req.body.mode,
+  });
+  res.json({ success: true, data });
+}));
+
+router.patch('/:id/config', validate(updateOrchestratorConfigSchema), asyncHandler(async (req, res) => {
+  const id = requireIntParam(req, 'id');
+  const data = await lpOrchestratorService.updateConfig({
+    userId: req.user.userId,
+    orchestratorId: id,
+    strategyConfig: req.body.strategyConfig,
+    protectionConfig: req.body.protectionConfig,
   });
   res.json({ success: true, data });
 }));

@@ -38,3 +38,36 @@ export function formatDuration(ms) {
   if (hours < 48) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
+
+/**
+ * Formatea un timestamp (ms desde epoch) como "hace Xs/m/h/d" según la
+ * distancia con `now`. Para fechas futuras muestra "en Xs/m/h". Valores
+ * inválidos devuelven '—'.
+ */
+export function formatRelative(timestampMs, { now = Date.now() } = {}) {
+  const ts = Number(timestampMs);
+  if (!Number.isFinite(ts) || ts <= 0) return '—';
+  const diffMs = now - ts;
+  const absMs = Math.abs(diffMs);
+  const future = diffMs < 0;
+  const prefix = future ? 'en ' : 'hace ';
+
+  if (absMs < 60_000) return `${prefix}${Math.max(1, Math.floor(absMs / 1000))}s`;
+  if (absMs < 3_600_000) return `${prefix}${Math.floor(absMs / 60_000)}m`;
+  if (absMs < 172_800_000) return `${prefix}${Math.floor(absMs / 3_600_000)}h`;
+  return `${prefix}${Math.floor(absMs / 86_400_000)}d`;
+}
+
+/**
+ * Formato absoluto detallado (para tooltips). Acepta ms o segundos
+ * según flag `inSeconds`.
+ */
+export function formatAbsolute(timestamp, { inSeconds = false } = {}) {
+  if (!timestamp) return '—';
+  const ms = inSeconds ? Number(timestamp) * 1000 : Number(timestamp);
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  return new Date(ms).toLocaleString('es-MX', {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  });
+}

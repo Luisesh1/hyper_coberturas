@@ -17,6 +17,7 @@ import PositionActionModal from './components/PositionActionModal';
 import SmartCreatePoolModal from './components/SmartCreatePoolModal';
 import SkeletonCard from './components/SkeletonCard';
 import WalletConnectSetupModal from '../../components/shared/WalletConnectSetupModal';
+import { formatApiError } from '../../utils/errorFormatter';
 import styles from './UniswapPoolsPage.module.css';
 
 const PROTECTED_POOLS_REFRESH_INTERVAL_MS = 600000;
@@ -83,7 +84,7 @@ export default function UniswapPoolsPage() {
       setResult((prev) => mergeResultProtections(prev, data));
       return data;
     } catch (err) {
-      setError(err.message);
+      setError(formatApiError(err));
       return null;
     } finally {
       setIsLoadingProtected(false);
@@ -127,7 +128,7 @@ export default function UniswapPoolsPage() {
         setProtectedRefreshedAt(Date.now());
         if (walletData?.address) setWallet(walletData.address);
       } catch (err) {
-        setError(err.message);
+        setError(formatApiError(err));
       }
     }
     loadInitial().catch(() => {});
@@ -256,7 +257,7 @@ export default function UniswapPoolsPage() {
       setActiveTab('results');
     } catch (err) {
       setResult(null);
-      setError(err.message);
+      setError(formatApiError(err));
     } finally {
       setIsScanning(false);
     }
@@ -323,7 +324,7 @@ export default function UniswapPoolsPage() {
       await loadProtectedPools();
       setActiveTab('protected');
     } catch (err) {
-      setError(err.message);
+      setError(formatApiError(err));
     } finally {
       setIsApplyingProtection(false);
     }
@@ -360,7 +361,7 @@ export default function UniswapPoolsPage() {
       await uniswapApi.deactivateProtectedPool(protection.id);
       await loadProtectedPools();
     } catch (err) {
-      setError(err.message);
+      setError(formatApiError(err));
     } finally {
       setDeactivatingId(null);
     }

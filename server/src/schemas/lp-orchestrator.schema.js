@@ -76,10 +76,35 @@ const killLpSchema = z.object({
   mode: z.enum(['auto', 'usdc', 'keep']).default('auto'),
 });
 
+// Versión parcial del schema de estrategia para el flujo de edición: el
+// cliente puede mandar sólo los campos que cambia. Los `min/max/lt` se
+// mantienen para rechazar valores fuera de rango.
+const strategyConfigPatchSchema = z.object({
+  rangeWidthPct: z.number().positive().lt(100).optional(),
+  edgeMarginPct: z.number().min(5).max(49).optional(),
+  costToRewardThreshold: z.number().positive().lt(1).optional(),
+  minRebalanceCooldownSec: z.number().int().min(0).optional(),
+  minNetLpEarningsForRebalanceUsd: z.number().min(0).optional(),
+  reinvestThresholdUsd: z.number().min(0).optional(),
+  urgentAlertRepeatMinutes: z.number().int().min(1).max(1440).optional(),
+  maxSlippageBps: z.number().int().min(1).max(1000).optional(),
+});
+
+const updateOrchestratorConfigSchema = z.object({
+  strategyConfig: strategyConfigPatchSchema.optional(),
+  // La protección se reemplaza completa si viene (schema union enabled/disabled),
+  // porque mezclar `enabled: true` con `enabled: false` no tiene sentido parcial.
+  protectionConfig: protectionConfigSchema.optional(),
+}).refine((value) => value.strategyConfig || value.protectionConfig, {
+  message: 'Debe enviarse strategyConfig o protectionConfig',
+});
+
 module.exports = {
   strategyConfigSchema,
+  strategyConfigPatchSchema,
   protectionConfigSchema,
   createOrchestratorSchema,
+  updateOrchestratorConfigSchema,
   attachLpSchema,
   recordTxFinalizedSchema,
   killLpSchema,

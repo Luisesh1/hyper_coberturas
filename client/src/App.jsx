@@ -18,6 +18,7 @@ import StrategyStudioPage from './pages/StrategyStudio/StrategyStudioPage';
 import BotsPage from './pages/Bots/BotsPage';
 import BacktestingPage from './pages/Backtesting/BacktestingPage';
 import HidenActionsPage from './pages/HidenActions/HidenActionsPage';
+import TradingViewPage from './pages/TradingView/TradingViewPage';
 import styles from './App.module.css';
 
 // DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
@@ -36,8 +37,11 @@ const BASE_NAV = [
   { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
   { id: 'lp-orchestrator', path: '/lp-orchestrator', label: '🎛 Orquestador LP', activeClass: 'modeBtnActive', title: 'Orquestador LP' },
   { id: 'metricas', path: '/metricas', label: '📊 Metricas', activeClass: 'modeBtnActive', title: 'Metricas' },
+  { id: 'trading-view', path: '/trading-view', label: '📈 Trading View', activeClass: 'modeBtnActive', title: 'Trading View' },
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
+
+const FULLSCREEN_ROUTES = new Set(['/trading-view']);
 
 const SUPER_NAV = [
   { id: 'users', path: '/usuarios', label: '👥 Usuarios', activeClass: 'modeBtnActive', title: 'Usuarios' },
@@ -52,6 +56,9 @@ function AppContent() {
   const location = useLocation();
 
   const navItems = isSuperuser ? [...BASE_NAV, ...SUPER_NAV] : BASE_NAV;
+  // Rutas que quieren solo el navbar + su contenido edge-to-edge (sin sidebar,
+  // sin padding del main). Ej: TradingView a pantalla completa.
+  const isFullscreen = FULLSCREEN_ROUTES.has(location.pathname);
 
   const goTo = (path) => {
     navigate(path);
@@ -139,12 +146,14 @@ function AppContent() {
         </div>
       </header>
 
-      <main className={styles.main}>
-        <aside className={styles.sidebar}>
-          <PricePanel selectedAsset={selectedAsset} onSelectAsset={setSelectedAsset} />
-        </aside>
+      <main className={`${styles.main} ${isFullscreen ? styles.mainFullscreen : ''}`}>
+        {!isFullscreen && (
+          <aside className={styles.sidebar}>
+            <PricePanel selectedAsset={selectedAsset} onSelectAsset={setSelectedAsset} />
+          </aside>
+        )}
 
-        <section className={styles.content}>
+        <section className={`${styles.content} ${isFullscreen ? styles.contentFullscreen : ''}`}>
           <ErrorBoundary>
             <Routes>
               <Route path="/"           element={<Navigate to="/trade" replace />} />
@@ -156,6 +165,7 @@ function AppContent() {
               <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
               <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
               <Route path="/metricas"   element={<MetricasPage />} />
+              <Route path="/trading-view" element={<TradingViewPage />} />
               <Route path="/config"     element={<SettingsPage />} />
               {/* Ruta oculta — no aparece en el navbar. Acciones de
                   recovery / mantenimiento manual. Acceso por URL directo. */}

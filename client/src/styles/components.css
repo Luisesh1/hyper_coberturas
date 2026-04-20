@@ -1,0 +1,193 @@
+/**
+ * components.css — Utilidades/primitives de UI compartidos.
+ *
+ * Se importa después de tokens.css en main.jsx y define clases globales
+ * que cualquier componente puede usar para evitar duplicación:
+ *   .btn / .btn-primary / .btn-secondary / .btn-danger / .btn-ghost
+ *   .card / .card-hover
+ *   .focus-ring (opt-in via className)
+ *   .input-base  .select-base
+ *
+ * Los CSS Modules siguen siendo la fuente de verdad para layouts específicos;
+ * estas utilidades cubren los casos repetidos (20+ copias de "button primary").
+ */
+
+/* ── Base reset de focus visible global ───────────────────── */
+button,
+a,
+[role='button'],
+input,
+select,
+textarea {
+  outline: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Botones ──────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-heavy);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+  user-select: none;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, rgba(102, 225, 219, 0.22), rgba(92, 163, 255, 0.18));
+  border-color: rgba(102, 225, 219, 0.4);
+  color: var(--uni-text-0);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(102, 225, 219, 0.32), rgba(92, 163, 255, 0.26));
+  border-color: rgba(102, 225, 219, 0.6);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-strong);
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--red-light);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.btn-danger:focus-visible {
+  box-shadow: var(--focus-ring-danger);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.btn-sm {
+  padding: 6px 10px;
+  font-size: var(--fs-xs);
+}
+
+.btn-lg {
+  padding: var(--sp-3) var(--sp-5);
+  font-size: var(--fs-md);
+}
+
+/* ── Card base ────────────────────────────────────────────── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: var(--sp-4);
+  box-shadow: var(--shadow-card);
+}
+
+.card-hover {
+  transition: border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.card-hover:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+}
+
+/* ── Input & Select consistentes ──────────────────────────── */
+.input-base,
+.select-base {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.input-base::placeholder {
+  color: var(--text-hint);
+}
+
+.input-base:focus,
+.select-base:focus {
+  border-color: rgba(102, 225, 219, 0.55);
+}
+
+/* ── Texto auxiliar ──────────────────────────────────────── */
+.text-muted { color: var(--text-secondary); }
+.text-subtle { color: var(--text-tertiary); }
+.text-mono { font-family: var(--font-mono); }
+
+/* ── Animación de entrada para toasts y modales ──────────── */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in-up {
+  animation: fadeInUp 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-up { animation: none; }
+  .btn:hover:not(:disabled),
+  .card-hover:hover { transform: none; }
+}

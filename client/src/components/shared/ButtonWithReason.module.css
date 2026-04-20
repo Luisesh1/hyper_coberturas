@@ -1,0 +1,26 @@
+.wrapper {
+  display: inline-flex;
+  position: relative;
+}
+
+.wrapper[data-disabled='true'] {
+  cursor: not-allowed;
+}
+
+.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: auto; /* permitir que el title se dispare en hover */
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

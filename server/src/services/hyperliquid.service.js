@@ -26,6 +26,78 @@ const {
 const INFO_URL = `${config.hyperliquid.apiUrl}/info`;
 const EXCHANGE_URL = `${config.hyperliquid.apiUrl}/exchange`;
 
+// Circuit breaker compartido para el endpoint de EXCHANGE. Tras varios fallos
+// consecutivos (rate-limit, 5xx o timeouts) pausamos las órdenes durante un
+// período corto para evitar empeorar la saturación y dejar órdenes colgadas.
+// No aplicamos a INFO porque ya maneja retry/backoff a nivel del _post().
+const EXCHANGE_BREAKER = {
+  threshold: 3,
+  cooldownMs: 60_000,
+  consecutiveFailures: 0,
+  openUntil: 0,
+};
+
+function _exchangeBreakerCheck() {
+  const now = Date.now();
+  if (EXCHANGE_BREAKER.openUntil > now) {
+    const waitMs = EXCHANGE_BREAKER.openUntil - now;
+    const err = new Error(`[HL API] circuit breaker abierto; espere ${Math.ceil(waitMs / 1000)}s antes de reintentar órdenes`);
+    err.circuitBreakerOpen = true;
+    err.retryInMs = waitMs;
+    throw err;
+  }
+}
+
+function _exchangeBreakerOnSuccess() {
+  EXCHANGE_BREAKER.consecutiveFailures = 0;
+  EXCHANGE_BREAKER.openUntil = 0;
+}
+
+/**
+ * Determina si una acción del endpoint EXCHANGE se puede reintentar en caso
+ * de timeout sin riesgo de ejecutarse dos veces:
+ *  - 'order'   → seguro SI trae cloid (HL deduplica por cloid)
+ *  - 'cancel', 'updateLeverage', 'updateIsolatedMargin', 'modify' → idempotentes
+ * El resto (withdraw, scheduleCancel, etc.) se marca no idempotente por defecto.
+ */
+function _isIdempotentExchangeAction(payloadOrAction) {
+  if (!payloadOrAction) return false;
+  // El payload al POST es `{ action, nonce, signature, ... }`, y _post recibe el
+  // payload completo. La action está en payload.action.
+  const action = payloadOrAction.action || payloadOrAction;
+  const type = action?.type;
+  if (!type) return false;
+  if (type === 'cancel' || type === 'cancelByCloid' || type === 'modify'
+      || type === 'updateLeverage' || type === 'updateIsolatedMargin') {
+    return true;
+  }
+  if (type === 'order') {
+    const orders = Array.isArray(action.orders) ? action.orders : [];
+    if (orders.length === 0) return false;
+    // Todas las órdenes deben traer cloid para garantizar dedupe.
+    return orders.every((o) => o && typeof o.c === 'string' && o.c.length > 0);
+  }
+  return false;
+}
+
+function _exchangeBreakerOnFailure(err) {
+  // Solo contamos fallos "temporales" (red/servidor), no rechazos aplicativos
+  // que ya vienen como HTTP 200 status:err desde HL (esos son errores de usuario).
+  const status = Number(err?.response?.status || 0);
+  const transient = status === 429
+    || status >= 500
+    || /econnreset|socket hang up|timeout|network/i.test(String(err?.message || ''));
+  if (!transient) return;
+  EXCHANGE_BREAKER.consecutiveFailures += 1;
+  if (EXCHANGE_BREAKER.consecutiveFailures >= EXCHANGE_BREAKER.threshold) {
+    EXCHANGE_BREAKER.openUntil = Date.now() + EXCHANGE_BREAKER.cooldownMs;
+    logger.error('hl_exchange_breaker_open', {
+      failures: EXCHANGE_BREAKER.consecutiveFailures,
+      cooldownMs: EXCHANGE_BREAKER.cooldownMs,
+    });
+  }
+}
+
 // Dominio EIP-712 que usa Hyperliquid para firmar acciones
 const EIP712_DOMAIN = {
   name: 'Exchange',
@@ -99,9 +171,26 @@ class HyperliquidService {
     if (endpoint) hlWeightBudget.record(endpoint);
 
     const isInfoRequest = url === INFO_URL;
-    const safeMaxRetries = Number.isFinite(maxRetries)
-      ? maxRetries
-      : (isInfoRequest ? Math.max(1, Number(config.hyperliquid?.infoRetryMaxAttempts) || 3) : 0);
+    const isExchangeRequest = url === EXCHANGE_URL;
+    if (isExchangeRequest) _exchangeBreakerCheck();
+
+    // Retry automático en EXCHANGE sólo cuando es seguro: el request debe ser
+    // idempotente. Las acciones 'order' traen cloid (HL deduplica por él); las
+    // acciones 'cancel' / 'updateLeverage' / 'updateIsolatedMargin' son
+    // idempotentes por naturaleza. Para otras (scheduleCancel, withdraw) NO
+    // reintentamos: un timeout podría ejecutarse dos veces.
+    const exchangeRetryable = isExchangeRequest && _isIdempotentExchangeAction(body?.action || body);
+
+    let safeMaxRetries;
+    if (Number.isFinite(maxRetries)) {
+      safeMaxRetries = maxRetries;
+    } else if (isInfoRequest) {
+      safeMaxRetries = Math.max(1, Number(config.hyperliquid?.infoRetryMaxAttempts) || 3);
+    } else if (exchangeRetryable) {
+      safeMaxRetries = 2;
+    } else {
+      safeMaxRetries = 0;
+    }
 
     let attempt = 0;
     let lastErr = null;
@@ -118,12 +207,27 @@ class HyperliquidService {
         if (data?.status === 'err') {
           throw new Error(data.response || 'Error en Hyperliquid API');
         }
+        if (isExchangeRequest) _exchangeBreakerOnSuccess();
         return data;
       } catch (err) {
         lastErr = err;
-        const retryable = isInfoRequest && isHyperliquidRetryableError(err);
+        const infoRetryable = isInfoRequest && isHyperliquidRetryableError(err);
+        // En EXCHANGE solo reintentamos fallas de red/timeout/5xx, NUNCA un
+        // rechazo aplicativo (status:err viene como error con err.response === undefined
+        // pero con err.message setmanual arriba). Detectamos el caso "no response"
+        // o status de servidor como señal de "desconocemos el resultado".
+        const httpStatus = Number(err?.response?.status || 0);
+        const looksTransient = !err.response
+          || httpStatus === 429
+          || httpStatus >= 500
+          || /econnreset|socket hang up|timeout|etimedout|network/i.test(String(err?.message || ''));
+        const exchangeShouldRetry = exchangeRetryable
+          && looksTransient
+          // Si el error viene de nuestro propio throw de "status === 'err'" (rechazo aplicativo),
+          // err.response es undefined pero no es timeout: la comprobación de patrón en message lo descarta.
+          && !/Error en Hyperliquid API|Orden rechazada|Stop entry rechazada|SL rechazado|TP rechazado|updateIsolatedMargin rechazado/i.test(String(err?.message || ''));
 
-        if (retryable && attempt < safeMaxRetries) {
+        if ((infoRetryable || exchangeShouldRetry) && attempt < safeMaxRetries) {
           const retryAfterHeader = err.response?.headers?.['retry-after'];
           const retryAfterMs = Number(retryAfterHeader) > 0
             ? Number(retryAfterHeader) * 1000
@@ -134,9 +238,10 @@ class HyperliquidService {
             });
           logger.warn('hl_retry_scheduled', {
             endpoint,
-            requestType: body?.type || null,
+            requestType: body?.type || body?.action?.type || null,
             attempt: attempt + 1,
             retryAfterMs,
+            scope: isInfoRequest ? 'info' : 'exchange',
             budget: hlWeightBudget.getSnapshot(),
             error: err.message,
           });
@@ -144,6 +249,8 @@ class HyperliquidService {
           attempt += 1;
           continue;
         }
+
+        if (isExchangeRequest) _exchangeBreakerOnFailure(err);
 
         // Errores propios (no-response) o error aplicativo: NO reintentar.
         if (err.message && !err.response) throw err;
@@ -155,6 +262,7 @@ class HyperliquidService {
     }
 
     // Se agotaron los reintentos.
+    if (isExchangeRequest) _exchangeBreakerOnFailure(lastErr);
     const message = lastErr?.response?.data?.error
       || lastErr?.response?.data
       || lastErr?.message
@@ -302,9 +410,9 @@ class HyperliquidService {
     return this._post(EXCHANGE_URL, payload);
   }
 
-  _buildLimitOrder({ assetIndex, isBuy, price, size, reduceOnly = false, tif = 'Gtc' }) {
+  _buildLimitOrder({ assetIndex, isBuy, price, size, reduceOnly = false, tif = 'Gtc', cloid = null }) {
     // Orden de campos del Python SDK: a, b, p, s, r, t (s antes de r)
-    return {
+    const order = {
       a: assetIndex,
       b: isBuy,
       p: floatToWire(price),
@@ -312,6 +420,27 @@ class HyperliquidService {
       r: reduceOnly,
       t: { limit: { tif } },
     };
+    if (cloid) order.c = cloid;
+    return order;
+  }
+
+  /**
+   * Genera un clientOrderId (cloid) aleatorio en formato hex de 128 bits.
+   * Hyperliquid deduplica órdenes que comparten cloid → reenviar la misma
+   * orden tras un timeout no crea duplicados; HL devuelve el resultado original.
+   */
+  _newCloid() {
+    const bytes = new Uint8Array(16);
+    // ethers.randomBytes asegura CSPRNG; cae en Math.random solo en entornos que no lo soporten
+    try {
+      const rand = ethers.randomBytes(16);
+      bytes.set(rand);
+    } catch (_err) {
+      for (let i = 0; i < 16; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    let hex = '0x';
+    for (let i = 0; i < bytes.length; i += 1) hex += bytes[i].toString(16).padStart(2, '0');
+    return hex;
   }
 
   _buildTriggerOrder({
@@ -323,10 +452,11 @@ class HyperliquidService {
     isMarket = true,
     triggerPx,
     tpsl,
+    cloid = null,
   }) {
     // Orden de campos EXACTO del Python SDK oficial de HL: a,b,p,s,r,t
     // (s antes que r — distinto al buildLimitOrder que usa r,s)
-    return {
+    const order = {
       a: assetIndex,
       b: isBuy,
       p: floatToWire(price),
@@ -340,6 +470,8 @@ class HyperliquidService {
         },
       },
     };
+    if (cloid) order.c = cloid;
+    return order;
   }
 
   /**
@@ -354,11 +486,15 @@ class HyperliquidService {
    * @param {'Gtc'|'Ioc'|'Alo'} params.tif - Time in force
    * @returns {{ oid: number|null, result: object }} oid del resting order (null si se ejecuto inmediatamente)
    */
-  async placeOrder({ assetIndex, isBuy, size, price, reduceOnly = false, tif = 'Gtc' }) {
+  async placeOrder({ assetIndex, isBuy, size, price, reduceOnly = false, tif = 'Gtc', cloid = null }) {
+    // Siempre adjuntamos cloid: si un reintento llega tras timeout, HL devuelve
+    // el mismo status y no crea una segunda orden. Permite al caller pasar su
+    // propio cloid para idempotencia end-to-end; si no, generamos uno fresco.
+    const effectiveCloid = cloid || this._newCloid();
     const action = {
       type: 'order',
       orders: [
-        this._buildLimitOrder({ assetIndex, isBuy, price, size, reduceOnly, tif }),
+        this._buildLimitOrder({ assetIndex, isBuy, price, size, reduceOnly, tif, cloid: effectiveCloid }),
       ],
       grouping: 'na',
     };
@@ -382,7 +518,7 @@ class HyperliquidService {
     const filledSz = status.filled?.totalSz != null ? parseFloat(status.filled.totalSz) : null;
     const avgPx = status.filled?.avgPx != null ? parseFloat(status.filled.avgPx) : null;
 
-    return { oid, filledSz, avgPx, result };
+    return { oid, filledSz, avgPx, cloid: effectiveCloid, result };
   }
 
   /**
@@ -422,6 +558,7 @@ class HyperliquidService {
           isMarket: true,
           triggerPx,
           tpsl: 'sl',
+          cloid: this._newCloid(),
         }),
       ],
       grouping: 'na',
@@ -461,6 +598,7 @@ class HyperliquidService {
           isMarket,
           triggerPx,
           tpsl: 'sl',
+          cloid: this._newCloid(),
         }),
       ],
       grouping: 'na',
@@ -494,6 +632,7 @@ class HyperliquidService {
           isMarket: true,
           triggerPx,
           tpsl: 'tp',
+          cloid: this._newCloid(),
         }),
       ],
       grouping: 'na',
@@ -556,6 +695,7 @@ class HyperliquidService {
           isMarket: true,
           triggerPx: entryTriggerPx,
           tpsl: 'sl',
+          cloid: this._newCloid(),
         }),
         // 2) SL encadenado: se activa automáticamente cuando la entrada se llena
         this._buildTriggerOrder({
@@ -567,6 +707,7 @@ class HyperliquidService {
           isMarket: true,
           triggerPx: exitTriggerPx,
           tpsl: 'sl',
+          cloid: this._newCloid(),
         }),
       ],
       type: 'order',

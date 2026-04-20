@@ -66,6 +66,7 @@ export default function OrchestratorCard({
   onAdoptLp,
   onShowLog,
   onShowIssue,
+  onEditConfig,
 }) {
   const phaseInfo = PHASE_LABELS[orchestrator.phase] || { label: orchestrator.phase, tone: 'muted' };
   const evaluation = orchestrator.lastEvaluation?.evaluation;
@@ -278,6 +279,15 @@ export default function OrchestratorCard({
             title="Ver bitácora de decisiones"
           >
             📋 Bitácora
+          </button>
+          <button
+            type="button"
+            className={styles.metaBtn}
+            onClick={() => onEditConfig?.(orchestrator)}
+            disabled={!onEditConfig}
+            title="Editar estrategia y protección del orquestador"
+          >
+            ⚙ Editar config
           </button>
           <button
             type="button"

@@ -298,6 +298,29 @@ async function updateAccounting(userId, id, accounting, executor) {
   return rows[0]?.id || null;
 }
 
+async function updateConfig(userId, id, {
+  strategyConfig,
+  protectionConfig,
+  updatedAt = Date.now(),
+}, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE lp_orchestrators
+        SET strategy_config_json = COALESCE($3, strategy_config_json),
+            protection_config_json = COALESCE($4, protection_config_json),
+            updated_at = $5
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [
+      userId,
+      id,
+      strategyConfig !== undefined ? toJson(strategyConfig) : null,
+      protectionConfig !== undefined ? toJson(protectionConfig) : null,
+      updatedAt,
+    ]
+  );
+  return rows[0]?.id || null;
+}
+
 async function markUrgentAlertSent(userId, id, { at = Date.now() } = {}, executor) {
   const { rows } = await exec(executor).query(
     `UPDATE lp_orchestrators
@@ -485,6 +508,7 @@ module.exports = {
   updatePhase,
   updateActiveLp,
   updateStrategyState,
+  updateConfig,
   updateAccounting,
   markUrgentAlertSent,
   clearUrgentAlert,

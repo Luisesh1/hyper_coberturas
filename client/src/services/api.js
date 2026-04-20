@@ -66,6 +66,8 @@ export const usersApi = {
 // ------------------------------------------------------------------
 export const marketApi = {
   getContexts: () => request('GET', '/market/contexts'),
+  getCandles: ({ asset, timeframe = '15m', limit = 300 } = {}) =>
+    request('GET', `/market/candles?asset=${encodeURIComponent(asset)}&timeframe=${timeframe}&limit=${limit}`),
 };
 
 // ------------------------------------------------------------------
@@ -289,6 +291,8 @@ export const lpOrchestratorApi = {
   killLp: (id, { mode = 'auto' } = {}) =>
     request('POST', `/lp-orchestrators/${id}/kill-lp`, { mode }),
   archive: (id) => request('POST', `/lp-orchestrators/${id}/archive`, {}),
+  updateConfig: (id, { strategyConfig, protectionConfig } = {}) =>
+    request('PATCH', `/lp-orchestrators/${id}/config`, { strategyConfig, protectionConfig }),
   getActionLog: (id, { limit } = {}) => {
     const qs = limit ? `?limit=${limit}` : '';
     return request('GET', `/lp-orchestrators/${id}/action-log${qs}`);

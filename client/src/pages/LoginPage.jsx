@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { formatApiError } from '../utils/errorFormatter';
 import styles from './LoginPage.module.css';
 
 export default function LoginPage() {
@@ -23,7 +24,7 @@ export default function LoginPage() {
     try {
       await login(form.username.trim(), form.password);
     } catch (err) {
-      setError(err.message);
+      setError(formatApiError(err, 'No se pudo iniciar sesión'));
     } finally {
       setLoading(false);
     }

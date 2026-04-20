@@ -6,6 +6,7 @@ import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
 import OrchestratorCard from './components/OrchestratorCard';
 import CreateOrchestratorWizard from './components/CreateOrchestratorWizard';
+import EditOrchestratorConfigModal from './components/EditOrchestratorConfigModal';
 import ActionLogDrawer from './components/ActionLogDrawer';
 import OrchestratorIssueModal from './components/OrchestratorIssueModal';
 import PositionActionModal from '../UniswapPools/components/PositionActionModal';
@@ -13,6 +14,7 @@ import SmartCreatePoolModal from '../UniswapPools/components/SmartCreatePoolModa
 import SmartAddLiquidityModal from '../UniswapPools/components/SmartAddLiquidityModal';
 import WalletConnectSetupModal from '../../components/shared/WalletConnectSetupModal';
 import { formatUsd } from '../UniswapPools/utils/pool-formatters';
+import { formatApiError } from '../../utils/errorFormatter';
 import styles from './LpOrchestratorPage.module.css';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -41,6 +43,7 @@ export default function LpOrchestratorPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [logDrawerFor, setLogDrawerFor] = useState(null); // orchestrator
   const [issueModalFor, setIssueModalFor] = useState(null);
+  const [editConfigFor, setEditConfigFor] = useState(null);
   const [resolvingIssueId, setResolvingIssueId] = useState(null);
   const { dialog, confirm } = useConfirmAction();
   const walletConn = useWalletConnection();
@@ -53,7 +56,7 @@ export default function LpOrchestratorPage() {
       const list = await lpOrchestratorApi.list({ includeArchived: showInactive });
       setOrchestrators(Array.isArray(list) ? list : []);
     } catch (err) {
-      setError(err.message || 'No se pudo cargar la lista.');
+      setError(formatApiError(err, 'No se pudo cargar la lista.'));
     } finally {
       setIsLoading(false);
     }
@@ -69,7 +72,7 @@ export default function LpOrchestratorPage() {
         setMeta(metaData);
         setAccounts(accountsData || []);
       } catch (err) {
-        setError(err.message);
+        setError(formatApiError(err, 'No se pudo cargar la configuración inicial.'));
       }
     }
     loadInitial().catch(() => {});
@@ -629,9 +632,22 @@ export default function LpOrchestratorPage() {
             onAdoptLp={handleAdoptLp}
             onShowLog={setLogDrawerFor}
             onShowIssue={setIssueModalFor}
+            onEditConfig={setEditConfigFor}
           />
         ))}
       </div>
+
+      {editConfigFor && (
+        <EditOrchestratorConfigModal
+          orchestrator={editConfigFor}
+          accounts={accounts}
+          onClose={() => setEditConfigFor(null)}
+          onSaved={() => {
+            setEditConfigFor(null);
+            refresh().catch(() => {});
+          }}
+        />
+      )}
 
       {showWizard && (
         <CreateOrchestratorWizard

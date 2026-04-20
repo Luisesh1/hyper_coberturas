@@ -1,34 +1,50 @@
 .container {
-  padding: 2rem;
+  padding: var(--sp-6);
   text-align: center;
   color: var(--text-primary);
   background: var(--bg-card);
-  border-radius: var(--radius-md);
-  margin: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin: var(--sp-4);
+  box-shadow: var(--shadow-card);
 }
 
 .title {
-  color: var(--red);
-  margin-bottom: 0.5rem;
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-heavy);
+  color: var(--red-light);
+  margin: 0 0 var(--sp-2);
 }
 
 .message {
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
-  margin-bottom: 1rem;
+  margin: 0 0 var(--sp-4);
+  line-height: var(--lh-normal);
 }
 
 .retryBtn {
-  padding: 0.5rem 1.5rem;
+  padding: var(--sp-2) var(--sp-5);
   background: var(--indigo);
   color: #fff;
-  border: none;
-  border-radius: var(--radius-sm);
+  border: 1px solid rgba(99, 102, 241, 0.8);
+  border-radius: var(--radius-md);
   cursor: pointer;
   font: inherit;
-  font-weight: 600;
-  transition: background var(--transition-fast);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  transition:
+    background var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .retryBtn:hover {
   background: var(--indigo-hover);
+  transform: translateY(-1px);
+}
+
+.retryBtn:focus-visible { box-shadow: var(--focus-ring); }
+
+@media (prefers-reduced-motion: reduce) {
+  .retryBtn:hover { transform: none; }
 }

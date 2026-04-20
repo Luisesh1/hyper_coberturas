@@ -61,10 +61,22 @@ export default function OrchestratorRangeBar({
   const openPinLeft = getBoundedPinLeft(openPct);
   const currentPinLeft = getBoundedPinLeft(currentPct);
 
+  // Edad del LP — activeForMs viene pre-calculado del backend; como fallback
+  // lo calculamos desde pool.openedAt (segundos) para que el label aparezca
+  // aun cuando la prop no se haya propagado todavía.
+  const lpAgeMs = Number.isFinite(activeForMs) && activeForMs > 0
+    ? activeForMs
+    : (pool?.openedAt ? Math.max(0, Date.now() - Number(pool.openedAt) * 1000) : null);
+
   return (
     <div className={styles.card}>
       <div className={styles.header}>
         <span className={styles.title}>Rango</span>
+        {lpAgeMs != null && (
+          <span className={styles.headerAge} title="Tiempo transcurrido desde la apertura del LP">
+            LP abierto hace {formatDuration(lpAgeMs)}
+          </span>
+        )}
       </div>
 
       {/* Pin del precio actual ARRIBA del track */}

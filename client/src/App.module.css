@@ -342,6 +342,18 @@
   min-height: 0;
 }
 
+/* ── Layout fullscreen: solo navbar + contenido (sin sidebar) ────── */
+.mainFullscreen {
+  grid-template-columns: 1fr;
+  padding: 0;
+  gap: 0;
+}
+
+.contentFullscreen {
+  overflow: hidden; /* el page interno se encarga del scroll si lo necesita */
+  height: 100%;
+}
+
 /* ── Animaciones ───────────────────────────────────────────────── */
 @keyframes fadeIn {
   from { opacity: 0; }

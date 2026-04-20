@@ -16,6 +16,12 @@ function toFiniteNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// HL no expone una suscripción real `clearinghouseState` a día de hoy: si el
+// handler WS jamás recibe eventos, el caché se llena una sola vez desde el
+// fallback HTTP y queda congelado. Un TTL corto garantiza que nuevas lecturas
+// vuelvan a HTTP cuando el slot isolated se haya fondeado/redimensionado.
+const CLEARINGHOUSE_STATE_FRESHNESS_MS = 5_000;
+
 function extractBbo(raw = {}) {
   const bid = toFiniteNumber(raw.bid ?? raw.bestBid ?? raw.bb ?? raw.b);
   const ask = toFiniteNumber(raw.ask ?? raw.bestAsk ?? raw.ba ?? raw.a);
@@ -80,7 +86,10 @@ class HyperliquidStreamService {
     const normalizedUser = normalizeUser(user);
     if (normalizedUser && !this.subscribedUsers.has(normalizedUser)) {
       this.subscribedUsers.add(normalizedUser);
-      this.wsClient.subscribe({ type: 'clearinghouseState', user });
+      // HL no expone un canal WS `clearinghouseState` — la fuente de verdad
+      // sigue siendo HTTP con TTL en `getClearinghouseState` más abajo.
+      // Mantener la suscripción activa desperdiciaría un slot del WS sin
+      // disparar eventos, además de generar ruido en el diagnóstico.
       this.wsClient.subscribe({ type: 'orderUpdates', user });
       this.wsClient.subscribe({ type: 'userEvents', user });
     }
@@ -133,13 +142,20 @@ class HyperliquidStreamService {
   async getClearinghouseState(user) {
     const normalized = normalizeUser(user);
     const cached = this.clearinghouseState.get(normalized);
-    if (cached) return { ...cached, source: 'ws' };
+    const age = cached ? Date.now() - Number(cached.timestamp || 0) : Infinity;
+    if (cached && age < CLEARINGHOUSE_STATE_FRESHNESS_MS) {
+      return { ...cached, source: cached.source || 'ws' };
+    }
 
     const state = await this.httpClient.getClearinghouseState(user).catch(() => null);
-    if (!state) return null;
-    const parsed = { user: normalized, state, timestamp: Date.now() };
+    if (!state) {
+      // Si HTTP falla pero tenemos caché viejo, devolvemos eso para no romper
+      // el resto del flujo (mejor stale que null).
+      return cached ? { ...cached, source: 'stale' } : null;
+    }
+    const parsed = { user: normalized, state, timestamp: Date.now(), source: 'http' };
     this.clearinghouseState.set(normalized, parsed);
-    return { ...parsed, source: 'http' };
+    return { ...parsed };
   }
 
   getDiagnostics() {
@@ -206,15 +222,9 @@ class HyperliquidStreamService {
       return;
     }
 
-    if (channel === 'clearinghouseState') {
-      const user = normalizeUser(data.user);
-      if (!user) return;
-      this.clearinghouseState.set(user, {
-        user,
-        state: data,
-        timestamp: Date.now(),
-      });
-    }
+    // `clearinghouseState` no se recibe por WS (HL no expone ese canal).
+    // El map `this.clearinghouseState` se llena sólo via HTTP + TTL en
+    // `getClearinghouseState`.
   }
 }
 

@@ -16,14 +16,13 @@ const backtestQueueService = require('../services/backtest-queue.service');
 const hedgeRegistry = require('../services/hedge.registry');
 const botRegistry = require('../services/bot.registry');
 
-// Hooks de proceso para capturar promesas/errores no manejados. En dev
-// los redirigimos al logger para que aparezcan en el DevLogPanel y dejen
-// de ser invisibles. En prod siguen siendo silenciosos por defecto (no
-// queremos que un crash en background tire el proceso sin control).
+// Hooks de proceso para capturar promesas/errores no manejados.
+// Se instalan en todos los entornos: en prod un reject silencioso en un
+// background task (monitor de hedge, orquestador delta-neutral) sin log
+// es una caja negra durante incidentes.
 let _processHooksInstalled = false;
 function installProcessHooksOnce() {
   if (_processHooksInstalled) return;
-  if (config.server.nodeEnv !== 'development') return;
   _processHooksInstalled = true;
   process.on('unhandledRejection', (reason) => {
     const err = reason instanceof Error ? reason : new Error(String(reason));

@@ -23,6 +23,7 @@ const { ValidationError } = require('../errors/app-error');
 const config = require('../config');
 const logger = require('./logger.service');
 const KeyedMutex = require('../utils/keyed-mutex');
+const leverageMutex = require('./leverage.mutex');
 
 const ENTRY_RESCUE_GRACE_MS = 15_000;
 const MARKET_ORDER_SLIPPAGE = config.trading.marketOrderSlippage || 0.002;
@@ -92,8 +93,17 @@ class HedgeService extends EventEmitter {
     }
 
     const lev = parseInt(hedge.leverage, 10);
+    if (!Number.isFinite(lev) || lev < 1 || lev > 100) {
+      throw new ValidationError(`leverage inválido para hedge #${hedge.id}: ${hedge.leverage}`);
+    }
     const isCross = hedge.marginMode === 'cross';
-    await this.hl.updateLeverage(hedge.assetIndex, isCross, Number.isFinite(lev) ? lev : 1);
+    // Mutex compartido con trading.service: serializa cambios de leverage por
+    // (cuenta, asset) para evitar que una apertura manual pise el modo pedido
+    // por una cobertura automática.
+    const mutexKey = leverageMutex.leverageKey({ accountId: this.accountId, assetIndex: hedge.assetIndex });
+    await leverageMutex.runExclusive(mutexKey, async () => {
+      await this.hl.updateLeverage(hedge.assetIndex, isCross, lev);
+    });
   }
 
   _nextPositionKey(hedge) {
@@ -396,7 +406,14 @@ class HedgeService extends EventEmitter {
     this.hedges.set(hedge.id, hedge);
     this.notifier.created(hedge);
 
-    this._placeEntryOrder(hedge).catch((err) => this._setError(hedge, err));
+    // Awaiting para que el HTTP devuelva el estado real tras colocar el stop
+    // de entrada. Sin el await, el caller ve success aun cuando la orden no
+    // se pudo colocar, y el hedge queda flotando en "entry_pending" sin oid.
+    try {
+      await this._placeEntryOrder(hedge);
+    } catch (err) {
+      await this._setError(hedge, err);
+    }
     return hedge;
   }
 
@@ -1018,10 +1035,19 @@ class HedgeService extends EventEmitter {
     // ── Verificar si el precio ya cruzó el nivel de salida ──────────────────
     // El movimiento fue tan rápido que la posición se abrió pero ya es tarde para SL.
     // En ese caso cerrar a mercado inmediatamente y reiniciar el ciclo.
-    const [mids, posAfterFill] = await Promise.all([
-      this.hl.getAllMids().catch((err) => { logger.warn('getAllMids failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; }),
-      this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; }),
+    // allSettled: si una falla no dejamos la otra pendiente sin observar.
+    const [midsResult, posResult] = await Promise.allSettled([
+      this.hl.getAllMids(),
+      this.hl.getPosition(hedge.asset),
     ]);
+    const mids = midsResult.status === 'fulfilled' ? midsResult.value : null;
+    if (midsResult.status === 'rejected') {
+      logger.warn('getAllMids failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: midsResult.reason?.message });
+    }
+    const posAfterFill = posResult.status === 'fulfilled' ? posResult.value : null;
+    if (posResult.status === 'rejected') {
+      logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: posResult.reason?.message });
+    }
     if (posAfterFill && parseFloat(posAfterFill.szi) !== 0) {
       hedge.positionSize = Math.abs(parseFloat(posAfterFill.szi));
       if (!hedge.openPrice && posAfterFill.entryPx) {
@@ -1034,6 +1060,16 @@ class HedgeService extends EventEmitter {
     const partialCoverage = await this._notifyPartialCoverage(hedge, hedge.positionSize || fillSize, 'entry_fill');
     if (partialCoverage) {
       await this._cancelRelatedEntryOrders(hedge, { keepOid: null });
+      // Un solo intento automático de completar la cobertura con IOC. Si
+      // falla o vuelve a ser parcial, el hedge se queda en estado partial
+      // y el usuario decide. Sin este topup una ráfaga de fill parcial deja
+      // la cobertura sub-dimensionada silenciosamente.
+      if (!hedge._partialTopupAttempted && partialCoverage.missingSize > 0) {
+        hedge._partialTopupAttempted = true;
+        await this._autoTopUpPartialEntry(hedge, partialCoverage).catch((err) => {
+          logger.warn('hedge_partial_topup_failed', { hedgeId: hedge.id, error: err.message });
+        });
+      }
     }
     if (mids) {
       const currentMid = parseFloat(mids[hedge.asset]);
@@ -1092,6 +1128,45 @@ class HedgeService extends EventEmitter {
 
   // _resetAfterCycle, _finalizeCycle, _onSlFill → hedge-cycle.mixin.js
 
+  async _autoTopUpPartialEntry(hedge, partialCoverage) {
+    const missing = Number(partialCoverage?.missingSize || 0);
+    if (!Number.isFinite(missing) || missing <= 0) return false;
+    if (!hedge.assetIndex || hedge.szDecimals == null) {
+      await this._ensureEntryConfig(hedge);
+    }
+
+    const mids = await this.hl.getAllMids().catch(() => null);
+    const price = mids ? parseFloat(mids[hedge.asset]) : NaN;
+    if (!Number.isFinite(price) || price <= 0) return false;
+
+    // No hacer topup si el precio ya cruzó el exit; sería abrir exposición a pérdida.
+    if (this._isExitBreached(hedge, price)) {
+      logger.warn('hedge_partial_topup_skipped_exit_breached', { hedgeId: hedge.id, price });
+      return false;
+    }
+
+    const isBuy = hedge.direction === 'long';
+    const forcePrice = isBuy
+      ? formatPrice(price * (1 + MARKET_ORDER_SLIPPAGE))
+      : formatPrice(price * (1 - MARKET_ORDER_SLIPPAGE));
+
+    try {
+      await this.hl.placeOrder({
+        assetIndex: hedge.assetIndex,
+        isBuy,
+        size: formatSize(missing, hedge.szDecimals),
+        price: forcePrice,
+        reduceOnly: false,
+        tif: 'Ioc',
+      });
+      logger.info('hedge_partial_topup_sent', { hedgeId: hedge.id, missing });
+      return true;
+    } catch (err) {
+      logger.warn('hedge_partial_topup_ioc_failed', { hedgeId: hedge.id, error: err.message });
+      return false;
+    }
+  }
+
   async _closePositionReduceOnly(hedge, pos) {
     if (!pos || parseFloat(pos.szi) === 0) return;
     const szi = parseFloat(pos.szi);
@@ -1118,10 +1193,15 @@ class HedgeService extends EventEmitter {
   }
 
   async _recoverEntryFromExchange(hedge) {
-    const [pos, fills] = await Promise.all([
-      this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; }),
-      this._getRecentFills().catch(() => []),
+    const [posResult, fillsResult] = await Promise.allSettled([
+      this.hl.getPosition(hedge.asset),
+      this._getRecentFills(),
     ]);
+    const pos = posResult.status === 'fulfilled' ? posResult.value : null;
+    if (posResult.status === 'rejected') {
+      logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: posResult.reason?.message });
+    }
+    const fills = fillsResult.status === 'fulfilled' ? (fillsResult.value || []) : [];
 
     const fill = fills.find((item) => Number(item.oid) === Number(hedge.entryOid));
     if (fill) {
@@ -1172,11 +1252,16 @@ class HedgeService extends EventEmitter {
     }
 
     try {
-      const [openOrders, pos] = await Promise.all([
-        this.hl.getOpenOrders().catch(() => []),
-        this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; }),
+      const [openOrdersResult, posResult] = await Promise.allSettled([
+        this.hl.getOpenOrders(),
+        this.hl.getPosition(hedge.asset),
       ]);
-      const openOidSet = new Set((openOrders || []).map((order) => Number(order.oid)));
+      const openOrders = openOrdersResult.status === 'fulfilled' ? (openOrdersResult.value || []) : [];
+      const pos = posResult.status === 'fulfilled' ? posResult.value : null;
+      if (posResult.status === 'rejected') {
+        logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: posResult.reason?.message });
+      }
+      const openOidSet = new Set(openOrders.map((order) => Number(order.oid)));
 
       if (hedge.entryOid && openOidSet.has(Number(hedge.entryOid))) {
         await this.hl.cancelOrder(hedge.assetIndex, hedge.entryOid).catch((err) => {
@@ -1197,11 +1282,16 @@ class HedgeService extends EventEmitter {
         hedge.closingStartedAt = hedge.closingStartedAt || Date.now();
       }
 
-      const [openOrdersAfter, posAfter] = await Promise.all([
-        this.hl.getOpenOrders().catch(() => []),
-        this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; }),
+      const [openOrdersAfterResult, posAfterResult] = await Promise.allSettled([
+        this.hl.getOpenOrders(),
+        this.hl.getPosition(hedge.asset),
       ]);
-      const openAfterSet = new Set((openOrdersAfter || []).map((order) => Number(order.oid)));
+      const openOrdersAfter = openOrdersAfterResult.status === 'fulfilled' ? (openOrdersAfterResult.value || []) : [];
+      const posAfter = posAfterResult.status === 'fulfilled' ? posAfterResult.value : null;
+      if (posAfterResult.status === 'rejected') {
+        logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: posAfterResult.reason?.message });
+      }
+      const openAfterSet = new Set(openOrdersAfter.map((order) => Number(order.oid)));
       const stillHasEntry = hedge.entryOid && openAfterSet.has(Number(hedge.entryOid));
       const stillHasSl = hedge.slOid && openAfterSet.has(Number(hedge.slOid));
       const stillHasPos = !!(posAfter && parseFloat(posAfter.szi) !== 0);

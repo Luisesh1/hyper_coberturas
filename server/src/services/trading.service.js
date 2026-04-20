@@ -13,6 +13,7 @@ const { placePositionProtection } = require('./protection.service');
 const balanceCacheService = require('./balance-cache.service');
 const { formatPrice, formatSize } = require('../utils/format');
 const logger = require('./logger.service');
+const leverageMutex = require('./leverage.mutex');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
 const MARKET_ORDER_SLIPPAGE = config.trading.marketOrderSlippage;
@@ -46,6 +47,9 @@ class TradingService {
     const assetName = asset.toUpperCase();
     const isBuy = side === 'long';
     const lev = leverage || config.trading.defaultLeverage;
+    if (!Number.isFinite(Number(lev)) || Number(lev) < 1 || Number(lev) > 100) {
+      throw new Error(`leverage inválido: ${lev}`);
+    }
     const isCross = (marginMode || config.trading.marginMode) === 'cross';
 
     const [assetMeta, mids, accountState] = await Promise.all([
@@ -61,6 +65,7 @@ class TradingService {
     const notionalValue = parseFloat(size) * midPrice;
     const requiredMarginValue = notionalValue / lev;
     const withdrawable = parseFloat(accountState.withdrawable || 0);
+    const accountValue = parseFloat(accountState.marginSummary?.accountValue || accountState.crossMarginSummary?.accountValue || 0);
 
     // En isolated margin, el margen ya bloqueado en la posición existente
     // puede absorber un incremento del mismo lado sin necesitar margen
@@ -72,13 +77,24 @@ class TradingService {
     );
     const existingMarginUsd = Number(positionEntry?.position?.marginUsed || 0);
     const existingSzi = parseFloat(positionEntry?.position?.szi || 0);
+    const slotRawUsd = Number(positionEntry?.position?.leverage?.rawUsd || 0);
+    const hasExistingPosition = Number.isFinite(existingSzi) && existingSzi !== 0;
+    const existingIsLong = existingSzi > 0;
     const sameSide = isBuy ? existingSzi > 0 : existingSzi < 0;
     let marginShortfall;
     if (!isCross && sameSide && existingMarginUsd > 0) {
-      const newTotalSize = Math.abs(existingSzi) + parseFloat(size);
-      const newTotalRequiredMargin = (newTotalSize * midPrice) / lev;
-      const extraNeeded = Math.max(0, newTotalRequiredMargin - existingMarginUsd);
-      marginShortfall = extraNeeded > withdrawable ? extraNeeded : 0;
+      // HL exige que el margen del INCREMENTO (no del total) provenga de
+      // `withdrawable` al añadir size a una posición isolated existente.
+      // El excedente del slot isolated no se auto-usa para nueva size,
+      // aunque el total ya esté sobre-colateralizado. Lo que sí se puede
+      // hacer antes del `placeOrder` es extraer el excedente del slot de
+      // vuelta a cross (updateIsolatedMargin con ntli negativo). Por eso
+      // aquí sumamos `availableForIncrement = withdrawable + slotSurplus`.
+      const SAFETY_BUFFER_FACTOR = 1.2;
+      const slotSurplusExtractable = Math.max(0, slotRawUsd - existingMarginUsd * SAFETY_BUFFER_FACTOR);
+      const availableForIncrement = withdrawable + slotSurplusExtractable;
+      const incrementMargin = requiredMarginValue; // = size*price/lev para el increment
+      marginShortfall = incrementMargin > availableForIncrement ? incrementMargin : 0;
     } else {
       marginShortfall = requiredMarginValue > withdrawable ? requiredMarginValue : 0;
     }
@@ -87,47 +103,71 @@ class TradingService {
         `Margen insuficiente: necesitas $${marginShortfall.toFixed(2)}, disponible $${withdrawable.toFixed(2)}`
       );
     }
-
-    await this.hl.updateLeverage(assetIndex, isCross, lev);
-
-    let orderPrice;
-    if (limitPrice) {
-      orderPrice = formatPrice(limitPrice);
-    } else {
-      orderPrice = isBuy
-        ? formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE))
-        : formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE));
+    // Segundo guardrail: contra el accountValue total (no solo withdrawable)
+    // para detectar casos degenerados donde el cálculo previo produzca 0
+    // pero la cuenta está realmente bajo agua.
+    if (accountValue > 0 && requiredMarginValue > accountValue * 1.01) {
+      throw new Error(
+        `Margen requerido ($${requiredMarginValue.toFixed(2)}) excede el valor de la cuenta ($${accountValue.toFixed(2)})`
+      );
     }
 
-    const result = await this.hl.placeOrder({
-      assetIndex,
-      isBuy,
-      size: formatSize(size, szDecimals),
-      price: orderPrice,
-      reduceOnly: false,
-      tif: limitPrice ? 'Gtc' : 'Ioc',
+    // Si hay posición abierta del LADO OPUESTO y se intenta cambiar margin mode
+    // (isolated ↔ cross), HL acepta el cambio pero puede liquidar al instante por
+    // falta de colateral en el nuevo modo. Bloqueamos explícitamente.
+    if (hasExistingPosition && !sameSide) {
+      const currentIsCross = Boolean(positionEntry?.position?.leverage?.type === 'cross');
+      if (currentIsCross !== isCross) {
+        throw new Error(
+          `Hay una posición ${existingIsLong ? 'LONG' : 'SHORT'} abierta en ${assetName} en modo ` +
+          `${currentIsCross ? 'cross' : 'isolated'}. Cámbialo solo tras cerrar la posición.`
+        );
+      }
+    }
+
+    const mutexKey = leverageMutex.leverageKey({ accountId: this.account?.id, assetIndex });
+    return leverageMutex.runExclusive(mutexKey, async () => {
+      await this.hl.updateLeverage(assetIndex, isCross, lev);
+
+      let orderPrice;
+      if (limitPrice) {
+        orderPrice = formatPrice(limitPrice);
+      } else {
+        orderPrice = isBuy
+          ? formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE))
+          : formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE));
+      }
+
+      const result = await this.hl.placeOrder({
+        assetIndex,
+        isBuy,
+        size: formatSize(size, szDecimals),
+        price: orderPrice,
+        reduceOnly: false,
+        tif: limitPrice ? 'Gtc' : 'Ioc',
+      });
+
+      const fillPrice = result.avgPx || parseFloat(orderPrice);
+      const filledQty = result.filledSz;
+
+      const openResult = {
+        success: true,
+        action: 'open',
+        account: this.account,
+        asset: assetName,
+        side,
+        size,
+        leverage: lev,
+        marginMode: isCross ? 'cross' : 'isolated',
+        orderPrice,
+        fillPrice,
+        filledQty,
+        result,
+      };
+      this.tg.notifyTradeOpen(openResult);
+      await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch((err) => logger.warn('balance cache refresh failed', { userId: this.userId, accountId: this.account.id, error: err.message }));
+      return openResult;
     });
-
-    const fillPrice = result.avgPx || parseFloat(orderPrice);
-    const filledQty = result.filledSz;
-
-    const openResult = {
-      success: true,
-      action: 'open',
-      account: this.account,
-      asset: assetName,
-      side,
-      size,
-      leverage: lev,
-      marginMode: isCross ? 'cross' : 'isolated',
-      orderPrice,
-      fillPrice,
-      filledQty,
-      result,
-    };
-    this.tg.notifyTradeOpen(openResult);
-    await balanceCacheService.refreshSnapshot(this.userId, this.account.id).catch((err) => logger.warn('balance cache refresh failed', { userId: this.userId, accountId: this.account.id, error: err.message }));
-    return openResult;
   }
 
   async closePosition({ asset, size }) {
@@ -165,7 +205,7 @@ class TradingService {
       ? formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE))
       : formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE));
 
-    const result = await this.hl.placeOrder({
+    let result = await this.hl.placeOrder({
       assetIndex,
       isBuy: !isLong,
       size: formatSize(closeSize, szDecimals),
@@ -174,8 +214,27 @@ class TradingService {
       tif: 'Ioc',
     });
 
+    // Si el IOC no rellenó (book delgado), reintentamos con slippage ampliado
+    // antes de rendirnos. Sin este fallback, un mercado momentáneamente ilíquido
+    // deja la posición abierta y expuesta hasta que el usuario repita el cierre.
     if (result.filledSz != null && result.filledSz === 0) {
-      throw new Error(`IOC close para ${assetName} no produjo fill`);
+      const WIDER_SLIPPAGE = Math.max(MARKET_ORDER_SLIPPAGE * 5, 0.01);
+      const aggressivePrice = isLong
+        ? formatPrice(midPrice * (1 - WIDER_SLIPPAGE))
+        : formatPrice(midPrice * (1 + WIDER_SLIPPAGE));
+      logger.warn('close_ioc_retry_wider_slippage', { asset: assetName, initialPrice: closePrice, retryPrice: aggressivePrice });
+      result = await this.hl.placeOrder({
+        assetIndex,
+        isBuy: !isLong,
+        size: formatSize(closeSize, szDecimals),
+        price: aggressivePrice,
+        reduceOnly: true,
+        tif: 'Ioc',
+      });
+    }
+
+    if (result.filledSz != null && result.filledSz === 0) {
+      throw new Error(`IOC close para ${assetName} no produjo fill (book demasiado delgado; reintentar manualmente con orden límite)`);
     }
 
     const actualClosedSize = result.filledSz != null ? result.filledSz : closeSize;

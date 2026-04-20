@@ -36,7 +36,10 @@ app.use(rateLimit({
 // ------------------------------------------------------------------
 // En docker/prod todo pasa por nginx (mismo origen) → sin CORS necesario.
 // En dev local (sin docker) se permite CLIENT_URL.
-// CLIENT_URL=* solo permitido en desarrollo.
+// CLIENT_URL=* solo permitido en desarrollo; en prod rechazamos wildcard.
+if (IS_PROD && (!config.server.clientUrl || config.server.clientUrl === '*')) {
+  throw new Error('CLIENT_URL debe estar configurado y no puede ser "*" en producción');
+}
 const corsOrigin = (!IS_PROD && config.server.clientUrl === '*')
   ? true
   : config.server.clientUrl;
