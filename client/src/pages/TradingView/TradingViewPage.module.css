@@ -40,6 +40,96 @@
   text-transform: uppercase;
 }
 
+.assetButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(120, 130, 145, 0.3);
+  background: #1a1d23;
+  color: var(--text, #eee);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.assetButton:hover {
+  background: #22252c;
+  border-color: rgba(99, 102, 241, 0.6);
+}
+.assetButtonSymbol {
+  font-weight: 700;
+  color: var(--text-bright, #f1f5f9);
+  letter-spacing: 0.02em;
+}
+.assetButtonSource {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted, #8690a0);
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(120, 130, 145, 0.12);
+}
+.assetButtonCaret {
+  color: var(--text-muted, #8690a0);
+  font-size: 0.75rem;
+}
+
+.liveDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6);
+  animation: livePulse 1.4s ease-in-out infinite;
+  margin-right: 4px;
+}
+.liveDotIdle {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+  margin-right: 4px;
+  opacity: 0.6;
+}
+.lastPrice {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-bright, #f1f5f9);
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+@keyframes livePulse {
+  0%   { box-shadow: 0 0 0 0   rgba(16, 185, 129, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);   }
+  100% { box-shadow: 0 0 0 0   rgba(16, 185, 129, 0);   }
+}
+@media (prefers-reduced-motion: reduce) {
+  .liveDot { animation: none; }
+}
+
+.histSpinner {
+  display: inline-block;
+  margin-left: 6px;
+  color: #60a5fa;
+  animation: spin 1s linear infinite;
+}
+.histEnd {
+  margin-left: 6px;
+  color: var(--text-muted, #64748b);
+  opacity: 0.6;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .histSpinner { animation: none; }
+}
+
 .tfGroup {
   display: flex;
   gap: 2px;
@@ -67,6 +157,19 @@
   background: var(--accent, #4a9eff);
   color: #fff;
 }
+
+.select {
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(120, 130, 145, 0.25);
+  background: #1a1d23;
+  color: var(--text, #eee);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.select:hover { border-color: rgba(99, 102, 241, 0.6); }
+.select:focus { outline: none; border-color: var(--accent, #4a9eff); }
 
 .refreshBtn {
   padding: 6px 12px;
@@ -105,6 +208,35 @@
 .chart {
   width: 100%;
   height: 100%;
+}
+
+.drawingsCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  user-select: none;
+  touch-action: none;
+}
+
+.futureTimeLabel {
+  position: absolute;
+  bottom: 4px;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  background: #2a2e36;
+  color: #f1f5f9;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  border: 1px solid rgba(120, 130, 145, 0.35);
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 6;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .error {

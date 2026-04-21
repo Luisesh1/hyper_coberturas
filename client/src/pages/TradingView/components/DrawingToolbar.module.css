@@ -1,0 +1,87 @@
+.toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: rgba(15, 17, 20, 0.88);
+  border: 1px solid rgba(120, 130, 145, 0.25);
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.tool {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.tool:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+}
+.toolActive {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: rgba(99, 102, 241, 0.6);
+  color: #c7d2fe;
+}
+.tool:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+}
+
+.separator {
+  height: 1px;
+  background: rgba(120, 130, 145, 0.2);
+  margin: 4px 0;
+}
+
+.iconLine {
+  display: inline-block;
+  width: 18px;
+  height: 2px;
+  background: currentColor;
+  transform: rotate(-30deg);
+  border-radius: 1px;
+}
+.iconHLine {
+  display: inline-block;
+  width: 18px;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+}
+.iconRect {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.iconFib {
+  display: inline-block;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'Times New Roman', serif;
+}
+.iconRuler {
+  font-size: 15px;
+}
+.iconSelect {
+  font-size: 14px;
+}
+.iconTrash {
+  font-size: 14px;
+}
