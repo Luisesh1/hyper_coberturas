@@ -18,7 +18,10 @@ const WebSocket = require('ws');
 const config = require('../config');
 const logger = require('../services/logger.service');
 
-const RECONNECT_DELAY_MS = config.intervals.wsReconnectDelayMs;
+const RECONNECT_BASE_DELAY_MS = config.intervals.wsReconnectDelayMs;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+// Tras recibir este umbral de mensajes sanos, reseteamos el backoff al base.
+const HEALTHY_RESET_MESSAGE_COUNT = 5;
 const PING_INTERVAL_MS = config.intervals.wsPingIntervalMs;
 const WATCHDOG_INTERVAL_MS = config.intervals.wsWatchdogIntervalMs;
 const WATCHDOG_MAX_SILENCE_MS = config.intervals.wsWatchdogMaxSilenceMs;
@@ -33,6 +36,17 @@ class HyperliquidWsClient {
     this.subscriptions = []; // suscripciones activas a restaurar en reconexion
     this._lastMessageAt = null;
     this._watchdogInterval = null;
+    this._reconnectAttempts = 0;
+    this._healthyMessagesSinceConnect = 0;
+  }
+
+  _nextReconnectDelayMs() {
+    const attempt = Math.min(this._reconnectAttempts, 10);
+    const exp = RECONNECT_BASE_DELAY_MS * Math.pow(2, attempt);
+    const capped = Math.min(exp, RECONNECT_MAX_DELAY_MS);
+    // Jitter aleatorio ±25% para evitar thundering herd contra HL.
+    const jitter = capped * (Math.random() * 0.5 - 0.25);
+    return Math.max(RECONNECT_BASE_DELAY_MS, Math.floor(capped + jitter));
   }
 
   /**
@@ -44,13 +58,18 @@ class HyperliquidWsClient {
 
     this.ws.on('open', () => {
       this.isConnected = true;
-      logger.info('hl_ws_connected');
+      this._healthyMessagesSinceConnect = 0;
+      logger.info('hl_ws_connected', { attempts: this._reconnectAttempts });
       this._startPing();
       this._restoreSubscriptions();
     });
 
     this.ws.on('message', (data) => {
       this._lastMessageAt = Date.now();
+      this._healthyMessagesSinceConnect += 1;
+      if (this._healthyMessagesSinceConnect === HEALTHY_RESET_MESSAGE_COUNT) {
+        this._reconnectAttempts = 0;
+      }
       try {
         const message = JSON.parse(data.toString());
         this._broadcast(message);
@@ -62,8 +81,10 @@ class HyperliquidWsClient {
     this.ws.on('close', (code, _reason) => {
       this.isConnected = false;
       this._stopPing();
-      logger.warn('hl_ws_closed', { code, reconnectMs: RECONNECT_DELAY_MS });
-      this.reconnectTimeout = setTimeout(() => this.connect(), RECONNECT_DELAY_MS);
+      const delayMs = this._nextReconnectDelayMs();
+      this._reconnectAttempts += 1;
+      logger.warn('hl_ws_closed', { code, reconnectMs: delayMs, attempts: this._reconnectAttempts });
+      this.reconnectTimeout = setTimeout(() => this.connect(), delayMs);
     });
 
     this.ws.on('error', (err) => {

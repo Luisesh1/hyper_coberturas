@@ -9,8 +9,8 @@
  * `protected-pool-dynamic.service.js`.
  */
 
-const { ethers } = require('ethers');
 const config = require('../config');
+const db = require('../db');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const uniswapService = require('./uniswap.service');
@@ -65,6 +65,23 @@ class LpOrchestratorService {
     this.verifier = deps.verifier || verifier;
     this.notifier = deps.notifier || new LpOrchestratorNotifier({ logger: deps.logger || logger });
     this.logger = deps.logger || logger;
+    // Inyectable para tests: si el caller no pasa `db`, usamos el real.
+    // Tests con repos fake pueden pasar un stub que ejecute fn(undefined)
+    // (modo no-transaccional) sin tocar el pool pg.
+    this._db = deps.db || db;
+  }
+
+  /**
+   * Ejecuta una secuencia de escrituras dentro de una transacción. Si el
+   * `db` inyectado no soporta transacciones (tests con fake), degrada a
+   * ejecución directa — los repos aceptan `executor=undefined` y usan el
+   * pool global. En prod siempre hay transacción real.
+   */
+  async _withTransaction(fn) {
+    if (this._db && typeof this._db.transaction === 'function') {
+      return this._db.transaction(fn);
+    }
+    return fn(undefined);
   }
 
   // ---------- LIFECYCLE: CREATE / ATTACH / KILL / ARCHIVE ------------------
@@ -172,28 +189,33 @@ class LpOrchestratorService {
     }
 
     const newAccounting = this.accounting.incrementLpCount(orch.accounting);
-    await this.repo.updateAccounting(userId, orchestratorId, newAccounting);
-    await this.repo.updateActiveLp(userId, orchestratorId, {
-      activePositionIdentifier: String(newPositionIdentifier),
-      activePoolAddress: refreshedSnapshot?.poolAddress || null,
-      activeProtectedPoolId: protectedPoolId,
-      phase: 'lp_active',
-    });
-    // Reset del baseline del hedge y del tracking de time-in-range:
-    // el próximo tick los tomará como inicio (sin computar delta) para
-    // evitar doble conteo del estado del nuevo hedge / nuevo LP.
-    await this.repo.updateStrategyState(userId, orchestratorId, {
-      strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
-    });
-    await this.repo.appendActionLog({
-      orchestratorId,
-      kind: 'attach_lp',
-      action: 'create-position',
-      positionIdentifier: newPositionIdentifier,
-      txHashes: finalizeResult?.txHashes || null,
-      snapshotHash: refreshedSnapshot ? computeSnapshotHash(refreshedSnapshot) : null,
-      payload: { protectedPoolId, protectionEnabled: !!protectionConfig?.enabled },
-      createdAt: Date.now(),
+    // Commit atómico de estado post-creación de LP: accounting + activeLp +
+    // strategyState + log. Si algo falla entre estas escrituras el estado
+    // del orquestador quedaría inconsistente con la LP ya creada on-chain.
+    await this._withTransaction(async (client) => {
+      await this.repo.updateAccounting(userId, orchestratorId, newAccounting, client);
+      await this.repo.updateActiveLp(userId, orchestratorId, {
+        activePositionIdentifier: String(newPositionIdentifier),
+        activePoolAddress: refreshedSnapshot?.poolAddress || null,
+        activeProtectedPoolId: protectedPoolId,
+        phase: 'lp_active',
+      }, client);
+      // Reset del baseline del hedge y del tracking de time-in-range:
+      // el próximo tick los tomará como inicio (sin computar delta) para
+      // evitar doble conteo del estado del nuevo hedge / nuevo LP.
+      await this.repo.updateStrategyState(userId, orchestratorId, {
+        strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
+      }, client);
+      await this.repo.appendActionLog({
+        orchestratorId,
+        kind: 'attach_lp',
+        action: 'create-position',
+        positionIdentifier: newPositionIdentifier,
+        txHashes: finalizeResult?.txHashes || null,
+        snapshotHash: refreshedSnapshot ? computeSnapshotHash(refreshedSnapshot) : null,
+        payload: { protectedPoolId, protectionEnabled: !!protectionConfig?.enabled },
+        createdAt: Date.now(),
+      }, client);
     });
 
     return this.repo.getById(userId, orchestratorId);
@@ -471,20 +493,23 @@ class LpOrchestratorService {
     //      - si hay protección activa, disparamos el refresh del hedge
     //      - logueamos en action_log como recovery con detalle
     const newAccounting = this.accounting.incrementLpCount(orch.accounting);
-    await this.repo.updateAccounting(orch.userId, orch.id, newAccounting);
-    await this.repo.updateActiveLp(orch.userId, orch.id, {
-      activePositionIdentifier: String(newest.identifier),
-      activePoolAddress: newest.poolAddress || orch.activePoolAddress,
-      activeProtectedPoolId: orch.activeProtectedPoolId,
+    // Commit atómico: accounting + activeLp + phase + log.
+    await this._withTransaction(async (client) => {
+      await this.repo.updateAccounting(orch.userId, orch.id, newAccounting, client);
+      await this.repo.updateActiveLp(orch.userId, orch.id, {
+        activePositionIdentifier: String(newest.identifier),
+        activePoolAddress: newest.poolAddress || orch.activePoolAddress,
+        activeProtectedPoolId: orch.activeProtectedPoolId,
+      }, client);
+      if (orch.phase === 'failed') {
+        await this.repo.updatePhase(orch.userId, orch.id, {
+          phase: 'lp_active',
+          lastError: null,
+          nextEligibleAttemptAt: null,
+          cooldownReason: null,
+        }, client);
+      }
     });
-    if (orch.phase === 'failed') {
-      await this.repo.updatePhase(orch.userId, orch.id, {
-        phase: 'lp_active',
-        lastError: null,
-        nextEligibleAttemptAt: null,
-        cooldownReason: null,
-      });
-    }
     // Refresh del hedge cuando hay protección, igual que recordTxFinalized.
     if (orch.activeProtectedPoolId) {
       try {
@@ -799,17 +824,20 @@ class LpOrchestratorService {
           });
         }
       }
-      await this.repo.updateAccounting(userId, orchestratorId, newAccounting);
-      await this.repo.updateActiveLp(userId, orchestratorId, {
-        activePositionIdentifier: null,
-        activePoolAddress: null,
-        activeProtectedPoolId: null,
-        phase: 'idle',
-      });
-      // Reset baseline del hedge y del tracking de time-in-range: el siguiente
-      // attachLp empezará un hedge fresco y un nuevo conteo de tiempo en rango.
-      await this.repo.updateStrategyState(userId, orchestratorId, {
-        strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
+      // Commit atómico del cierre: accounting + activeLp reset + strategyState.
+      await this._withTransaction(async (client) => {
+        await this.repo.updateAccounting(userId, orchestratorId, newAccounting, client);
+        await this.repo.updateActiveLp(userId, orchestratorId, {
+          activePositionIdentifier: null,
+          activePoolAddress: null,
+          activeProtectedPoolId: null,
+          phase: 'idle',
+        }, client);
+        // Reset baseline del hedge y del tracking de time-in-range: el siguiente
+        // attachLp empezará un hedge fresco y un nuevo conteo de tiempo en rango.
+        await this.repo.updateStrategyState(userId, orchestratorId, {
+          strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
+        }, client);
       });
       nextPhase = 'idle';
       this.notifier.lpKilled(orch).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));

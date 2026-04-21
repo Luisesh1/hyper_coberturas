@@ -1,7 +1,15 @@
-const HyperliquidService = require('./hyperliquid.service');
 const { ValidationError } = require('../errors/app-error');
+const hyperliquidProvider = require('./marketdata-providers/hyperliquid.provider');
+const binanceProvider = require('./marketdata-providers/binance.provider');
+const yahooProvider = require('./marketdata-providers/yahoo.provider');
 
-const client = new HyperliquidService();
+const PROVIDERS = {
+  hyperliquid: hyperliquidProvider,
+  binance: binanceProvider,
+  yahoo: yahooProvider,
+};
+const DEFAULT_DATASOURCE = 'hyperliquid';
+
 const cache = new Map();
 const pairCache = new Map();
 const CACHE_TTL_MS = 10_000;
@@ -11,6 +19,10 @@ const TIMEFRAME_TO_MS = {
   '5m': 5 * 60_000,
   '15m': 15 * 60_000,
   '1h': 60 * 60_000,
+  '4h': 4 * 60 * 60_000,
+  '1d': 24 * 60 * 60_000,
+  '1w': 7 * 24 * 60 * 60_000,
+  '1M': 30 * 24 * 60 * 60_000, // aproximacion; Hyperliquid devuelve candles de mes real
 };
 
 function normalizeTimeframe(timeframe = '15m') {
@@ -22,71 +34,71 @@ function normalizeTimeframe(timeframe = '15m') {
 }
 
 function normalizeAsset(asset = 'BTC') {
-  const normalized = String(asset || 'BTC').trim().toUpperCase();
+  const normalized = String(asset || 'BTC').trim();
   if (!normalized) throw new ValidationError('asset requerido');
+  // hyperliquid/binance usan mayusculas; yahoo distingue mayus/minus (no forzar).
   return normalized;
 }
 
-function normalizeCandle(candle = {}) {
-  return {
-    time: Number(candle.t),
-    closeTime: Number(candle.T),
-    open: Number(candle.o),
-    high: Number(candle.h),
-    low: Number(candle.l),
-    close: Number(candle.c),
-    volume: Number(candle.v || 0),
-    trades: Number(candle.n || 0),
-  };
+function normalizeDatasource(ds) {
+  const normalized = String(ds || DEFAULT_DATASOURCE).trim().toLowerCase();
+  if (!PROVIDERS[normalized]) {
+    throw new ValidationError(`datasource invalido: ${normalized}`);
+  }
+  return normalized;
 }
 
-function buildCacheKey(asset, timeframe, startTime, endTime) {
-  return `${asset}:${timeframe}:${startTime}:${endTime}`;
+function buildCacheKey(datasource, asset, timeframe, startTime, endTime) {
+  return `${datasource}:${asset}:${timeframe}:${startTime}:${endTime}`;
 }
 
-function buildPairKey(asset, timeframe) {
-  return `${asset}:${timeframe}`;
+function buildPairKey(datasource, asset, timeframe) {
+  return `${datasource}:${asset}:${timeframe}`;
 }
 
 async function getCandles(asset, timeframe, {
+  datasource,
   limit = 200,
   startTime,
   endTime = Date.now(),
   force = false,
 } = {}) {
+  const normalizedDs = normalizeDatasource(datasource);
   const normalizedAsset = normalizeAsset(asset);
   const normalizedTimeframe = normalizeTimeframe(timeframe);
   const timeframeMs = TIMEFRAME_TO_MS[normalizedTimeframe];
   const normalizedLimit = Math.max(10, Math.min(1000, Number(limit) || 200));
   const normalizedEnd = Number(endTime) || Date.now();
   const normalizedStart = Number(startTime) || (normalizedEnd - (normalizedLimit * timeframeMs));
-  const cacheKey = buildCacheKey(normalizedAsset, normalizedTimeframe, normalizedStart, normalizedEnd);
+  const cacheKey = buildCacheKey(normalizedDs, normalizedAsset, normalizedTimeframe, normalizedStart, normalizedEnd);
   const cached = cache.get(cacheKey);
 
   if (!force && cached && (Date.now() - cached.createdAt) < CACHE_TTL_MS) {
     return cached.value;
   }
 
-  const rows = await client.getCandleSnapshot({
-    asset: normalizedAsset,
-    interval: normalizedTimeframe,
+  const provider = PROVIDERS[normalizedDs];
+  const rows = await provider.fetchCandles({
+    symbol: normalizedAsset,
+    timeframe: normalizedTimeframe,
     startTime: normalizedStart,
     endTime: normalizedEnd,
   });
 
-  const value = Array.isArray(rows) ? rows.map(normalizeCandle).sort((a, b) => a.time - b.time) : [];
+  const value = Array.isArray(rows) ? rows.slice().sort((a, b) => a.time - b.time) : [];
   cache.set(cacheKey, { createdAt: Date.now(), value });
-  pairCache.set(buildPairKey(normalizedAsset, normalizedTimeframe), {
+  pairCache.set(buildPairKey(normalizedDs, normalizedAsset, normalizedTimeframe), {
     createdAt: Date.now(),
     value,
   });
   return value;
 }
 
-function getCachedCandles(asset, timeframe, { maxAgeMs = Infinity } = {}) {
+function getCachedCandles(asset, timeframe, { datasource, maxAgeMs = Infinity } = {}) {
+  const normalizedDs = normalizeDatasource(datasource);
   const normalizedAsset = normalizeAsset(asset);
   const normalizedTimeframe = normalizeTimeframe(timeframe);
-  const entry = pairCache.get(buildPairKey(normalizedAsset, normalizedTimeframe));
+  const entry = pairCache.get(buildPairKey(normalizedDs, normalizedAsset, normalizedTimeframe));
   if (!entry) return null;
   if ((Date.now() - entry.createdAt) > maxAgeMs) return null;
   return entry.value;
@@ -101,9 +113,12 @@ async function getLatestClosedCandle(asset, timeframe, options = {}) {
 
 module.exports = {
   TIMEFRAME_TO_MS,
+  PROVIDERS,
+  DEFAULT_DATASOURCE,
   getCandles,
   getCachedCandles,
   getLatestClosedCandle,
   normalizeAsset,
   normalizeTimeframe,
+  normalizeDatasource,
 };

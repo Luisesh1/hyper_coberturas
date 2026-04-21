@@ -61,7 +61,8 @@
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(620px, 100vw);
+  width: min(620px, 100%);
+  max-width: 100%;
   background: #0e1620;
   color: #f5f7fb;
   z-index: 9999;

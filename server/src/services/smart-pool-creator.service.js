@@ -757,7 +757,7 @@ function isAssetDirectFor(asset, targetAddress, wrappedNativeAddress) {
   return false;
 }
 
-function buildFundingPriority(asset, { token0Address, token1Address, wrappedNativeAddress }) {
+function _buildFundingPriority(asset, { token0Address, token1Address, wrappedNativeAddress }) {
   if (isAssetDirectFor(asset, token0Address, wrappedNativeAddress)) return 0;
   if (isAssetDirectFor(asset, token1Address, wrappedNativeAddress)) return 0;
   if (asset.isNative && asset.isWrappedNative) return 1;

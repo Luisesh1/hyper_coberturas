@@ -11,12 +11,34 @@
   line-height: 1.5;
 }
 
+/* ── Global overflow guard ─────────────────────────────────────── */
+/* Evita "juego horizontal" en mobile cuando algún descendiente
+   excede el ancho del viewport (tablas, chips largos, scrollbars).
+   Usamos `overflow-x: clip` en lugar de `hidden` para NO romper
+   `position: sticky` del header (clip no crea contexto de scroll). */
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;       /* fallback para navegadores muy antiguos */
+  overflow-x: clip;
+}
+
+img,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
 /* ── App container ─────────────────────────────────────────────── */
 .app {
   min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+  overflow-x: clip;
 }
 
 /* ── Header ────────────────────────────────────────────────────── */
@@ -118,6 +140,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 /* ── WS status badge ───────────────────────────────────────────── */
@@ -324,22 +349,28 @@
 /* ── Main layout ───────────────────────────────────────────────── */
 .main {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: 16px;
   padding: 16px 24px;
   flex: 1;
+  width: 100%;
+  max-width: 100%;
   height: calc(100vh - 61px);
   overflow: hidden;
 }
 
 .sidebar {
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
+  min-width: 0;
 }
 
 .content {
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
+  min-width: 0;
 }
 
 /* ── Layout fullscreen: solo navbar + contenido (sin sidebar) ────── */
@@ -387,7 +418,7 @@
 
   /* Layout de una sola columna */
   .main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     height: auto;
     overflow: visible;
     padding: 12px 16px;
@@ -396,6 +427,26 @@
   .sidebar,
   .content {
     overflow-y: visible;
+    overflow-x: hidden;
     min-height: 0;
+    min-width: 0;
   }
+}
+
+/* ── Responsive: smartphone pequeño ────────────────────────────── */
+@media (max-width: 480px) {
+  .header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .main {
+    padding: 10px 12px;
+    gap: 12px;
+  }
+  .offCanvas {
+    width: min(280px, calc(100% - 48px));
+  }
+  .logoText { font-size: 1rem; }
+  .userBadge { font-size: 0.72rem; }
+  .wsStatus { font-size: 0.7rem; padding: 2px 8px; }
 }

@@ -5,21 +5,26 @@ import { TradingProvider } from './context/TradingContext';
 import { PricePanel } from './components/PricePanel/PricePanel';
 import { TradingPanel } from './components/TradingPanel/TradingPanel';
 import { HedgePanel } from './components/HedgePanel/HedgePanel';
-import SettingsPage from './pages/Settings/SettingsPage';
-import UsersPage from './pages/Users/UsersPage';
 import { Notifications } from './components/Layout/Notifications';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
-import UniswapPoolsPage from './pages/UniswapPools/UniswapPoolsPage';
-import LpOrchestratorPage from './pages/LpOrchestrator/LpOrchestratorPage';
-import MetricasPage from './pages/Metricas/MetricasPage';
-import StrategyStudioPage from './pages/StrategyStudio/StrategyStudioPage';
-import BotsPage from './pages/Bots/BotsPage';
-import BacktestingPage from './pages/Backtesting/BacktestingPage';
-import HidenActionsPage from './pages/HidenActions/HidenActionsPage';
-import TradingViewPage from './pages/TradingView/TradingViewPage';
 import styles from './App.module.css';
+
+// Code splitting por ruta: cada página pesada se convierte en un chunk
+// separado que sólo se descarga cuando el usuario navega a esa vista.
+// TradingPanel/HedgePanel se mantienen eager porque son la ruta por
+// defecto (/trade) y evitamos un flash de fallback en el login→home.
+const SettingsPage         = lazy(() => import('./pages/Settings/SettingsPage'));
+const UsersPage            = lazy(() => import('./pages/Users/UsersPage'));
+const UniswapPoolsPage     = lazy(() => import('./pages/UniswapPools/UniswapPoolsPage'));
+const LpOrchestratorPage   = lazy(() => import('./pages/LpOrchestrator/LpOrchestratorPage'));
+const MetricasPage         = lazy(() => import('./pages/Metricas/MetricasPage'));
+const StrategyStudioPage   = lazy(() => import('./pages/StrategyStudio/StrategyStudioPage'));
+const BotsPage             = lazy(() => import('./pages/Bots/BotsPage'));
+const BacktestingPage      = lazy(() => import('./pages/Backtesting/BacktestingPage'));
+const HidenActionsPage     = lazy(() => import('./pages/HidenActions/HidenActionsPage'));
+const TradingViewPage      = lazy(() => import('./pages/TradingView/TradingViewPage'));
 
 // DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
 // completo en build de producción gracias al guard `import.meta.env.DEV`.
@@ -155,24 +160,26 @@ function AppContent() {
 
         <section className={`${styles.content} ${isFullscreen ? styles.contentFullscreen : ''}`}>
           <ErrorBoundary>
-            <Routes>
-              <Route path="/"           element={<Navigate to="/trade" replace />} />
-              <Route path="/trade"      element={<TradingPanel selectedAsset={selectedAsset} />} />
-              <Route path="/coberturas" element={<HedgePanel selectedAsset={selectedAsset} />} />
-              <Route path="/estrategias" element={<StrategyStudioPage />} />
-              <Route path="/backtesting" element={<BacktestingPage />} />
-              <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
-              <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
-              <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
-              <Route path="/metricas"   element={<MetricasPage />} />
-              <Route path="/trading-view" element={<TradingViewPage />} />
-              <Route path="/config"     element={<SettingsPage />} />
-              {/* Ruta oculta — no aparece en el navbar. Acciones de
-                  recovery / mantenimiento manual. Acceso por URL directo. */}
-              <Route path="/hidenActions" element={<HidenActionsPage />} />
-              {isSuperuser && <Route path="/usuarios" element={<UsersPage />} />}
-              <Route path="*"           element={<Navigate to="/trade" replace />} />
-            </Routes>
+            <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-tertiary)' }}>Cargando…</div>}>
+              <Routes>
+                <Route path="/"           element={<Navigate to="/trade" replace />} />
+                <Route path="/trade"      element={<TradingPanel selectedAsset={selectedAsset} />} />
+                <Route path="/coberturas" element={<HedgePanel selectedAsset={selectedAsset} />} />
+                <Route path="/estrategias" element={<StrategyStudioPage />} />
+                <Route path="/backtesting" element={<BacktestingPage />} />
+                <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
+                <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
+                <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
+                <Route path="/metricas"   element={<MetricasPage />} />
+                <Route path="/trading-view" element={<TradingViewPage />} />
+                <Route path="/config"     element={<SettingsPage />} />
+                {/* Ruta oculta — no aparece en el navbar. Acciones de
+                    recovery / mantenimiento manual. Acceso por URL directo. */}
+                <Route path="/hidenActions" element={<HidenActionsPage />} />
+                {isSuperuser && <Route path="/usuarios" element={<UsersPage />} />}
+                <Route path="*"           element={<Navigate to="/trade" replace />} />
+              </Routes>
+            </Suspense>
           </ErrorBoundary>
         </section>
       </main>

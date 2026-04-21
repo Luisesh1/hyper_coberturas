@@ -8,7 +8,6 @@ const {
 } = require('../abis');
 const {
   MAX_UINT256,
-  DEFAULT_SLIPPAGE_BPS,
   V3_SWAP_ROUTER_ADDRESS,
   CLOSE_SWAP_BUFFER_BPS,
   ACTIONS,
@@ -17,7 +16,6 @@ const {
   buildApprovalRequirement,
   maybeBuildApprovalTx,
   buildWrapNativeTx,
-  buildUnwrapNativeTx,
 } = require('../tx-encoders');
 const {
   buildV3SwapTx,

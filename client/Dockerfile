@@ -6,7 +6,7 @@
 
 # === Desarrollo (Vite dev server) ===
 # Nota: corre como root por la misma razon que el server (cuota inotify).
-FROM node:22-alpine AS development
+FROM node:22-alpine@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f AS development
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -16,7 +16,7 @@ STOPSIGNAL SIGTERM
 CMD ["sh", "-c", "npx vite --host 0.0.0.0 --port ${VITE_PORT:-5174}"]
 
 # === Build de produccion (usuario non-root) ===
-FROM node:22-alpine AS builder
+FROM node:22-alpine@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f AS builder
 WORKDIR /app
 RUN chown node:node /app
 USER node

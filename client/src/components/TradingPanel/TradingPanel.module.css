@@ -8,7 +8,10 @@
   flex-direction: column;
   gap: 10px;
   height: 100%;
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
+  min-width: 0;
 }
 
 /* ── Barra superior ────────────────────────────────────────────── */
@@ -128,10 +131,11 @@
 /* ── Cuerpo 2 columnas ─────────────────────────────────────────── */
 .body {
   display: grid;
-  grid-template-columns: 380px 1fr;
+  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
   gap: 20px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -658,7 +662,7 @@
 /* ── Responsive ────────────────────────────────────────────────── */
 @media (max-width: 1150px) {
   .body {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     overflow: visible;
     height: auto;
   }
@@ -667,6 +671,7 @@
   .positionsCol {
     overflow-y: visible;
     min-height: unset;
+    min-width: 0;
   }
 }
 
@@ -675,6 +680,6 @@
   .body { gap: 12px; }
   .posGrid { grid-template-columns: 1fr 1fr; }
   .accountStrip { padding: 6px 10px; flex-wrap: wrap; }
-  .modalBox { width: calc(100vw - 32px); }
+  .modalBox { width: calc(100% - 32px); max-width: 100%; }
   .staleBanner { font-size: 0.72rem; padding: 6px 10px; }
 }

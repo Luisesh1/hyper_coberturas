@@ -5,7 +5,6 @@ const {
 } = require('../abis');
 const {
   DEFAULT_SLIPPAGE_BPS,
-  ACTIONS,
   CLOSE_ACTIONS,
 } = require('../constants');
 const uniswapService = require('../../uniswap.service');

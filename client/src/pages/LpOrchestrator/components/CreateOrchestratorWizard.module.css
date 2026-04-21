@@ -11,7 +11,7 @@
 }
 
 .modal {
-  width: min(860px, calc(100vw - 36px));
+  width: min(860px, calc(100% - 36px));
   max-height: calc(100vh - 36px);
   overflow: auto;
   display: flex;

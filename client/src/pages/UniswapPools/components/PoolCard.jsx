@@ -41,6 +41,7 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
   });
   const canClaim = isLpPosition && canClaimRaw;
   const canManage = isLpPosition && canManageRaw;
+  const isV4 = typeof pool.version === 'string' && pool.version.toLowerCase() === 'v4';
 
   const toneCls = pool.protection
     ? styles.card_protected

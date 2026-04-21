@@ -29,6 +29,10 @@ services:
     container_name: testbot-nginx-prod
     ports:
       - "${NGINX_PORT:-80}:80"
+      - "${NGINX_TLS_PORT:-443}:443"
+    volumes:
+      - certbot_certs:/etc/letsencrypt:ro
+      - certbot_webroot:/var/www/certbot:ro
     depends_on:
       server:
         condition: service_healthy
@@ -46,10 +50,32 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  # ── Certbot (solo se invoca manualmente con profile bootstrap) ─────
+  certbot:
+    image: certbot/certbot:latest@sha256:78a7eaa40af657301e25731297b6e73646c695370d17e9bb03189fa82966d65c
+    container_name: testbot-certbot
+    profiles:
+      - bootstrap
+    volumes:
+      - certbot_certs:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    # Uso:
+    #   docker compose -f docker-compose.prod.yml --profile bootstrap run --rm certbot \
+    #     certonly --webroot -w /var/www/certbot -d ${SERVER_NAME} --email ${CERTBOT_EMAIL} --agree-tos --non-interactive
+    # Luego descomentar el bloque HTTPS en nginx/nginx.prod.conf y reiniciar nginx.
+    entrypoint: ["certbot"]
 
   # ── Base de datos PostgreSQL ────────────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    # Pin por digest: cualquier "refresh" del tag remoto NO cambia el bit
+    # de imagen usado. Actualizar conscientemente verificando release notes.
+    image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
     container_name: testbot-postgres-prod
     environment:
       POSTGRES_DB:       ${POSTGRES_DB:-testbot}
@@ -74,7 +100,53 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "1.5"
           memory: 512M
+
+  # ── Backup pg_dump (cron sidecar) ───────────────────────────────────
+  backup:
+    image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+    container_name: testbot-backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST:     postgres
+      PGPORT:     "5432"
+      PGUSER:     "${POSTGRES_USER:-testbot}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:?requerido}"
+      PGDATABASE: "${POSTGRES_DB:-testbot}"
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-7}"
+      BACKUP_CRON: "${BACKUP_CRON:-0 3 * * *}"
+    volumes:
+      - postgres_backups:/backups
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    # Registra el cron y mantiene el contenedor vivo. crond ejecuta backup.sh
+    # según BACKUP_CRON (default: 03:00 UTC todos los días).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "$$BACKUP_CRON sh /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root
+        touch /var/log/backup.log
+        crond -f -l 8 &
+        CRON_PID=$$!
+        tail -n 0 -F /var/log/backup.log &
+        wait $$CRON_PID
+    restart: unless-stopped
+    networks:
+      - testbot-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 128M
 
   # ── Backend Node.js (produccion, sin nodemon) ──────────────────────
   server:
@@ -123,8 +195,12 @@ volumes:
     name: testbot-postgres-backups
   server_data:
     name: testbot-server-data
+  certbot_certs:
+    name: testbot-certbot-certs
+  certbot_webroot:
+    name: testbot-certbot-webroot
 
 networks:
   testbot-net:
     name: testbot-network
-    external: true
+    driver: bridge

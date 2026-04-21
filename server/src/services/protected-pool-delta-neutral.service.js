@@ -1,4 +1,5 @@
 const config = require('../config');
+const db = require('../db');
 const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const deltaRebalanceLogRepository = require('../repositories/protected-pool-delta-rebalance.repository');
@@ -94,6 +95,8 @@ class ProtectedPoolDeltaNeutralService {
     this.basisGuardBps = deps.basisGuardBps || config.deltaNeutral.basisGuardBps;
     this.lowConfidenceBasisBps = deps.lowConfidenceBasisBps || config.deltaNeutral.lowConfidenceBasisBps;
     this.minDwellMs = deps.minDwellMs || config.deltaNeutral.minDwellMs;
+    // Inyectable para tests: fallback a db real si no se pasa.
+    this._db = deps.db || db;
     this.interval = null;
     this.running = false;
     this.lastEvalAt = new Map();
@@ -113,6 +116,18 @@ class ProtectedPoolDeltaNeutralService {
       fullScans: 0,
       truthRefreshDeferred: 0,
     };
+  }
+
+  /**
+   * Ejecuta fn dentro de una transacción DB cuando el `db` inyectado la
+   * soporta. Para tests con stubs sin `transaction`, ejecuta fn(undefined)
+   * como fallback (modo no-transaccional — los repos lo aceptan).
+   */
+  async _withTransaction(fn) {
+    if (this._db && typeof this._db.transaction === 'function') {
+      return this._db.transaction(fn);
+    }
+    return fn(undefined);
   }
 
   async _getRiskControls(userId) {
@@ -2551,20 +2566,25 @@ class ProtectedPoolDeltaNeutralService {
         endAt: deactivatedAt,
         rangeFrozenAt: deactivatedAt,
       });
-      await this.repo.deactivate(protection.userId, protection.id, {
-        deactivatedAt,
-        ...(finalRangeMetrics ? {
-          ...finalRangeMetrics,
-          poolSnapshot: timeInRangeService.applyRangeMetricsToSnapshot(protection.poolSnapshot || {}, finalRangeMetrics),
-        } : {}),
-      });
-      await this.repo.updateStrategyState(protection.userId, protection.id, {
-        strategyState: {
-          ...strategyState,
-          status: 'deactivating',
-          lastActualQty: 0,
-        },
-      }).catch((err) => logger.warn('updateStrategyState on deactivation failed', { poolId: protection.id, error: err.message }));
+      // Commit atómico de desactivación: sin hedge activo en HL (nada on-chain
+      // que revertir), pero deactivate + strategyState deben ir juntos para
+      // que un siguiente tick no intente re-abrir por lectura parcial.
+      await this._withTransaction(async (client) => {
+        await this.repo.deactivate(protection.userId, protection.id, {
+          deactivatedAt,
+          ...(finalRangeMetrics ? {
+            ...finalRangeMetrics,
+            poolSnapshot: timeInRangeService.applyRangeMetricsToSnapshot(protection.poolSnapshot || {}, finalRangeMetrics),
+          } : {}),
+        }, client);
+        await this.repo.updateStrategyState(protection.userId, protection.id, {
+          strategyState: {
+            ...strategyState,
+            status: 'deactivating',
+            lastActualQty: 0,
+          },
+        }, client);
+      }).catch((err) => logger.warn('deactivate_tx_failed', { poolId: protection.id, error: err.message }));
       return this.repo.getById(protection.userId, protection.id);
     }
 

@@ -1,5 +1,4 @@
 const db = require('../db');
-const config = require('../config');
 const { createWsServer, loadActiveUsers } = require('../websocket/wsServer');
 const hlWsClient = require('../websocket/hyperliquidWs');
 const runtimeStatus = require('../runtime/status');

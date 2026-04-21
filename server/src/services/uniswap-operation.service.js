@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const config = require('../config');
+const db = require('../db');
 const logger = require('./logger.service');
 const operationRepo = require('../repositories/uniswap-operation.repository');
 const positionActionsService = require('./uniswap-position-actions.service');
@@ -140,7 +141,19 @@ class UniswapOperationService {
     if (this.running) return;
     this.running = true;
     try {
-      const operations = await this.operationRepo.listPending(20);
+      // Reserva atómicamente las operaciones pendientes con FOR UPDATE SKIP LOCKED
+      // marcándolas `processing` dentro de la misma tx. Otros workers
+      // concurrentes no volverán a verlas hasta que terminemos o liberemos.
+      const operations = await db.transaction(async (client) => {
+        const claimed = await this.operationRepo.claimPending(20, client);
+        if (claimed.length === 0) return [];
+        const now = Date.now();
+        for (const op of claimed) {
+          await this.operationRepo.updateState(op.id, { step: op.step || op.status, updatedAt: now }, client);
+        }
+        return claimed;
+      });
+
       for (const operation of operations) {
         await this.processOne(operation).catch((err) => {
           this.logger.error('uniswap_operation_process_failed', {

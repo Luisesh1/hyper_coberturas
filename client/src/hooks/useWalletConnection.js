@@ -383,7 +383,21 @@ export function WalletProvider({ children }) {
   const [needsWalletConnectSetup, setNeedsWalletConnectSetup] = useState(false);
   const queryClientRef = useRef(null);
   if (!queryClientRef.current) {
-    queryClientRef.current = new QueryClient();
+    // Defaults conservadores: evitan refetch masivos en foco y mantienen
+    // datos frescos durante 30s. Queries individuales pueden sobrescribir.
+    queryClientRef.current = new QueryClient({
+      defaultOptions: {
+        queries: {
+          staleTime: 30_000,
+          gcTime: 5 * 60_000,
+          refetchOnWindowFocus: false,
+          retry: 1,
+        },
+        mutations: {
+          retry: 0,
+        },
+      },
+    });
   }
 
   const setWalletConnectProjectId = useCallback((value) => {

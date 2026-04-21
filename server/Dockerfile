@@ -5,7 +5,9 @@
 # Prod: docker-compose -f docker-compose.prod.yml up (node)
 
 # === Base compartida ===
-FROM node:22-alpine AS base
+# Pin por digest (sha256) — supply-chain reproducibility. Refrescar
+# manualmente tras revisar release notes y CVEs.
+FROM node:22-alpine@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f AS base
 WORKDIR /app
 COPY package*.json ./
 

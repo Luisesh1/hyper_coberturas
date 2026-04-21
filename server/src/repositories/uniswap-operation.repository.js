@@ -116,6 +116,27 @@ async function listPending(limit = 20, executor) {
   return rows.map(mapRow);
 }
 
+/**
+ * Reserva atómicamente hasta `limit` operaciones pendientes usando
+ * FOR UPDATE SKIP LOCKED. Requiere ejecutarse dentro de una transacción
+ * (`db.transaction(async (client) => claimPending(limit, client))`).
+ * Evita que dos workers concurrentes recojan la misma operación.
+ */
+async function claimPending(limit = 20, executor) {
+  if (!executor) {
+    throw new Error('claimPending requires a transactional executor');
+  }
+  const { rows } = await executor.query(
+    `SELECT * FROM position_action_operations
+      WHERE status IN ('queued', 'waiting_receipts', 'refreshing_snapshot', 'migrating_protection')
+      ORDER BY updated_at ASC, id ASC
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED`,
+    [limit]
+  );
+  return rows.map(mapRow);
+}
+
 async function updateState(id, patch = {}, executor) {
   const now = patch.updatedAt || Date.now();
   const { rows } = await exec(executor).query(
@@ -150,5 +171,6 @@ module.exports = {
   getById,
   getByOperationKey,
   listPending,
+  claimPending,
   updateState,
 };

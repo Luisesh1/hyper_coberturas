@@ -4,6 +4,11 @@ const assert = require('node:assert/strict');
 const { LpOrchestratorService } = require('../src/services/lp-orchestrator.service');
 const accounting = require('../src/services/lp-orchestrator/accounting');
 
+// Fake db para los tests que exercitan rutas con _withTransaction:
+// ejecuta fn(undefined) → los repos caen al path no-transaccional contra
+// el fake repo, sin tocar pg.
+const fakeDb = { transaction: async (fn) => fn(undefined) };
+
 function makeFakeRepo() {
   const orchestrators = new Map();
   const log = [];
@@ -301,6 +306,7 @@ test('kill+recreate: contabilidad persiste entre LPs', async () => {
     uniswapService: makeFakeUniswapService(basePool()),
     notifier,
     logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
   });
 
   // 1) Matar el LP
@@ -505,6 +511,7 @@ test('time-in-range: attachLp resetea el tracker', async () => {
     lpOrchestratorRepository: repo,
     notifier: makeFakeNotifier(),
     logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
   });
   await service.attachLp({
     userId: 1,

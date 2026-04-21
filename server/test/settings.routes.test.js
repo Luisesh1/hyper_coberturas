@@ -158,14 +158,15 @@ test('PUT /api/settings/telegram recarga Telegram y refresca el listener de coma
         'Content-Type': 'application/json',
         Authorization: `Bearer ${buildToken()}`,
       },
-      body: JSON.stringify({ token: 'bot-token', chatId: '999999' }),
+      // Token con formato válido: <bot_id>:<secret> (ver TELEGRAM_TOKEN_REGEX).
+      body: JSON.stringify({ token: '1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', chatId: '999999' }),
     });
     const json = await res.json();
 
     assert.equal(res.status, 200);
     assert.equal(json.success, true);
     assert.deepEqual(calls, [
-      { type: 'set', userId: 1, payload: { token: 'bot-token', chatId: '999999' } },
+      { type: 'set', userId: 1, payload: { token: '1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', chatId: '999999' } },
       { type: 'reload', userId: 1 },
       { type: 'refresh-configs' },
     ]);

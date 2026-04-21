@@ -18,6 +18,7 @@ const config = require('../config');
 const { numericEqual } = require('../utils/format');
 const logger = require('./logger.service');
 const hlWeightBudget = require('./hl-weight-budget.service');
+const metrics = require('./metrics.service');
 const {
   computeBackoffMs,
   isHyperliquidRetryableError,
@@ -51,6 +52,15 @@ function _exchangeBreakerCheck() {
 function _exchangeBreakerOnSuccess() {
   EXCHANGE_BREAKER.consecutiveFailures = 0;
   EXCHANGE_BREAKER.openUntil = 0;
+}
+
+function getExchangeBreakerState() {
+  const now = Date.now();
+  return {
+    open: EXCHANGE_BREAKER.openUntil > now,
+    consecutiveFailures: EXCHANGE_BREAKER.consecutiveFailures,
+    msUntilClose: Math.max(0, EXCHANGE_BREAKER.openUntil - now),
+  };
 }
 
 /**
@@ -174,6 +184,12 @@ class HyperliquidService {
     const isExchangeRequest = url === EXCHANGE_URL;
     if (isExchangeRequest) _exchangeBreakerCheck();
 
+    const scope = isInfoRequest ? 'info' : isExchangeRequest ? 'exchange' : 'other';
+    const endPostTimer = metrics
+      .histogram('hl_request_duration_seconds', { scope, endpoint: endpoint || 'unknown' })
+      .startTimer();
+    metrics.counter('hl_requests_total', { scope, endpoint: endpoint || 'unknown' }).inc();
+
     // Retry automático en EXCHANGE sólo cuando es seguro: el request debe ser
     // idempotente. Las acciones 'order' traen cloid (HL deduplica por él); las
     // acciones 'cancel' / 'updateLeverage' / 'updateIsolatedMargin' son
@@ -208,6 +224,7 @@ class HyperliquidService {
           throw new Error(data.response || 'Error en Hyperliquid API');
         }
         if (isExchangeRequest) _exchangeBreakerOnSuccess();
+        endPostTimer();
         return data;
       } catch (err) {
         lastErr = err;
@@ -251,6 +268,14 @@ class HyperliquidService {
         }
 
         if (isExchangeRequest) _exchangeBreakerOnFailure(err);
+
+        const httpStatusLabel = Number(err?.response?.status || 0) || (err?.circuitBreakerOpen ? 'breaker_open' : 'network');
+        metrics.counter('hl_request_errors_total', {
+          scope,
+          endpoint: endpoint || 'unknown',
+          status: String(httpStatusLabel),
+        }).inc();
+        endPostTimer();
 
         // Errores propios (no-response) o error aplicativo: NO reintentar.
         if (err.message && !err.response) throw err;
@@ -883,3 +908,4 @@ class HyperliquidService {
 }
 
 module.exports = HyperliquidService;
+module.exports.getExchangeBreakerState = getExchangeBreakerState;

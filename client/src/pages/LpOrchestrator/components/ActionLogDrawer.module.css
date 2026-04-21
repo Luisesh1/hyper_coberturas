@@ -15,7 +15,8 @@
 }
 
 .drawer {
-  width: min(560px, 100vw);
+  width: min(560px, 100%);
+  max-width: 100%;
   height: 100vh;
   background: linear-gradient(180deg, rgba(11, 18, 26, 0.98), rgba(8, 13, 19, 0.96));
   border-left: 1px solid var(--uni-border);

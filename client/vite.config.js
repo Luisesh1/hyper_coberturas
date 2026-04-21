@@ -10,6 +10,40 @@ export default defineConfig({
   optimizeDeps: {
     include: ['@walletconnect/ethereum-provider'],
   },
+  build: {
+    // Sourcemaps fuera del bundle (no referenciados en los .js emitidos):
+    // útiles para subir a Sentry/monitoring sin exponer al navegador.
+    sourcemap: 'hidden',
+    chunkSizeWarningLimit: 1024,
+    rollupOptions: {
+      output: {
+        // Split manual para reducir el chunk inicial. Cada grupo carga
+        // sólo cuando alguna ruta lo necesita.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('react-dom') || id.includes('/react/') || id.includes('react-router')) {
+            return 'vendor-react';
+          }
+          if (id.includes('@tanstack/react-query')) {
+            return 'vendor-query';
+          }
+          if (id.includes('lightweight-charts')) {
+            return 'vendor-charts';
+          }
+          if (id.includes('@codemirror') || id.includes('/codemirror/')) {
+            return 'vendor-codemirror';
+          }
+          if (id.includes('viem') || id.includes('wagmi') || id.includes('@walletconnect') || id.includes('w3m-')) {
+            return 'vendor-wallet';
+          }
+          if (id.includes('technicalindicators')) {
+            return 'vendor-indicators';
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     host: '0.0.0.0',
     port: devPort,

@@ -221,8 +221,6 @@ async function waitForClaimReceipt({ network, version, positionIdentifier, walle
     network, version, positionIdentifier, walletAddress,
   });
 
-  const provider = getProviderCached(networkConfig);
-
   onProgress?.('waiting_receipts', { txHash });
   let receipt;
   try {

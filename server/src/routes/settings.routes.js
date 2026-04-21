@@ -386,4 +386,52 @@ router.post('/delta-neutral-top-up-counters/:id/reset', asyncHandler(async (req,
   });
 }));
 
+// ------------------------------------------------------------------
+// Chart indicators (config del panel de TradingView por usuario)
+// ------------------------------------------------------------------
+
+router.get('/chart-indicators', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const config = await settingsService.getChartIndicators(userId);
+  res.json({ success: true, data: config });
+}));
+
+router.put('/chart-indicators', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const body = req.body || {};
+  if (!Array.isArray(body.indicators)) {
+    throw new ValidationError('indicators debe ser un arreglo');
+  }
+  const saved = await settingsService.setChartIndicators(userId, body);
+  res.json({ success: true, data: saved });
+}));
+
+// ------------------------------------------------------------------
+// Chart drawings (por simbolo)
+// ------------------------------------------------------------------
+
+router.get('/chart-drawings/:symbol', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const symbol = String(req.params.symbol || '').trim();
+  if (!symbol) throw new ValidationError('symbol requerido');
+  const drawings = await settingsService.getChartDrawingsForSymbol(userId, symbol);
+  res.json({ success: true, data: { symbol, drawings } });
+}));
+
+router.put('/chart-drawings/:symbol', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const symbol = String(req.params.symbol || '').trim();
+  if (!symbol) throw new ValidationError('symbol requerido');
+  const body = req.body || {};
+  if (!Array.isArray(body.drawings)) {
+    throw new ValidationError('drawings debe ser un arreglo');
+  }
+  try {
+    const saved = await settingsService.setChartDrawingsForSymbol(userId, symbol, body.drawings);
+    res.json({ success: true, data: { symbol, drawings: saved } });
+  } catch (err) {
+    throw new ValidationError(err.message || 'symbol invalido');
+  }
+}));
+
 module.exports = router;

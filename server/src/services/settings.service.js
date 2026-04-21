@@ -16,6 +16,173 @@ const deltaNeutralRiskCache = new Map();
 
 const NOTIFICATION_CATEGORIES = ['hedge', 'trade', 'runtime', 'deltaNeutralBlock'];
 
+const CHART_INDICATORS_KEY = 'chart_indicators';
+const CHART_INDICATOR_TYPES = new Set([
+  'sma', 'ema', 'wma', 'bollinger', 'keltner', 'vwap',
+  'rsi', 'macd', 'stoch', 'atr', 'adx', 'volume', 'sqzmom',
+]);
+const MAX_CHART_INDICATORS = 20;
+
+function getDefaultChartIndicators() {
+  return {
+    version: 1,
+    indicators: [
+      {
+        uid: 'sqzmom-default',
+        type: 'sqzmom',
+        params: { length: 20, mult: 2.0, lengthKC: 20, multKC: 1.5, useTrueRange: true },
+        style: {},
+        visible: true,
+      },
+    ],
+  };
+}
+
+function normalizeStyle(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  if (typeof raw.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw.color)) out.color = raw.color;
+  const lineWidth = Number(raw.lineWidth);
+  if (Number.isFinite(lineWidth) && lineWidth >= 1 && lineWidth <= 5) out.lineWidth = Math.floor(lineWidth);
+  if (['solid', 'dashed', 'dotted'].includes(raw.lineStyle)) out.lineStyle = raw.lineStyle;
+  return out;
+}
+
+function normalizeIndicatorEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const type = String(raw.type || '').toLowerCase();
+  if (!CHART_INDICATOR_TYPES.has(type)) return null;
+
+  const params = {};
+  if (raw.params && typeof raw.params === 'object') {
+    for (const [k, v] of Object.entries(raw.params)) {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        params[k] = v;
+      } else if (typeof v === 'boolean') {
+        params[k] = v;
+      } else if (typeof v === 'string' && v.length <= 40) {
+        params[k] = v;
+      }
+    }
+  }
+
+  const uid = typeof raw.uid === 'string' && raw.uid.length > 0 && raw.uid.length <= 64
+    ? raw.uid
+    : `${type}-${Math.random().toString(36).slice(2, 10)}`;
+
+  return {
+    uid,
+    type,
+    params,
+    style: normalizeStyle(raw.style),
+    visible: raw.visible !== false,
+  };
+}
+
+function normalizeChartIndicators(value) {
+  if (!value || typeof value !== 'object') return getDefaultChartIndicators();
+  const raw = Array.isArray(value.indicators) ? value.indicators : [];
+  const indicators = raw
+    .map(normalizeIndicatorEntry)
+    .filter(Boolean)
+    .slice(0, MAX_CHART_INDICATORS);
+  return { version: 1, indicators };
+}
+
+// ------------------------------------------------------------------
+// Chart drawings (trend lines, horizontal, rectangles, fib) — per symbol
+// ------------------------------------------------------------------
+const CHART_DRAWINGS_KEY = 'chart_drawings';
+const CHART_DRAWING_TYPES = new Set(['trendline', 'horizontal', 'rectangle', 'fib']);
+const MAX_DRAWINGS_PER_SYMBOL = 50;
+const MAX_SYMBOLS_PER_USER = 40;
+
+function normalizeDrawingStyle(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  if (typeof raw.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw.color)) out.color = raw.color;
+  const lineWidth = Number(raw.lineWidth);
+  if (Number.isFinite(lineWidth) && lineWidth >= 1 && lineWidth <= 5) out.lineWidth = Math.floor(lineWidth);
+  if (['solid', 'dashed', 'dotted'].includes(raw.lineStyle)) out.lineStyle = raw.lineStyle;
+  const fillOpacity = Number(raw.fillOpacity);
+  if (Number.isFinite(fillOpacity) && fillOpacity >= 0 && fillOpacity <= 1) out.fillOpacity = fillOpacity;
+  return out;
+}
+
+function normalizeAnchor(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  if (raw.time != null) {
+    const t = Number(raw.time);
+    if (!Number.isFinite(t) || t <= 0) return null;
+    out.time = Math.floor(t);
+  }
+  if (raw.price != null) {
+    const p = Number(raw.price);
+    if (!Number.isFinite(p)) return null;
+    out.price = p;
+  }
+  if (out.time == null && out.price == null) return null;
+  return out;
+}
+
+function normalizeDrawingEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const type = String(raw.type || '').toLowerCase();
+  if (!CHART_DRAWING_TYPES.has(type)) return null;
+
+  const anchors = Array.isArray(raw.anchors)
+    ? raw.anchors.map(normalizeAnchor).filter(Boolean)
+    : [];
+
+  // Cada tipo requiere una forma específica
+  if (type === 'horizontal' && anchors.length !== 1) return null;
+  if (type === 'horizontal' && anchors[0].price == null) return null;
+  if ((type === 'trendline' || type === 'rectangle' || type === 'fib')
+      && (anchors.length !== 2 || anchors.some((a) => a.time == null || a.price == null))) {
+    return null;
+  }
+
+  const uid = typeof raw.uid === 'string' && raw.uid.length > 0 && raw.uid.length <= 64
+    ? raw.uid
+    : `${type}-${Math.random().toString(36).slice(2, 10)}`;
+
+  return {
+    uid,
+    type,
+    anchors,
+    style: normalizeDrawingStyle(raw.style),
+    visible: raw.visible !== false,
+  };
+}
+
+function normalizeSymbolKey(symbol) {
+  const s = String(symbol || '').trim();
+  if (!s) return null;
+  if (s.length > 32) return null;
+  // Permite letras, números, guiones y símbolos comunes de tickers (=, ^, ., /, _)
+  if (!/^[A-Za-z0-9\-=^./_]+$/.test(s)) return null;
+  return s;
+}
+
+function normalizeChartDrawingsAll(value) {
+  if (!value || typeof value !== 'object') return { version: 1, bySymbol: {} };
+  const raw = value.bySymbol && typeof value.bySymbol === 'object' ? value.bySymbol : {};
+  const bySymbol = {};
+  const symbols = Object.keys(raw).slice(0, MAX_SYMBOLS_PER_USER);
+  for (const sym of symbols) {
+    const key = normalizeSymbolKey(sym);
+    if (!key) continue;
+    const list = Array.isArray(raw[sym]) ? raw[sym] : [];
+    const normalized = list
+      .map(normalizeDrawingEntry)
+      .filter(Boolean)
+      .slice(0, MAX_DRAWINGS_PER_SYMBOL);
+    if (normalized.length > 0) bySymbol[key] = normalized;
+  }
+  return { version: 1, bySymbol };
+}
+
 function getDefaultNotificationPrefs() {
   return {
     silencedUntil: null,
@@ -237,6 +404,51 @@ async function setDeltaNeutralRiskControls(userId, controls) {
   return normalized;
 }
 
+async function getChartIndicators(userId) {
+  const stored = await getSetting(userId, CHART_INDICATORS_KEY);
+  if (!stored) return getDefaultChartIndicators();
+  return normalizeChartIndicators(stored);
+}
+
+async function setChartIndicators(userId, config) {
+  const normalized = normalizeChartIndicators(config);
+  await setSetting(userId, CHART_INDICATORS_KEY, normalized);
+  return normalized;
+}
+
+async function getChartDrawingsAll(userId) {
+  const stored = await getSetting(userId, CHART_DRAWINGS_KEY);
+  return normalizeChartDrawingsAll(stored);
+}
+
+async function getChartDrawingsForSymbol(userId, symbol) {
+  const key = normalizeSymbolKey(symbol);
+  if (!key) return [];
+  const all = await getChartDrawingsAll(userId);
+  return all.bySymbol[key] || [];
+}
+
+async function setChartDrawingsForSymbol(userId, symbol, list) {
+  const key = normalizeSymbolKey(symbol);
+  if (!key) throw new Error('symbol invalido');
+  const all = await getChartDrawingsAll(userId);
+  const next = Array.isArray(list)
+    ? list.map(normalizeDrawingEntry).filter(Boolean).slice(0, MAX_DRAWINGS_PER_SYMBOL)
+    : [];
+  if (next.length === 0) {
+    delete all.bySymbol[key];
+  } else {
+    all.bySymbol[key] = next;
+  }
+  // Aplica el cap de simbolos
+  const keys = Object.keys(all.bySymbol);
+  if (keys.length > MAX_SYMBOLS_PER_USER) {
+    for (const k of keys.slice(MAX_SYMBOLS_PER_USER)) delete all.bySymbol[k];
+  }
+  await setSetting(userId, CHART_DRAWINGS_KEY, all);
+  return next;
+}
+
 module.exports = {
   ENCRYPTED_PREFIX,
   decryptValue,
@@ -259,4 +471,15 @@ module.exports = {
   setAlchemy,
   getDeltaNeutralRiskControls,
   setDeltaNeutralRiskControls,
+  getChartIndicators,
+  setChartIndicators,
+  getDefaultChartIndicators,
+  normalizeChartIndicators,
+  CHART_INDICATOR_TYPES,
+  getChartDrawingsAll,
+  getChartDrawingsForSymbol,
+  setChartDrawingsForSymbol,
+  normalizeChartDrawingsAll,
+  normalizeDrawingEntry,
+  CHART_DRAWING_TYPES,
 };

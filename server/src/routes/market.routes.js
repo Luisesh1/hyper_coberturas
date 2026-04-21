@@ -13,20 +13,44 @@ const { Router } = require('express');
 const asyncHandler  = require('../middleware/async-handler');
 const marketService = require('../services/market.service');
 const marketDataService = require('../services/market-data.service');
+const { CATEGORIES, listAssets } = require('../services/marketdata-providers/asset-catalog');
 
 const router = Router();
 
-// GET /api/market/candles?asset=ETH&timeframe=15m&limit=300
+// GET /api/market/candles?asset=ETH&timeframe=15m&limit=300&datasource=hyperliquid
 // Devuelve OHLCV normalizadas (ms epoch + open/high/low/close/volume).
 // Delegamos el caching y validación en `marketDataService.getCandles`.
 router.get('/candles', asyncHandler(async (req, res) => {
-  const { asset, timeframe, limit } = req.query;
+  const { asset, timeframe, limit, datasource, startTime, endTime } = req.query;
+  const parseTs = (raw) => {
+    if (raw == null || raw === '') return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
   const candles = await marketDataService.getCandles(
     String(asset || 'BTC'),
     String(timeframe || '15m'),
-    { limit: Number(limit) || 300 }
+    {
+      limit: Number(limit) || 300,
+      datasource,
+      startTime: parseTs(startTime),
+      endTime: parseTs(endTime),
+    },
   );
   res.json({ success: true, data: candles });
+}));
+
+// GET /api/market/catalog
+// Devuelve el catálogo curado de activos por datasource/categoría. Usado
+// por el selector de pares de la gráfica.
+router.get('/catalog', asyncHandler(async (_req, res) => {
+  res.json({
+    success: true,
+    data: {
+      categories: CATEGORIES,
+      assets: listAssets(),
+    },
+  });
 }));
 
 router.get('/prices', asyncHandler(async (req, res) => {

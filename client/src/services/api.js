@@ -66,8 +66,9 @@ export const usersApi = {
 // ------------------------------------------------------------------
 export const marketApi = {
   getContexts: () => request('GET', '/market/contexts'),
-  getCandles: ({ asset, timeframe = '15m', limit = 300 } = {}) =>
-    request('GET', `/market/candles?asset=${encodeURIComponent(asset)}&timeframe=${timeframe}&limit=${limit}`),
+  getCandles: ({ asset, timeframe = '15m', limit = 300, datasource = 'hyperliquid', startTime, endTime } = {}) =>
+    request('GET', `/market/candles${buildQueryString({ asset, timeframe, limit, datasource, startTime, endTime })}`),
+  getCatalog: () => request('GET', '/market/catalog'),
 };
 
 // ------------------------------------------------------------------
@@ -155,6 +156,14 @@ export const settingsApi = {
     request('GET', '/settings/delta-neutral-top-up-counters'),
   resetDeltaNeutralTopUpCounter: (protectionId) =>
     request('POST', `/settings/delta-neutral-top-up-counters/${protectionId}/reset`, {}),
+  getChartIndicators: () =>
+    request('GET', '/settings/chart-indicators'),
+  saveChartIndicators: (config) =>
+    request('PUT', '/settings/chart-indicators', config),
+  getChartDrawings: (symbol) =>
+    request('GET', `/settings/chart-drawings/${encodeURIComponent(symbol)}`),
+  saveChartDrawings: (symbol, drawings) =>
+    request('PUT', `/settings/chart-drawings/${encodeURIComponent(symbol)}`, { drawings }),
 };
 
 // ------------------------------------------------------------------

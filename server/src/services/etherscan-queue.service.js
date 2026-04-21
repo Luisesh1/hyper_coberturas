@@ -1,7 +1,25 @@
 const httpClient = require('../shared/platform/http/http-client');
 const config = require('../config');
 const logger = require('./logger.service');
+const metrics = require('./metrics.service');
+const { createCircuitBreaker } = require('../utils/circuit-breaker');
 const { ExternalServiceError, ValidationError } = require('../errors/app-error');
+
+// Circuit breaker para Etherscan: protege contra cascadas cuando la API
+// está caída o con 5xx prolongados. Un rate-limit (reintentable) no
+// mueve el breaker; sí lo hacen los 5xx / timeouts / network errors.
+const etherscanBreaker = createCircuitBreaker({
+  name: 'etherscan',
+  failureThreshold: 5,
+  cooldownMs: 30_000,
+  halfOpenMaxCalls: 1,
+  isRetryable: (err) => {
+    const msg = String(err?.message || '').toLowerCase();
+    if (err instanceof ValidationError) return false; // key inválida ≠ outage
+    return /timeout|etimedout|econnreset|socket hang up|network|5\d{2}/.test(msg);
+  },
+  logger,
+});
 
 const ETHERSCAN_API_URL = 'https://api.etherscan.io/v2/api';
 const MAX_RATE_LIMIT_RETRIES = 60;
@@ -65,14 +83,16 @@ function createEtherscanQueueClient({
 
   const execute = async (job) => {
     const startedAt = now();
+    const endTimer = metrics.histogram('etherscan_request_duration_seconds', null).startTimer();
+    metrics.counter('etherscan_requests_total', null).inc();
     try {
-      const { data } = await axiosInstance.get(apiUrl, {
+      const { data } = await etherscanBreaker.exec(() => axiosInstance.get(apiUrl, {
         params: {
           ...job.params,
           apikey: job.apiKey,
         },
         timeout: job.timeoutMs,
-      });
+      }));
 
       if (data?.status === '1') {
         queueLogger.info('etherscan_queue_request_completed', {
@@ -83,6 +103,7 @@ function createEtherscanQueueClient({
           durationMs: now() - startedAt,
           rateLimitedHits: job.rateLimitedHits,
         });
+        endTimer();
         job.resolve(data.result);
         return;
       }
@@ -104,6 +125,7 @@ function createEtherscanQueueClient({
           durationMs: now() - startedAt,
           rateLimitedHits: job.rateLimitedHits,
         });
+        endTimer();
         job.resolve([]);
         return;
       }
@@ -113,6 +135,10 @@ function createEtherscanQueueClient({
       const error = err instanceof ValidationError || err instanceof ExternalServiceError
         ? err
         : new ExternalServiceError(`Etherscan request fallo: ${err.message}`);
+      metrics.counter('etherscan_request_errors_total', {
+        reason: err?.circuitBreakerOpen ? 'breaker_open' : 'network_or_http',
+      }).inc();
+      endTimer();
       queueLogger.warn('etherscan_queue_request_failed', {
         module: job.params?.module || null,
         action: job.params?.action || null,

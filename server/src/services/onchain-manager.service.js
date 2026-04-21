@@ -1,4 +1,27 @@
 const { ethers } = require('ethers');
+const metrics = require('./metrics.service');
+const logger = require('./logger.service');
+const { createCircuitBreaker } = require('../utils/circuit-breaker');
+
+// Circuit breaker global para RPC externo (Alchemy + publicnodes). Cortamos
+// tras 8 fallos de red consecutivos para que una tormenta RPC no consuma
+// workers. 20s de cooldown + half-open con 1 call de prueba. NOTA: un revert
+// de contrato (gas, require, etc.) NO es transient y no debe mover el
+// breaker — lo filtramos con `isRetryable`.
+const rpcBreaker = createCircuitBreaker({
+  name: 'rpc-provider',
+  failureThreshold: 8,
+  cooldownMs: 20_000,
+  halfOpenMaxCalls: 1,
+  isRetryable: (err) => {
+    const msg = String(err?.message || '').toLowerCase();
+    if (err?.code === 'CALL_EXCEPTION') return false;
+    if (err?.code === 'BAD_DATA') return false;
+    if (/revert|underlying call exception|require/i.test(msg)) return false;
+    return /timeout|etimedout|econnreset|socket hang up|network|fetch failed|503|502|504|429/.test(msg);
+  },
+  logger,
+});
 
 // Multicall3: misma address en TODA red EVM mainnet/L2 que el bot soporta
 // (Arbitrum, Ethereum, Optimism, Base, Polygon). Si en algún momento se
@@ -168,13 +191,21 @@ class OnChainManager {
       entry = { count: 0, totalDurationMs: 0, errors: 0, samples: [] };
       scopeMap.set(method, entry);
     }
+    const endPromTimer = metrics
+      .histogram('rpc_call_duration_seconds', { scope, method })
+      .startTimer();
+    metrics.counter('rpc_calls_total', { scope, method }).inc();
     try {
-      const result = await fn();
+      // Wrap en circuit breaker: `rpcBreaker.exec` pasa el error intacto
+      // cuando no es retryable, y lanza un error `circuitBreakerOpen=true`
+      // si ya se abrió. Los revert de contrato NO cuentan.
+      const result = await rpcBreaker.exec(() => fn());
       const durationMs = Date.now() - startedAt;
       entry.count += 1;
       entry.totalDurationMs += durationMs;
       entry.samples.push(durationMs);
       if (entry.samples.length > METRICS_RING_SIZE) entry.samples.shift();
+      endPromTimer();
       return result;
     } catch (err) {
       const durationMs = Date.now() - startedAt;
@@ -183,8 +214,19 @@ class OnChainManager {
       entry.totalDurationMs += durationMs;
       entry.samples.push(durationMs);
       if (entry.samples.length > METRICS_RING_SIZE) entry.samples.shift();
+      metrics.counter('rpc_call_errors_total', {
+        scope,
+        method,
+        reason: err?.circuitBreakerOpen ? 'breaker_open' : (err?.code || 'other'),
+      }).inc();
+      endPromTimer();
       throw err;
     }
+  }
+
+  /** Estado del circuit breaker compartido para exponer por /metrics. */
+  getRpcBreakerState() {
+    return rpcBreaker.getState();
   }
 
   _percentile(samples, p) {

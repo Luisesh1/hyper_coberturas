@@ -5,7 +5,6 @@ const {
   validateTickRange,
 } = require('../position-validators');
 const {
-  ERC20_ABI,
   V3_FACTORY_ABI,
   V3_POOL_ABI,
 } = require('../abis');
