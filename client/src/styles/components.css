@@ -191,3 +191,17 @@ textarea:focus-visible {
   .btn:hover:not(:disabled),
   .card-hover:hover { transform: none; }
 }
+
+/* ── Mobile: evitar zoom involuntario en iOS ──────────────────
+   Safari hace zoom al enfocar un input con font-size < 16px.
+   Subimos a 16px en viewports pequeños; el layout ya tolera el
+   cambio porque inputs usan padding relativo y width:100%. */
+@media (max-width: 768px) {
+  input,
+  select,
+  textarea,
+  .input-base,
+  .select-base {
+    font-size: 16px;
+  }
+}

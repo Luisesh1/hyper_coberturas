@@ -7,6 +7,30 @@
   color: var(--text, #b3b8c2);
 }
 
+/* Pseudo-fullscreen: cuando el navegador no soporta Fullscreen API en el div
+   (ej. iOS Safari), cubrimos toda la ventana con position: fixed + z-index
+   alto. Los modales (z-index 1100) siguen por encima.
+   Sólo aplicamos insets horizontales aquí; los verticales los manejan el
+   topBar y el bottomBar respectivamente para evitar doble padding. */
+.pageFullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh; /* mobile: evita el salto al mostrar/ocultar la barra del navegador */
+  padding: 0;
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
+}
+/* Cuando el navegador sí aplica la Fullscreen API nativa, el elemento hereda
+   :fullscreen y conviene quitar los insets (el sistema ya maneja el notch). */
+.page:fullscreen {
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -15,6 +39,38 @@
   border-bottom: 1px solid rgba(120, 130, 145, 0.18);
   flex-shrink: 0;
   flex-wrap: wrap;
+}
+
+/* Subsecciones de la barra superior. En desktop las tres viven inline dentro
+   de la misma fila flex; en mobile las reestructuramos (ver @media abajo). */
+.toolbarMain,
+.toolbarSecondary,
+.toolbarDesktop {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+.toolbarMain { flex-shrink: 0; }
+.toolbarDesktop { flex: 1 1 auto; flex-wrap: wrap; }
+
+/* Barra inferior (mobile-only por defecto está oculta; se muestra en @media). */
+.bottomBar {
+  display: none;
+}
+.bottomBarTf {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.bottomBarTf::-webkit-scrollbar { display: none; }
+.bottomBarActions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: center;
 }
 
 .toolGroup {
@@ -252,3 +308,219 @@
   font-size: 0.85rem;
   z-index: 10;
 }
+
+/* Botón de pantalla completa: ícono-only, con SVG que rota al activarse. */
+.fullscreenBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  padding: 6px 10px;
+}
+.fsIcon {
+  display: block;
+  color: inherit;
+}
+
+/* Normalizamos los botones "refresh/indicadores/fullscreen" para que admitan
+   un texto + ícono + badge, que se reorganizan en mobile. */
+.refreshBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btnIcon { display: inline-flex; }
+.btnText { display: inline; }
+/* Badge visible SÓLO en mobile (sustituye al texto "Indicadores (N)"). */
+.btnBadge { display: none; }
+
+/* Grupos secundarios (crosshair, escala) y stats secundarias (candles)
+   tienen prioridad baja: el usuario puede ocultarlos con el botón de ajustes
+   y en mobile están ocultos por defecto. */
+.toolGroupSecondary {}
+.statsItemSecondary {}
+
+/* Cuando el usuario oculta los ajustes, desaparecen los grupos secundarios
+   en cualquier viewport (también desktop). El botón toggle queda resaltado
+   cuando los ajustes están visibles. */
+.settingsHidden .toolGroupSecondary { display: none; }
+.settingsVisible .settingsBtn {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #c7d2fe;
+}
+
+.settingsBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  padding: 6px 10px;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Responsive — Tablet (≤ 900px): reducimos gap y padding.
+   ──────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .toolbar {
+    gap: 10px;
+    padding: 8px 12px;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Responsive — Mobile (≤ 768px): layout estilo TradingView mobile.
+   - Top: sólo asset + precio (una fila compacta).
+   - Chart rellena el medio.
+   - Bottom bar sticky: timeframes con scroll + botones de acción.
+   - Crosshair/Escala aparecen como fila extra dentro del topBar cuando
+     el usuario activa el toggle de ajustes.
+   - Targets táctiles ≥ 38px.
+   ──────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 6px 10px;
+    padding-top: max(6px, env(safe-area-inset-top, 0));
+    flex-wrap: nowrap;
+  }
+
+  /* Oculta el bloque desktop (timeframes + acciones) — aparecen abajo. */
+  .toolbarDesktop { display: none; }
+
+  /* Fila principal: asset a la izquierda, precio a la derecha. */
+  .toolbarMain {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+  }
+
+  /* Fila de ajustes: visible sólo cuando el usuario los activa.
+     La regla global `.settingsHidden .toolGroupSecondary` oculta los hijos,
+     pero aquí también ocultamos el wrapper para ahorrar espacio vertical. */
+  .toolbarSecondary {
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .settingsHidden .toolbarSecondary { display: none; }
+
+  .toolGroup {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .toolGroup label { display: none; }
+
+  .assetButton {
+    padding: 8px 10px;
+    min-height: 40px;
+    font-size: 0.88rem;
+    border-radius: 8px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .assetButtonSymbol { font-size: 0.95rem; }
+
+  /* Botones de acción comunes. */
+  .refreshBtn {
+    min-height: 40px;
+    min-width: 40px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* En mobile los botones muestran sólo el ícono; el texto se oculta. */
+  .btnText { display: none; }
+  .btnBadge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-left: -2px;
+    background: var(--accent, #4a9eff);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  /* Stats compactas en el topBar: sólo precio + live dot. */
+  .stats {
+    gap: 6px;
+    font-size: 0.82rem;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+    margin-left: 0;
+    text-align: right;
+  }
+  .statsLabel { display: none; }
+  .statsItemSecondary { display: none; }
+  .lastPrice {
+    font-family: var(--font-mono, monospace);
+    font-size: 1rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-left: 4px;
+  }
+
+  /* Barra inferior sticky con timeframes + acciones. */
+  .bottomBar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom, 0));
+    padding-left: max(8px, env(safe-area-inset-left, 0));
+    padding-right: max(8px, env(safe-area-inset-right, 0));
+    border-top: 1px solid rgba(120, 130, 145, 0.25);
+    background: #0f1114;
+    flex-shrink: 0;
+    z-index: 2;
+  }
+
+  /* Los timeframes ocupan todo el espacio disponible a la izquierda,
+     con scroll horizontal si sobran. */
+  .bottomBarTf .tfGroup {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    max-width: none;
+    border: none;
+    border-radius: 0;
+  }
+  .bottomBarTf .tfGroup::-webkit-scrollbar { display: none; }
+
+  .tfBtn {
+    padding: 9px 12px;
+    min-height: 40px;
+    min-width: 40px;
+    font-size: 0.82rem;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+    border-radius: 6px;
+  }
+  .tfBtnActive { border-radius: 6px; }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Responsive — Mobile angosto (≤ 420px): tipografías y targets un poco
+   más chicos para iPhone SE y similares.
+   ──────────────────────────────────────────────────────────────── */
+@media (max-width: 420px) {
+  .toolbar { padding: 6px 8px; }
+  .assetButton { padding: 7px 9px; font-size: 0.82rem; min-height: 38px; }
+  .assetButtonSymbol { font-size: 0.9rem; }
+  .tfBtn { padding: 9px 10px; font-size: 0.78rem; min-width: 38px; min-height: 38px; }
+  .refreshBtn { padding: 7px 9px; min-width: 38px; min-height: 38px; }
+  .bottomBar { gap: 6px; padding-left: max(6px, env(safe-area-inset-left, 0)); padding-right: max(6px, env(safe-area-inset-right, 0)); }
+  .stats { gap: 4px; }
+  .lastPrice { font-size: 0.9rem; }
+}
+

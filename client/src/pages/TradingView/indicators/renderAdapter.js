@@ -1,4 +1,4 @@
-import { LineSeries, HistogramSeries } from 'lightweight-charts';
+import { LineSeries, HistogramSeries, PriceScaleMode } from 'lightweight-charts';
 import { computeIndicator } from './computeAdapter';
 import { INDICATORS } from './catalog';
 
@@ -72,6 +72,13 @@ function createIndicatorSeries(chart, entry, paneIndex) {
 
     default:
       return null;
+  }
+
+  // Los sub-panes (osciladores: RSI, MACD, SQZMOM, etc.) siempre se visualizan
+  // en escala Normal. Si el pane de precio está en log, los osciladores
+  // heredarían esa escala al compartir priceScaleId y se deformarían.
+  if (meta.pane === 'subpane' && series.length > 0) {
+    try { series[0].priceScale().applyOptions({ mode: PriceScaleMode.Normal }); } catch { /* noop */ }
   }
 
   return { series, paneIndex };

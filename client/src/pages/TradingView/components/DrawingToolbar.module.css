@@ -85,3 +85,35 @@
 .iconTrash {
   font-size: 14px;
 }
+
+/* ────────────────────────────────────────────────────────────────
+   Responsive — Mobile: la barra de dibujo queda dentro del widgetContainer
+   (que no toca el bottomBar). La ponemos arriba a la izquierda con targets
+   más grandes y disposición horizontal. No necesita safe-area insets porque
+   vive por encima del chart, no al borde de la pantalla.
+   ──────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .toolbar {
+    top: 8px;
+    left: 8px;
+    flex-direction: row;
+    gap: 2px;
+    padding: 4px;
+    background: rgba(15, 17, 20, 0.94);
+    border-radius: 10px;
+    flex-wrap: wrap;
+    max-width: calc(100vw - 16px);
+  }
+  .tool {
+    width: 44px;
+    height: 44px;
+    font-size: 16px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .separator {
+    width: 1px;
+    height: auto;
+    margin: 0 2px;
+    align-self: stretch;
+  }
+}

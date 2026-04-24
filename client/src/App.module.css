@@ -47,6 +47,9 @@ canvas {
   align-items: center;
   justify-content: space-between;
   padding: 14px 24px;
+  padding-top: max(14px, env(safe-area-inset-top));
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -223,13 +226,13 @@ canvas {
   flex-direction: column;
   justify-content: center;
   gap: 5px;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   background: transparent;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  padding: 7px 8px;
+  padding: 10px;
   flex-shrink: 0;
 }
 
@@ -259,6 +262,10 @@ canvas {
   left: 0;
   width: 280px;
   height: 100vh;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
   background: var(--bg-card);
   border-right: 1px solid var(--border);
   z-index: 200;
@@ -290,6 +297,8 @@ canvas {
   color: var(--text-tertiary);
   font-size: 1.1rem;
   cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   line-height: 1;
@@ -422,6 +431,9 @@ canvas {
     height: auto;
     overflow: visible;
     padding: 12px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 
   .sidebar,

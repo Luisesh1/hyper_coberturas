@@ -36,7 +36,9 @@
     "@vitejs/plugin-react": "^4.3.1",
     "eslint": "^8.57.1",
     "jsdom": "^22.1.0",
+    "sharp": "^0.34.5",
     "vite": "^7.3.1",
+    "vite-plugin-pwa": "^1.2.0",
     "vitest": "^1.6.1"
   }
 }

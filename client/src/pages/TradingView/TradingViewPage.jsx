@@ -15,6 +15,21 @@ const ASSET_STORAGE_KEY = 'tv_selected_asset_v1';
 const CROSSHAIR_STORAGE_KEY = 'tv_crosshair_mode_v1';
 const PRICE_SCALE_STORAGE_KEY = 'tv_price_scale_mode_v1';
 const TIMEFRAME_STORAGE_KEY = 'tv_timeframe_v1';
+const SETTINGS_VISIBLE_STORAGE_KEY = 'tv_settings_visible_v1';
+
+function loadStoredSettingsVisible() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_VISIBLE_STORAGE_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+    // Default según ancho de viewport: visible en desktop, oculto en mobile.
+    return typeof window !== 'undefined'
+      ? window.matchMedia('(min-width: 769px)').matches
+      : true;
+  } catch {
+    return true;
+  }
+}
 
 const PRICE_SCALE_MODES = [
   { value: PriceScaleMode.Normal,      label: 'Regular' },
@@ -167,7 +182,10 @@ export default function TradingViewPage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [activeTool, setActiveTool] = useState(null);
   const [futureTimeLabel, setFutureTimeLabel] = useState(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(loadStoredSettingsVisible);
 
+  const pageRef = useRef(null);
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const candleSeriesRef = useRef(null);
@@ -288,11 +306,50 @@ export default function TradingViewPage() {
     try { localStorage.setItem(TIMEFRAME_STORAGE_KEY, timeframe); } catch { /* noop */ }
   }, [timeframe]);
 
-  // Aplica el modo de escala de precio (regular/log) + persiste.
+  // Aplica el modo de escala de precio (regular/log) SÓLO al pane 0 (precio).
+  // Los sub-panes de osciladores fuerzan su propia escala Normal al crearse
+  // (ver renderAdapter.js), por lo que no deben verse afectados aquí.
   useEffect(() => {
-    chartRef.current?.priceScale('right').applyOptions({ mode: priceScaleMode });
+    try { chartRef.current?.priceScale('right', 0).applyOptions({ mode: priceScaleMode }); } catch { /* noop */ }
     try { localStorage.setItem(PRICE_SCALE_STORAGE_KEY, String(priceScaleMode)); } catch { /* noop */ }
   }, [priceScaleMode]);
+
+  // Pantalla completa: intenta la Fullscreen API nativa (desktop/Android) y
+  // cae a "pseudo-fullscreen" vía CSS (iOS Safari, que no soporta la API en divs).
+  const toggleFullscreen = useCallback(() => {
+    const next = !fullscreen;
+    setFullscreen(next);
+    try {
+      if (next) {
+        const el = pageRef.current;
+        if (el?.requestFullscreen) el.requestFullscreen().catch(() => { /* noop */ });
+      } else if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => { /* noop */ });
+      }
+    } catch { /* noop */ }
+  }, [fullscreen]);
+
+  // Sincroniza cuando el usuario sale de fullscreen con Esc o con el botón del navegador.
+  useEffect(() => {
+    const onFsChange = () => {
+      if (!document.fullscreenElement) setFullscreen(false);
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  // En iOS (o cuando la API nativa no disparó), Esc también debe cerrar el pseudo-fullscreen.
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
+
+  // Persiste la preferencia de visibilidad de los ajustes secundarios.
+  useEffect(() => {
+    try { localStorage.setItem(SETTINGS_VISIBLE_STORAGE_KEY, settingsVisible ? '1' : '0'); } catch { /* noop */ }
+  }, [settingsVisible]);
 
   // --- 3) Carga candles ---
   const loadData = useCallback(async () => {
@@ -516,86 +573,177 @@ export default function TradingViewPage() {
   const canvasInteractive = activeTool !== null && activeTool !== 'select';
   const canvasCursor = activeTool && TOOLS[activeTool] ? TOOLS[activeTool].cursor : 'default';
 
-  return (
-    <div className={styles.page}>
-      <div className={styles.toolbar}>
-        <div className={styles.toolGroup}>
-          <label>Par:</label>
-          <button
-            type="button"
-            className={styles.assetButton}
-            onClick={() => setAssetPickerOpen(true)}
-            title={asset.name || asset.symbol}
-          >
-            <span className={styles.assetButtonSymbol}>{asset.symbol}</span>
-            <span className={styles.assetButtonSource}>{asset.datasource}</span>
-            <span className={styles.assetButtonCaret}>▾</span>
-          </button>
-        </div>
-        <div className={styles.toolGroup}>
-          <label>Timeframe:</label>
-          <div className={styles.tfGroup}>
-            {TIMEFRAMES.map((t) => (
-              <button
-                key={t.value}
-                type="button"
-                className={`${styles.tfBtn} ${timeframe === t.value ? styles.tfBtnActive : ''}`}
-                onClick={() => setTimeframe(t.value)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className={styles.toolGroup}>
-          <label htmlFor="crosshair-mode">Crosshair:</label>
-          <select
-            id="crosshair-mode"
-            className={styles.select}
-            value={crosshairMode}
-            onChange={(e) => setCrosshairMode(Number(e.target.value))}
-            title="Modo del crosshair"
-          >
-            {CROSSHAIR_MODES.map((m) => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
-        </div>
-        <div className={styles.toolGroup}>
-          <label htmlFor="price-scale-mode">Escala:</label>
-          <select
-            id="price-scale-mode"
-            className={styles.select}
-            value={priceScaleMode}
-            onChange={(e) => setPriceScaleMode(Number(e.target.value))}
-            title="Escala de precio"
-          >
-            {PRICE_SCALE_MODES.map((m) => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
-        </div>
-        <button type="button" className={styles.refreshBtn} onClick={loadData} disabled={loading}>
-          {loading ? '⟳ Cargando…' : '⟳ Refrescar'}
+  const visibleIndicatorsCount = indicators.filter((i) => i.visible !== false).length;
+
+  // Helpers reutilizables: los mismos controles se renderizan en la barra
+  // superior (desktop) y en la inferior (mobile). Son stateless/sin IDs
+  // propios, así que duplicarlos en el árbol no introduce conflictos.
+  const renderTimeframes = (extraClass = '') => (
+    <div className={`${styles.tfGroup} ${extraClass}`}>
+      {TIMEFRAMES.map((t) => (
+        <button
+          key={t.value}
+          type="button"
+          className={`${styles.tfBtn} ${timeframe === t.value ? styles.tfBtnActive : ''}`}
+          onClick={() => setTimeframe(t.value)}
+        >
+          {t.label}
         </button>
-        <button type="button" className={styles.refreshBtn} onClick={() => setModalOpen(true)}>
-          ⚙️ Indicadores ({indicators.filter((i) => i.visible !== false).length})
-        </button>
-        <div className={styles.stats}>
-          {lastPrice != null && (
-            <span className={styles.statsItem}>
-              <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
-              <span className={styles.statsLabel}>{liveActive ? 'En vivo' : 'Último'}:</span>
-              <span className={styles.lastPrice}>
-                ${Number(lastPrice).toLocaleString('en-US', { maximumFractionDigits: 6 })}
-              </span>
-            </span>
-          )}
-          <span className={styles.statsItem}>
-            <span className={styles.statsLabel}>Candles:</span> {candleCount}
-            {loadingHistory && <span className={styles.histSpinner}>↻</span>}
-            {reachedHistoryEndRef.current && <span className={styles.histEnd} title="No hay más historia">·</span>}
+      ))}
+    </div>
+  );
+
+  const renderActionButtons = () => (
+    <>
+      <button
+        type="button"
+        className={styles.refreshBtn}
+        onClick={loadData}
+        disabled={loading}
+        title="Refrescar datos"
+        aria-label="Refrescar"
+      >
+        <span className={styles.btnIcon}>⟳</span>
+        <span className={styles.btnText}>{loading ? 'Cargando…' : 'Refrescar'}</span>
+      </button>
+      <button
+        type="button"
+        className={styles.refreshBtn}
+        onClick={() => setModalOpen(true)}
+        title="Configurar indicadores"
+        aria-label="Indicadores"
+      >
+        <span className={styles.btnIcon}>⚙️</span>
+        <span className={styles.btnText}>Indicadores ({visibleIndicatorsCount})</span>
+        <span className={styles.btnBadge} aria-hidden="true">{visibleIndicatorsCount}</span>
+      </button>
+      <button
+        type="button"
+        className={`${styles.refreshBtn} ${styles.settingsBtn}`}
+        onClick={() => setSettingsVisible((v) => !v)}
+        title={settingsVisible ? 'Ocultar ajustes (crosshair, escala)' : 'Mostrar ajustes (crosshair, escala)'}
+        aria-label={settingsVisible ? 'Ocultar ajustes' : 'Mostrar ajustes'}
+        aria-pressed={settingsVisible}
+      >
+        <svg className={styles.fsIcon} width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="8" cy="8" r="2.25" />
+          <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`${styles.refreshBtn} ${styles.fullscreenBtn}`}
+        onClick={toggleFullscreen}
+        title={fullscreen ? 'Salir de pantalla completa (Esc)' : 'Pantalla completa'}
+        aria-label={fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+        aria-pressed={fullscreen}
+      >
+        {fullscreen ? (
+          <svg className={styles.fsIcon} width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+            <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+          </svg>
+        ) : (
+          <svg className={styles.fsIcon} width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+            <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
+          </svg>
+        )}
+      </button>
+    </>
+  );
+
+  // Los selects con id= (crosshair-mode, price-scale-mode) se renderizan una
+  // sola vez para evitar ids duplicados en el DOM. Aparecen inline en desktop
+  // y como fila adicional en mobile cuando el usuario activa los ajustes.
+  const secondaryControlsNode = (
+    <>
+      <div className={`${styles.toolGroup} ${styles.toolGroupSecondary}`}>
+        <label htmlFor="crosshair-mode">Crosshair:</label>
+        <select
+          id="crosshair-mode"
+          className={styles.select}
+          value={crosshairMode}
+          onChange={(e) => setCrosshairMode(Number(e.target.value))}
+          title="Modo del crosshair"
+        >
+          {CROSSHAIR_MODES.map((m) => (
+            <option key={m.value} value={m.value}>{m.label}</option>
+          ))}
+        </select>
+      </div>
+      <div className={`${styles.toolGroup} ${styles.toolGroupSecondary}`}>
+        <label htmlFor="price-scale-mode">Escala:</label>
+        <select
+          id="price-scale-mode"
+          className={styles.select}
+          value={priceScaleMode}
+          onChange={(e) => setPriceScaleMode(Number(e.target.value))}
+          title="Escala de precio"
+        >
+          {PRICE_SCALE_MODES.map((m) => (
+            <option key={m.value} value={m.value}>{m.label}</option>
+          ))}
+        </select>
+      </div>
+    </>
+  );
+
+  const statsNode = (
+    <div className={styles.stats}>
+      {lastPrice != null && (
+        <span className={styles.statsItem}>
+          <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
+          <span className={styles.statsLabel}>{liveActive ? 'En vivo' : 'Último'}:</span>
+          <span className={styles.lastPrice}>
+            ${Number(lastPrice).toLocaleString('en-US', { maximumFractionDigits: 6 })}
           </span>
+        </span>
+      )}
+      <span className={`${styles.statsItem} ${styles.statsItemSecondary}`}>
+        <span className={styles.statsLabel}>Candles:</span> {candleCount}
+        {loadingHistory && <span className={styles.histSpinner}>↻</span>}
+        {reachedHistoryEndRef.current && <span className={styles.histEnd} title="No hay más historia">·</span>}
+      </span>
+    </div>
+  );
+
+  return (
+    <div
+      ref={pageRef}
+      className={`${styles.page} ${fullscreen ? styles.pageFullscreen : ''} ${settingsVisible ? styles.settingsVisible : styles.settingsHidden}`}
+    >
+      <div className={styles.toolbar}>
+        {/* Siempre visible: asset + precio. En mobile es la única fila del top. */}
+        <div className={styles.toolbarMain}>
+          <div className={styles.toolGroup}>
+            <label>Par:</label>
+            <button
+              type="button"
+              className={styles.assetButton}
+              onClick={() => setAssetPickerOpen(true)}
+              title={asset.name || asset.symbol}
+            >
+              <span className={styles.assetButtonSymbol}>{asset.symbol}</span>
+              <span className={styles.assetButtonSource}>{asset.datasource}</span>
+              <span className={styles.assetButtonCaret}>▾</span>
+            </button>
+          </div>
+          {statsNode}
+        </div>
+
+        {/* Crosshair + escala: inline en desktop; en mobile, nueva fila
+            colapsable controlada por el toggle de ajustes. */}
+        <div className={styles.toolbarSecondary}>
+          {secondaryControlsNode}
+        </div>
+
+        {/* Timeframes + botones de acción: en desktop quedan inline arriba;
+            en mobile se ocultan y aparecen duplicados en la barra inferior. */}
+        <div className={styles.toolbarDesktop}>
+          <div className={styles.toolGroup}>
+            <label>Timeframe:</label>
+            {renderTimeframes()}
+          </div>
+          {renderActionButtons()}
         </div>
       </div>
 
@@ -632,6 +780,18 @@ export default function TradingViewPage() {
             {futureTimeLabel.text}
           </div>
         )}
+      </div>
+
+      {/* Barra inferior: sólo visible en mobile. Contiene los timeframes
+          (scroll horizontal) y los botones de acción, al estilo de la app
+          de TradingView en móvil. */}
+      <div className={styles.bottomBar}>
+        <div className={styles.bottomBarTf}>
+          {renderTimeframes(styles.tfGroupMobile)}
+        </div>
+        <div className={styles.bottomBarActions}>
+          {renderActionButtons()}
+        </div>
       </div>
 
       <IndicatorConfigModal

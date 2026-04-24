@@ -9,6 +9,7 @@ import { Notifications } from './components/Layout/Notifications';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
+import UpdateToast from './pwa/UpdateToast';
 import styles from './App.module.css';
 
 // Code splitting por ruta: cada página pesada se convierte en un chunk
@@ -215,6 +216,7 @@ export default function App() {
   return (
     <AuthProvider>
       <AuthGate />
+      <UpdateToast />
     </AuthProvider>
   );
 }
