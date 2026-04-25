@@ -346,6 +346,14 @@ export default function TradingViewPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [fullscreen]);
 
+  // Marca <body> con una clase mientras estamos en fullscreen para que el
+  // header global (App) pueda ocultarse en mobile y aprovechar todo el alto.
+  useEffect(() => {
+    if (!fullscreen) return undefined;
+    document.body.classList.add('tv-fullscreen-active');
+    return () => document.body.classList.remove('tv-fullscreen-active');
+  }, [fullscreen]);
+
   // Persiste la preferencia de visibilidad de los ajustes secundarios.
   useEffect(() => {
     try { localStorage.setItem(SETTINGS_VISIBLE_STORAGE_KEY, settingsVisible ? '1' : '0'); } catch { /* noop */ }

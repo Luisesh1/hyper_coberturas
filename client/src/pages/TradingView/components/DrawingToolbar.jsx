@@ -1,7 +1,23 @@
+import { useEffect, useState } from 'react';
 import { TOOLS } from '../drawings/catalog';
 import styles from './DrawingToolbar.module.css';
 
 const TOOL_ORDER = ['select', 'ruler', 'trendline', 'horizontal', 'rectangle', 'fib'];
+const EXPANDED_STORAGE_KEY = 'tv_drawing_toolbar_expanded_v1';
+
+function loadStoredExpanded() {
+  try {
+    const raw = localStorage.getItem(EXPANDED_STORAGE_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+    // Default según viewport: visible en desktop, oculto en mobile.
+    return typeof window !== 'undefined'
+      ? window.matchMedia('(min-width: 769px)').matches
+      : true;
+  } catch {
+    return true;
+  }
+}
 
 function ToolIcon({ toolId }) {
   switch (toolId) {
@@ -23,8 +39,44 @@ export default function DrawingToolbar({
   onDeleteSelected,
   hasDrawings,
 }) {
+  const [expanded, setExpanded] = useState(loadStoredExpanded);
+
+  useEffect(() => {
+    try { localStorage.setItem(EXPANDED_STORAGE_KEY, expanded ? '1' : '0'); } catch { /* noop */ }
+  }, [expanded]);
+
+  if (!expanded) {
+    return (
+      <div className={styles.toolbarCollapsed} role="toolbar" aria-label="Herramientas de dibujo (colapsadas)">
+        <button
+          type="button"
+          className={`${styles.tool} ${styles.toggleBtn}`}
+          title="Mostrar herramientas de dibujo"
+          aria-label="Mostrar herramientas de dibujo"
+          aria-expanded="false"
+          onClick={() => setExpanded(true)}
+        >
+          <span className={styles.iconExpand}>✏️</span>
+          {activeTool && <span className={styles.activeDot} aria-hidden="true" />}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.toolbar} role="toolbar" aria-label="Herramientas de dibujo">
+      <button
+        type="button"
+        className={`${styles.tool} ${styles.toggleBtn}`}
+        title="Ocultar herramientas"
+        aria-label="Ocultar herramientas"
+        aria-expanded="true"
+        onClick={() => setExpanded(false)}
+      >
+        <span className={styles.iconCollapse}>‹</span>
+      </button>
+      <div className={styles.separator} />
+
       {TOOL_ORDER.map((id) => {
         const meta = TOOLS[id];
         if (!meta) return null;

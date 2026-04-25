@@ -14,6 +14,49 @@
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
 }
 
+/* Estado colapsado: sólo el botón toggle flotando arriba a la izquierda. */
+.toolbarCollapsed {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 6;
+  display: flex;
+  padding: 4px;
+  background: rgba(15, 17, 20, 0.88);
+  border: 1px solid rgba(120, 130, 145, 0.25);
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.toggleBtn {
+  position: relative;
+  color: #cbd5e1;
+}
+.toggleBtn:hover { color: #f8fafc; }
+
+/* Indicador de que hay una herramienta activa cuando la barra está colapsada. */
+.activeDot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #818cf8;
+  box-shadow: 0 0 0 2px rgba(15, 17, 20, 0.88);
+}
+
+.iconExpand {
+  font-size: 14px;
+  line-height: 1;
+}
+.iconCollapse {
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 600;
+}
+
 .tool {
   width: 32px;
   height: 32px;
@@ -104,6 +147,13 @@
     flex-wrap: wrap;
     max-width: calc(100vw - 16px);
   }
+  .toolbarCollapsed {
+    top: 8px;
+    left: 8px;
+    padding: 3px;
+    background: rgba(15, 17, 20, 0.94);
+    border-radius: 10px;
+  }
   .tool {
     width: 44px;
     height: 44px;
@@ -116,4 +166,6 @@
     margin: 0 2px;
     align-self: stretch;
   }
+  .iconExpand { font-size: 18px; }
+  .iconCollapse { font-size: 22px; }
 }

@@ -408,6 +408,13 @@ canvas {
   }
 }
 
+/* ── TradingView fullscreen: oculta header global en mobile ──────
+   El page interno usa pseudo-fullscreen (position: fixed) que ya cubre
+   visualmente el header, pero en mobile la barra de URL del navegador
+   puede dejar el header visible al borde si la altura del viewport
+   cambia. Ocultarlo explícitamente garantiza pantalla 100% libre. */
+:global(body.tv-fullscreen-active) .header { display: none; }
+
 /* ── Responsive: mobile ────────────────────────────────────────── */
 @media (max-width: 768px) {
   .header {
