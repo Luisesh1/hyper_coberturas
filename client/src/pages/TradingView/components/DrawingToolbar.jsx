@@ -3,19 +3,18 @@ import { TOOLS } from '../drawings/catalog';
 import styles from './DrawingToolbar.module.css';
 
 const TOOL_ORDER = ['select', 'ruler', 'trendline', 'horizontal', 'rectangle', 'fib'];
-const EXPANDED_STORAGE_KEY = 'tv_drawing_toolbar_expanded_v1';
+// v2: cambia el default a "colapsado" en todos los viewports, así la barra
+// no obstruye el chart hasta que el usuario la despliega.
+const EXPANDED_STORAGE_KEY = 'tv_drawing_toolbar_expanded_v2';
 
 function loadStoredExpanded() {
   try {
     const raw = localStorage.getItem(EXPANDED_STORAGE_KEY);
     if (raw === '1') return true;
     if (raw === '0') return false;
-    // Default según viewport: visible en desktop, oculto en mobile.
-    return typeof window !== 'undefined'
-      ? window.matchMedia('(min-width: 769px)').matches
-      : true;
+    return false;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -67,13 +66,13 @@ export default function DrawingToolbar({
     <div className={styles.toolbar} role="toolbar" aria-label="Herramientas de dibujo">
       <button
         type="button"
-        className={`${styles.tool} ${styles.toggleBtn}`}
+        className={`${styles.tool} ${styles.toggleBtn} ${styles.toggleBtnClose}`}
         title="Ocultar herramientas"
         aria-label="Ocultar herramientas"
         aria-expanded="true"
         onClick={() => setExpanded(false)}
       >
-        <span className={styles.iconCollapse}>‹</span>
+        <span className={styles.iconCollapse}>✕</span>
       </button>
       <div className={styles.separator} />
 

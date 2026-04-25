@@ -35,6 +35,19 @@
 }
 .toggleBtn:hover { color: #f8fafc; }
 
+/* En estado expandido el botón "cerrar" debe ser inconfundible: lo
+   diferenciamos visualmente con un fondo y un color distintos al resto
+   de las herramientas. */
+.toggleBtnClose {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #c7d2fe;
+}
+.toggleBtnClose:hover {
+  background: rgba(99, 102, 241, 0.28);
+  border-color: rgba(99, 102, 241, 0.6);
+}
+
 /* Indicador de que hay una herramienta activa cuando la barra está colapsada. */
 .activeDot {
   position: absolute;
