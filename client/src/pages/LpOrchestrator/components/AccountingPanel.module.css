@@ -73,7 +73,32 @@
 }
 
 .netRow strong {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   font-size: 1.1rem;
+}
+
+.netPct {
+  font-size: 0.74rem;
+  color: currentColor;
+  opacity: 0.82;
+}
+
+.secondaryNetRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid var(--uni-border);
+  font-size: 0.82rem;
+  color: var(--uni-text-2);
+}
+
+.secondaryNetRow strong {
+  font-size: 0.9rem;
 }
 
 .compact .grid {

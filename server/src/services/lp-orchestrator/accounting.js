@@ -111,7 +111,16 @@ function computeAccountingDelta(prevSnapshot, currentSnapshot) {
 
   const prevValue = num(prevSnapshot?.currentValueUsd);
   const currValue = num(currentSnapshot?.currentValueUsd);
-  const priceDriftDelta = prevSnapshot ? currValue - prevValue : 0;
+  // Si el LP cambió de identidad (modify-range / rebalance que cierra y reabre
+  // la posición), el "delta de valor" entre el LP viejo y el nuevo NO es
+  // deriva de precio: es un ajuste de capital ya contabilizado en
+  // applyTxCostDelta (gas + slippage + collected fees + capitalDeltaUsd).
+  // Tomar el delta aquí causaría doble conteo. La nueva posición arranca con
+  // su propia baseline de drift en el siguiente tick.
+  const prevIdent = prevSnapshot?.identifier != null ? String(prevSnapshot.identifier) : null;
+  const currIdent = currentSnapshot?.identifier != null ? String(currentSnapshot.identifier) : null;
+  const positionChanged = prevIdent != null && currIdent != null && prevIdent !== currIdent;
+  const priceDriftDelta = (prevSnapshot && !positionChanged) ? currValue - prevValue : 0;
 
   return {
     lpFeesDelta,

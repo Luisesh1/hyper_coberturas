@@ -18,6 +18,20 @@ test('computeAccountingDelta: si las fees decrecen (collect), delta de fees = 0'
   assert.equal(delta.lpFeesDelta, 0);
 });
 
+test('computeAccountingDelta: cambio de identifier (modify-range) pone priceDriftDelta = 0', () => {
+  const prev = { identifier: '5442406', unclaimedFeesUsd: 0, currentValueUsd: 112 };
+  const curr = { identifier: '5447463', unclaimedFeesUsd: 0, currentValueUsd: 105 };
+  const delta = accounting.computeAccountingDelta(prev, curr);
+  assert.equal(delta.priceDriftDelta, 0);
+});
+
+test('computeAccountingDelta: mismo identifier mantiene drift como diferencia de valor', () => {
+  const prev = { identifier: '5442406', unclaimedFeesUsd: 0, currentValueUsd: 112 };
+  const curr = { identifier: '5442406', unclaimedFeesUsd: 0, currentValueUsd: 110 };
+  const delta = accounting.computeAccountingDelta(prev, curr);
+  assert.equal(delta.priceDriftDelta, -2);
+});
+
 test('applyTxCostDelta: suma gas + slippage y registra fees cobradas', () => {
   const start = { ...accounting.DEFAULT_ACCOUNTING };
   const after = accounting.applyTxCostDelta(start, {

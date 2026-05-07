@@ -31,6 +31,7 @@ function formatOrchestratorAge(ms) {
 
 export default function AccountingPanel({
   accounting,
+  metricsSummary = null,
   createdAt = null,
   initialTotalUsd = null,
   unclaimedFeesUsd = null,
@@ -55,6 +56,13 @@ export default function AccountingPanel({
 
   const pendingFees = Number(unclaimedFeesUsd);
   const hasPendingFees = Number.isFinite(pendingFees) && pendingFees > 0;
+  const metricsDelta = Number(metricsSummary?.deltaUsd);
+  const hasMetricsPnl = Number.isFinite(metricsDelta);
+  const metricsDeltaPct = Number(metricsSummary?.deltaPct);
+  const metricsCapturedAt = Number(metricsSummary?.current?.capturedAt);
+  const metricsTitle = Number.isFinite(metricsCapturedAt)
+    ? `Ultimo snapshot: ${new Date(metricsCapturedAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}`
+    : 'Sin snapshots de metricas todavia';
 
   const lpItems = [
     { label: 'Fees LP ganadas', value: formatUsd(a.lpFeesUsd), tone: 'positive' },
@@ -124,8 +132,22 @@ export default function AccountingPanel({
         </div>
       )}
 
-      <div className={styles.netRow}>
-        <span>P&amp;L neto total</span>
+      {hasMetricsPnl && (
+        <div className={styles.netRow} title={metricsTitle}>
+          <span>P&amp;L segun metricas</span>
+          <strong className={signTone(metricsDelta) === 'negative' ? styles.negative : styles.positive}>
+            {formatSignedUsd(metricsDelta)}
+            {Number.isFinite(metricsDeltaPct) && (
+              <small className={styles.netPct}>
+                {metricsDeltaPct >= 0 ? '+' : ''}{metricsDeltaPct.toFixed(2)}%
+              </small>
+            )}
+          </strong>
+        </div>
+      )}
+
+      <div className={hasMetricsPnl ? styles.secondaryNetRow : styles.netRow}>
+        <span>{hasMetricsPnl ? 'P&L contable acumulado' : 'P&L neto total'}</span>
         <strong className={signTone(a.totalNetPnlUsd) === 'negative' ? styles.negative : styles.positive}>
           {formatSignedUsd(a.totalNetPnlUsd)}
         </strong>
