@@ -14,7 +14,7 @@ const INTERVAL_MAP = {
   '5m':  { yahoo: '5m',  windowDays: 60 },
   '15m': { yahoo: '15m', windowDays: 60 },
   '1h':  { yahoo: '60m', windowDays: 730 },
-  '4h':  null, // Yahoo no expone 4h; fallback al caller
+  '4h':  { yahoo: '60m', windowDays: 730, aggregateHours: 4 },
   '1d':  { yahoo: '1d',  windowDays: 365 * 20 },
   '1w':  { yahoo: '1wk', windowDays: 365 * 20 },
   '1M':  { yahoo: '1mo', windowDays: 365 * 30 },
@@ -44,7 +44,7 @@ async function fetchCandles({ symbol, timeframe, startTime, endTime }) {
   });
 
   const quotes = result?.quotes || [];
-  return quotes
+  const candles = quotes
     .filter((q) => q && q.date && Number.isFinite(Number(q.close)))
     .map((q) => {
       const t = new Date(q.date).getTime();
@@ -59,10 +59,40 @@ async function fetchCandles({ symbol, timeframe, startTime, endTime }) {
         trades: 0,
       };
     });
+
+  if (cfg.aggregateHours) {
+    return aggregateHourlyCandles(candles, cfg.aggregateHours);
+  }
+
+  return candles;
+}
+
+function aggregateHourlyCandles(candles, hours) {
+  const bucketMs = hours * 60 * 60 * 1000;
+  const buckets = new Map();
+
+  for (const candle of candles) {
+    const bucketTime = Math.floor(candle.time / bucketMs) * bucketMs;
+    const bucket = buckets.get(bucketTime);
+
+    if (!bucket) {
+      buckets.set(bucketTime, { ...candle, time: bucketTime });
+      continue;
+    }
+
+    bucket.high = Math.max(bucket.high, candle.high);
+    bucket.low = Math.min(bucket.low, candle.low);
+    bucket.close = candle.close;
+    bucket.closeTime = candle.closeTime;
+    bucket.volume += candle.volume;
+  }
+
+  return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
 }
 
 module.exports = {
   name: 'yahoo',
   supportedIntervals: Object.keys(INTERVAL_MAP).filter((k) => INTERVAL_MAP[k]),
   fetchCandles,
+  aggregateHourlyCandles,
 };
