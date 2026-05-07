@@ -226,7 +226,6 @@ export default function OrchestratorCard({
 
       <AccountingPanel
         accounting={orchestrator.accounting}
-        metricsSummary={orchestrator.metricsSummary}
         createdAt={orchestrator.createdAt}
         initialTotalUsd={orchestrator.initialTotalUsd}
         unclaimedFeesUsd={

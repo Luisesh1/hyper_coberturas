@@ -5,7 +5,6 @@ const { validate } = require('../middleware/validate.middleware');
 const { requireIntParam } = require('../middleware/parse-params');
 const lpOrchestratorService = require('../services/lp-orchestrator.service');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
-const orchestratorMetricsRepository = require('../repositories/orchestrator-metrics.repository');
 const {
   createOrchestratorSchema,
   updateOrchestratorConfigSchema,
@@ -20,16 +19,7 @@ router.use(authenticate);
 router.get('/', asyncHandler(async (req, res) => {
   const includeArchived = req.query.includeArchived === 'true';
   const data = await lpOrchestratorRepository.listForUser(req.user.userId, { includeArchived });
-  const summaries = await orchestratorMetricsRepository.getSummariesForOrchestrators(
-    data.map((orch) => orch.id)
-  );
-  res.json({
-    success: true,
-    data: data.map((orch) => ({
-      ...orch,
-      metricsSummary: summaries.get(orch.id) || null,
-    })),
-  });
+  res.json({ success: true, data });
 }));
 
 router.post('/', validate(createOrchestratorSchema), asyncHandler(async (req, res) => {
@@ -46,14 +36,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   if (!data) {
     return res.status(404).json({ success: false, error: 'Orquestador no encontrado' });
   }
-  const summaries = await orchestratorMetricsRepository.getSummariesForOrchestrators([data.id]);
-  res.json({
-    success: true,
-    data: {
-      ...data,
-      metricsSummary: summaries.get(data.id) || null,
-    },
-  });
+  res.json({ success: true, data });
 }));
 
 router.get('/:id/action-log', asyncHandler(async (req, res) => {
