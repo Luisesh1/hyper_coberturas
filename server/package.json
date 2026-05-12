@@ -14,6 +14,7 @@
     "verify:hedge-fix:live": "node src/scripts/verify-hedge-fix-live.js",
     "maintenance:dedupe-protected-pools": "node src/scripts/dedupe-protected-uniswap-pools.js",
     "seed:strategy:ma-cross": "node src/scripts/seed-ma-crossover-strategy.js",
+    "seed:strategy:sqzmom-ema55": "node src/scripts/seed-sqzmom-ema55-strategy.js",
     "seed:indicator:sqzmom-lb": "node src/scripts/seed-sqzmom-lb-indicator.js",
     "optimize:strategy:sqzmom": "node src/scripts/optimize-sqzmom-strategy.js"
   },

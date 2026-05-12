@@ -58,6 +58,14 @@ function ConfigDrawer({
               </select>
             </label>
             <label className={styles.field}>
+              <span>Datasource</span>
+              <select value={form.datasource || 'hyperliquid'} onChange={set('datasource')}>
+                <option value="hyperliquid">Hyperliquid</option>
+                <option value="binance">Binance Spot</option>
+                <option value="yahoo">Yahoo</option>
+              </select>
+            </label>
+            <label className={styles.field}>
               <span>Asset</span>
               <input
                 list="bt-assets"

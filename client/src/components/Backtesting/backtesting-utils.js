@@ -33,6 +33,7 @@ export function blankOverlay(kind = 'builtin') {
 export function defaultForm(strategyId = '') {
   return {
     strategyId: strategyId ? String(strategyId) : '',
+    datasource: 'hyperliquid',
     asset: 'BTC',
     timeframe: '15m',
     params: stringifyJson({ fastPeriod: 9, slowPeriod: 21 }),
@@ -70,6 +71,7 @@ export function loadStoredForm() {
 export function buildPayload(form) {
   return {
     strategyId: Number(form.strategyId),
+    datasource: form.datasource || 'hyperliquid',
     asset: form.asset,
     timeframe: form.timeframe,
     params: parseJsonObject(form.params, {}),

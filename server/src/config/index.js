@@ -52,6 +52,14 @@ const config = {
     port: parseInt(process.env.PORT, 10) || 3001,
     nodeEnv: process.env.NODE_ENV || 'development',
     clientUrl: process.env.CLIENT_URL || 'http://localhost:5174',
+    publicBaseUrl: (() => {
+      const explicit = String(process.env.PUBLIC_BASE_URL || '').trim();
+      if (explicit) return explicit;
+      const client = String(process.env.CLIENT_URL || '').trim();
+      // CLIENT_URL='*' es valor de CORS, no una URL válida para deep-linking.
+      if (client && client !== '*') return client;
+      return 'http://localhost:5174';
+    })(),
   },
   hyperliquid: {
     apiUrl: process.env.HL_API_URL || 'https://api.hyperliquid.xyz',

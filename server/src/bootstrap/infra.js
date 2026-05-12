@@ -12,6 +12,7 @@ const uniswapOperationService = require('../services/uniswap-operation.service')
 const telegramCommandService = require('../services/telegram-command.service');
 const etherscanQueueService = require('../services/etherscan-queue.service');
 const backtestQueueService = require('../services/backtest-queue.service');
+const alertsSchedulerService = require('../services/alerts/alerts-scheduler.service');
 const hedgeRegistry = require('../services/hedge.registry');
 const botRegistry = require('../services/bot.registry');
 
@@ -69,6 +70,9 @@ async function bootstrapInfra(httpServer) {
   uniswapOperationService.start();
   telegramCommandService.start();
   backtestQueueService.start();
+  alertsSchedulerService.start().catch((err) =>
+    logger.warn('alerts_scheduler_start_failed', { error: err.message })
+  );
 
   return {
     wss,
@@ -82,6 +86,7 @@ async function bootstrapInfra(httpServer) {
       telegramCommandService.stop();
       etherscanQueueService.shutdown();
       backtestQueueService.stop();
+      alertsSchedulerService.stop();
       await hedgeRegistry.destroyAll().catch((err) =>
         logger.warn('hedge_registry_shutdown_error', { error: err.message })
       );

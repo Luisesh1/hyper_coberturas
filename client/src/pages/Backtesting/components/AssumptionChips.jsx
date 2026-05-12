@@ -7,6 +7,7 @@ function AssumptionChips({ result, selectedStrategy }) {
     ['Rango', result.config?.from
       ? `${toDatetimeLocal(result.config.from)} \u2192 ${toDatetimeLocal(result.config.to)}`
       : `${result.config?.limit || '\u2014'} velas`],
+    ['Datasource', result.config?.datasource || 'hyperliquid'],
     ['Estrategia', selectedStrategy?.name || `#${result.config?.strategyId}`],
   ];
 

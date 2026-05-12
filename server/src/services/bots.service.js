@@ -6,6 +6,8 @@ const strategyEngine = require('./strategy-engine.service');
 const marketDataService = require('./market-data.service');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 
+const ANY_ASSET = '*';
+
 function parseJson(value, fallback) {
   if (value == null || value === '') return fallback;
   if (typeof value === 'object') return value;
@@ -102,6 +104,15 @@ function normalizeParams(value) {
   throw new ValidationError('params debe ser un objeto JSON');
 }
 
+function resolveStrategyAsset(assetUniverse, requestedAsset, fallback = 'BTC') {
+  if (requestedAsset) return marketDataService.normalizeAsset(requestedAsset);
+  const values = Array.isArray(assetUniverse) ? assetUniverse : [];
+  const firstConcreteAsset = values
+    .map((value) => String(value || '').trim())
+    .find((value) => value && value !== ANY_ASSET);
+  return marketDataService.normalizeAsset(firstConcreteAsset || fallback);
+}
+
 async function normalizeInput(userId, input = {}, current = null) {
   const strategyId = Number(input.strategyId ?? current?.strategyId);
   if (!strategyId) throw new ValidationError('strategyId es requerido');
@@ -112,7 +123,7 @@ async function normalizeInput(userId, input = {}, current = null) {
   if (!accountId) throw new ValidationError('accountId es requerido');
   await hyperliquidAccountsService.getAccount(userId, accountId);
 
-  const asset = marketDataService.normalizeAsset(input.asset || current?.asset || strategyAssets[0] || 'BTC');
+  const asset = resolveStrategyAsset(strategyAssets, input.asset || current?.asset);
   const timeframe = marketDataService.normalizeTimeframe(input.timeframe || current?.timeframe || strategy.timeframe || '15m');
   const leverage = Number(input.leverage ?? current?.leverage ?? 10);
   const sizeUsd = Number(input.sizeUsd ?? input.size ?? current?.sizeUsd ?? current?.size ?? 0);

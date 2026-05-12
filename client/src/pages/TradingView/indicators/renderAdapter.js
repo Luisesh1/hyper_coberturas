@@ -15,11 +15,93 @@ function lineOpts(style = {}, overrides = {}) {
   };
 }
 
+function getAdxRoles(params = {}) {
+  const roles = [];
+  if (params.showADX !== false) roles.push('adx');
+  if (params.showDIPlus !== false) roles.push('pdi');
+  if (params.showDIMinus !== false) roles.push('mdi');
+  return roles;
+}
+
+function getSqzmomRoles(params = {}) {
+  const roles = ['histogram', 'sqzDots'];
+  if (params.showNormalUpper !== false) roles.push('normalUpper');
+  if (params.showNormalMiddle === true) roles.push('normalMiddle');
+  if (params.showNormalLower !== false) roles.push('normalLower');
+  return roles;
+}
+
+// Mapa role → índice de serie por tipo de indicador.
+// Se usa para resolver `getValuesAt(time)` correctamente: dado un role
+// (e.g. 'macd'), sabemos qué `mount.series[idx]` lo dibuja y por tanto qué
+// color usa. Para `adx`/`sqzmom` los roles activos varían según params,
+// por eso se construye dinámicamente desde `mount.roles`.
+function buildRoleMap(type, mountRoles) {
+  switch (type) {
+    case 'macd': return { macd: 0, signal: 1, histogram: 2 };
+    case 'stoch': return { k: 0, d: 1 };
+    case 'bollinger':
+    case 'keltner': return { upper: 0, middle: 1, lower: 2 };
+    case 'volume': return { volume: 0 };
+    case 'rsi': return { line: 0, highLevel: 1, lowLevel: 2 };
+    case 'adx': {
+      const map = {};
+      (mountRoles || ['adx', 'pdi', 'mdi']).forEach((r, i) => { map[r] = i; });
+      return map;
+    }
+    case 'sqzmom': {
+      const map = {};
+      (mountRoles || ['histogram', 'sqzDots']).forEach((r, i) => { map[r] = i; });
+      return map;
+    }
+    // sma / ema / wma / vwap / rsi / atr: única línea con role='line'.
+    default: return { line: 0 };
+  }
+}
+
+// Etiqueta legible para una sub-línea de un indicador, dada su role.
+// Se usa en el legend overlay del chart.
+function roleLabel(type, role) {
+  if (type === 'macd') {
+    if (role === 'macd') return 'MACD';
+    if (role === 'signal') return 'Signal';
+    if (role === 'histogram') return 'Hist';
+  }
+  if (type === 'stoch') {
+    if (role === 'k') return '%K';
+    if (role === 'd') return '%D';
+  }
+  if (type === 'bollinger' || type === 'keltner') {
+    if (role === 'upper') return 'Up';
+    if (role === 'middle') return 'Mid';
+    if (role === 'lower') return 'Lo';
+  }
+  if (type === 'adx') {
+    if (role === 'adx') return 'ADX';
+    if (role === 'pdi') return '+DI';
+    if (role === 'mdi') return '-DI';
+  }
+  if (type === 'sqzmom') {
+    if (role === 'histogram') return 'Mom';
+    if (role === 'sqzDots') return 'Sqz';
+    if (role === 'normalUpper') return '+σ';
+    if (role === 'normalLower') return '-σ';
+    if (role === 'normalMiddle') return 'Media';
+  }
+  if (type === 'rsi') {
+    if (role === 'line') return 'RSI';
+    if (role === 'highLevel') return 'Alto';
+    if (role === 'lowLevel') return 'Bajo';
+  }
+  return null;
+}
+
 // Crea las series de un indicador en el chart. Devuelve { series[], paneIndex }.
 function createIndicatorSeries(chart, entry, paneIndex) {
   const meta = INDICATORS[entry.type];
   if (!meta) return null;
   const series = [];
+  let roles = null;
 
   switch (entry.type) {
     case 'sma':
@@ -31,6 +113,8 @@ function createIndicatorSeries(chart, entry, paneIndex) {
 
     case 'rsi':
       series.push(chart.addSeries(LineSeries, lineOpts(entry.style, { title: 'RSI' }), paneIndex));
+      series.push(chart.addSeries(LineSeries, lineOpts({ color: '#ef4444', lineWidth: 1, lineStyle: 'dashed' }, { title: 'RSI Alto' }), paneIndex));
+      series.push(chart.addSeries(LineSeries, lineOpts({ color: '#22c55e', lineWidth: 1, lineStyle: 'dashed' }, { title: 'RSI Bajo' }), paneIndex));
       break;
 
     case 'atr':
@@ -49,9 +133,16 @@ function createIndicatorSeries(chart, entry, paneIndex) {
       break;
 
     case 'adx':
-      series.push(chart.addSeries(LineSeries, lineOpts({ color: entry.style?.color || '#a3e635', lineWidth: 2 }, { title: 'ADX' }), paneIndex));
-      series.push(chart.addSeries(LineSeries, lineOpts({ color: '#22c55e', lineWidth: 1 }, { title: '+DI' }), paneIndex));
-      series.push(chart.addSeries(LineSeries, lineOpts({ color: '#ef4444', lineWidth: 1 }, { title: '-DI' }), paneIndex));
+      roles = getAdxRoles(entry.params);
+      if (roles.includes('adx')) {
+        series.push(chart.addSeries(LineSeries, lineOpts({ color: entry.style?.color || '#a3e635', lineWidth: 2 }, { title: 'ADX' }), paneIndex));
+      }
+      if (roles.includes('pdi')) {
+        series.push(chart.addSeries(LineSeries, lineOpts({ color: '#22c55e', lineWidth: 1 }, { title: '+DI' }), paneIndex));
+      }
+      if (roles.includes('mdi')) {
+        series.push(chart.addSeries(LineSeries, lineOpts({ color: '#ef4444', lineWidth: 1 }, { title: '-DI' }), paneIndex));
+      }
       break;
 
     case 'bollinger':
@@ -66,8 +157,18 @@ function createIndicatorSeries(chart, entry, paneIndex) {
       break;
 
     case 'sqzmom':
+      roles = getSqzmomRoles(entry.params);
       series.push(chart.addSeries(HistogramSeries, { priceFormat: { type: 'price', precision: 4, minMove: 0.0001 }, priceLineVisible: false, lastValueVisible: true, title: 'SQZMOM' }, paneIndex));
       series.push(chart.addSeries(LineSeries, { color: '#2962ff', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }, paneIndex));
+      if (roles.includes('normalUpper')) {
+        series.push(chart.addSeries(LineSeries, lineOpts({ color: '#f59e0b', lineWidth: 1, lineStyle: 'dashed' }, { title: 'SQZMOM +σ' }), paneIndex));
+      }
+      if (roles.includes('normalMiddle')) {
+        series.push(chart.addSeries(LineSeries, lineOpts({ color: '#94a3b8', lineWidth: 1, lineStyle: 'dotted' }, { title: 'SQZMOM Media' }), paneIndex));
+      }
+      if (roles.includes('normalLower')) {
+        series.push(chart.addSeries(LineSeries, lineOpts({ color: '#f59e0b', lineWidth: 1, lineStyle: 'dashed' }, { title: 'SQZMOM -σ' }), paneIndex));
+      }
       break;
 
     default:
@@ -81,7 +182,7 @@ function createIndicatorSeries(chart, entry, paneIndex) {
     try { series[0].priceScale().applyOptions({ mode: PriceScaleMode.Normal }); } catch { /* noop */ }
   }
 
-  return { series, paneIndex };
+  return { series, paneIndex, roles };
 }
 
 function applyDataToSeries(mountEntry, computed, entry) {
@@ -107,10 +208,18 @@ function applyDataToSeries(mountEntry, computed, entry) {
     return;
   }
 
+  if (entry.type === 'rsi') {
+    s0?.setData(data.find((d) => d.role === 'line')?.data || []);
+    s1?.setData(data.find((d) => d.role === 'highLevel')?.data || []);
+    s2?.setData(data.find((d) => d.role === 'lowLevel')?.data || []);
+    return;
+  }
+
   if (entry.type === 'adx') {
-    s0?.setData(data.find((d) => d.role === 'adx')?.data || []);
-    s1?.setData(data.find((d) => d.role === 'pdi')?.data || []);
-    s2?.setData(data.find((d) => d.role === 'mdi')?.data || []);
+    const roles = mountEntry.roles || ['adx', 'pdi', 'mdi'];
+    roles.forEach((role, index) => {
+      mountEntry.series[index]?.setData(data.find((d) => d.role === role)?.data || []);
+    });
     return;
   }
 
@@ -122,8 +231,10 @@ function applyDataToSeries(mountEntry, computed, entry) {
   }
 
   if (entry.type === 'sqzmom') {
-    s0?.setData(data.find((d) => d.role === 'histogram')?.data || []);
-    s1?.setData(data.find((d) => d.role === 'sqzDots')?.data || []);
+    const roles = mountEntry.roles || ['histogram', 'sqzDots'];
+    roles.forEach((role, index) => {
+      mountEntry.series[index]?.setData(data.find((d) => d.role === role)?.data || []);
+    });
     return;
   }
 
@@ -212,7 +323,12 @@ export function createIndicatorsController(chart) {
       let m = mounted.get(entry.uid);
 
       // Si cambió el tipo (raro) o el paneIndex, recreamos.
-      if (m && (m.entry.type !== entry.type || m.mount.paneIndex !== paneIndex)) {
+      const adxRolesChanged = entry.type === 'adx'
+        && (m?.mount.roles || ['adx', 'pdi', 'mdi']).join('|') !== getAdxRoles(entry.params).join('|');
+      const sqzmomRolesChanged = entry.type === 'sqzmom'
+        && (m?.mount.roles || ['histogram', 'sqzDots']).join('|') !== getSqzmomRoles(entry.params).join('|');
+
+      if (m && (m.entry.type !== entry.type || m.mount.paneIndex !== paneIndex || adxRolesChanged || sqzmomRolesChanged)) {
         removeUid(entry.uid);
         m = null;
       }
@@ -220,7 +336,8 @@ export function createIndicatorsController(chart) {
       if (!m) {
         const mount = createIndicatorSeries(chart, entry, paneIndex);
         if (!mount) continue;
-        mounted.set(entry.uid, { entry, mount });
+        mount.roleMap = buildRoleMap(entry.type, mount.roles);
+        mounted.set(entry.uid, { entry, mount, computed: null });
       } else {
         // Actualizar estilo si cambió (color, lineWidth)
         // Para simplicidad, aplicamos options solo a la primera línea.
@@ -239,7 +356,22 @@ export function createIndicatorsController(chart) {
 
       const computed = computeIndicator(entry.type, candles, entry.params);
       const current = mounted.get(entry.uid);
-      if (computed && current) applyDataToSeries(current.mount, computed, entry);
+      if (computed && current) {
+        applyDataToSeries(current.mount, computed, entry);
+        // Cachear computed permite resolver getValuesAt(time) en O(n) sin
+        // recomputar el indicador en cada movimiento del crosshair.
+        current.computed = computed;
+        // Indexar por time para lookup O(1). data viene en `time` segundos.
+        const byTime = new Map();
+        for (const s of computed.series) {
+          for (const point of s.data) {
+            let bucket = byTime.get(point.time);
+            if (!bucket) { bucket = {}; byTime.set(point.time, bucket); }
+            bucket[s.role] = point.value;
+          }
+        }
+        current.byTime = byTime;
+      }
     }
 
     const subpanesCount = nextSubpane - 1;
@@ -247,5 +379,60 @@ export function createIndicatorsController(chart) {
     setStretchFactors(subpanesCount);
   }
 
-  return { render, removeAll };
+  // Devuelve los valores de cada indicador montado en el timestamp dado
+  // (en segundos, formato lightweight-charts). Se usa para alimentar el
+  // legend overlay del chart. Si una vela no tiene valor para un role
+  // (ej. periodo de warmup), ese role se omite.
+  function getValuesAt(timeSec) {
+    const out = [];
+    for (const [, m] of mounted) {
+      const meta = INDICATORS[m.entry.type];
+      if (!meta) continue;
+      const bucket = m.byTime?.get(timeSec);
+      if (!bucket) {
+        out.push({
+          uid: m.entry.uid,
+          type: m.entry.type,
+          label: meta.label,
+          params: m.entry.params || {},
+          pane: meta.pane,
+          values: [],
+        });
+        continue;
+      }
+      const values = [];
+      // Itera por roles conocidos del roleMap para preservar el orden visual
+      // (el mismo de creación de series).
+      const roleEntries = Object.entries(m.mount.roleMap || {});
+      // Orden por índice de serie ascendente para consistencia.
+      roleEntries.sort((a, b) => a[1] - b[1]);
+      for (const [role, idx] of roleEntries) {
+        const v = bucket[role];
+        if (v == null || !Number.isFinite(v)) continue;
+        const series = m.mount.series[idx];
+        let color = '#cbd5e1';
+        try {
+          const opts = series?.options?.();
+          color = opts?.color || color;
+        } catch { /* noop */ }
+        values.push({
+          role,
+          label: roleLabel(m.entry.type, role),
+          value: v,
+          color,
+        });
+      }
+      out.push({
+        uid: m.entry.uid,
+        type: m.entry.type,
+        label: meta.label,
+        params: m.entry.params || {},
+        pane: meta.pane,
+        values,
+      });
+    }
+    return out;
+  }
+
+  return { render, removeAll, getValuesAt };
 }

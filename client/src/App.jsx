@@ -26,6 +26,7 @@ const BotsPage             = lazy(() => import('./pages/Bots/BotsPage'));
 const BacktestingPage      = lazy(() => import('./pages/Backtesting/BacktestingPage'));
 const HidenActionsPage     = lazy(() => import('./pages/HidenActions/HidenActionsPage'));
 const TradingViewPage      = lazy(() => import('./pages/TradingView/TradingViewPage'));
+const AlertsPage           = lazy(() => import('./pages/Alerts/AlertsPage'));
 
 // DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
 // completo en build de producción gracias al guard `import.meta.env.DEV`.
@@ -40,6 +41,7 @@ const BASE_NAV = [
   { id: 'strategies', path: '/estrategias', label: 'Estrategias', activeClass: 'modeBtnActive', title: 'Estrategias' },
   { id: 'backtesting', path: '/backtesting', label: 'Backtesting', activeClass: 'modeBtnActive', title: 'Backtesting' },
   { id: 'bots', path: '/bots', label: 'Bots', activeClass: 'modeBtnActive', title: 'Bots' },
+  { id: 'alerts', path: '/alertas', label: '🔔 Alertas', activeClass: 'modeBtnActive', title: 'Alertas' },
   { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
   { id: 'lp-orchestrator', path: '/lp-orchestrator', label: '🎛 Orquestador LP', activeClass: 'modeBtnActive', title: 'Orquestador LP' },
   { id: 'metricas', path: '/metricas', label: '📊 Metricas', activeClass: 'modeBtnActive', title: 'Metricas' },
@@ -173,6 +175,7 @@ function AppContent() {
                 <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
                 <Route path="/metricas"   element={<MetricasPage />} />
                 <Route path="/trading-view" element={<TradingViewPage />} />
+                <Route path="/alertas"     element={<AlertsPage />} />
                 <Route path="/config"     element={<SettingsPage />} />
                 {/* Ruta oculta — no aparece en el navbar. Acciones de
                     recovery / mantenimiento manual. Acceso por URL directo. */}

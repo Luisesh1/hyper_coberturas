@@ -5,6 +5,7 @@
     "migrate": "npm --prefix server run migrate",
     "seed:dev": "npm --prefix server run seed:dev",
     "seed:strategy:ma-cross": "npm --prefix server run seed:strategy:ma-cross",
+    "seed:strategy:sqzmom-ema55": "npm --prefix server run seed:strategy:sqzmom-ema55",
     "seed:indicator:sqzmom-lb": "npm --prefix server run seed:indicator:sqzmom-lb",
     "optimize:strategy:sqzmom": "npm --prefix server run optimize:strategy:sqzmom",
     "check:architecture": "node scripts/check-architecture-boundaries.mjs",

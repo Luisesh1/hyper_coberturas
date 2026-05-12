@@ -1,7 +1,7 @@
 import {
   SMA, EMA, WMA, RSI, MACD, BollingerBands, ATR, ADX, Stochastic,
 } from 'technicalindicators';
-import { computeSqueezeMomentum } from '../sqzmom';
+import { buildSqueezeNormalBands, computeSqueezeMomentum } from '../sqzmom';
 
 // Las candles que llegan traen `time` en segundos (ya convertido en TradingViewPage)
 // o en milisegundos (crudo del server). `time` de salida: segundos (formato lightweight-charts).
@@ -37,6 +37,15 @@ function alignRightObjects(candles, objects, pick) {
     out.push({ time: toSec(candles[offset + i]), value: Number(v) });
   }
   return out;
+}
+
+function buildHorizontalReference(sourceData, value) {
+  return sourceData.map((point) => ({ time: point.time, value }));
+}
+
+function numberOrDefault(value, fallback) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
 }
 
 function computeVwap(candles) {
@@ -107,7 +116,16 @@ export function computeIndicator(type, candles, params = {}) {
     }
     case 'rsi': {
       const v = RSI.calculate({ period: params.length || 14, values: closes });
-      return { series: [{ role: 'line', data: alignRight(candles, v) }] };
+      const rsiData = alignRight(candles, v);
+      const highLevel = numberOrDefault(params.highLevel, 70);
+      const lowLevel = numberOrDefault(params.lowLevel, 30);
+      return {
+        series: [
+          { role: 'line', data: rsiData },
+          { role: 'highLevel', data: buildHorizontalReference(rsiData, highLevel) },
+          { role: 'lowLevel', data: buildHorizontalReference(rsiData, lowLevel) },
+        ],
+      };
     }
     case 'atr': {
       const v = ATR.calculate({ period: params.length || 14, high: highs, low: lows, close: closes });
@@ -148,12 +166,15 @@ export function computeIndicator(type, candles, params = {}) {
         high: highs, low: lows, close: closes,
         period: params.length || 14,
       });
+      const showADX = params.showADX !== false;
+      const showDIPlus = params.showDIPlus !== false;
+      const showDIMinus = params.showDIMinus !== false;
+      const series = [];
+      if (showADX) series.push({ role: 'adx', data: alignRightObjects(candles, out, (o) => o.adx) });
+      if (showDIPlus) series.push({ role: 'pdi', data: alignRightObjects(candles, out, (o) => o.pdi) });
+      if (showDIMinus) series.push({ role: 'mdi', data: alignRightObjects(candles, out, (o) => o.mdi) });
       return {
-        series: [
-          { role: 'adx', data: alignRightObjects(candles, out, (o) => o.adx) },
-          { role: 'pdi', data: alignRightObjects(candles, out, (o) => o.pdi) },
-          { role: 'mdi', data: alignRightObjects(candles, out, (o) => o.mdi) },
-        ],
+        series,
       };
     }
     case 'bollinger': {
@@ -196,11 +217,16 @@ export function computeIndicator(type, candles, params = {}) {
       const sqz = computeSqueezeMomentum(candles, params);
       const valid = sqz.filter((p) => p && p.value != null);
       const hist = valid.map((p) => ({ time: p.time, value: p.value, color: p.color }));
+      const bands = buildSqueezeNormalBands(valid, params);
+      const series = [
+        { role: 'histogram', data: hist },
+        { role: 'sqzDots', data: buildSqzDots(valid) },
+      ];
+      if (params.showNormalUpper !== false) series.push({ role: 'normalUpper', data: bands.upper });
+      if (params.showNormalMiddle === true) series.push({ role: 'normalMiddle', data: bands.middle });
+      if (params.showNormalLower !== false) series.push({ role: 'normalLower', data: bands.lower });
       return {
-        series: [
-          { role: 'histogram', data: hist },
-          { role: 'sqzDots', data: buildSqzDots(valid) },
-        ],
+        series,
       };
     }
     default:

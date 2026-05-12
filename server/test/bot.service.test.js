@@ -2,12 +2,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { BotRuntime } = require('../src/services/bot.service');
+const botsService = require('../src/services/bots.service');
 const botsRepository = require('../src/repositories/bots.repository');
 const strategiesRepository = require('../src/repositories/strategies.repository');
 const strategyIndicatorsRepository = require('../src/repositories/strategy-indicators.repository');
 const marketDataService = require('../src/services/market-data.service');
 const strategyEngine = require('../src/services/strategy-engine.service');
 const balanceCacheService = require('../src/services/balance-cache.service');
+const hyperliquidAccountsService = require('../src/services/hyperliquid-accounts.service');
+const {
+  STRATEGY_SOURCE: SQZMOM_EMA55_SOURCE,
+  getDefaultParams: getSqzmomEma55Params,
+} = require('../src/scripts/seed-sqzmom-ema55-strategy');
 
 function withPatched(object, patches) {
   const originals = {};
@@ -107,6 +113,24 @@ function createHarness(initialRow = createBotRow()) {
     runs,
     release: releaseRepo,
   };
+}
+
+function buildClosedCandles(length = 260) {
+  const now = Date.now();
+  const start = now - ((length + 2) * 60_000);
+  return Array.from({ length }, (_item, index) => {
+    const close = 100 + (Math.sin(index / 8) * 6) + (index * 0.03);
+    return {
+      time: start + (index * 60_000),
+      closeTime: start + ((index + 1) * 60_000),
+      open: close - 0.5,
+      high: close + 1.2,
+      low: close - 1.1,
+      close: Number(close.toFixed(4)),
+      volume: 100 + index,
+      trades: 10,
+    };
+  });
 }
 
 function patchStaticDeps() {
@@ -286,5 +310,163 @@ test('auto pausa el bot al alcanzar el umbral de fallos consecutivos y registra 
     releaseMarket();
     releaseBalance();
     releaseEngine();
+  }
+});
+
+test('bot evalua SQZMOM EMA55 con parametros del bot sin abrir entradas deshabilitadas', async () => {
+  const params = {
+    ...getSqzmomEma55Params(),
+    enableLong: false,
+    enableShort: false,
+    useTrueRange: false,
+    lengthBB: 18,
+    lengthKC: 24,
+    emaLen: 34,
+    periodNR: 80,
+    atrPeriod: 5,
+    atrScale: 1.4,
+  };
+  const harness = createHarness(createBotRow({
+    params_json: JSON.stringify(params),
+  }));
+  const releaseStrategies = withPatched(strategiesRepository, {
+    getById: async () => ({
+      id: 7,
+      script_source: SQZMOM_EMA55_SOURCE,
+      default_params_json: JSON.stringify(getSqzmomEma55Params()),
+    }),
+  });
+  const releaseIndicators = withPatched(strategyIndicatorsRepository, {
+    listByUser: async () => [],
+  });
+  const releaseMarket = withPatched(marketDataService, {
+    getCandles: async () => buildClosedCandles(260),
+    getCachedCandles: () => null,
+  });
+  const releaseBalance = withPatched(balanceCacheService, {
+    getSnapshot: async () => ({
+      positions: [],
+      openOrders: [],
+      lastUpdatedAt: Date.now(),
+    }),
+    getCachedSnapshot: () => null,
+  });
+
+  try {
+    const runtime = new BotRuntime(1, harness.currentRow);
+    runtime.applySignal = async (signal) => ({
+      action: signal.type,
+      details: { testedStrategy: 'sqzmom_ema55' },
+    });
+
+    const result = await runtime.evaluateLatest({ force: true });
+
+    assert.equal(result.signal.type, 'hold');
+    assert.equal(result.execution.action, 'hold');
+    assert.equal(runtime.bot.runtime.state, 'healthy');
+    assert.equal(harness.runs.some((row) => row.status === 'success' && row.action === 'hold'), true);
+  } finally {
+    harness.release();
+    releaseStrategies();
+    releaseIndicators();
+    releaseMarket();
+    releaseBalance();
+  }
+});
+
+test('createBot permite estrategia agnostica y valida con asset/timeframe configurados en el bot', async () => {
+  let createdPayload = null;
+  let validatedContext = null;
+  const releaseStrategies = withPatched(strategiesRepository, {
+    getById: async () => ({
+      id: 7,
+      name: 'SQZMOM Agnostic',
+      asset_universe_json: JSON.stringify(['*']),
+      timeframe: '15m',
+      script_source: SQZMOM_EMA55_SOURCE,
+      default_params_json: JSON.stringify(getSqzmomEma55Params()),
+    }),
+  });
+  const releaseAccounts = withPatched(hyperliquidAccountsService, {
+    getAccount: async () => ({ id: 3, alias: 'Main', address: '0x1234' }),
+  });
+  const releaseIndicators = withPatched(strategyIndicatorsRepository, {
+    listByUser: async () => [],
+  });
+  const releaseMarket = withPatched(marketDataService, {
+    getCandles: async (asset, timeframe) => {
+      assert.equal(asset, 'ETH');
+      assert.equal(timeframe, '1h');
+      return buildClosedCandles(260);
+    },
+  });
+  const releaseEngine = withPatched(strategyEngine, {
+    validateStrategy: async ({ context }) => {
+      validatedContext = context;
+      return { signal: { type: 'hold' }, diagnostics: { candles: 260 } };
+    },
+  });
+  const releaseRepo = withPatched(botsRepository, {
+    create: async (_userId, payload) => {
+      createdPayload = payload;
+      return createBotRow({
+        id: 44,
+        strategy_id: payload.strategyId,
+        hyperliquid_account_id: payload.accountId,
+        asset: payload.asset,
+        timeframe: payload.timeframe,
+        params_json: payload.paramsJson,
+        leverage: payload.leverage,
+        margin_mode: payload.marginMode,
+        size: payload.size,
+        status: payload.status,
+      });
+    },
+    getById: async () => createBotRow({
+      id: 44,
+      strategy_id: createdPayload.strategyId,
+      strategy_name: 'SQZMOM Agnostic',
+      strategy_timeframe: '15m',
+      strategy_default_params_json: JSON.stringify(getSqzmomEma55Params()),
+      hyperliquid_account_id: createdPayload.accountId,
+      account_alias: 'Main',
+      account_address: '0x1234',
+      asset: createdPayload.asset,
+      timeframe: createdPayload.timeframe,
+      params_json: createdPayload.paramsJson,
+      leverage: createdPayload.leverage,
+      margin_mode: createdPayload.marginMode,
+      size: createdPayload.size,
+      stop_loss_pct: createdPayload.stopLossPct,
+      take_profit_pct: createdPayload.takeProfitPct,
+      status: createdPayload.status,
+      backtest_summary_json: null,
+    }),
+  });
+
+  try {
+    const bot = await botsService.createBot(1, {
+      strategyId: 7,
+      accountId: 3,
+      asset: 'ETH',
+      timeframe: '1h',
+      sizeUsd: 150,
+      leverage: 3,
+      params: { emaLen: 34, enableShort: false },
+    });
+
+    assert.equal(bot.asset, 'ETH');
+    assert.equal(bot.timeframe, '1h');
+    assert.equal(createdPayload.asset, 'ETH');
+    assert.equal(createdPayload.timeframe, '1h');
+    assert.equal(validatedContext.params.emaLen, 34);
+    assert.equal(validatedContext.params.enableShort, false);
+  } finally {
+    releaseStrategies();
+    releaseAccounts();
+    releaseIndicators();
+    releaseMarket();
+    releaseEngine();
+    releaseRepo();
   }
 });

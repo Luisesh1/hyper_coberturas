@@ -11,6 +11,11 @@ function makeCandles(closes, volumes = null) {
   }));
 }
 
+function makeSqzmomCandles(length = 80) {
+  const closes = Array.from({ length }, (_, i) => 100 + Math.sin(i / 4) * 8 + i * 0.12);
+  return makeCandles(closes);
+}
+
 describe('computeAdapter', () => {
   it('SMA(5) produce N-4 puntos con valor correcto', () => {
     const candles = makeCandles([1, 2, 3, 4, 5, 6, 7]);
@@ -43,6 +48,25 @@ describe('computeAdapter', () => {
       expect(p.value).toBeGreaterThanOrEqual(0);
       expect(p.value).toBeLessThanOrEqual(100);
     }
+  });
+
+  it('RSI devuelve referencias alta y baja configurables', () => {
+    const closes = Array.from({ length: 30 }, (_, i) => 100 + Math.sin(i / 3));
+    const out = computeIndicator('rsi', makeCandles(closes), {
+      length: 14,
+      highLevel: 75,
+      lowLevel: 25,
+    });
+    const rsi = out.series.find((s) => s.role === 'line');
+    const high = out.series.find((s) => s.role === 'highLevel');
+    const low = out.series.find((s) => s.role === 'lowLevel');
+
+    expect(high.data).toHaveLength(rsi.data.length);
+    expect(low.data).toHaveLength(rsi.data.length);
+    expect(high.data.every((p) => p.value === 75)).toBe(true);
+    expect(low.data.every((p) => p.value === 25)).toBe(true);
+    expect(high.data[0].time).toEqual(rsi.data[0].time);
+    expect(low.data.at(-1).time).toEqual(rsi.data.at(-1).time);
   });
 
   it('MACD devuelve tres sub-series (macd, signal, histogram)', () => {
@@ -111,6 +135,72 @@ describe('computeAdapter', () => {
         expect(p.value).toBeGreaterThanOrEqual(0);
         expect(p.value).toBeLessThanOrEqual(100);
       }
+    }
+  });
+
+  it('ADX permite ocultar partes desde params', () => {
+    const highs = Array.from({ length: 40 }, (_, i) => 100 + Math.sin(i / 3) * 5);
+    const candles = highs.map((h, i) => ({
+      time: 1700000000000 + i * 60_000,
+      open: h - 0.5, high: h, low: h - 2, close: h - 0.2, volume: 10,
+    }));
+    const out = computeIndicator('adx', candles, {
+      length: 14,
+      showADX: false,
+      showDIPlus: true,
+      showDIMinus: false,
+    });
+    expect(out.series.map((s) => s.role)).toEqual(['pdi']);
+    expect(out.series[0].data.length).toBeGreaterThan(0);
+  });
+
+  it('SQZMOM devuelve lineas superior e inferior por defecto', () => {
+    const out = computeIndicator('sqzmom', makeSqzmomCandles(), {
+      normalBandLength: 5,
+    });
+    expect(out.series.map((s) => s.role)).toEqual(['histogram', 'sqzDots', 'normalUpper', 'normalLower']);
+    expect(out.series.find((s) => s.role === 'normalUpper').data.length).toBeGreaterThan(0);
+    expect(out.series.find((s) => s.role === 'normalLower').data.length).toBeGreaterThan(0);
+  });
+
+  it('SQZMOM muestra la linea media solo cuando se habilita', () => {
+    const out = computeIndicator('sqzmom', makeSqzmomCandles(), {
+      normalBandLength: 5,
+      showNormalMiddle: true,
+    });
+    expect(out.series.map((s) => s.role)).toEqual([
+      'histogram',
+      'sqzDots',
+      'normalUpper',
+      'normalMiddle',
+      'normalLower',
+    ]);
+    expect(out.series.find((s) => s.role === 'normalMiddle').data.length).toBeGreaterThan(0);
+  });
+
+  it('SQZMOM permite ocultar cada linea de banda de forma independiente', () => {
+    const out = computeIndicator('sqzmom', makeSqzmomCandles(), {
+      normalBandLength: 5,
+      showNormalUpper: false,
+      showNormalMiddle: true,
+      showNormalLower: false,
+    });
+    expect(out.series.map((s) => s.role)).toEqual(['histogram', 'sqzDots', 'normalMiddle']);
+  });
+
+  it('SQZMOM inicia la banda normal despues de completar la ventana movil', () => {
+    const normalBandLength = 7;
+    const out = computeIndicator('sqzmom', makeSqzmomCandles(), { normalBandLength });
+    const hist = out.series.find((s) => s.role === 'histogram').data;
+    const upper = out.series.find((s) => s.role === 'normalUpper').data;
+    const lower = out.series.find((s) => s.role === 'normalLower').data;
+
+    expect(upper).toHaveLength(hist.length - normalBandLength + 1);
+    expect(lower).toHaveLength(upper.length);
+    expect(upper[0].time).toEqual(hist[normalBandLength - 1].time);
+
+    for (let i = 0; i < upper.length; i += 1) {
+      expect(upper[i].value).toBeGreaterThanOrEqual(lower[i].value);
     }
   });
 });

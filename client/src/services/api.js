@@ -69,6 +69,8 @@ export const marketApi = {
   getCandles: ({ asset, timeframe = '15m', limit = 300, datasource = 'hyperliquid', startTime, endTime } = {}) =>
     request('GET', `/market/candles${buildQueryString({ asset, timeframe, limit, datasource, startTime, endTime })}`),
   getCatalog: () => request('GET', '/market/catalog'),
+  getTopByVolume: ({ datasource = 'binance', window = '1d', limit = 20 } = {}) =>
+    request('GET', `/market/top-volume${buildQueryString({ datasource, window, limit })}`),
 };
 
 // ------------------------------------------------------------------
@@ -362,6 +364,21 @@ export const backtestingApi = {
   enqueue: (payload) => request('POST', '/backtesting/queue', payload),
   getJob: (jobId) => request('GET', `/backtesting/jobs/${jobId}`),
   getJobs: () => request('GET', '/backtesting/jobs'),
+};
+
+// ------------------------------------------------------------------
+// Alertas
+// ------------------------------------------------------------------
+export const alertsApi = {
+  list:    ()              => request('GET',    '/alerts'),
+  get:     (id)            => request('GET',    `/alerts/${id}`),
+  create:  (payload)       => request('POST',   '/alerts', payload),
+  update:  (id, payload)   => request('PUT',    `/alerts/${id}`, payload),
+  remove:  (id)            => request('DELETE', `/alerts/${id}`),
+  test:    (id, { dryRun = true } = {}) =>
+                              request('POST',   `/alerts/${id}/test`, { dryRun }),
+  events:  (id, { limit = 50 } = {}) =>
+                              request('GET',    `/alerts/${id}/events${buildQueryString({ limit })}`),
 };
 
 // ------------------------------------------------------------------

@@ -364,6 +364,23 @@ function resolveRiskExit(position, candle) {
   return null;
 }
 
+function resolvePartialFill(position, candle) {
+  const plan = position && position.partialPlan;
+  if (!plan || plan.filled) return null;
+  const targetPrice = Number(plan.targetPrice);
+  if (!Number.isFinite(targetPrice)) return null;
+  const high = Number(candle.high);
+  const low = Number(candle.low);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  if (position.side === 'long' && high >= targetPrice) {
+    return { rawPrice: targetPrice, qtyPercent: plan.qtyPercent || 50 };
+  }
+  if (position.side === 'short' && low <= targetPrice) {
+    return { rawPrice: targetPrice, qtyPercent: plan.qtyPercent || 50 };
+  }
+  return null;
+}
+
 function replacePoint(series, point) {
   if (!point) return series;
   if (!series.length || series[series.length - 1].time !== point.time) {
@@ -484,8 +501,92 @@ async function runBacktest(payload) {
       entryFee: round(entryFee, 6),
       entrySlippage: round(Math.abs(fillPrice - referencePrice) * qty, 6),
       risk: null,
+      partialPlan: null,
     };
     position.risk = buildPositionRisk(position, stopLossPct, takeProfitPct);
+
+    const innerMeta = signalMeta && typeof signalMeta.meta === 'object' && signalMeta.meta ? signalMeta.meta : {};
+    const partialTargetRaw = signalMeta.partialTarget ?? innerMeta.partialTarget;
+    const partialTarget = Number(partialTargetRaw);
+    if (Number.isFinite(partialTarget) && partialTarget > 0) {
+      const requestedPercent = Number(signalMeta.partialPercent ?? innerMeta.partialPercent);
+      const qtyPercent = Number.isFinite(requestedPercent) && requestedPercent > 0 && requestedPercent < 100
+        ? requestedPercent
+        : 50;
+      const beFlagRaw = signalMeta.breakEvenAfterPartial ?? innerMeta.breakEvenAfterPartial;
+      position.partialPlan = {
+        targetPrice: round(partialTarget, 6),
+        qtyPercent,
+        breakEvenAfterPartial: beFlagRaw !== false,
+        filled: false,
+      };
+    }
+  }
+
+  function processPartialFill(fill, candle, candleIndex) {
+    if (!position) return null;
+    const plan = position.partialPlan;
+    if (!plan || plan.filled) return null;
+    const fillPrice = applySlippage(fill.rawPrice, position.side, 'close', slippageRate);
+    if (!Number.isFinite(fillPrice)) return null;
+    const fraction = Math.max(0, Math.min(1, fill.qtyPercent / 100));
+    const partialQty = Number(position.qty) * fraction;
+    const remainQty = Number(position.qty) - partialQty;
+    const direction = position.side === 'long' ? 1 : -1;
+    const grossPnl = (fillPrice - Number(position.entryPrice)) * direction * partialQty;
+    const exitNotional = partialQty * Number(fillPrice);
+    const exitFee = exitNotional * feeRate;
+    const entryFeeShare = Number(position.entryFee || 0) * fraction;
+    const fees = entryFeeShare + exitFee;
+    const pnl = round(grossPnl - fees, 4) || 0;
+    realizedPnl += pnl;
+    const slippageCost = Math.abs(fillPrice - Number(fill.rawPrice)) * partialQty;
+    const entrySlippageShare = Number(position.entrySlippage || 0) * fraction;
+    const trade = {
+      side: position.side,
+      entryPrice: round(position.entryPrice, 6),
+      exitPrice: round(fillPrice, 6),
+      entryTime: position.entryTime,
+      exitTime: candle.closeTime,
+      openedAt: position.entryTime,
+      closedAt: candle.closeTime,
+      qty: round(partialQty, 8),
+      sizeUsd: round(partialQty * Number(position.entryPrice), 4),
+      marginUsed: round((partialQty * Number(position.entryPrice)) / leverage, 4),
+      leverage,
+      marginMode,
+      reason: 'partial_atr',
+      fees: round(fees, 6) || 0,
+      slippage: round(entrySlippageShare + slippageCost, 6) || 0,
+      barsHeld: Math.max(1, candleIndex - Number(position.entryIndex) + 1),
+      pnl,
+      equity: round(realizedPnl, 4) || 0,
+      equityAfter: round(realizedPnl, 4) || 0,
+      meta: { kind: 'partial', partialPercent: fill.qtyPercent },
+    };
+    trades.push(trade);
+    positionSegments.push({
+      side: position.side,
+      entryTime: position.entryTime,
+      exitTime: candle.closeTime,
+      entryPrice: round(position.entryPrice, 6),
+      exitPrice: round(fillPrice, 6),
+      pnl,
+      reason: 'partial_atr',
+    });
+
+    position.qty = round(remainQty);
+    position.sizeUsd = round(remainQty * Number(position.entryPrice), 4);
+    position.marginUsed = round(position.sizeUsd / leverage, 4);
+    position.entryFee = round(Number(position.entryFee || 0) - entryFeeShare, 6);
+    position.entrySlippage = round(Number(position.entrySlippage || 0) - entrySlippageShare, 6);
+    plan.filled = true;
+
+    if (plan.breakEvenAfterPartial) {
+      position.risk = position.risk || {};
+      position.risk.stopPrice = round(Number(position.entryPrice));
+    }
+    return trade;
   }
 
   function closePosition(reason, rawPrice, candle, extra = {}) {
@@ -541,17 +642,26 @@ async function runBacktest(payload) {
     const candle = candles[index];
 
     if (position && index > position.entryIndex) {
-      const riskExit = resolveRiskExit(position, candle);
-      if (riskExit) {
-        closePosition(riskExit.reason, riskExit.rawPrice, candle, { meta: { kind: 'risk' }, candleIndex: index });
+      const partialFill = resolvePartialFill(position, candle);
+      if (partialFill) {
+        processPartialFill(partialFill, candle, index);
+      }
+      if (position) {
+        const riskExit = resolveRiskExit(position, candle);
+        if (riskExit) {
+          closePosition(riskExit.reason, riskExit.rawPrice, candle, { meta: { kind: 'risk' }, candleIndex: index });
+        }
       }
     }
 
     const slice = candles.slice(0, index + 1);
+    const positionForCtx = position
+      ? { ...position, entryBarsAgo: index - Number(position.entryIndex) }
+      : null;
     const runtime = buildRuntimeContext({
       ...payload.baseContext,
       market: { candles: slice },
-      account: { position },
+      account: { position: positionForCtx },
       params,
     }, customIndicators);
     const currentSignal = await exports.evaluate(runtime.ctx) || signal.hold();

@@ -5,6 +5,8 @@ const strategyEngine = require('./strategy-engine.service');
 const marketDataService = require('./market-data.service');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 
+const ANY_ASSET = '*';
+
 const DEFAULT_STRATEGY_SOURCE = `module.exports.evaluate = async function evaluate(ctx) {
   const closes = ctx.market.candles({ limit: 100 });
   const fast = ctx.indicators.ema(closes, { period: 9 });
@@ -37,9 +39,18 @@ function normalizeAssetUniverse(assetUniverse) {
     : String(assetUniverse || 'BTC').split(',');
   const normalized = values
     .map((value) => String(value || '').trim().toUpperCase())
+    .map((value) => (['*', 'ANY', 'ALL', 'TODOS'].includes(value) ? ANY_ASSET : value))
     .filter(Boolean);
   if (normalized.length === 0) return ['BTC'];
+  if (normalized.includes(ANY_ASSET)) return [ANY_ASSET];
   return [...new Set(normalized)];
+}
+
+function resolveStrategyAsset(assetUniverse, requestedAsset) {
+  if (requestedAsset) return marketDataService.normalizeAsset(requestedAsset);
+  const normalized = normalizeAssetUniverse(assetUniverse);
+  const firstConcreteAsset = normalized.find((asset) => asset !== ANY_ASSET);
+  return marketDataService.normalizeAsset(firstConcreteAsset || 'BTC');
 }
 
 function normalizeDefaultParams(value) {
@@ -141,9 +152,10 @@ async function resolveRuntimeStrategy(userId, { strategyId, draftStrategy } = {}
 }
 
 async function buildValidationContext(userId, strategy, overrides = {}) {
-  const asset = marketDataService.normalizeAsset(overrides.asset || strategy.assetUniverse[0] || 'BTC');
+  const asset = resolveStrategyAsset(strategy.assetUniverse, overrides.asset);
   const timeframe = marketDataService.normalizeTimeframe(overrides.timeframe || strategy.timeframe);
   const candles = await marketDataService.getCandles(asset, timeframe, {
+    datasource: overrides.datasource,
     limit: overrides.limit || 250,
     startTime: overrides.startTime || overrides.from,
     endTime: overrides.endTime || overrides.to,
@@ -194,7 +206,7 @@ async function getStrategy(userId, strategyId) {
 async function createStrategy(userId, input) {
   const strategy = normalizeStrategyInput(input);
   const validationContext = await buildValidationContext(userId, strategy, {
-    asset: strategy.assetUniverse[0],
+    asset: resolveStrategyAsset(strategy.assetUniverse),
     timeframe: strategy.timeframe,
   });
   await strategyEngine.validateStrategy({
@@ -219,7 +231,7 @@ async function updateStrategy(userId, strategyId, input) {
     ...input,
   });
   const validationContext = await buildValidationContext(userId, strategy, {
-    asset: strategy.assetUniverse[0],
+    asset: resolveStrategyAsset(strategy.assetUniverse),
     timeframe: strategy.timeframe,
   });
   await strategyEngine.validateStrategy({
@@ -330,6 +342,8 @@ module.exports = {
   mapIndicatorRow,
   mapStrategy,
   normalizeRuntimeStrategyInput,
+  normalizeAssetUniverse,
+  resolveStrategyAsset,
   resolveRuntimeStrategy,
   updateStrategy,
   validateDraftStrategy,

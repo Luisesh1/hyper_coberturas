@@ -84,6 +84,21 @@ class LpOrchestratorService {
     return fn(undefined);
   }
 
+  async _deactivateLinkedProtection(userId, protectionId, { orchestratorId, reason } = {}) {
+    if (!protectionId) return null;
+    try {
+      return await this.uniswapProtectionService.deactivateProtectedPool(userId, protectionId);
+    } catch (err) {
+      this.logger.warn('lp_orchestrator_linked_protection_deactivate_failed', {
+        orchestratorId,
+        protectionId,
+        reason,
+        error: err.message,
+      });
+      throw err;
+    }
+  }
+
   // ---------- LIFECYCLE: CREATE / ATTACH / KILL / ARCHIVE ------------------
 
   async createOrchestrator({ userId, ...input }) {
@@ -639,6 +654,12 @@ class LpOrchestratorService {
       // cerrado on-chain. Limpiamos el identificador del orquestador para
       // que el `archive` siguiente no falle, y devolvemos un marcador para
       // que el cliente sepa que no hay nada que firmar.
+      if (orch.activeProtectedPoolId) {
+        await this._deactivateLinkedProtection(userId, orch.activeProtectedPoolId, {
+          orchestratorId,
+          reason: 'lp_already_closed_on_chain',
+        });
+      }
       await this.repo.updateActiveLp(userId, orchestratorId, {
         activePositionIdentifier: null,
         activePoolAddress: null,
@@ -802,6 +823,12 @@ class LpOrchestratorService {
     // Acciones de cierre dejan el orquestador en idle
     let nextPhase = 'lp_active';
     if (action === 'close-to-usdc' || action === 'close-keep-assets') {
+      if (orch.activeProtectedPoolId) {
+        await this._deactivateLinkedProtection(userId, orch.activeProtectedPoolId, {
+          orchestratorId,
+          reason: action,
+        });
+      }
       // Flush final del hedge state al accounting del orquestador antes de
       // deslindar la protección. Sin esto, los fills reconciliados durante
       // la desactivación (realized PnL, fees) se pierden porque el
@@ -947,6 +974,18 @@ class LpOrchestratorService {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
       throw new ValidationError('Cierra el LP activo antes de archivar el orquestador');
+    }
+    if (orch.activeProtectedPoolId) {
+      await this._deactivateLinkedProtection(userId, orch.activeProtectedPoolId, {
+        orchestratorId,
+        reason: 'archive',
+      });
+      await this.repo.updateActiveLp(userId, orchestratorId, {
+        activePositionIdentifier: null,
+        activePoolAddress: null,
+        activeProtectedPoolId: null,
+        phase: orch.phase || 'idle',
+      });
     }
     await this.repo.archive(userId, orchestratorId);
     await this.repo.appendActionLog({

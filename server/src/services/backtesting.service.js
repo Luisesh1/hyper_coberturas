@@ -58,9 +58,12 @@ function buildConfig({
   strategyId,
   strategyMode,
   asset,
+  datasource,
   timeframe,
   params,
   sizeUsd,
+  sizingMode,
+  pctEquity,
   leverage,
   marginMode,
   stopLossPct,
@@ -78,9 +81,12 @@ function buildConfig({
     strategyName: strategy?.name || null,
     strategyMode,
     asset,
+    datasource,
     timeframe,
     params,
     sizeUsd,
+    sizingMode,
+    pctEquity,
     leverage,
     marginMode,
     stopLossPct: stopLossPct > 0 ? stopLossPct : null,
@@ -109,6 +115,7 @@ async function buildBenchmarks({
   slippageBps,
   overlayRequests,
   asset,
+  datasource,
   timeframe,
   limit,
   from,
@@ -159,9 +166,12 @@ async function buildBenchmarks({
             strategyId: null,
             strategyMode: 'benchmark',
             asset,
+            datasource,
             timeframe,
             params: validationContext.context.params,
             sizeUsd,
+            sizingMode,
+            pctEquity,
             leverage,
             marginMode,
             stopLossPct,
@@ -194,7 +204,8 @@ async function simulateBacktest(userId, input = {}, { timeoutMs } = {}) {
     throw new ValidationError('strategyId o draftStrategy es requerido');
   }
 
-  const asset = marketDataService.normalizeAsset(input.asset || strategy.assetUniverse?.[0] || 'BTC');
+  const asset = strategiesService.resolveStrategyAsset(strategy.assetUniverse, input.asset);
+  const datasource = marketDataService.normalizeDatasource(input.datasource);
   const timeframe = marketDataService.normalizeTimeframe(input.timeframe || strategy.timeframe || '15m');
   const limit = Math.max(50, Math.min(1000, normalizeNumber(input.limit, 500)));
   const from = normalizeTimestamp(input.from);
@@ -208,6 +219,7 @@ async function simulateBacktest(userId, input = {}, { timeoutMs } = {}) {
 
   const validationContext = await strategiesService.buildValidationContext(userId, strategy, {
     asset,
+    datasource,
     timeframe,
     params: parseJsonObject(input.params, {}),
     limit,
@@ -216,20 +228,25 @@ async function simulateBacktest(userId, input = {}, { timeoutMs } = {}) {
     force: true,
   });
 
+  const strategyUsesFullEquity = validationContext.context.params.useFullEquity === true;
   const sizeUsd = Math.max(1, normalizeNumber(
-    input.sizeUsd,
+    strategyUsesFullEquity ? validationContext.context.params.sizeUsd : input.sizeUsd,
     validationContext.context.params.sizeUsd || validationContext.context.params.size || 100,
   ));
   const leverage = Math.max(1, normalizeNumber(input.leverage, 10));
   const marginMode = input.marginMode === 'isolated' ? 'isolated' : 'cross';
   const stopLossPct = normalizeNumber(input.stopLossPct);
   const takeProfitPct = normalizeNumber(input.takeProfitPct);
-  const feeBps = Math.max(0, normalizeNumber(input.feeBps, 0));
-  const slippageBps = Math.max(0, normalizeNumber(input.slippageBps, 0));
+  const paramFeeBps = normalizeNumber(validationContext.context.params.feeBps, 0);
+  const paramSlippageBps = normalizeNumber(validationContext.context.params.slippageBps, 0);
+  const feeBps = Math.max(0, normalizeNumber(input.feeBps, paramFeeBps));
+  const slippageBps = Math.max(0, normalizeNumber(input.slippageBps, paramSlippageBps));
   const overlayRequests = normalizeOverlayRequests(input.overlayRequests);
 
-  const sizingMode = ['usd', 'qty', 'pct_equity'].includes(input.sizingMode) ? input.sizingMode : 'usd';
-  const pctEquity = normalizeNumber(input.pctEquity, 10);
+  const sizingMode = strategyUsesFullEquity
+    ? 'pct_equity'
+    : (['usd', 'qty', 'pct_equity'].includes(input.sizingMode) ? input.sizingMode : 'usd');
+  const pctEquity = strategyUsesFullEquity ? 100 : normalizeNumber(input.pctEquity, 10);
 
   const result = await strategyEngine.simulateBacktest({
     source: strategy.scriptSource,
@@ -272,6 +289,7 @@ async function simulateBacktest(userId, input = {}, { timeoutMs } = {}) {
     slippageBps,
     overlayRequests,
     asset,
+    datasource,
     timeframe,
     limit,
     from,
@@ -284,9 +302,12 @@ async function simulateBacktest(userId, input = {}, { timeoutMs } = {}) {
       strategyId,
       strategyMode,
       asset,
+      datasource,
       timeframe,
       params: validationContext.context.params,
       sizeUsd,
+      sizingMode,
+      pctEquity,
       leverage,
       marginMode,
       stopLossPct,

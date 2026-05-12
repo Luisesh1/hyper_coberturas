@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { createChart, CandlestickSeries, CrosshairMode, PriceScaleMode } from 'lightweight-charts';
 import { marketApi, settingsApi } from '../../services/api';
 import { useTradingContext } from '../../context/TradingContext';
@@ -7,6 +8,8 @@ import { getDefaultChartIndicators } from './indicators/defaults';
 import IndicatorConfigModal from './components/IndicatorConfigModal';
 import AssetPickerModal from './components/AssetPickerModal';
 import DrawingToolbar from './components/DrawingToolbar';
+import ReplayPanel from './components/ReplayPanel';
+import { useReplayController } from './replay/useReplayController';
 import { useDrawings } from './drawings/use-drawings';
 import { TOOLS } from './drawings/catalog';
 import styles from './TradingViewPage.module.css';
@@ -16,6 +19,15 @@ const CROSSHAIR_STORAGE_KEY = 'tv_crosshair_mode_v1';
 const PRICE_SCALE_STORAGE_KEY = 'tv_price_scale_mode_v1';
 const TIMEFRAME_STORAGE_KEY = 'tv_timeframe_v1';
 const SETTINGS_VISIBLE_STORAGE_KEY = 'tv_settings_visible_v1';
+const OVERLAYS_HIDDEN_STORAGE_KEY = 'tv_overlays_hidden_v1';
+
+function loadStoredOverlaysHidden() {
+  try {
+    return localStorage.getItem(OVERLAYS_HIDDEN_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function loadStoredSettingsVisible() {
   try {
@@ -136,6 +148,45 @@ function formatProjectedTime(sec, tf) {
   });
 }
 
+// Formatea un precio con decimales adaptativos al orden de magnitud.
+// 70,510.73 (BTC) | 2,348.7 (ETH) | 145.62 | 0.85432 | 0.0000123
+function formatPrice(n) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const abs = Math.abs(n);
+  let frac;
+  if (abs >= 1000) frac = 2;
+  else if (abs >= 1) frac = 4;
+  else if (abs >= 0.01) frac = 6;
+  else frac = 8;
+  return n.toLocaleString('en-US', { maximumFractionDigits: frac, minimumFractionDigits: frac >= 4 ? 0 : frac });
+}
+
+function formatChange(n) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${formatPrice(n)}`;
+}
+
+function formatPercent(n) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(2)}%`;
+}
+
+// Etiqueta compacta de un indicador para el legend overlay.
+// Convierte type+params en algo como "EMA 20", "MACD 12/26/9", "BB 20/2".
+function formatIndicatorLabel(type, params, label) {
+  const p = params || {};
+  if (type === 'macd') return `${label} ${p.fastPeriod || 12}/${p.slowPeriod || 26}/${p.signalPeriod || 9}`;
+  if (type === 'bollinger') return `${label} ${p.length || 20}/${p.stdDev || 2}`;
+  if (type === 'keltner') return `${label} ${p.length || 20}/${p.atrLength || 10}`;
+  if (type === 'stoch') return `${label} ${p.kPeriod || 14}/${p.signalPeriod || 3}`;
+  if (type === 'volume') return 'Vol';
+  if (type === 'vwap') return 'VWAP';
+  if (p.length != null) return `${label} ${p.length}`;
+  return label;
+}
+
 // Intervalo de polling en tiempo real por timeframe.
 // Compromiso entre frescura y carga de red (el backend cachea 10s).
 const LIVE_POLL_MS = {
@@ -160,14 +211,40 @@ const THEME = {
 
 export default function TradingViewPage() {
   const { selectedAsset, addNotification } = useTradingContext();
+  const [searchParams] = useSearchParams();
+  const urlSymbol = searchParams.get('symbol');
+  const urlTf = searchParams.get('tf');
+  const urlDatasource = searchParams.get('datasource');
   const [asset, setAsset] = useState(() => {
+    if (urlSymbol) {
+      return {
+        symbol: urlSymbol,
+        datasource: urlDatasource || 'binance',
+        name: urlSymbol,
+      };
+    }
     return loadStoredAsset() || {
       symbol: selectedAsset || 'ETH',
       datasource: 'hyperliquid',
       name: selectedAsset || 'ETH',
     };
   });
-  const [timeframe, setTimeframe] = useState(loadStoredTimeframe);
+  const [timeframe, setTimeframe] = useState(() => {
+    if (urlTf && TIMEFRAMES.some((t) => t.value === urlTf)) return urlTf;
+    return loadStoredTimeframe();
+  });
+
+  // Reaccionar a cambios del query (back/forward del navegador o navegación
+  // entre alertas distintas sin remount). No limpiamos los params para que
+  // la URL quede compartible y refresh-safe.
+  useEffect(() => {
+    if (urlSymbol) {
+      setAsset((prev) => prev.symbol === urlSymbol && prev.datasource === (urlDatasource || prev.datasource)
+        ? prev
+        : { symbol: urlSymbol, datasource: urlDatasource || 'binance', name: urlSymbol });
+    }
+    if (urlTf && TIMEFRAMES.some((t) => t.value === urlTf)) setTimeframe(urlTf);
+  }, [urlSymbol, urlTf, urlDatasource]);
   const [crosshairMode, setCrosshairMode] = useState(loadStoredCrosshairMode);
   const [priceScaleMode, setPriceScaleMode] = useState(loadStoredPriceScaleMode);
   const [loading, setLoading] = useState(true);
@@ -184,6 +261,13 @@ export default function TradingViewPage() {
   const [futureTimeLabel, setFutureTimeLabel] = useState(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(loadStoredSettingsVisible);
+  const [replayPanelOpen, setReplayPanelOpen] = useState(false);
+  const [hoveredOhlc, setHoveredOhlc] = useState(null);
+  const [overlaysHidden, setOverlaysHidden] = useState(loadStoredOverlaysHidden);
+
+  useEffect(() => {
+    try { localStorage.setItem(OVERLAYS_HIDDEN_STORAGE_KEY, overlaysHidden ? '1' : '0'); } catch { /* noop */ }
+  }, [overlaysHidden]);
 
   const pageRef = useRef(null);
   const containerRef = useRef(null);
@@ -269,10 +353,26 @@ export default function TradingViewPage() {
   // lightweight-charts no emite `param.time` en el área vacía a la derecha;
   // usamos `param.logical` + la última vela + duración del timeframe para
   // calcular el tiempo proyectado y pintamos una etiqueta flotante propia.
+  // El mismo handler también alimenta el overlay OHLC superior derecho:
+  // cuando hay `param.time` (cursor sobre una vela real) buscamos la vela
+  // correspondiente en candlesRef y la exponemos por estado.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return undefined;
     const handler = (param) => {
+      // --- Overlay OHLC: vela bajo el cursor ---
+      if (param?.time != null && candlesRef.current.length > 0) {
+        const tMs = typeof param.time === 'number' ? param.time * 1000 : null;
+        if (tMs != null) {
+          const c = candlesRef.current.find((x) => x.time === tMs);
+          setHoveredOhlc(c || null);
+        }
+      } else {
+        // Cursor fuera del área de velas o en zona vacía → mostrar la última.
+        setHoveredOhlc(null);
+      }
+
+      // --- Etiqueta de tiempo futuro (zona derecha sin velas) ---
       if (!param?.point || candlesRef.current.length === 0) {
         setFutureTimeLabel(null);
         return;
@@ -402,13 +502,36 @@ export default function TradingViewPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // --- Replay mode controller ---
+  // Vive entre loadData y el polling live: cuando está activo, este último
+  // se suspende (ver dependencia `replayActive` en el efecto siguiente).
+  const replay = useReplayController({
+    asset,
+    timeframe,
+    candleSeriesRef,
+    candlesRef,
+    indicatorsControllerRef,
+    indicatorsRef,
+    chartRef,
+    onError: (msg) => addNotification?.('error', msg),
+    onStopped: () => { /* loadData se vuelve a invocar al cambiar deps abajo si es necesario */ },
+    // Cada tick del replay actualiza lastPrice para forzar un re-render
+    // del overlay OHLC (que lee la última vela in-progress).
+    onTick: (htf) => setLastPrice(htf.close),
+  });
+  const replayActive = replay.active;
+
   // --- 4) Polling en tiempo real del último candle ---
+  // Si el modo replay está activo, suspendemos el polling para no pisar la
+  // vela HTF en formación con datos vivos.
   useEffect(() => {
     if (liveTimerRef.current) {
       clearInterval(liveTimerRef.current);
       liveTimerRef.current = null;
     }
     setLiveActive(false);
+
+    if (replayActive) return undefined;
 
     const intervalMs = LIVE_POLL_MS[timeframe] || 15_000;
     let cancelled = false;
@@ -466,7 +589,7 @@ export default function TradingViewPage() {
         liveTimerRef.current = null;
       }
     };
-  }, [asset, timeframe]);
+  }, [asset, timeframe, replayActive]);
 
   // --- 5) Re-render cuando cambian los indicadores (sin recargar candles) ---
   useEffect(() => {
@@ -475,7 +598,10 @@ export default function TradingViewPage() {
   }, [indicators]);
 
   // --- 6) Scroll infinito: carga histórico cuando el usuario llega al borde izquierdo ---
+  // Suspendido durante replay: el array candlesRef se está mutando por el hook
+  // de replay y agregar barras aquí corrompería su snapshot.
   const fetchMoreHistory = useCallback(async () => {
+    if (replayActive) return;
     if (fetchingHistoryRef.current || reachedHistoryEndRef.current) return;
     const current = candlesRef.current;
     if (current.length === 0) return;
@@ -525,7 +651,7 @@ export default function TradingViewPage() {
       fetchingHistoryRef.current = false;
       setLoadingHistory(false);
     }
-  }, [asset, timeframe]);
+  }, [asset, timeframe, replayActive]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -583,6 +709,26 @@ export default function TradingViewPage() {
 
   const visibleIndicatorsCount = indicators.filter((i) => i.visible !== false).length;
 
+  // Vela a mostrar en el overlay OHLC: la que está bajo el crosshair, o la
+  // última disponible si el cursor está fuera. Lee candlesRef directamente
+  // (mutado in-place por live polling y replay). Los re-renders los
+  // disparan setLastPrice (polling+tick replay) y setHoveredOhlc (crosshair).
+  const lastCandleIdx = candlesRef.current.length - 1;
+  const lastCandle = lastCandleIdx >= 0 ? candlesRef.current[lastCandleIdx] : null;
+  const displayedOhlc = hoveredOhlc || lastCandle;
+  // Vela previa (para change inter-bar): recalculada cada render.
+  let prevCandle = null;
+  if (displayedOhlc) {
+    const idx = candlesRef.current.findIndex((c) => c.time === displayedOhlc.time);
+    if (idx > 0) prevCandle = candlesRef.current[idx - 1];
+  }
+
+  // Legend de indicadores: valores en el timestamp mostrado. Vacío si no
+  // hay vela o controlador. lightweight-charts usa segundos.
+  const indicatorLegend = (displayedOhlc && indicatorsControllerRef.current?.getValuesAt)
+    ? indicatorsControllerRef.current.getValuesAt(Math.floor(displayedOhlc.time / 1000))
+    : [];
+
   // Helpers reutilizables: los mismos controles se renderizan en la barra
   // superior (desktop) y en la inferior (mobile). Son stateless/sin IDs
   // propios, así que duplicarlos en el árbol no introduce conflictos.
@@ -624,6 +770,17 @@ export default function TradingViewPage() {
         <span className={styles.btnIcon}>⚙️</span>
         <span className={styles.btnText}>Indicadores ({visibleIndicatorsCount})</span>
         <span className={styles.btnBadge} aria-hidden="true">{visibleIndicatorsCount}</span>
+      </button>
+      <button
+        type="button"
+        className={`${styles.refreshBtn} ${replayActive || replayPanelOpen ? styles.replayBtnActive : ''}`}
+        onClick={() => setReplayPanelOpen((v) => !v)}
+        title={replayActive ? 'Replay activo — abrir panel' : 'Modo Replay (simular formación de vela)'}
+        aria-label="Modo Replay"
+        aria-pressed={replayPanelOpen}
+      >
+        <span className={styles.btnIcon}>⏯</span>
+        <span className={styles.btnText}>Replay{replayActive ? ' ●' : ''}</span>
       </button>
       <button
         type="button"
@@ -780,7 +937,34 @@ export default function TradingViewPage() {
           hasDrawings={drawings.drawings.length > 0}
         />
 
-        {futureTimeLabel && (
+        {/* Botón flotante para ocultar/mostrar overlays informativos
+            (OHLC + indicador legend + etiqueta de tiempo futuro). El botón
+            siempre está visible para poder volver a activarlos.
+            ReplayPanel y DrawingToolbar son herramientas, no se ocultan. */}
+        <button
+          type="button"
+          className={`${styles.overlaysToggle} ${overlaysHidden ? styles.overlaysToggleHidden : ''}`}
+          onClick={() => setOverlaysHidden((v) => !v)}
+          title={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
+          aria-label={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
+          aria-pressed={overlaysHidden}
+        >
+          {overlaysHidden ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+              <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+              <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+              <line x1="1" y1="1" x2="23" y2="23" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          )}
+        </button>
+
+        {!overlaysHidden && futureTimeLabel && (
           <div
             className={styles.futureTimeLabel}
             style={{ left: `${futureTimeLabel.x}px` }}
@@ -788,6 +972,92 @@ export default function TradingViewPage() {
             {futureTimeLabel.text}
           </div>
         )}
+
+        {!overlaysHidden && displayedOhlc && (() => {
+          const intra = displayedOhlc.close - displayedOhlc.open;
+          const intraPct = displayedOhlc.open ? (intra / displayedOhlc.open) * 100 : null;
+          const inter = prevCandle ? displayedOhlc.close - prevCandle.close : null;
+          const interPct = prevCandle?.close ? (inter / prevCandle.close) * 100 : null;
+          const upBar = displayedOhlc.close >= displayedOhlc.open;
+          return (
+            <div className={styles.ohlcOverlay} aria-label="Valores OHLC">
+              <span className={styles.ohlcSymbol}>
+                {asset.symbol} · {timeframe.toUpperCase()} · {asset.datasource}
+              </span>
+              <span className={styles.ohlcGroup}>
+                <span className={styles.ohlcLabel}>O</span>
+                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
+                  {formatPrice(displayedOhlc.open)}
+                </span>
+              </span>
+              <span className={styles.ohlcGroup}>
+                <span className={styles.ohlcLabel}>H</span>
+                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
+                  {formatPrice(displayedOhlc.high)}
+                </span>
+              </span>
+              <span className={styles.ohlcGroup}>
+                <span className={styles.ohlcLabel}>L</span>
+                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
+                  {formatPrice(displayedOhlc.low)}
+                </span>
+              </span>
+              <span className={styles.ohlcGroup}>
+                <span className={styles.ohlcLabel}>C</span>
+                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
+                  {formatPrice(displayedOhlc.close)}
+                </span>
+              </span>
+              <span className={`${styles.ohlcChange} ${intra >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
+                {formatChange(intra)} ({formatPercent(intraPct)})
+              </span>
+              {inter != null && (
+                <span className={`${styles.ohlcChange} ${styles.ohlcChangeSecondary} ${inter >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
+                  {formatChange(inter)} ({formatPercent(interPct)})
+                </span>
+              )}
+            </div>
+          );
+        })()}
+
+        {!overlaysHidden && indicatorLegend.length > 0 && (
+          <div className={styles.indicatorLegend} aria-label="Valores de indicadores">
+            {indicatorLegend.map((ind) => (
+              <div key={ind.uid} className={styles.legendRow}>
+                <span
+                  className={styles.legendDot}
+                  style={{ background: ind.values[0]?.color || '#94a3b8' }}
+                  aria-hidden="true"
+                />
+                <span className={styles.legendName}>
+                  {formatIndicatorLabel(ind.type, ind.params, ind.label)}
+                </span>
+                {ind.values.length === 0 ? (
+                  <span className={styles.legendNoData}>—</span>
+                ) : (
+                  <span className={styles.legendValues}>
+                    {ind.values.map((v, i) => (
+                      <span key={v.role} className={styles.legendValueGroup}>
+                        {v.label && <span className={styles.legendValueLabel}>{v.label}:</span>}
+                        <span className={styles.legendValue} style={{ color: v.color }}>
+                          {formatPrice(v.value)}
+                        </span>
+                        {i < ind.values.length - 1 && <span className={styles.legendSep}>·</span>}
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <ReplayPanel
+          open={replayPanelOpen}
+          onClose={() => setReplayPanelOpen(false)}
+          htfTimeframe={timeframe}
+          controller={replay}
+        />
       </div>
 
       {/* Barra inferior: sólo visible en mobile. Contiene los timeframes

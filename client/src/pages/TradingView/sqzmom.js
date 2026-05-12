@@ -94,6 +94,11 @@ export const SQZMOM_DEFAULTS = Object.freeze({
   lengthKC: 20,
   multKC: 1.5,
   useTrueRange: true,
+  showNormalUpper: true,
+  showNormalMiddle: false,
+  showNormalLower: true,
+  normalBandLength: 100,
+  normalBandSigma: 2,
 });
 
 export function computeSqueezeMomentum(candles, params = {}) {
@@ -194,4 +199,36 @@ export function buildSqueezeDots(sqzmomSeries) {
     else color = '#9e9e9e';                   // gray: squeeze se soltó (sqzOff)
     return { time: p.time, value: 0, color };
   }).filter(Boolean);
+}
+
+export function buildSqueezeNormalBands(sqzmomSeries, params = {}) {
+  const cfg = { ...SQZMOM_DEFAULTS, ...params };
+  const length = Math.max(2, Math.floor(Number(cfg.normalBandLength) || SQZMOM_DEFAULTS.normalBandLength));
+  const sigma = Math.max(0, Number(cfg.normalBandSigma) || SQZMOM_DEFAULTS.normalBandSigma);
+  const upper = [];
+  const middle = [];
+  const lower = [];
+  const window = [];
+
+  for (const point of sqzmomSeries) {
+    if (!point || !Number.isFinite(point.value)) continue;
+
+    window.push(point.value);
+    if (window.length > length) window.shift();
+    if (window.length < length) continue;
+
+    const mean = window.reduce((sum, value) => sum + value, 0) / length;
+    const variance = window.reduce((sum, value) => {
+      const diff = value - mean;
+      return sum + diff * diff;
+    }, 0) / length;
+    const deviation = Math.sqrt(variance);
+    const spread = sigma * deviation;
+
+    upper.push({ time: point.time, value: mean + spread });
+    middle.push({ time: point.time, value: mean });
+    lower.push({ time: point.time, value: mean - spread });
+  }
+
+  return { upper, middle, lower };
 }

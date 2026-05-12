@@ -524,3 +524,436 @@
   .lastPrice { font-size: 0.9rem; }
 }
 
+
+/* ────────────────────────────────────────────────────────────────
+   Modo Replay — panel flotante encima del chart cuando el usuario
+   abre la herramienta desde la toolbar. No bloquea las velas: vive
+   en la esquina superior derecha del widgetContainer.
+   ──────────────────────────────────────────────────────────────── */
+.replayBtnActive {
+  border-color: rgba(99, 102, 241, 0.7);
+  background: rgba(99, 102, 241, 0.18);
+  color: #f1f5f9;
+}
+
+.replayPanel {
+  position: absolute;
+  top: 52px;                  /* deja espacio al overlay OHLC */
+  right: 12px;
+  z-index: 20;
+  width: 320px;
+  max-width: calc(100% - 24px);
+  background: rgba(20, 22, 28, 0.96);
+  border: 1px solid rgba(120, 130, 145, 0.35);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  color: var(--text, #e6e7ea);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.replayHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(120, 130, 145, 0.18);
+  padding-bottom: 6px;
+}
+
+.replayTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #f1f5f9;
+}
+
+.replayDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #818cf8;
+  box-shadow: 0 0 8px rgba(129, 140, 248, 0.6);
+}
+
+.replayCloseBtn {
+  background: transparent;
+  color: var(--text-muted, #8690a0);
+  border: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.replayCloseBtn:hover {
+  background: rgba(120, 130, 145, 0.12);
+  color: #f1f5f9;
+}
+
+.replayWarn {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.replayRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.replayLabel {
+  font-size: 0.78rem;
+  color: var(--text-muted, #8690a0);
+  min-width: 64px;
+}
+
+.replayDatetime {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(120, 130, 145, 0.25);
+  background: #1a1d23;
+  color: var(--text, #eee);
+  font-family: inherit;
+  font-size: 0.82rem;
+  color-scheme: dark;
+}
+
+.replayMiniBtn {
+  padding: 5px 9px;
+  border-radius: 4px;
+  border: 1px solid rgba(120, 130, 145, 0.3);
+  background: #1a1d23;
+  color: var(--text, #eee);
+  cursor: pointer;
+  font-size: 0.85rem;
+  min-width: 32px;
+}
+.replayMiniBtn:hover:not(:disabled) {
+  background: #22262d;
+  border-color: rgba(99, 102, 241, 0.6);
+}
+.replayMiniBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.replayPrimaryBtn {
+  flex: 1 1 auto;
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(99, 102, 241, 0.6);
+  background: rgba(99, 102, 241, 0.18);
+  color: #f1f5f9;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.replayPrimaryBtn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.32);
+}
+.replayPrimaryBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.replayDangerBtn {
+  padding: 5px 9px;
+  border-radius: 4px;
+  border: 1px solid rgba(239, 83, 80, 0.5);
+  background: rgba(239, 83, 80, 0.12);
+  color: #ef5350;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.replayDangerBtn:hover {
+  background: rgba(239, 83, 80, 0.25);
+}
+
+.replaySpeedGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border: 1px solid rgba(120, 130, 145, 0.25);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.replaySpeedBtn {
+  background: #1a1d23;
+  color: var(--text-muted, #8690a0);
+  border: none;
+  padding: 4px 8px;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: background 120ms;
+}
+.replaySpeedBtn:hover {
+  background: #22262d;
+  color: var(--text, #eee);
+}
+.replaySpeedBtnActive {
+  background: var(--accent, #4a9eff);
+  color: #fff;
+}
+
+.replayStatus {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  color: var(--text-muted, #8690a0);
+  background: rgba(120, 130, 145, 0.08);
+  padding: 4px 8px;
+  border-radius: 4px;
+  word-break: break-word;
+}
+
+/* En mobile, baja el panel un poco y limita altura para no tapar los
+   controles de la barra superior. */
+@media (max-width: 768px) {
+  .replayPanel {
+    top: 70px;                /* mobile: deja espacio al overlay OHLC */
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: none;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Overlay OHLC — barra superior derecha que muestra los valores de
+   la vela bajo el crosshair (o la última vela si el cursor está
+   fuera del chart). Reacciona también al modo replay vía lastPrice.
+   ──────────────────────────────────────────────────────────────── */
+.ohlcOverlay {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 15;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgba(20, 22, 28, 0.78);
+  border: 1px solid rgba(120, 130, 145, 0.22);
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  color: var(--text, #e6e7ea);
+  pointer-events: none;       /* no bloquea clicks sobre el chart */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
+  max-width: calc(100% - 24px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.ohlcSymbol {
+  color: var(--text-muted, #8690a0);
+  font-family: inherit;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding-right: 6px;
+  border-right: 1px solid rgba(120, 130, 145, 0.18);
+}
+
+.ohlcGroup {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.ohlcLabel {
+  color: var(--text-muted, #6a7380);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+}
+
+.ohlcVal {
+  font-weight: 600;
+}
+
+.ohlcUp { color: #26a69a; }
+.ohlcDown { color: #ef5350; }
+
+.ohlcChange {
+  font-weight: 600;
+  padding-left: 6px;
+  border-left: 1px solid rgba(120, 130, 145, 0.18);
+}
+.ohlcChangeSecondary {
+  font-weight: 500;
+  opacity: 0.85;
+  padding-left: 6px;
+  border-left: 0;
+}
+
+/* En mobile, el overlay se sitúa abajo del toolbar y reduce tamaño. */
+@media (max-width: 768px) {
+  .ohlcOverlay {
+    top: 6px;
+    right: 6px;
+    left: 6px;
+    gap: 8px;
+    padding: 4px 8px;
+    font-size: 0.7rem;
+  }
+  .ohlcSymbol {
+    flex-basis: 100%;
+    padding-right: 0;
+    border-right: 0;
+    border-bottom: 1px solid rgba(120, 130, 145, 0.14);
+    padding-bottom: 2px;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Legend de indicadores — debajo del overlay OHLC. Una fila por
+   indicador montado, con sus valores en el timestamp del crosshair
+   (o el último si el cursor está fuera).
+   ──────────────────────────────────────────────────────────────── */
+.indicatorLegend {
+  position: absolute;
+  top: 46px;                  /* justo debajo del ohlcOverlay */
+  right: 12px;
+  z-index: 14;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  max-width: calc(100% - 24px);
+}
+
+.legendRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  background: rgba(20, 22, 28, 0.62);
+  border: 1px solid rgba(120, 130, 145, 0.16);
+  border-radius: 4px;
+  align-self: flex-end;       /* alinea cada fila a la derecha */
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legendName {
+  color: var(--text-muted, #b3b8c2);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.legendValues {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.legendValueGroup {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.legendValueLabel {
+  color: var(--text-muted, #6a7380);
+  font-size: 0.68rem;
+}
+
+.legendValue {
+  font-weight: 600;
+}
+
+.legendSep {
+  color: var(--text-muted, #4a5060);
+  margin: 0 2px;
+}
+
+.legendNoData {
+  color: var(--text-muted, #6a7380);
+  opacity: 0.6;
+}
+
+@media (max-width: 768px) {
+  .indicatorLegend {
+    top: 64px;                /* mobile: debajo del ohlcOverlay más alto */
+    right: 6px;
+    left: 6px;
+    align-items: flex-end;
+    font-size: 0.7rem;
+  }
+  .legendRow {
+    padding: 2px 6px;
+    gap: 4px;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Botón flotante para ocultar/mostrar overlays informativos
+   (OHLC, legend de indicadores, etiqueta de tiempo futuro).
+   Posicionado en la esquina inferior derecha del widgetContainer
+   para no superponerse con la DrawingToolbar (top-left), el OHLC
+   overlay (top-right) ni el ReplayPanel (top-right).
+   ──────────────────────────────────────────────────────────────── */
+.overlaysToggle {
+  position: absolute;
+  bottom: 36px;               /* sobre el price-scale del eje X */
+  right: 64px;                /* deja espacio al label de precio derecho */
+  z-index: 22;                /* encima de overlays y panel replay */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(120, 130, 145, 0.28);
+  background: rgba(20, 22, 28, 0.78);
+  color: var(--text, #e6e7ea);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.overlaysToggle:hover {
+  background: rgba(28, 32, 40, 0.92);
+  border-color: rgba(99, 102, 241, 0.55);
+  color: #f1f5f9;
+}
+.overlaysToggle:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.75);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+}
+
+/* Estado "overlays ocultos": ligeramente atenuado para indicar que
+   está en modo silencioso, pero aún visible para poder reactivarlo. */
+.overlaysToggleHidden {
+  color: var(--text-muted, #8690a0);
+  background: rgba(20, 22, 28, 0.62);
+}
+
+@media (max-width: 768px) {
+  .overlaysToggle {
+    bottom: 30px;
+    right: 56px;
+    width: 36px;
+    height: 36px;        /* target táctil mayor en mobile */
+  }
+}

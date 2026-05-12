@@ -1,5 +1,8 @@
-// Catalogo curado de activos populares por datasource/categoria.
+// Catalogo de activos por datasource/categoria.
 // Cada entrada: { id, symbol, name, datasource, category }
+
+const httpClient = require('../../shared/platform/http/http-client');
+const logger = require('../logger.service');
 
 const CATEGORIES = {
   crypto_perp: 'Cripto (perp)',
@@ -10,7 +13,7 @@ const CATEGORIES = {
   forex: 'Forex',
 };
 
-const ASSETS = [
+const CURATED_ASSETS = [
   // ---------- Hyperliquid perps ----------
   { symbol: 'BTC',  name: 'Bitcoin',       datasource: 'hyperliquid', category: 'crypto_perp' },
   { symbol: 'ETH',  name: 'Ethereum',      datasource: 'hyperliquid', category: 'crypto_perp' },
@@ -90,17 +93,111 @@ const ASSETS = [
   { symbol: 'AUDUSD=X', name: 'AUD/USD', datasource: 'yahoo', category: 'forex' },
 ].map((a) => ({ ...a, id: `${a.datasource}:${a.symbol}` }));
 
+const CACHE_TTL_MS = 10 * 60 * 1000;
+let catalogCache = null;
+
+const LEVERAGED_TOKEN_PATTERN = /(UP|DOWN|BULL|BEAR)USDT$/;
+
+function decorate(asset) {
+  return { ...asset, id: `${asset.datasource}:${asset.symbol}` };
+}
+
+function sortAssets(assets) {
+  return assets.slice().sort((a, b) => {
+    if (a.datasource !== b.datasource) return a.datasource.localeCompare(b.datasource);
+    if (a.category !== b.category) return a.category.localeCompare(b.category);
+    return a.symbol.localeCompare(b.symbol);
+  });
+}
+
 function listAssets() {
-  return ASSETS.map((a) => ({ ...a }));
+  return CURATED_ASSETS.map((a) => ({ ...a }));
 }
 
 function findAsset(datasource, symbol) {
-  return ASSETS.find((a) => a.datasource === datasource && a.symbol === symbol) || null;
+  return CURATED_ASSETS.find((a) => a.datasource === datasource && a.symbol === symbol) || null;
+}
+
+function curatedByDatasource(datasource) {
+  return CURATED_ASSETS.filter((a) => a.datasource === datasource).map((a) => ({ ...a }));
+}
+
+async function listBinanceAssets() {
+  const { data } = await httpClient.get('https://api.binance.com/api/v3/exchangeInfo', { timeout: 15_000 });
+  const symbols = Array.isArray(data?.symbols) ? data.symbols : [];
+
+  return symbols
+    .filter((s) =>
+      s?.status === 'TRADING' &&
+      s?.quoteAsset === 'USDT' &&
+      s?.isSpotTradingAllowed !== false &&
+      typeof s.symbol === 'string' &&
+      s.symbol.endsWith('USDT') &&
+      !LEVERAGED_TOKEN_PATTERN.test(s.symbol)
+    )
+    .map((s) => decorate({
+      symbol: s.symbol,
+      name: `${s.baseAsset}/${s.quoteAsset}`,
+      datasource: 'binance',
+      category: 'crypto_spot',
+      source: 'exchange',
+    }));
+}
+
+async function listHyperliquidAssets() {
+  const { data } = await httpClient.post('https://api.hyperliquid.xyz/info', { type: 'meta' }, { timeout: 10_000 });
+  const universe = Array.isArray(data?.universe) ? data.universe : [];
+
+  return universe
+    .filter((asset) => typeof asset?.name === 'string' && asset.name.trim())
+    .map((asset) => decorate({
+      symbol: asset.name,
+      name: asset.name,
+      datasource: 'hyperliquid',
+      category: 'crypto_perp',
+      source: 'exchange',
+    }));
+}
+
+async function safeDynamicAssets(datasource, loader) {
+  try {
+    const assets = await loader();
+    if (assets.length > 0) return assets;
+  } catch (err) {
+    logger.warn?.('asset_catalog_dynamic_fetch_failed', { datasource, error: err.message });
+  }
+  return curatedByDatasource(datasource).map((asset) => ({ ...asset, source: 'curated' }));
+}
+
+async function listCatalogAssets({ refresh = false } = {}) {
+  if (!refresh && catalogCache && catalogCache.expiresAt > Date.now()) {
+    return catalogCache.assets.map((a) => ({ ...a }));
+  }
+
+  const [hyperliquid, binance] = await Promise.all([
+    safeDynamicAssets('hyperliquid', listHyperliquidAssets),
+    safeDynamicAssets('binance', listBinanceAssets),
+  ]);
+  const yahoo = curatedByDatasource('yahoo').map((asset) => ({ ...asset, source: 'curated' }));
+  const assets = sortAssets([...hyperliquid, ...binance, ...yahoo]);
+
+  catalogCache = {
+    assets,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  };
+
+  return assets.map((a) => ({ ...a }));
+}
+
+function clearCatalogCache() {
+  catalogCache = null;
 }
 
 module.exports = {
-  ASSETS,
+  ASSETS: CURATED_ASSETS,
   CATEGORIES,
   listAssets,
+  listCatalogAssets,
   findAsset,
+  clearCatalogCache,
 };

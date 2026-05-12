@@ -54,7 +54,7 @@ async function processNext() {
   logger.info('backtest_job_started', { jobId: job.id, userId: job.userId });
 
   try {
-    const result = await backtestingService.simulateBacktest(job.userId, job.input, { timeoutMs: 120_000 });
+    const result = await backtestingService.simulateBacktest(job.userId, job.input, { timeoutMs: 300_000 });
     job.status = 'completed';
     job.result = result;
     job.completedAt = Date.now();

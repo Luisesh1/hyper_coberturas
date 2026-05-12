@@ -13,7 +13,8 @@ const { Router } = require('express');
 const asyncHandler  = require('../middleware/async-handler');
 const marketService = require('../services/market.service');
 const marketDataService = require('../services/market-data.service');
-const { CATEGORIES, listAssets } = require('../services/marketdata-providers/asset-catalog');
+const { CATEGORIES, listCatalogAssets } = require('../services/marketdata-providers/asset-catalog');
+const topVolumeService = require('../services/market-top-volume.service');
 
 const router = Router();
 
@@ -41,16 +42,28 @@ router.get('/candles', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/market/catalog
-// Devuelve el catálogo curado de activos por datasource/categoría. Usado
-// por el selector de pares de la gráfica.
+// Devuelve el catálogo de activos por datasource/categoría. Binance e
+// Hyperliquid se consultan desde sus exchanges con fallback al catálogo curado.
 router.get('/catalog', asyncHandler(async (_req, res) => {
   res.json({
     success: true,
     data: {
       categories: CATEGORIES,
-      assets: listAssets(),
+      assets: await listCatalogAssets(),
     },
   });
+}));
+
+// GET /api/market/top-volume?datasource=binance&window=1d&limit=20
+// Activos ordenados por volumen 24h / 7d / 30d. Usado en el picker masivo.
+router.get('/top-volume', asyncHandler(async (req, res) => {
+  const { datasource, window, limit } = req.query;
+  const data = await topVolumeService.getTopByVolume({
+    datasource: String(datasource || 'binance'),
+    window: String(window || '1d'),
+    limit: Number(limit) || 20,
+  });
+  res.json({ success: true, data });
 }));
 
 router.get('/prices', asyncHandler(async (req, res) => {

@@ -115,6 +115,17 @@ function makeFakeUniswapService(pool) {
   };
 }
 
+function makeFakeProtectionService() {
+  const calls = [];
+  return {
+    calls,
+    deactivateProtectedPool: async (userId, protectionId) => {
+      calls.push({ userId, protectionId });
+      return { id: protectionId, userId, status: 'inactive' };
+    },
+  };
+}
+
 function basePool(overrides = {}) {
   return {
     identifier: '777',
@@ -354,6 +365,61 @@ test('kill+recreate: contabilidad persiste entre LPs', async () => {
   assert.equal(o2.accounting.gasSpentUsd, 12);
 });
 
+test('killLp alreadyClosed desactiva protección enlazada antes de limpiar el orquestador', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, { activeProtectedPoolId: 42 });
+  const protectionService = makeFakeProtectionService();
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    uniswapProtectionService: protectionService,
+    uniswapService: makeFakeUniswapService(null),
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+  });
+  service._inspectPositionOnChain = async () => null;
+
+  const result = await service.killLp({ userId: 1, orchestratorId: id, mode: 'usdc' });
+  assert.equal(result.alreadyClosed, true);
+  assert.deepEqual(protectionService.calls, [{ userId: 1, protectionId: 42 }]);
+
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.activePositionIdentifier, null);
+  assert.equal(orch.activeProtectedPoolId, null);
+  assert.equal(orch.phase, 'idle');
+});
+
+test('recordTxFinalized de cierre desactiva protección antes de desligarla', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, { activeProtectedPoolId: 42 });
+  const protectionService = makeFakeProtectionService();
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    uniswapProtectionService: protectionService,
+    protectedPoolRepository: {
+      getById: async () => ({ id: 42, status: 'inactive', strategyState: {} }),
+    },
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.recordTxFinalized({
+    userId: 1,
+    orchestratorId: id,
+    action: 'close-to-usdc',
+    finalizeResult: {
+      txHashes: ['0xclose-protected'],
+      refreshedSnapshot: { liquidity: '0', currentValueUsd: 0 },
+    },
+    expected: { gasCostUsd: 1, slippageCostUsd: 0 },
+  });
+
+  assert.deepEqual(protectionService.calls, [{ userId: 1, protectionId: 42 }]);
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.activeProtectedPoolId, null);
+  assert.equal(orch.phase, 'idle');
+});
+
 test('archive solo permitido si no hay LP activo', async () => {
   const repo = makeFakeRepo();
   const id = await bootstrapOrchestrator(repo);
@@ -366,6 +432,30 @@ test('archive solo permitido si no hay LP activo', async () => {
     () => service.archive({ userId: 1, orchestratorId: id }),
     /Cierra el LP activo/
   );
+});
+
+test('archive desactiva protección huérfana enlazada antes de archivar', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    activePositionIdentifier: null,
+    activePoolAddress: null,
+    activeProtectedPoolId: 42,
+    phase: 'idle',
+  });
+  const protectionService = makeFakeProtectionService();
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    uniswapProtectionService: protectionService,
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+  });
+
+  await service.archive({ userId: 1, orchestratorId: id });
+
+  assert.deepEqual(protectionService.calls, [{ userId: 1, protectionId: 42 }]);
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.status, 'archived');
+  assert.equal(orch.activeProtectedPoolId, null);
 });
 
 test('recordTxFinalized con drift critical → phase failed', async () => {
