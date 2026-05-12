@@ -61,6 +61,44 @@ function emptyForm() {
   };
 }
 
+function getFormValidationError(value) {
+  if (!value.name.trim()) return 'Falta el nombre de la alerta';
+  if (value.assetList.length === 0) return 'Agrega al menos un activo';
+  if (value.rules.length === 0) return 'Agrega al menos una regla';
+  for (const [i, r] of value.rules.entries()) {
+    const conds = Array.isArray(r.conditions) ? r.conditions : [];
+    if (conds.length === 0) return `Regla #${i + 1} no tiene condiciones`;
+    if (!conds.every((c) => c.indicatorType && c.timeframe && c.operator)) {
+      return `Regla #${i + 1} tiene condiciones incompletas`;
+    }
+  }
+  return null;
+}
+
+function formToPayload(value) {
+  return {
+    name: value.name.trim(),
+    isActive: value.isActive,
+    thresholdPercent: Number(value.thresholdPercent),
+    cooldownSeconds: Number(value.cooldownSeconds),
+    telegramEnabled: value.telegramEnabled,
+    datasource: value.datasource,
+    assetList: value.assetList.slice(),
+    rules: value.rules.map((r) => ({
+      conditions: (r.conditions || []).map((c) => ({
+        indicatorType: c.indicatorType,
+        indicatorParams: c.indicatorParams || {},
+        timeframe: c.timeframe,
+        operandSeries: c.operandSeries,
+        operator: c.operator,
+        operand: c.operand,
+      })),
+      joiners: r.joiners || [],
+      weight: Number(r.weight) || 0,
+    })),
+  };
+}
+
 export default function AlertsPage() {
   const { addNotification } = useTradingContext();
   const [alerts, setAlerts] = useState([]);
@@ -73,10 +111,15 @@ export default function AlertsPage() {
   const [assetInput, setAssetInput] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [editorMode, setEditorMode] = useState('visual');
+  const [rawText, setRawText] = useState('');
+  const [rawError, setRawError] = useState('');
+  const [rawTextDirty, setRawTextDirty] = useState(false);
   // Marca-aguada del form al cargarlo, para detectar cambios sin guardar.
   // Comparamos por JSON-stringify: simple y suficiente para forms pequeños.
   const baselineRef = useRef(JSON.stringify(emptyForm()));
   const isDirty = useMemo(() => JSON.stringify(form) !== baselineRef.current, [form]);
+  const effectiveDirty = isDirty || (editorMode === 'raw' && rawTextDirty);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -118,6 +161,10 @@ export default function AlertsPage() {
         : [emptyRule()],
     });
     setTestResult(null);
+    setEditorMode('visual');
+    setRawText('');
+    setRawError('');
+    setRawTextDirty(false);
   }, [applyForm]);
 
   const applyPreset = useCallback((preset) => {
@@ -129,6 +176,10 @@ export default function AlertsPage() {
       rules: (built.rules || []).map(normalizeLoadedRule),
     });
     setTestResult(null);
+    setEditorMode('visual');
+    setRawText('');
+    setRawError('');
+    setRawTextDirty(false);
   }, [applyForm]);
 
   const updateField = (key, value) => setForm((p) => ({ ...p, [key]: value }));
@@ -172,50 +223,94 @@ export default function AlertsPage() {
     });
   };
 
-  const buildPayload = () => ({
-    name: form.name.trim(),
-    isActive: form.isActive,
-    thresholdPercent: Number(form.thresholdPercent),
-    cooldownSeconds: Number(form.cooldownSeconds),
-    telegramEnabled: form.telegramEnabled,
-    datasource: form.datasource,
-    assetList: form.assetList.slice(),
-    rules: form.rules.map((r) => ({
-      conditions: (r.conditions || []).map((c) => ({
-        indicatorType: c.indicatorType,
-        indicatorParams: c.indicatorParams || {},
-        timeframe: c.timeframe,
-        operandSeries: c.operandSeries,
-        operator: c.operator,
-        operand: c.operand,
-      })),
-      joiners: r.joiners || [],
-      weight: Number(r.weight) || 0,
-    })),
-  });
+  const buildPayload = () => formToPayload(form);
 
-  const validationError = useMemo(() => {
-    if (!form.name.trim()) return 'Falta el nombre de la alerta';
-    if (form.assetList.length === 0) return 'Agrega al menos un activo';
-    if (form.rules.length === 0) return 'Agrega al menos una regla';
-    for (const [i, r] of form.rules.entries()) {
-      const conds = Array.isArray(r.conditions) ? r.conditions : [];
-      if (conds.length === 0) return `Regla #${i + 1} no tiene condiciones`;
-      if (!conds.every((c) => c.indicatorType && c.timeframe && c.operator)) {
-        return `Regla #${i + 1} tiene condiciones incompletas`;
-      }
+  const payloadToForm = (payload) => {
+    const source = payload?.alert && typeof payload.alert === 'object' ? payload.alert : payload;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      throw new Error('El raw text debe ser un objeto JSON de alerta');
     }
-    return null;
-  }, [form]);
+    return {
+      ...emptyForm(),
+      name: String(source.name ?? '').trim(),
+      isActive: source.isActive !== false,
+      thresholdPercent: Number(source.thresholdPercent ?? 70),
+      cooldownSeconds: Number(source.cooldownSeconds ?? 900),
+      telegramEnabled: source.telegramEnabled !== false,
+      datasource: source.datasource || 'binance',
+      assetList: Array.isArray(source.assetList)
+        ? source.assetList.map((asset) => String(asset || '').trim().toUpperCase()).filter(Boolean)
+        : [],
+      rules: Array.isArray(source.rules) && source.rules.length > 0
+        ? source.rules.map(normalizeLoadedRule)
+        : [emptyRule()],
+    };
+  };
+
+  const formatRaw = (payload = buildPayload()) => JSON.stringify(payload, null, 2);
+
+  const openRawMode = () => {
+    setRawText(formatRaw());
+    setRawError('');
+    setRawTextDirty(false);
+    setEditorMode('raw');
+  };
+
+  const refreshRawFromVisual = () => {
+    setRawText(formatRaw());
+    setRawError('');
+    setRawTextDirty(false);
+  };
+
+  const openVisualMode = () => {
+    setEditorMode('visual');
+    setRawError('');
+  };
+
+  const applyRawText = ({ quiet = false } = {}) => {
+    try {
+      const parsed = JSON.parse(rawText);
+      const next = payloadToForm(parsed);
+      setForm(next);
+      setRawText(formatRaw(formToPayload(next)));
+      setRawError('');
+      setRawTextDirty(false);
+      setTestResult(null);
+      if (!quiet) addNotification?.('success', 'Raw text aplicado al editor');
+      return next;
+    } catch (err) {
+      setRawError(err.message || 'Raw text inválido');
+      if (!quiet) addNotification?.('error', `Raw text inválido: ${err.message}`);
+      return null;
+    }
+  };
+
+  const copyRawText = async () => {
+    const text = editorMode === 'raw' ? rawText : formatRaw();
+    try {
+      await navigator.clipboard.writeText(text);
+      addNotification?.('success', 'Configuración copiada');
+    } catch {
+      setRawText(text);
+      setEditorMode('raw');
+      addNotification?.('error', 'No se pudo copiar automáticamente; el texto quedó abierto para copiarlo');
+    }
+  };
+
+  const validationError = useMemo(() => getFormValidationError(form), [form]);
+  const saveValidationError = editorMode === 'raw' && rawTextDirty ? null : validationError;
 
   const save = async () => {
-    if (validationError) {
-      addNotification?.('error', validationError);
+    const rawForm = editorMode === 'raw' && rawTextDirty ? applyRawText({ quiet: true }) : null;
+    if (editorMode === 'raw' && rawTextDirty && !rawForm) return;
+    const nextValidationError = getFormValidationError(rawForm || form);
+    if (nextValidationError) {
+      addNotification?.('error', nextValidationError);
       return;
     }
     setIsSaving(true);
     try {
-      const payload = buildPayload();
+      const payload = rawForm ? formToPayload(rawForm) : buildPayload();
       if (selectedId) {
         const updated = await alertsApi.update(selectedId, payload);
         addNotification?.('success', 'Alerta actualizada');
@@ -248,7 +343,7 @@ export default function AlertsPage() {
   };
 
   const toggleActive = async () => {
-    if (!selectedId || isDirty) return;
+    if (!selectedId || effectiveDirty) return;
     const nextIsActive = !form.isActive;
     setIsTogglingActive(true);
     try {
@@ -338,7 +433,7 @@ export default function AlertsPage() {
         <div className={styles.editor}>
           {/* Banner contextual: presets si es alerta nueva sin tocar, o
               indicador "sin guardar" si el form está dirty. */}
-          {!selectedId && !isDirty && (
+          {editorMode === 'visual' && !selectedId && !isDirty && (
             <div className={styles.presetsBanner}>
               <div className={styles.presetsHeader}>
                 <div>
@@ -363,7 +458,29 @@ export default function AlertsPage() {
             </div>
           )}
 
-          {isDirty && (
+          <div className={styles.editorModeBar}>
+            <div className={styles.editorModeTabs}>
+              <button
+                type="button"
+                className={`${styles.editorModeTab} ${editorMode === 'visual' ? styles.editorModeTabActive : ''}`}
+                onClick={openVisualMode}
+              >
+                Visual
+              </button>
+              <button
+                type="button"
+                className={`${styles.editorModeTab} ${editorMode === 'raw' ? styles.editorModeTabActive : ''}`}
+                onClick={openRawMode}
+              >
+                Raw text
+              </button>
+            </div>
+            <button type="button" className={`${styles.btn} ${styles.btnSecondary} ${styles.btnSmall}`} onClick={copyRawText}>
+              Copiar config
+            </button>
+          </div>
+
+          {effectiveDirty && (
             <div className={styles.dirtyBanner}>
               ● Cambios sin guardar
               {selectedId && (
@@ -381,6 +498,31 @@ export default function AlertsPage() {
             </div>
           )}
 
+          {editorMode === 'raw' ? (
+            <div className={styles.rawEditor}>
+              <div className={styles.rawToolbar}>
+                <span className={styles.rawHint}>Edita o pega una configuración JSON de alerta.</span>
+                <button type="button" className={`${styles.btn} ${styles.btnSecondary} ${styles.btnSmall}`} onClick={refreshRawFromVisual}>
+                  Regenerar desde visual
+                </button>
+                <button type="button" className={`${styles.btn} ${styles.btnSecondary} ${styles.btnSmall}`} onClick={() => applyRawText()}>
+                  Aplicar al formulario
+                </button>
+              </div>
+              <textarea
+                className={styles.rawTextarea}
+                value={rawText}
+                spellCheck={false}
+                onChange={(e) => {
+                  setRawText(e.target.value);
+                  setRawTextDirty(true);
+                  setRawError('');
+                }}
+              />
+              {rawError && <div className={styles.rawError}>{rawError}</div>}
+            </div>
+          ) : (
+            <>
           <div className={styles.section}>
             <h3 className={styles.sectionTitle}>General</h3>
             <div className={styles.formGrid}>
@@ -543,6 +685,8 @@ export default function AlertsPage() {
               </div>
             </div>
           )}
+            </>
+          )}
 
           <div className={styles.actionBar}>
             {selectedId && (
@@ -552,14 +696,14 @@ export default function AlertsPage() {
             )}
             {selectedId && (
               <label
-                className={`${styles.activeSwitch} ${form.isActive ? styles.activeSwitchOn : ''} ${(isSaving || isTogglingActive || isDirty) ? styles.activeSwitchDisabled : ''}`}
-                title={isDirty ? 'Guarda o descarta los cambios antes de activar/desactivar' : ''}
+                className={`${styles.activeSwitch} ${form.isActive ? styles.activeSwitchOn : ''} ${(isSaving || isTogglingActive || effectiveDirty) ? styles.activeSwitchDisabled : ''}`}
+                title={effectiveDirty ? 'Guarda o descarta los cambios antes de activar/desactivar' : ''}
               >
                 <input
                   type="checkbox"
                   checked={form.isActive}
                   onChange={toggleActive}
-                  disabled={isSaving || isTogglingActive || isDirty}
+                  disabled={isSaving || isTogglingActive || effectiveDirty}
                 />
                 <span className={styles.activeSwitchTrack}>
                   <span className={styles.activeSwitchThumb} />
@@ -576,8 +720,8 @@ export default function AlertsPage() {
                   type="button"
                   className={`${styles.btn} ${styles.btnSecondary}`}
                   onClick={() => testNow({ dryRun: true })}
-                  disabled={isDirty}
-                  title={isDirty ? 'Guarda primero los cambios para probar' : 'Evalúa la alerta con las últimas velas, sin enviar Telegram'}
+                  disabled={effectiveDirty}
+                  title={effectiveDirty ? 'Guarda primero los cambios para probar' : 'Evalúa la alerta con las últimas velas, sin enviar Telegram'}
                 >
                   Probar (sin enviar)
                 </button>
@@ -585,8 +729,8 @@ export default function AlertsPage() {
                   type="button"
                   className={`${styles.btn} ${styles.btnSecondary}`}
                   onClick={() => testNow({ dryRun: false })}
-                  disabled={isDirty}
-                  title={isDirty ? 'Guarda primero los cambios para probar' : 'Evalúa y envía Telegram si supera el umbral'}
+                  disabled={effectiveDirty}
+                  title={effectiveDirty ? 'Guarda primero los cambios para probar' : 'Evalúa y envía Telegram si supera el umbral'}
                 >
                   Probar y enviar Telegram
                 </button>
@@ -596,8 +740,8 @@ export default function AlertsPage() {
               type="button"
               className={`${styles.btn} ${styles.btnPrimary}`}
               onClick={save}
-              disabled={isSaving || !!validationError || (!isDirty && !!selectedId)}
-              title={validationError || (!isDirty && selectedId ? 'No hay cambios para guardar' : '')}
+              disabled={isSaving || !!saveValidationError || (!effectiveDirty && !!selectedId)}
+              title={saveValidationError || (!effectiveDirty && selectedId ? 'No hay cambios para guardar' : '')}
             >
               {isSaving ? 'Guardando…' : (selectedId ? 'Guardar cambios' : 'Crear alerta')}
             </button>

@@ -503,6 +503,83 @@
 .sectionHeader .sectionTitle { margin: 0; }
 .btnSmall { padding: 4px 10px; font-size: 12px; }
 
+/* --- Editor visual / raw text --- */
+.editorModeBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--border, #2a2e38);
+  border-radius: 8px;
+  background: var(--surface-2, #1a1d24);
+}
+.editorModeTabs {
+  display: inline-flex;
+  gap: 4px;
+}
+.editorModeTab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary, #9ca3af);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.editorModeTab:hover {
+  color: var(--text-primary, #e5e7eb);
+  border-color: var(--border, #2a2e38);
+}
+.editorModeTabActive {
+  color: #fff;
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+.rawEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rawToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rawHint {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-tertiary, #6b7280);
+}
+.rawTextarea {
+  width: 100%;
+  min-height: 520px;
+  resize: vertical;
+  background: #0f1218;
+  border: 1px solid var(--border, #2a2e38);
+  border-radius: 8px;
+  color: var(--text-primary, #e5e7eb);
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+.rawTextarea:focus {
+  outline: none;
+  border-color: var(--accent, #3b82f6);
+}
+.rawError {
+  color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.35);
+  background: rgba(239,68,68,0.1);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
 /* --- Asset picker modal --- */
 .modalBackdrop {
   position: fixed;
