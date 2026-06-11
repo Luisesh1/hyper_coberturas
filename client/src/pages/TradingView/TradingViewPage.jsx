@@ -12,6 +12,7 @@ import ReplayPanel from './components/ReplayPanel';
 import { useReplayController } from './replay/useReplayController';
 import { useDrawings } from './drawings/use-drawings';
 import { TOOLS } from './drawings/catalog';
+import { getInitialChartViewport } from './chartViewport';
 import styles from './TradingViewPage.module.css';
 
 const ASSET_STORAGE_KEY = 'tv_selected_asset_v1';
@@ -113,6 +114,7 @@ const TIMEFRAMES = [
 ];
 const DEFAULT_TIMEFRAME = '15m';
 const CANDLE_LIMIT = 500;
+const DEFAULT_RIGHT_OFFSET = 12;
 
 function loadStoredTimeframe() {
   try {
@@ -207,6 +209,8 @@ const THEME = {
   border: 'rgba(120, 130, 145, 0.25)',
   up: '#26a69a',
   down: '#ef5350',
+  upEdge: '#39c8b9',
+  downEdge: '#ff6b68',
 };
 
 export default function TradingViewPage() {
@@ -322,7 +326,7 @@ export default function TradingViewPage() {
         borderColor: THEME.border,
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 12,
+        rightOffset: DEFAULT_RIGHT_OFFSET,
       },
       crosshair: { mode: crosshairMode },
     });
@@ -331,10 +335,10 @@ export default function TradingViewPage() {
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: THEME.up,
       downColor: THEME.down,
-      borderUpColor: THEME.up,
-      borderDownColor: THEME.down,
-      wickUpColor: THEME.up,
-      wickDownColor: THEME.down,
+      borderUpColor: THEME.upEdge,
+      borderDownColor: THEME.downEdge,
+      wickUpColor: THEME.upEdge,
+      wickDownColor: THEME.downEdge,
     }, 0);
     candleSeriesRef.current = candleSeries;
 
@@ -489,7 +493,14 @@ export default function TradingViewPage() {
 
       indicatorsControllerRef.current?.render(indicatorsRef.current, candles);
 
-      chartRef.current?.timeScale().fitContent();
+      // El encuadre inicial se adapta al ancho real: menos velas en móvil y
+      // más contexto en escritorio, sin comprimir las 500 velas cargadas.
+      const { rightOffset, barSpacing } = getInitialChartViewport(
+        containerRef.current?.clientWidth,
+        candleData.length,
+      );
+      chartRef.current?.timeScale().applyOptions({ barSpacing, rightOffset });
+      chartRef.current?.timeScale().scrollToRealTime();
       setCandleCount(candles.length);
       setLastPrice(candles[candles.length - 1]?.close ?? null);
     } catch (err) {

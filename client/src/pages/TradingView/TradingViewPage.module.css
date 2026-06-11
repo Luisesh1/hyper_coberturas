@@ -266,6 +266,13 @@
   height: 100%;
 }
 
+/* lightweight-charts administra el tamaño CSS y el bitmap HiDPI de sus
+   canvas. Evitamos que la regla global `canvas { max-width: 100% }` vuelva
+   a escalar internamente esos bitmaps y suavice los bordes de las velas. */
+.chart canvas {
+  max-width: none;
+}
+
 .drawingsCanvas {
   position: absolute;
   top: 0;
