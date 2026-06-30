@@ -253,6 +253,24 @@ export default function OrchestratorCard({
         </summary>
         <div className={styles.strategyGrid}>
           <StrategyCell label="Ancho rango" value={`±${strategyConfig.rangeWidthPct ?? '?'}%`} />
+          {(() => {
+            const rec = orchestrator.lastEvaluation?.rangeRecommendation;
+            const recW = rec?.recommendedWidthPct;
+            const curW = Number(strategyConfig.rangeWidthPct);
+            // Solo mostramos la sugerencia si difiere de forma accionable (>0.5%)
+            // del ancho actual — evita ruido cuando ya está bien calibrado.
+            if (recW == null || !Number.isFinite(curW) || Math.abs(recW - curW) <= 0.5) {
+              return null;
+            }
+            const dir = recW > curW ? '↑ ensanchar' : '↓ angostar';
+            return (
+              <StrategyCell
+                label="Ancho sugerido"
+                value={`±${recW}% (${dir})`}
+                highlight
+              />
+            );
+          })()}
           <StrategyCell label="Margen borde" value={`${strategyConfig.edgeMarginPct ?? '?'}%`} />
           <StrategyCell
             label="Banda central"
@@ -375,11 +393,16 @@ export default function OrchestratorCard({
   );
 }
 
-function StrategyCell({ label, value }) {
+function StrategyCell({ label, value, highlight = false }) {
   return (
     <div className={styles.strategyCell}>
       <span className={styles.strategyCellLabel}>{label}</span>
-      <span className={styles.strategyCellValue}>{value}</span>
+      <span
+        className={styles.strategyCellValue}
+        style={highlight ? { color: 'var(--accent, #f5a623)', fontWeight: 600 } : undefined}
+      >
+        {value}
+      </span>
     </div>
   );
 }

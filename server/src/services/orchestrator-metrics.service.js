@@ -19,7 +19,11 @@ const lpOrchestratorRepository = require('../repositories/lp-orchestrator.reposi
 const orchestratorMetricsRepo = require('../repositories/orchestrator-metrics.repository');
 const walletBalanceService = require('./wallet-balance.service');
 const balanceCacheService = require('./balance-cache.service');
+const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
+const marketService = require('./market.service');
 const { resolveOrchestratorAccountId } = require('./orchestrator-account-resolver');
+
+const FUNDING_CACHE_TTL_MS = 60_000;
 
 const HOUR_MS = 60 * 60_000;
 
@@ -27,6 +31,36 @@ class OrchestratorMetricsService {
   constructor() {
     this.timer = null;
     this.running = false;
+    // Cache corto de funding por activo: getAssetContexts() trae todos los
+    // activos en una llamada; con TTL evitamos pegarle a HL una vez por
+    // orquestador durante la captura en serie.
+    this._fundingCache = { fetchedAt: 0, byAsset: new Map() };
+  }
+
+  /**
+   * Funding rate horario (signed) del activo en Hyperliquid. Convención HL:
+   * rate > 0 → los longs pagan a los shorts (un hedge corto COBRA funding);
+   * rate < 0 → el short PAGA. Devuelve null si no se pudo resolver.
+   */
+  async _getFundingRate(asset) {
+    const key = String(asset || '').toUpperCase();
+    if (!key) return null;
+    if (Date.now() - this._fundingCache.fetchedAt > FUNDING_CACHE_TTL_MS) {
+      try {
+        const ctxs = await marketService.getAssetContexts();
+        const byAsset = new Map();
+        for (const c of ctxs || []) {
+          const rate = Number(c.fundingRate);
+          if (c.name && Number.isFinite(rate)) byAsset.set(String(c.name).toUpperCase(), rate);
+        }
+        this._fundingCache = { fetchedAt: Date.now(), byAsset };
+      } catch (err) {
+        logger.warn('orchestrator_metrics_funding_fetch_failed', { asset: key, error: err.message });
+        // Mantenemos el cache viejo si lo hay; si no, devolvemos null abajo.
+      }
+    }
+    const rate = this._fundingCache.byAsset.get(key);
+    return Number.isFinite(rate) ? rate : null;
   }
 
   start() {
@@ -225,6 +259,13 @@ class OrchestratorMetricsService {
       }
     }
 
+    // --- Tracking del hedge (KPIs del plan de mejoras) ---
+    // Mide cuánto del delta del LP queda sin cubrir por el hedge. Es el
+    // componente que el análisis histórico identificó como mayor leak.
+    //   trackingErrorUsd = |deltaQty − actualQty| × precio
+    //   residualUsd      = (deltaQty − targetQty) × precio  (sub-hedge por zona)
+    const hedgeTracking = await this._computeHedgeTracking(orchestrator, poolSnapshot, lastEval);
+
     return {
       walletUsd,
       lpUsd,
@@ -238,8 +279,82 @@ class OrchestratorMetricsService {
       hlAccount: hlAccountSource,
       hlStatus,
       hlError,
+      hedgeTracking,
     };
+  }
+
+  /**
+   * Lee el strategy_state de la protección activa y deriva las métricas de
+   * tracking del hedge para el snapshot horario. Devuelve null si el
+   * orquestador no tiene protección activa o no hay datos suficientes.
+   */
+  async _computeHedgeTracking(orchestrator, poolSnapshot, lastEval) {
+    const timeInRangePct = Number.isFinite(Number(lastEval?.timeInRangePct))
+      ? Number(lastEval.timeInRangePct)
+      : null;
+    const price = Number(poolSnapshot?.priceCurrent) || null;
+
+    if (!orchestrator.activeProtectedPoolId) {
+      return { hasHedge: false, timeInRangePct, price };
+    }
+
+    try {
+      const protection = await protectedPoolRepository.getById(
+        orchestrator.userId,
+        orchestrator.activeProtectedPoolId
+      );
+      const state = protection?.strategyState || protection?.strategy_state_json || null;
+      const parsed = typeof state === 'string' ? JSON.parse(state) : state;
+      if (!parsed || typeof parsed !== 'object') {
+        return { hasHedge: false, timeInRangePct, price };
+      }
+      const deltaQty = Number(parsed.lastDeltaQty);
+      const targetQty = Number(parsed.lastTargetQty);
+      const actualQty = Number(parsed.lastActualQty);
+      const shadowTargetQty = Number(parsed.lastShadowTargetQty);
+      const px = price || Number(parsed.lastModelPrice) || null;
+
+      const finite = (v) => (Number.isFinite(v) ? v : null);
+      const hedgeActualUsd = (Number.isFinite(actualQty) && px) ? actualQty * px : null;
+
+      // Funding (#6): un hedge corto cobra funding cuando el rate es positivo y
+      // lo paga cuando es negativo. Proyectamos el costo/ingreso diario sobre el
+      // notional real del hedge (rate horario × 24). headwind = está pagando.
+      const asset = orchestrator.inferredAsset || protection?.inferredAsset || null;
+      const fundingRateHourly = asset ? await this._getFundingRate(asset) : null;
+      const projectedDailyFundingUsd = (Number.isFinite(fundingRateHourly) && Number.isFinite(hedgeActualUsd))
+        ? fundingRateHourly * hedgeActualUsd * 24
+        : null;
+
+      return {
+        hasHedge: true,
+        timeInRangePct,
+        price: px,
+        deltaQty: finite(deltaQty),
+        targetQty: finite(targetQty),
+        actualQty: finite(actualQty),
+        shadowTargetQty: finite(shadowTargetQty),
+        hedgeTargetUsd: (Number.isFinite(targetQty) && px) ? targetQty * px : null,
+        hedgeActualUsd,
+        trackingErrorUsd: (Number.isFinite(deltaQty) && Number.isFinite(actualQty) && px)
+          ? Math.abs(deltaQty - actualQty) * px : null,
+        residualUsd: (Number.isFinite(deltaQty) && Number.isFinite(targetQty) && px)
+          ? (deltaQty - targetQty) * px : null,
+        zoneState: parsed.zoneState || null,
+        modelConfidence: parsed.modelConfidence || null,
+        fundingRateHourly: finite(fundingRateHourly),
+        projectedDailyFundingUsd: finite(projectedDailyFundingUsd),
+        fundingHeadwind: Number.isFinite(projectedDailyFundingUsd) ? projectedDailyFundingUsd < 0 : null,
+      };
+    } catch (err) {
+      logger.warn('orchestrator_metrics_hedge_tracking_failed', {
+        orchestratorId: orchestrator.id,
+        error: err.message,
+      });
+      return { hasHedge: false, timeInRangePct, price };
+    }
   }
 }
 
 module.exports = new OrchestratorMetricsService();
+module.exports.OrchestratorMetricsService = OrchestratorMetricsService;

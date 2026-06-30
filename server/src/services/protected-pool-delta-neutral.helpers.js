@@ -333,7 +333,13 @@ function normalizeEvaluationStatus({
   return 'tracking';
 }
 
-function deriveBandSettings(protection, rvStats, metrics, currentPrice) {
+function deriveBandSettings(protection, rvStats, metrics, currentPrice, opts = {}) {
+  // Factores de endurecimiento (config-gated). Default 1 = sin cambio. Solo
+  // afectan el modo adaptativo: en modo 'fixed' el usuario fijó intervalo/banda
+  // explícitamente y los respetamos. Se clampan a (0, 1] para que nunca
+  // aflojen la cadencia por error de configuración.
+  const intervalTightenFactor = Math.min(1, Math.max(0.05, asFiniteNumber(opts.intervalTightenFactor) || 1));
+  const bandTightenFactor = Math.min(1, Math.max(0.05, asFiniteNumber(opts.bandTightenFactor) || 1));
   const bandMode = protection.bandMode || DEFAULT_BAND_MODE;
   const rv4hPct = asFiniteNumber(rvStats.rv4hPct) || 0;
   const rv24hPct = asFiniteNumber(rvStats.rv24hPct) || 0;
@@ -341,10 +347,10 @@ function deriveBandSettings(protection, rvStats, metrics, currentPrice) {
   const adaptivePreset = buildBandPreset(effectiveRvPct);
   const baseBandPct = bandMode === 'fixed'
     ? (asFiniteNumber(protection.baseRebalancePriceMovePct) || DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT)
-    : adaptivePreset.priceMovePct;
+    : adaptivePreset.priceMovePct * bandTightenFactor;
   const intervalSec = bandMode === 'fixed'
     ? (asFiniteNumber(protection.rebalanceIntervalSec) || DEFAULT_REBALANCE_INTERVAL_SEC)
-    : adaptivePreset.intervalSec;
+    : Math.round(adaptivePreset.intervalSec * intervalTightenFactor);
   let effectiveBandPct = baseBandPct;
   const distancePct = distanceToRangePct(protection, currentPrice);
   if (

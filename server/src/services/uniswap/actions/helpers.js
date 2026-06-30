@@ -263,6 +263,54 @@ async function buildEstimatedCosts(ctx, txPlan, { slippageCostUsd = 0 } = {}) {
   return estimateTxPlanCostUsd({ provider, txPlan, nativeUsdPrice, slippageCostUsd });
 }
 
+/**
+ * Gas REALIZADO en USD a partir de los receipts on-chain de un conjunto de
+ * txHashes. Suma `gasUsed × effectiveGasPrice` de cada receipt y lo convierte
+ * con el precio del token nativo. Se usa para contabilizar el gas real del
+ * orquestador (el cliente no lo envía y `expected.gasCostUsd` llegaba 0).
+ *
+ * Resiliente: receipts faltantes o errores de RPC se ignoran (cuentan 0); el
+ * objetivo es no perder costos, no abortar la finalización por un RPC flojo.
+ *
+ * @param {{ network: string, txHashes: Array<string> }} args
+ * @returns {Promise<number>} gas realizado en USD (0 si no se pudo resolver)
+ */
+async function computeRealizedGasUsd({ network, txHashes } = {}) {
+  const hashes = Array.isArray(txHashes) ? txHashes.filter(Boolean).map(String) : [];
+  if (hashes.length === 0) return 0;
+  let networkConfig;
+  try {
+    networkConfig = getNetworkConfig(network);
+  } catch {
+    return 0;
+  }
+  const provider = getProvider(networkConfig);
+  if (!provider) return 0;
+
+  let gasWei = 0n;
+  for (const hash of hashes) {
+    try {
+      const receipt = await provider.getTransactionReceipt(hash);
+      if (!receipt) continue;
+      const gasUsed = BigInt(receipt.gasUsed ?? 0);
+      const gasPrice = BigInt(receipt.effectiveGasPrice ?? receipt.gasPrice ?? 0);
+      gasWei += gasUsed * gasPrice;
+    } catch (err) {
+      logger.warn('realized_gas_receipt_failed', {
+        network,
+        txHash: hash,
+        error: err.message,
+      });
+    }
+  }
+  if (gasWei === 0n) return 0;
+
+  const nativeUsdPrice = await getNativeUsdPrice(networkConfig);
+  if (!Number.isFinite(Number(nativeUsdPrice)) || Number(nativeUsdPrice) <= 0) return 0;
+  const gasNative = Number(ethers.formatEther(gasWei));
+  return gasNative * Number(nativeUsdPrice);
+}
+
 // ─── Close Operations ────────────────────────────────────────────────
 
 function applyCloseBuffer(amount, bps = CLOSE_SWAP_BUFFER_BPS) {
@@ -774,6 +822,7 @@ module.exports = {
   _nativePriceCache,
   getNativeUsdPrice,
   buildEstimatedCosts,
+  computeRealizedGasUsd,
   // Close Operations
   applyCloseBuffer,
   getCanonicalUsdcTokenForNetwork,

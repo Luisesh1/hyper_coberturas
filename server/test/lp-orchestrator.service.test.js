@@ -616,3 +616,67 @@ test('time-in-range: attachLp resetea el tracker', async () => {
   const orch = await repo.getById(1, id);
   assert.equal(orch.strategyState.timeTracking, null, 'attachLp debe nullificar timeTracking');
 });
+
+test('recordTxFinalized usa gas real de receipts cuando el cliente no envía gasCostUsd', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    accounting: { ...accounting.DEFAULT_ACCOUNTING, gasSpentUsd: 0 },
+  });
+  const gasCalls = [];
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    notifier: makeFakeNotifier(),
+    positionActionsService: {
+      preparePositionAction: async () => ({ txPlan: [], estimatedCosts: {} }),
+      computeRealizedGasUsd: async ({ network, txHashes }) => {
+        gasCalls.push({ network, txHashes });
+        return 3.5; // gas realizado calculado desde los receipts
+      },
+    },
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.recordTxFinalized({
+    userId: 1,
+    orchestratorId: id,
+    action: 'reinvest-fees',
+    finalizeResult: { txHashes: ['0xaaa', '0xbbb'] },
+    expected: { slippageCostUsd: 0 }, // sin gasCostUsd → debe caer al cálculo real
+  });
+
+  assert.equal(gasCalls.length, 1, 'debe invocar computeRealizedGasUsd una vez');
+  assert.deepEqual(gasCalls[0].txHashes, ['0xaaa', '0xbbb']);
+  const o = await repo.getById(1, id);
+  assert.equal(o.accounting.gasSpentUsd, 3.5, 'el gas real debe acumularse en accounting');
+});
+
+test('recordTxFinalized NO recalcula gas si el cliente ya envió gasCostUsd', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    accounting: { ...accounting.DEFAULT_ACCOUNTING, gasSpentUsd: 0 },
+  });
+  let called = false;
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    notifier: makeFakeNotifier(),
+    positionActionsService: {
+      preparePositionAction: async () => ({ txPlan: [], estimatedCosts: {} }),
+      computeRealizedGasUsd: async () => { called = true; return 99; },
+    },
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.recordTxFinalized({
+    userId: 1,
+    orchestratorId: id,
+    action: 'reinvest-fees',
+    finalizeResult: { txHashes: ['0xaaa'] },
+    expected: { gasCostUsd: 1.25, slippageCostUsd: 0 },
+  });
+
+  assert.equal(called, false, 'no debe recalcular si ya vino gasCostUsd del cliente');
+  const o = await repo.getById(1, id);
+  assert.equal(o.accounting.gasSpentUsd, 1.25);
+});

@@ -9,6 +9,11 @@ const strategyConfigSchema = z.object({
   reinvestThresholdUsd: z.number().min(0).default(0),
   urgentAlertRepeatMinutes: z.number().int().min(1).max(1440).default(30),
   maxSlippageBps: z.number().int().min(1).max(1000).default(100),
+  // Rango adaptativo (advisory): k·RV para el ancho base + cotas. Ver
+  // lp-orchestrator/range-recommender.js.
+  rangeVolMultiplier: z.number().positive().max(2).default(0.15),
+  minRangeWidthPct: z.number().positive().lt(100).default(1),
+  maxRangeWidthPct: z.number().positive().lt(100).default(30),
 });
 
 const protectionConfigSchema = z.union([
@@ -88,6 +93,9 @@ const strategyConfigPatchSchema = z.object({
   reinvestThresholdUsd: z.number().min(0).optional(),
   urgentAlertRepeatMinutes: z.number().int().min(1).max(1440).optional(),
   maxSlippageBps: z.number().int().min(1).max(1000).optional(),
+  rangeVolMultiplier: z.number().positive().max(2).optional(),
+  minRangeWidthPct: z.number().positive().lt(100).optional(),
+  maxRangeWidthPct: z.number().positive().lt(100).optional(),
 });
 
 const updateOrchestratorConfigSchema = z.object({

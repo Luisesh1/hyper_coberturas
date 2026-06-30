@@ -107,6 +107,7 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
           walletUsd: data.walletUsd,
           lpUsd: data.lpUsd,
           hlAccountUsd: data.hlAccountUsd,
+          hedgeTracking: data.breakdown?.hedgeTracking || null,
         });
       }
     } catch (err) {
@@ -327,6 +328,22 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
                 : '—'}
             </span>
           </div>
+          {stats.current?.hedgeTracking?.hasHedge && (
+            <div className={styles.stat}>
+              <span className={styles.statLabel}>Funding/día</span>
+              <span
+                className={styles.statValue}
+                style={{ color: stats.current.hedgeTracking.fundingHeadwind ? '#e2554e' : '#3fb27f' }}
+                title={stats.current.hedgeTracking.fundingHeadwind
+                  ? 'El hedge corto está PAGANDO funding (headwind)'
+                  : 'El hedge corto COBRA funding'}
+              >
+                {stats.current.hedgeTracking.projectedDailyFundingUsd != null
+                  ? `${stats.current.hedgeTracking.projectedDailyFundingUsd >= 0 ? '+' : ''}${fmtUsd(stats.current.hedgeTracking.projectedDailyFundingUsd)}`
+                  : '—'}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

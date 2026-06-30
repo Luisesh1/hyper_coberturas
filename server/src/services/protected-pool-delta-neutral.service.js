@@ -95,6 +95,24 @@ class ProtectedPoolDeltaNeutralService {
     this.basisGuardBps = deps.basisGuardBps || config.deltaNeutral.basisGuardBps;
     this.lowConfidenceBasisBps = deps.lowConfidenceBasisBps || config.deltaNeutral.lowConfidenceBasisBps;
     this.minDwellMs = deps.minDwellMs || config.deltaNeutral.minDwellMs;
+    // Multiplicadores del hedge ratio por zona (configurables). El "vigente" es
+    // el que se ejecuta; el "shadow" es el propuesto que se loguea sin ejecutar
+    // cuando `shadowMode` está activo. Ver config.deltaNeutral.zoneHedge*.
+    this.zoneHedgeMultipliers = deps.zoneHedgeMultipliers || {
+      center: config.deltaNeutral.zoneHedgeMultiplierCenter,
+      transition: config.deltaNeutral.zoneHedgeMultiplierTransition,
+      edge: config.deltaNeutral.zoneHedgeMultiplierEdge,
+    };
+    this.shadowMode = deps.shadowMode != null ? deps.shadowMode : config.deltaNeutral.shadowMode;
+    this.shadowZoneHedgeMultipliers = deps.shadowZoneHedgeMultipliers || {
+      center: config.deltaNeutral.shadowZoneHedgeMultiplierCenter,
+      transition: config.deltaNeutral.shadowZoneHedgeMultiplierTransition,
+      edge: config.deltaNeutral.shadowZoneHedgeMultiplierEdge,
+    };
+    this.bandTightening = deps.bandTightening || {
+      intervalTightenFactor: config.deltaNeutral.bandIntervalTightenFactor,
+      bandTightenFactor: config.deltaNeutral.bandPriceTightenFactor,
+    };
     // Inyectable para tests: fallback a db real si no se pasa.
     this._db = deps.db || db;
     this.interval = null;
@@ -198,10 +216,10 @@ class ProtectedPoolDeltaNeutralService {
     return 'center';
   }
 
-  _zoneMultiplier(zoneState) {
-    if (zoneState === 'center') return 0.6;
-    if (zoneState === 'transition') return 0.85;
-    return 1;
+  _zoneMultiplier(zoneState, multipliers = this.zoneHedgeMultipliers) {
+    if (zoneState === 'center') return multipliers.center;
+    if (zoneState === 'transition') return multipliers.transition;
+    return multipliers.edge;
   }
 
   _hasRealtimeMarketPrice(marketContext = null) {
@@ -282,16 +300,30 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     const zoneState = this._deriveZoneState(protection, baseTwin.syntheticPriceCurrent);
-    const targetHedgeRatioApplied = Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO) * this._zoneMultiplier(zoneState);
+    const baseRatio = Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
+    const targetHedgeRatioApplied = baseRatio * this._zoneMultiplier(zoneState);
     const tunedTwin = buildSyntheticLpState(snapshot, {
       volatilePriceUsd: marketContext?.hlPrice,
       targetHedgeRatio: targetHedgeRatioApplied,
     });
 
+    // Shadow: target propuesto con los multiplicadores alternativos. No se
+    // ejecuta; sirve para medir cuánto residual dejaría de existir si se
+    // adoptara (ver _logShadowHedge en el loop de evaluación).
+    const shadowRatioApplied = baseRatio * this._zoneMultiplier(zoneState, this.shadowZoneHedgeMultipliers);
+    const shadowTwin = this.shadowMode
+      ? buildSyntheticLpState(snapshot, {
+        volatilePriceUsd: marketContext?.hlPrice,
+        targetHedgeRatio: shadowRatioApplied,
+      })
+      : null;
+
     return {
       ...tunedTwin,
       zoneState,
       targetHedgeRatioApplied,
+      shadowTargetHedgeRatioApplied: shadowRatioApplied,
+      shadowTargetQty: shadowTwin?.targetQty ?? null,
     };
   }
 
@@ -1558,7 +1590,7 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     const rvStats = await this._getVolatilityStats(hl, activeProtection.inferredAsset);
-    const band = deriveBandSettings(activeProtection, rvStats, metrics, currentPrice);
+    const band = deriveBandSettings(activeProtection, rvStats, metrics, currentPrice, this.bandTightening);
     const positionObservation = await this._observeHedgePosition({
       protection: activeProtection,
       hl,
@@ -1604,6 +1636,7 @@ class ProtectedPoolDeltaNeutralService {
       lastDeltaQty: metrics.deltaQty,
       lastGamma: metrics.gamma,
       lastTargetQty: metrics.targetQty,
+      lastShadowTargetQty: metrics.shadowTargetQty ?? null,
       lastActualQty: actualQty,
       effectiveBandPct: band.effectiveBandPct,
       rv4hPct: band.rv4hPct,
@@ -1841,6 +1874,29 @@ class ProtectedPoolDeltaNeutralService {
     const driftQty = Number(metrics.targetQty) - actualQty;
     const driftUsd = Math.abs(driftQty) * currentPrice;
     const isReduceOnlyPath = driftQty < -1e-8;
+
+    // Shadow mode: registra el residual sin cubrir hoy (deltaQty − targetQty)
+    // vs el que dejaría el target propuesto (deltaQty − shadowTargetQty), sin
+    // ejecutar. Permite cuantificar la mejora de cobertura sobre plata real
+    // antes de adoptar los nuevos multiplicadores. Ver KPIs del plan.
+    if (this.shadowMode && metrics.shadowTargetQty != null) {
+      const liveResidualUsd = (Number(metrics.deltaQty) - Number(metrics.targetQty)) * currentPrice;
+      const shadowResidualUsd = (Number(metrics.deltaQty) - Number(metrics.shadowTargetQty)) * currentPrice;
+      this.logger.info?.('delta_neutral_shadow_hedge', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        zoneState: metrics.zoneState,
+        deltaQty: Number(metrics.deltaQty),
+        targetQty: Number(metrics.targetQty),
+        shadowTargetQty: Number(metrics.shadowTargetQty),
+        actualQty,
+        liveResidualUsd,
+        shadowResidualUsd,
+        residualReductionUsd: Math.abs(liveResidualUsd) - Math.abs(shadowResidualUsd),
+        currentPrice,
+      });
+    }
     const forceReduceNearZero = metrics.targetQty <= NEAR_ZERO_TARGET_QTY && actualQty > 1e-8;
     const minDwellActive = Number.isFinite(Number(nextState.minDwellUntil)) && Date.now() < Number(nextState.minDwellUntil);
     const confidenceBlocksIncrease = nextState.modelConfidence === 'low' && driftQty > 0;

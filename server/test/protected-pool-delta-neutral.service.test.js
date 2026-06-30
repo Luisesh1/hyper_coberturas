@@ -114,6 +114,40 @@ test('deriveBandSettings usa max(rv4h, rv24h) y estrecha la banda cerca del bord
   assert.equal(settings.effectiveBandPct, 0.5);
 });
 
+test('deriveBandSettings: factores de endurecimiento aceleran la cadencia (config-gated)', () => {
+  const args = [
+    { bandMode: 'adaptive', rangeLowerPrice: 2000, rangeUpperPrice: 3000 },
+    { rv4hPct: 50, rv24hPct: 50 }, // preset balanced: 3% / 21600s
+    { normalizedGamma: 0.1 },
+    2500, // lejos del borde → sin tightening por proximidad
+  ];
+  const base = deriveBandSettings(...args);
+  assert.equal(base.baseBandPct, 3);
+  assert.equal(base.intervalSec, 21600);
+
+  // Factor 0.5 → mitad de banda y mitad de intervalo.
+  const tight = deriveBandSettings(...args, { intervalTightenFactor: 0.5, bandTightenFactor: 0.5 });
+  assert.equal(tight.baseBandPct, 1.5);
+  assert.equal(tight.intervalSec, 10800);
+
+  // Default (sin opts) NO cambia el comportamiento histórico.
+  const def = deriveBandSettings(...args, {});
+  assert.equal(def.baseBandPct, 3);
+  assert.equal(def.intervalSec, 21600);
+});
+
+test('deriveBandSettings: el endurecimiento NO afecta el modo fixed', () => {
+  const fixed = deriveBandSettings(
+    { bandMode: 'fixed', baseRebalancePriceMovePct: 4, rebalanceIntervalSec: 7200, rangeLowerPrice: 2000, rangeUpperPrice: 3000 },
+    { rv4hPct: 50, rv24hPct: 50 },
+    { normalizedGamma: 0.1 },
+    2500,
+    { intervalTightenFactor: 0.25, bandTightenFactor: 0.25 },
+  );
+  assert.equal(fixed.baseBandPct, 4);
+  assert.equal(fixed.intervalSec, 7200);
+});
+
 test('auto top-up usa un cap diario fijo basado en el notional inicial', async () => {
   let marginUpdates = 0;
   const service = new ProtectedPoolDeltaNeutralService();

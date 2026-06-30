@@ -39,6 +39,7 @@ function _getRecoveryProvider(network) {
 }
 
 const rangeEvaluator = require('./lp-orchestrator/range-evaluator');
+const { recommendRangeWidthPct } = require('./lp-orchestrator/range-recommender');
 const accounting = require('./lp-orchestrator/accounting');
 const LpOrchestratorCostEstimator = require('./lp-orchestrator/cost-estimator');
 const verifier = require('./lp-orchestrator/verifier');
@@ -772,8 +773,27 @@ class LpOrchestratorService {
       const postValue = Number(refreshedSnapshot.currentValueUsd) || 0;
       capitalDeltaUsd = postValue - prevValue;
     }
+    // Gas: el cliente raramente envía `expected.gasCostUsd` (llegaba 0), así que
+    // si no vino y tenemos txHashes, lo calculamos server-side desde los receipts
+    // on-chain. Sin esto, `gasSpentUsd` quedaba en 0 pese a múltiples re-ranges /
+    // rebalanceos, subestimando la pérdida real del orquestador.
+    let gasCostUsd = Number(expected.gasCostUsd) || 0;
+    if (gasCostUsd === 0 && incomingTxHashes.length > 0
+        && typeof this.positionActionsService.computeRealizedGasUsd === 'function') {
+      try {
+        gasCostUsd = await this.positionActionsService.computeRealizedGasUsd({
+          network: orch.network,
+          txHashes: incomingTxHashes,
+        });
+      } catch (err) {
+        this.logger.warn('lp_orchestrator_realized_gas_failed', {
+          orchestratorId,
+          error: err.message,
+        });
+      }
+    }
     const txCost = {
-      gasCostUsd: Number(expected.gasCostUsd) || 0,
+      gasCostUsd: Number(gasCostUsd) || 0,
       slippageCostUsd: Number(expected.slippageCostUsd) || 0,
       collectedFeesUsd: action === 'collect-fees' || action === 'reinvest-fees'
         ? Number(expected.collectedFeesUsd) || 0
@@ -1482,6 +1502,20 @@ class LpOrchestratorService {
       timeInRangePct,
     };
 
+    // Recomendación ADVISORY de ancho de rango (corrección #4): usa el feedback
+    // de time-in-range — que antes se calculaba y descartaba — para sugerir un
+    // rango más ancho si el LP vive poco en rango (era el caso histórico: 34%
+    // con ±5%) o más angosto si vive casi siempre dentro. El usuario sigue
+    // firmando el re-range; esto solo informa el ancho sugerido.
+    const rangeRecommendation = recommendRangeWidthPct({
+      rvPct: Number(pool.realizedVolPct) || undefined,
+      timeInRangePct: timeInRangePct == null ? undefined : timeInRangePct,
+      currentWidthPct: Number(orch.strategyConfig?.rangeWidthPct ?? 5),
+      volMultiplier: Number(orch.strategyConfig?.rangeVolMultiplier ?? 0.15),
+      minWidthPct: Number(orch.strategyConfig?.minRangeWidthPct ?? 1),
+      maxWidthPct: Number(orch.strategyConfig?.maxRangeWidthPct ?? 30),
+    });
+
     // 4) Decisión
     let decision = 'hold';
     let reason = 'in_central_band';
@@ -1557,6 +1591,7 @@ class LpOrchestratorService {
         timeInRangePct: newTimeTracking.timeInRangePct,
         timeInRangeMs: newTimeTracking.timeInRangeMs,
         timeTrackedMs: newTimeTracking.timeTrackedMs,
+        rangeRecommendation,
       },
       lastEvaluationAt: nowTs,
       lastDecision: decision,
@@ -1588,6 +1623,8 @@ class LpOrchestratorService {
         : null,
       snapshotHash,
       accountingDelta: delta,
+      recommendedRangeWidthPct: rangeRecommendation.recommendedWidthPct,
+      rangeRecommendationReason: rangeRecommendation.feedback,
       createdAt: Date.now(),
     });
 

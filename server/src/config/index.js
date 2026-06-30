@@ -153,6 +153,28 @@ const config = {
     basisGuardBps: parseInt(process.env.DELTA_NEUTRAL_BASIS_GUARD_BPS, 10) || 40,
     lowConfidenceBasisBps: parseInt(process.env.DELTA_NEUTRAL_LOW_CONF_BASIS_BPS, 10) || 75,
     minDwellMs: parseInt(process.env.DELTA_NEUTRAL_MIN_DWELL_MS, 10) || 60_000,
+    // Multiplicadores del hedge ratio por zona del precio respecto al rango LP.
+    // `center` < 1 sub-cubre deliberadamente cuando el precio está profundo en
+    // rango (apuesta a reversión a la media). El análisis histórico mostró que
+    // en mercados tendenciales ese 40% sin cubrir es el mayor componente de
+    // pérdida, por eso es configurable para poder subirlo hacia 1.0.
+    zoneHedgeMultiplierCenter: parseFloat(process.env.DELTA_NEUTRAL_ZONE_MULT_CENTER) || 0.6,
+    zoneHedgeMultiplierTransition: parseFloat(process.env.DELTA_NEUTRAL_ZONE_MULT_TRANSITION) || 0.85,
+    zoneHedgeMultiplierEdge: parseFloat(process.env.DELTA_NEUTRAL_ZONE_MULT_EDGE) || 1,
+    // Shadow mode: cuando true, el motor computa el target del hedge con los
+    // multiplicadores "propuestos" (shadow*) y loguea el residual proyectado,
+    // pero EJECUTA con los multiplicadores vigentes. Permite validar un cambio
+    // de cobertura sobre plata real sin ejecutarlo hasta confirmar la mejora.
+    shadowMode: process.env.DELTA_NEUTRAL_SHADOW_MODE === 'true',
+    shadowZoneHedgeMultiplierCenter: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_CENTER) || 1,
+    shadowZoneHedgeMultiplierTransition: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_TRANSITION) || 1,
+    shadowZoneHedgeMultiplierEdge: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_EDGE) || 1,
+    // Endurecimiento (config-gated) de la cadencia de rebalanceo del hedge en
+    // modo adaptativo. Factor < 1 acelera (intervalo y banda más chicos) para
+    // seguir mejor el delta cuando el LP cruza su rango seguido. Default 1 =
+    // presets históricos sin cambio. Ver buildBandPreset/deriveBandSettings.
+    bandIntervalTightenFactor: parseFloat(process.env.DELTA_NEUTRAL_BAND_INTERVAL_TIGHTEN) || 1,
+    bandPriceTightenFactor: parseFloat(process.env.DELTA_NEUTRAL_BAND_PRICE_TIGHTEN) || 1,
     rpcBudgetHourly: parseInt(process.env.DELTA_NEUTRAL_RPC_BUDGET_HOURLY, 10) || 1_000,
     rpcBudgetDaily: parseInt(process.env.DELTA_NEUTRAL_RPC_BUDGET_DAILY, 10) || 10_000,
     positionMissingConfirmations: parseInt(process.env.LP_ORCH_MISSING_CONFIRMATIONS, 10) || 2,
