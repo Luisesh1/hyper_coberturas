@@ -108,6 +108,7 @@ class OrchestratorMetricsService {
     this.running = true;
     const startedAt = Date.now();
     let captured = 0;
+    let skipped = 0;
     let failed = 0;
 
     try {
@@ -119,8 +120,9 @@ class OrchestratorMetricsService {
       for (const orch of orchestrators) {
         if (orch.status !== 'active') continue;
         try {
-          await this.captureOne(orch);
-          captured += 1;
+          const snap = await this.captureOne(orch);
+          if (snap) captured += 1;
+          else skipped += 1;
         } catch (err) {
           failed += 1;
           logger.warn('orchestrator_metrics_capture_failed', {
@@ -135,6 +137,7 @@ class OrchestratorMetricsService {
 
     logger.info('orchestrator_metrics_capture_completed', {
       captured,
+      skipped,
       failed,
       durationMs: Date.now() - startedAt,
     });
@@ -144,28 +147,37 @@ class OrchestratorMetricsService {
     const breakdown = await this.computeBreakdown(orchestrator);
     const totalUsd = (breakdown.walletUsd || 0) + (breakdown.lpUsd || 0) + (breakdown.hlAccountUsd || 0);
 
-    // --- Deteccion de anomalias: HL balance cae a 0 sospechosamente ---
-    // Si la captura anterior tenia HL balance significativo (>$1) y la
-    // actual es exactamente 0, es un probable fallo silencioso (API down,
-    // accountId mal resuelto, etc.). Log explicito para investigar.
-    if (breakdown.hlStatus !== 'not_linked' && breakdown.hlAccountUsd === 0) {
+    // --- Guard anti-cero-falso de la pata HL ---
+    // Si la pata HL vino en 0 sin que la captura reportara 'ok' (típicamente
+    // 'not_linked' porque resolveOrchestratorAccountId devolvió null de forma
+    // transitoria durante un re-range, o 'unavailable' por fallo de fetch) y la
+    // captura anterior tenía saldo real (>$1), es un fallo transitorio: NO es
+    // que la cuenta se haya vaciado. Persistir ese 0 mete un total_usd basura
+    // que ensucia /metricas y falsea drawdowns. Preferimos SALTAR la captura
+    // (hueco honesto de 1h) a escribir un cero falso.
+    // Nota: un cero genuino (cuenta realmente vacía) llega con hlStatus 'ok' y
+    // no entra aquí; un orquestador sin cuenta no tiene previo sano y persiste 0.
+    if (breakdown.hlAccountUsd === 0 && breakdown.hlStatus !== 'ok') {
+      let previous = null;
       try {
-        const previous = await orchestratorMetricsRepo.getLatest(orchestrator.id);
-        if (previous && Number(previous.hlAccountUsd) > 1) {
-          logger.warn('orchestrator_metrics_hl_balance_zero_anomaly', {
-            orchestratorId: orchestrator.id,
-            previousHlAccountUsd: Number(previous.hlAccountUsd),
-            currentHlAccountUsd: 0,
-            hlStatus: breakdown.hlStatus,
-            hlError: breakdown.hlError,
-            capturedAt: Date.now(),
-          });
-        }
+        previous = await orchestratorMetricsRepo.getLatest(orchestrator.id);
       } catch (err) {
         logger.warn('orchestrator_metrics_anomaly_check_failed', {
           orchestratorId: orchestrator.id,
           error: err.message,
         });
+      }
+      if (previous && Number(previous.hlAccountUsd) > 1) {
+        logger.warn('orchestrator_metrics_hl_capture_skipped', {
+          orchestratorId: orchestrator.id,
+          reason: 'hl_zero_with_healthy_previous',
+          previousHlAccountUsd: Number(previous.hlAccountUsd),
+          hlStatus: breakdown.hlStatus,
+          hlError: breakdown.hlError,
+          walletUsd: breakdown.walletUsd,
+          lpUsd: breakdown.lpUsd,
+        });
+        return null;
       }
     }
 
