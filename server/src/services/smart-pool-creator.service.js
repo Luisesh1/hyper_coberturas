@@ -14,6 +14,7 @@ const {
   normalizeHooksAddress,
   ZERO_HOOKS_ADDRESS,
 } = require('./uniswap-v4-helpers.service');
+const { classifyHook } = require('./uniswap/v4-hook-safety');
 
 const { SUPPORTED_NETWORKS } = require('./uniswap/networks');
 const {
@@ -524,7 +525,14 @@ async function getV4PoolContext({
 
   const resolvedHooks = normalizeHooksAddress(hooks);
   if (hasHooks(resolvedHooks)) {
-    throw new ValidationError('Los pools v4 con hooks no estan soportados en smart create por ahora');
+    // Sólo se rechazan los hooks que devuelven deltas (custom accounting), cuya
+    // matemática de valor/delta no es modelable para la cobertura. Los hooks
+    // safe (fee dinámica, gating, oráculos, informativos) se permiten igual que
+    // un pool v3. Ver services/uniswap/v4-hook-safety.js.
+    const { safe } = classifyHook(resolvedHooks);
+    if (!safe) {
+      throw new ValidationError('Pool v4 con hook de custom accounting (returns-delta): no modelable para cobertura');
+    }
   }
 
   const resolvedPoolId = poolId || computeV4PoolId({
@@ -1830,7 +1838,8 @@ async function getSuggestions({
       requestedTokenOrderReversed: poolContext.requestedTokenOrderReversed === true,
       validation: {
         poolExists: true,
-        hooksSupported: !hasHooks(poolContext.hooks || ZERO_HOOKS_ADDRESS),
+        // Un pool con hook safe (sin returns-delta) es soportado para cobertura.
+        hooksSupported: classifyHook(poolContext.hooks || ZERO_HOOKS_ADDRESS).safe,
       },
       gasReserve: balances.gasReserve,
       suggestions,
