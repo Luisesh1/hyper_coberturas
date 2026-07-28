@@ -68,19 +68,25 @@ printf '%s\n' "${LOGS}" | jq -rs '
 echo "----------------------------------------------------------------"
 
 # Veredicto global.
+# El criterio correcto NO es "% de muestras que mejora" — en edge/outside el hedge
+# ya está a 1.0, así que el fix es un no-op (reducción exactamente 0) y esas muestras
+# nunca cuentan como positivas. Como la posición vive en edge la mayor parte del
+# tiempo, exigir pctPositive alto es un falso negativo. Lo que importa es: ¿el fix
+# empeora alguna muestra? (pctWorse). Si nunca empeora y reduce en promedio, es GO.
 printf '%s\n' "${LOGS}" | jq -rs '
   def avg(f): (map(f) | add) / length;
   def pct(f): (map(select(f)) | length) * 100 / length;
   {
     samples: length,
     avgReduction: (avg(.residualReductionUsd) | (.*100|round)/100),
-    pctPositive: (pct(.residualReductionUsd > 0) | (.*10|round)/10)
+    pctPositive: (pct(.residualReductionUsd > 0) | (.*10|round)/10),
+    pctWorse: (pct(.residualReductionUsd < -0.01) | (.*10|round)/10)
   }
-  | "GLOBAL · \(.samples) muestras · reducción prom $\(.avgReduction) · mejora en \(.pctPositive)% de muestras\n" +
-    (if (.avgReduction > 0 and .pctPositive >= 90)
-       then "VEREDICTO: ✅ GO — adoptar el fix (subir DELTA_NEUTRAL_ZONE_MULT_CENTER hacia 1.0)."
+  | "GLOBAL · \(.samples) muestras · reducción prom $\(.avgReduction) · mejora en \(.pctPositive)% · empeora en \(.pctWorse)% de muestras\n" +
+    (if (.avgReduction > 0 and .pctWorse == 0)
+       then "VEREDICTO: ✅ GO — adoptar el fix (subir DELTA_NEUTRAL_ZONE_MULT_CENTER hacia 1.0). Ninguna muestra empeora."
      elif (.avgReduction > 0)
-       then "VEREDICTO: ⚠️  PARCIAL — reduce en promedio pero hay muestras donde empeora; revisar regímenes antes de activar."
+       then "VEREDICTO: ⚠️  PARCIAL — reduce en promedio pero \(.pctWorse)% de muestras empeora; revisar regímenes antes de activar."
      else "VEREDICTO: ❌ NO-GO — el fix no reduce el residual en esta ventana."
      end)
 '
