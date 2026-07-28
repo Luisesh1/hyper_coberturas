@@ -169,6 +169,14 @@ const config = {
     shadowZoneHedgeMultiplierCenter: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_CENTER) || 1,
     shadowZoneHedgeMultiplierTransition: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_TRANSITION) || 1,
     shadowZoneHedgeMultiplierEdge: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_EDGE) || 1,
+    // Allowlist de hooks v4 auditados: addresses (coma-separadas) de hooks que
+    // devuelven deltas (normalmente UNSAFE) pero que se revisaron a mano y se
+    // habilitan para cobertura. Default vacío = sólo se cubren pools cuya
+    // matemática CLAMM es modelable. Ver services/uniswap/v4-hook-safety.js.
+    v4HookAllowlist: String(process.env.DELTA_NEUTRAL_V4_HOOK_ALLOWLIST || '')
+      .split(',')
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean),
     // Endurecimiento (config-gated) de la cadencia de rebalanceo del hedge en
     // modo adaptativo. Factor < 1 acelera (intervalo y banda más chicos) para
     // seguir mejor el delta cuando el LP cruza su rango seguido. Default 1 =

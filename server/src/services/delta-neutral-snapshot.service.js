@@ -1,6 +1,22 @@
 const crypto = require('crypto');
+const { classifyHook } = require('./uniswap/v4-hook-safety');
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+// Allowlist de hooks v4 auditados (lazy-require del config para no romper
+// tests de módulo puro que no cargan config en modo prod).
+function getV4HookAllowlist() {
+  try {
+    return require('../config').deltaNeutral?.v4HookAllowlist || [];
+  } catch {
+    return [];
+  }
+}
+
+function isHookAllowlisted(hooksAddress) {
+  if (!hooksAddress) return false;
+  return getV4HookAllowlist().includes(String(hooksAddress).trim().toLowerCase());
+}
 
 function normalizeAddress(value) {
   if (!value) return null;
@@ -90,12 +106,23 @@ function validateNormalizedProtectionSnapshot(snapshot = {}) {
   if (!Number.isFinite(snapshot.priceCurrent) || snapshot.priceCurrent <= 0) reasons.push('price_missing');
   if (snapshot.version === 'v3' && !snapshot.poolAddress) reasons.push('pool_address_missing');
   if (snapshot.version === 'v4' && !snapshot.poolId) reasons.push('pool_id_missing');
-  if (snapshot.version === 'v4' && snapshot.hooks && snapshot.hooks !== ZERO_ADDRESS) reasons.push('unsupported_pool_shape');
+  // Pools v4 con hooks: sólo se rechazan los que devuelven deltas (custom
+  // accounting), cuya matemática de valor/delta no es modelable con CLAMM. Los
+  // hooks "safe" (informativos, fee dinámica, gating, etc.) entran a cobertura
+  // igual que un pool v3. Un hook auditado a mano puede forzarse vía allowlist.
+  if (snapshot.version === 'v4' && snapshot.hooks && snapshot.hooks !== ZERO_ADDRESS) {
+    const { safe, reason } = classifyHook(snapshot.hooks);
+    if (!safe && !isHookAllowlisted(snapshot.hooks)) {
+      reasons.push(reason || 'hook_returns_delta');
+    }
+  }
 
+  const unsupportedReasons = ['unsupported_pool_shape', 'hook_returns_delta', 'hook_address_invalid'];
+  const unsupported = reasons.find((r) => unsupportedReasons.includes(r));
   const valid = reasons.length === 0;
   return {
     valid,
-    status: valid ? 'ready' : reasons.includes('unsupported_pool_shape') ? 'unsupported_pool_shape' : 'invalid',
+    status: valid ? 'ready' : unsupported || 'invalid',
     reasons,
   };
 }
