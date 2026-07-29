@@ -218,8 +218,31 @@ function buildApiMockState() {
   return { strategies, indicators, bots, runsByBot, backtestResponse };
 }
 
+function buildLowPriceCandles() {
+  const start = Date.now() - (80 * 60_000);
+  return Array.from({ length: 80 }, (_, index) => {
+    const base = 0.012850 + (index * 0.000003);
+    const wave = Math.sin(index / 5) * 0.000018;
+    const open = base + wave;
+    const close = open + (index % 2 === 0 ? 0.000021 : -0.000014);
+    const high = Math.max(open, close) + 0.000026;
+    const low = Math.min(open, close) - 0.000019;
+    const time = start + (index * 60_000);
+    return {
+      time,
+      closeTime: time + 60_000,
+      open: Number(open.toFixed(6)),
+      high: Number(high.toFixed(6)),
+      low: Number(low.toFixed(6)),
+      close: Number(close.toFixed(6)),
+      volume: 100000 + index,
+    };
+  });
+}
+
 async function mockApi(page) {
   const state = buildApiMockState();
+  const lowPriceCandles = buildLowPriceCandles();
 
   await page.addInitScript(() => {
     localStorage.setItem('hl_token', 'test-token');
@@ -258,6 +281,15 @@ async function mockApi(page) {
     if (pathname === '/api/strategies' && method === 'GET') return json(state.strategies);
     if (pathname === '/api/indicators' && method === 'GET') return json(state.indicators);
     if (pathname === '/api/bots' && method === 'GET') return json(state.bots);
+    if (pathname === '/api/market/contexts' && method === 'GET') return json([]);
+    if (pathname === '/api/settings/chart-indicators' && method === 'GET') return json({ indicators: [] });
+    if (pathname === '/api/market/candles' && method === 'GET') {
+      const limit = Number(url.searchParams.get('limit') || lowPriceCandles.length);
+      return json(lowPriceCandles.slice(-limit));
+    }
+
+    const chartDrawingsMatch = pathname.match(/^\/api\/settings\/chart-drawings\/(.+)$/);
+    if (chartDrawingsMatch && method === 'GET') return json({ drawings: [] });
 
     if (pathname === '/api/strategies' && method === 'POST') {
       const body = route.request().postDataJSON();
@@ -279,6 +311,15 @@ async function mockApi(page) {
 
     const validateMatch = pathname.match(/^\/api\/strategies\/(\d+)\/validate$/);
     if (validateMatch && method === 'POST') {
+      return json({
+        asset: 'BTC',
+        timeframe: '15m',
+        signal: { type: 'long' },
+        diagnostics: { candles: 250 },
+      });
+    }
+
+    if (pathname === '/api/strategies/validate-draft' && method === 'POST') {
       return json({
         asset: 'BTC',
         timeframe: '15m',
@@ -387,13 +428,13 @@ test.beforeEach(async ({ page }) => {
 test('Strategy Studio permite validar y backtestear una estrategia', async ({ page }) => {
   await page.goto('/estrategias');
 
-  await expect(page.getByText('Strategy Studio')).toBeVisible();
+  await expect(page.getByText('Strategy Studio', { exact: true })).toBeVisible();
   await expect(page.getByText('Trend Rider')).toBeVisible();
   await page.getByRole('button', { name: /Trend Rider/i }).click();
   await page.getByRole('button', { name: 'Validar' }).click();
   await expect(page.getByText('Signal: long')).toBeVisible();
   await page.getByRole('button', { name: 'Backtest', exact: true }).click();
-  await expect(page.getByRole('button', { name: /Backtest 8 trades/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Resumen 3 trades/i })).toBeVisible();
   await expect(page.getByText('Volume Z-Score')).toBeVisible();
 });
 
@@ -438,4 +479,16 @@ test('Backtesting permite correr una simulacion e inspeccionar trades', async ({
   await expect(page.locator('tr').filter({ hasText: 'signal_reverse' })).toBeVisible();
   await page.getByRole('button', { name: 'win' }).click();
   await expect(page.getByRole('button', { name: 'win' })).toHaveClass(/filterBtnActive/);
+});
+
+test('TradingView ajusta decimales para activos de precio bajo', async ({ page }) => {
+  await page.goto('/trading-view?symbol=PENGUUSDT&datasource=binance&tf=1m');
+
+  await expect(page.getByRole('button', { name: /PENGUUSDT/i })).toBeVisible();
+  await expect(page.getByTestId('tradingview-chart')).toHaveAttribute('data-price-precision', '6');
+  await expect(page.getByText(/0\.013\d{3}/).first()).toBeVisible();
+
+  const chartBox = await page.getByTestId('tradingview-chart').boundingBox();
+  expect(chartBox?.width).toBeGreaterThan(300);
+  expect(chartBox?.height).toBeGreaterThan(300);
 });

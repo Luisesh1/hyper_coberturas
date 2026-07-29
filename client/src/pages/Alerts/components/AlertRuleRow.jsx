@@ -336,6 +336,17 @@ export function AlertRuleRow({ rule, onChange, onRemove, index }) {
         <span className={styles.ruleNum}>Regla #{index + 1}</span>
         <div className={styles.ruleHeadFields}>
           <div className={styles.formField}>
+            <label>Label Telegram</label>
+            <input
+              className={styles.input}
+              type="text"
+              maxLength={120}
+              value={rule.label || ''}
+              onChange={(e) => update({ label: e.target.value })}
+              placeholder="Ej: RSI sobreventa"
+            />
+          </div>
+          <div className={styles.formField}>
             <label>Peso</label>
             <input
               className={styles.input}

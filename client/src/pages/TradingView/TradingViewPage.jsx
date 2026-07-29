@@ -115,6 +115,7 @@ const TIMEFRAMES = [
 const DEFAULT_TIMEFRAME = '15m';
 const CANDLE_LIMIT = 500;
 const DEFAULT_RIGHT_OFFSET = 12;
+const DEFAULT_PRICE_PRECISION = 2;
 
 function loadStoredTimeframe() {
   try {
@@ -152,21 +153,46 @@ function formatProjectedTime(sec, tf) {
 
 // Formatea un precio con decimales adaptativos al orden de magnitud.
 // 70,510.73 (BTC) | 2,348.7 (ETH) | 145.62 | 0.85432 | 0.0000123
-function formatPrice(n) {
-  if (n == null || !Number.isFinite(n)) return '—';
-  const abs = Math.abs(n);
-  let frac;
-  if (abs >= 1000) frac = 2;
-  else if (abs >= 1) frac = 4;
-  else if (abs >= 0.01) frac = 6;
-  else frac = 8;
-  return n.toLocaleString('en-US', { maximumFractionDigits: frac, minimumFractionDigits: frac >= 4 ? 0 : frac });
+function getPricePrecisionFromValue(value) {
+  const abs = Math.abs(Number(value));
+  if (!Number.isFinite(abs) || abs === 0) return DEFAULT_PRICE_PRECISION;
+  if (abs >= 1000) return 2;
+  if (abs >= 1) return 4;
+  if (abs >= 0.01) return 6;
+  return 8;
 }
 
-function formatChange(n) {
+function getPricePrecisionFromCandles(candles = []) {
+  const minPrice = candles.reduce((min, candle) => {
+    const values = [candle?.open, candle?.high, candle?.low, candle?.close]
+      .map(Number)
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (values.length === 0) return min;
+    return Math.min(min, ...values);
+  }, Infinity);
+  return Number.isFinite(minPrice) ? getPricePrecisionFromValue(minPrice) : DEFAULT_PRICE_PRECISION;
+}
+
+function getPriceFormatOptions(precision) {
+  return {
+    type: 'price',
+    precision,
+    minMove: precision > 0 ? 10 ** -precision : 1,
+  };
+}
+
+function formatPrice(n, precision = getPricePrecisionFromValue(n)) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return n.toLocaleString('en-US', {
+    maximumFractionDigits: precision,
+    minimumFractionDigits: precision >= 4 ? 0 : precision,
+  });
+}
+
+function formatChange(n, precision) {
   if (n == null || !Number.isFinite(n)) return '—';
   const sign = n > 0 ? '+' : '';
-  return `${sign}${formatPrice(n)}`;
+  return `${sign}${formatPrice(n, precision)}`;
 }
 
 function formatPercent(n) {
@@ -259,6 +285,7 @@ export default function TradingViewPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [lastPrice, setLastPrice] = useState(null);
+  const [pricePrecision, setPricePrecision] = useState(DEFAULT_PRICE_PRECISION);
   const [liveActive, setLiveActive] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [activeTool, setActiveTool] = useState(null);
@@ -339,6 +366,7 @@ export default function TradingViewPage() {
       borderDownColor: THEME.downEdge,
       wickUpColor: THEME.upEdge,
       wickDownColor: THEME.downEdge,
+      priceFormat: getPriceFormatOptions(DEFAULT_PRICE_PRECISION),
     }, 0);
     candleSeriesRef.current = candleSeries;
 
@@ -485,6 +513,9 @@ export default function TradingViewPage() {
         return;
       }
       candlesRef.current = candles;
+      const nextPrecision = getPricePrecisionFromCandles(candles);
+      candleSeriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
+      setPricePrecision(nextPrecision);
       const candleData = candles.map((c) => ({
         time: Math.floor(c.time / 1000),
         open: c.open, high: c.high, low: c.low, close: c.close,
@@ -574,6 +605,12 @@ export default function TradingViewPage() {
           return;
         }
 
+        const nextPrecision = getPricePrecisionFromCandles(current);
+        if (nextPrecision !== pricePrecision) {
+          candleSeriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
+          setPricePrecision(nextPrecision);
+        }
+
         candleSeriesRef.current?.update({
           time: Math.floor(latest.time / 1000),
           open: latest.open, high: latest.high, low: latest.low, close: latest.close,
@@ -600,7 +637,7 @@ export default function TradingViewPage() {
         liveTimerRef.current = null;
       }
     };
-  }, [asset, timeframe, replayActive]);
+  }, [asset, timeframe, replayActive, pricePrecision]);
 
   // --- 5) Re-render cuando cambian los indicadores (sin recargar candles) ---
   useEffect(() => {
@@ -644,6 +681,9 @@ export default function TradingViewPage() {
       }
       const merged = [...newBars, ...current].sort((a, b) => a.time - b.time);
       candlesRef.current = merged;
+      const nextPrecision = getPricePrecisionFromCandles(merged);
+      candleSeriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
+      setPricePrecision(nextPrecision);
       const candleData = merged.map((c) => ({
         time: Math.floor(c.time / 1000),
         open: c.open, high: c.high, low: c.low, close: c.close,
@@ -870,7 +910,7 @@ export default function TradingViewPage() {
           <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
           <span className={styles.statsLabel}>{liveActive ? 'En vivo' : 'Último'}:</span>
           <span className={styles.lastPrice}>
-            ${Number(lastPrice).toLocaleString('en-US', { maximumFractionDigits: 6 })}
+            ${formatPrice(Number(lastPrice), pricePrecision)}
           </span>
         </span>
       )}
@@ -925,7 +965,12 @@ export default function TradingViewPage() {
 
       <div ref={widgetContainerRef} className={styles.widgetContainer}>
         {error && <div className={styles.error}>{error}</div>}
-        <div ref={containerRef} className={styles.chart} />
+        <div
+          ref={containerRef}
+          className={styles.chart}
+          data-testid="tradingview-chart"
+          data-price-precision={pricePrecision}
+        />
 
         <canvas
           ref={drawingsCanvasRef}
@@ -998,33 +1043,33 @@ export default function TradingViewPage() {
               <span className={styles.ohlcGroup}>
                 <span className={styles.ohlcLabel}>O</span>
                 <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.open)}
+                  {formatPrice(displayedOhlc.open, pricePrecision)}
                 </span>
               </span>
               <span className={styles.ohlcGroup}>
                 <span className={styles.ohlcLabel}>H</span>
                 <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.high)}
+                  {formatPrice(displayedOhlc.high, pricePrecision)}
                 </span>
               </span>
               <span className={styles.ohlcGroup}>
                 <span className={styles.ohlcLabel}>L</span>
                 <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.low)}
+                  {formatPrice(displayedOhlc.low, pricePrecision)}
                 </span>
               </span>
               <span className={styles.ohlcGroup}>
                 <span className={styles.ohlcLabel}>C</span>
                 <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.close)}
+                  {formatPrice(displayedOhlc.close, pricePrecision)}
                 </span>
               </span>
               <span className={`${styles.ohlcChange} ${intra >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
-                {formatChange(intra)} ({formatPercent(intraPct)})
+                {formatChange(intra, pricePrecision)} ({formatPercent(intraPct)})
               </span>
               {inter != null && (
                 <span className={`${styles.ohlcChange} ${styles.ohlcChangeSecondary} ${inter >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatChange(inter)} ({formatPercent(interPct)})
+                  {formatChange(inter, pricePrecision)} ({formatPercent(interPct)})
                 </span>
               )}
             </div>
@@ -1051,7 +1096,7 @@ export default function TradingViewPage() {
                       <span key={v.role} className={styles.legendValueGroup}>
                         {v.label && <span className={styles.legendValueLabel}>{v.label}:</span>}
                         <span className={styles.legendValue} style={{ color: v.color }}>
-                          {formatPrice(v.value)}
+                          {formatPrice(v.value, pricePrecision)}
                         </span>
                         {i < ind.values.length - 1 && <span className={styles.legendSep}>·</span>}
                       </span>

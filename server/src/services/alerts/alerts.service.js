@@ -66,9 +66,10 @@ const ruleSchema = z.preprocess((raw) => {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     if (Array.isArray(raw.conditions)) return raw;
     if (raw.indicatorType) {
-      const { id, weight, indicatorType, indicatorParams, timeframe, operandSeries, operator, operand } = raw;
+      const { id, label, weight, indicatorType, indicatorParams, timeframe, operandSeries, operator, operand } = raw;
       return {
         id,
+        label,
         weight,
         conditions: [{ indicatorType, indicatorParams, timeframe, operandSeries, operator, operand }],
         joiners: [],
@@ -78,6 +79,7 @@ const ruleSchema = z.preprocess((raw) => {
   return raw;
 }, z.object({
   id: z.string().optional(),
+  label: z.string().trim().max(120).optional().default(''),
   conditions: z.array(conditionSchema).min(1),
   joiners: z.array(z.enum(['and', 'or'])).optional().default([]),
   weight: z.number().nonnegative().default(1),
@@ -331,6 +333,7 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
   }
 
   // Disparar: registrar evento y enviar telegram
+  const alertSentAt = Date.now();
   const messageText = buildAlertMessage({
     alert: alertDto,
     asset,
@@ -339,6 +342,7 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
     total: ruleResults.length,
     candleCloseTime,
     lowestTf,
+    sentAt: alertSentAt,
   });
 
   let telegramSent = false;
@@ -370,6 +374,7 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
     score,
     thresholdPercent: alertDto.thresholdPercent,
     matchedRulesJson: JSON.stringify(matched.map((m) => ({
+      label: m.rule.label || '',
       indicatorType: m.rule.indicatorType,
       indicatorParams: m.rule.indicatorParams,
       timeframe: m.rule.timeframe,
@@ -382,10 +387,10 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
     messageText,
     telegramSent,
     telegramError,
-    now: Date.now(),
+    now: alertSentAt,
   });
 
-  await alertsRepo.updateCooldown(alertDto.id, asset, Date.now()).catch((err) => {
+  await alertsRepo.updateCooldown(alertDto.id, asset, alertSentAt).catch((err) => {
     logger.warn('alerts_cooldown_update_failed', {
       alertId: alertDto.id, asset, error: err.message,
     });
@@ -418,22 +423,36 @@ async function testAlertNow(userId, alertId, { dryRun = true } = {}) {
 // Builder del mensaje
 // ------------------------------------------------------------------
 
-function buildAlertMessage({ alert, asset, score, matched, total, candleCloseTime, lowestTf }) {
+function buildAlertMessage({ alert, asset, score, matched, total, candleCloseTime, lowestTf, sentAt = Date.now() }) {
   const base = String(config.server.publicBaseUrl || '').replace(/\/+$/, '');
   const url = `${base}/trading-view?symbol=${encodeURIComponent(asset)}&tf=${encodeURIComponent(lowestTf || '')}`;
-  const matchedLines = matched.length
-    ? matched.map((r) => `  • ${escapeHtml(r.reason)}`).join('\n')
-    : '  (ninguna)';
+  const matchedLabels = matched.map(ruleMessageLabel).filter(Boolean);
+  const matchedLines = matchedLabels.length
+    ? matchedLabels.map((label) => `  • ${escapeHtml(label)}`).join('\n')
+    : '  (sin labels)';
   const when = new Date(candleCloseTime).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+  const sentAtUtc = formatUtcDateTime(sentAt);
   return [
     `🔔 <b>${escapeHtml(alert.name)}</b>`,
     `Activo: <b>${escapeHtml(asset)}</b> · TF: ${escapeHtml(lowestTf || '?')}`,
     `Puntaje: <b>${score.toFixed(1)}%</b> (umbral ${Number(alert.thresholdPercent).toFixed(0)}%)`,
-    `Reglas activas (${matched.length}/${total}):`,
+    `Labels de reglas aprobadas (${matchedLabels.length}/${matched.length}, ${total} total):`,
     matchedLines,
     `Cierre vela: ${escapeHtml(when)}`,
+    `Enviada UTC: <b>${escapeHtml(sentAtUtc)}</b>`,
     `<a href="${url}">📈 Abrir gráfico</a>`,
   ].join('\n');
+}
+
+function ruleMessageLabel(result) {
+  const label = String(result?.rule?.label || '').trim();
+  return label;
+}
+
+function formatUtcDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().replace(/\.\d{3}Z$/, ' UTC').replace('T', ' ');
+  return date.toISOString().replace(/\.\d{3}Z$/, ' UTC').replace('T', ' ');
 }
 
 function escapeHtml(str) {

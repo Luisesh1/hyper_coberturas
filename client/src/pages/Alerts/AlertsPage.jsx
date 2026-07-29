@@ -16,6 +16,7 @@ const DATASOURCES = [
 function emptyRule() {
   return {
     id: `r-${Math.random().toString(36).slice(2, 9)}`,
+    label: '',
     conditions: [emptyCondition()],
     joiners: [],
     weight: 1,
@@ -29,6 +30,7 @@ function normalizeLoadedRule(raw) {
   if (raw && Array.isArray(raw.conditions) && raw.conditions.length > 0) {
     return {
       ...base,
+      label: String(raw.label || ''),
       conditions: raw.conditions.map((c) => ({ ...emptyCondition(), ...c })),
       joiners: Array.isArray(raw.joiners) ? raw.joiners.slice() : [],
       weight: Number(raw.weight) || 1,
@@ -43,7 +45,7 @@ function normalizeLoadedRule(raw) {
       operator: raw.operator,
       operand: raw.operand ? { ...raw.operand } : { kind: 'constant', value: 0 },
     };
-    return { ...base, conditions: [cond], joiners: [], weight: Number(raw.weight) || 1 };
+    return { ...base, label: String(raw.label || ''), conditions: [cond], joiners: [], weight: Number(raw.weight) || 1 };
   }
   return base;
 }
@@ -85,6 +87,7 @@ function formToPayload(value) {
     datasource: value.datasource,
     assetList: value.assetList.slice(),
     rules: value.rules.map((r) => ({
+      label: String(r.label || '').trim(),
       conditions: (r.conditions || []).map((c) => ({
         indicatorType: c.indicatorType,
         indicatorParams: c.indicatorParams || {},
@@ -677,7 +680,7 @@ export default function AlertsPage() {
                         key={i}
                         className={`${styles.testRule} ${rr.matched ? styles.testRuleMatched : styles.testRuleUnmatched}`}
                       >
-                        {rr.matched ? '✓' : '·'} {rr.reason}
+                        {rr.matched ? '✓' : '·'} {rr.matched && rr.rule?.label ? `${rr.rule.label}: ` : ''}{rr.reason}
                       </div>
                     ))}
                   </div>
