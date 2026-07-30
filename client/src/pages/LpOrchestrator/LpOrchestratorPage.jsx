@@ -488,6 +488,11 @@ export default function LpOrchestratorPage() {
       token1Address: creatingLpFor.token1Address,
       fee: creatingLpFor.feeTier,
       totalUsdTarget: creatingLpFor.initialTotalUsd,
+      // En v4 solo reenviamos el tickSpacing si el orquestador lo declaró:
+      // por defecto el backend lo deriva del fee y computa el poolId.
+      ...(creatingLpFor.version === 'v4' && creatingLpFor.strategyConfig?.v4TickSpacing != null
+        ? { tickSpacing: Number(creatingLpFor.strategyConfig.v4TickSpacing) }
+        : {}),
     };
   }, [creatingLpFor, walletConn.address]);
 
@@ -652,7 +657,6 @@ export default function LpOrchestratorPage() {
       {showWizard && (
         <CreateOrchestratorWizard
           network="arbitrum"
-          version="v3"
           walletAddress={walletConn.address}
           accounts={accounts}
           onClose={() => setShowWizard(false)}

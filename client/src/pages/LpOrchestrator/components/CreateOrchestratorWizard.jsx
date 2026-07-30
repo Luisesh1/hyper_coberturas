@@ -39,15 +39,22 @@ const FEE_TIERS = [
   { value: 10000, label: '1.00%' },
 ];
 
+// Espejo de DEFAULT_V4_TICK_SPACING_BY_FEE en
+// server/src/services/smart-pool-creator.service.js. Solo se usa para
+// mostrar el valor que el backend derivará; no se envía salvo override.
+const DEFAULT_V4_TICK_SPACING_BY_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
+
 export default function CreateOrchestratorWizard({
   network = 'arbitrum',
-  version = 'v3',
+  version: initialVersion = 'v3',
   walletAddress,
   accounts = [],
   onClose,
   onCreated,
 }) {
   const [step, setStep] = useState(STEP.IDENTITY);
+  const [version, setVersion] = useState(initialVersion);
+  const [v4TickSpacing, setV4TickSpacing] = useState('');
   const [name, setName] = useState('');
   const [tokenList, setTokenList] = useState([]);
   const [token0Address, setToken0Address] = useState('');
@@ -104,6 +111,14 @@ export default function CreateOrchestratorWizard({
       return 'El capital inicial debe ser un número positivo.';
     }
     if (!walletAddress) return 'Conecta una wallet antes de crear el orquestador.';
+    if (version === 'v4') {
+      if (v4TickSpacing !== '') {
+        const ts = Number(v4TickSpacing);
+        if (!Number.isInteger(ts) || ts <= 0) {
+          return 'El tick spacing debe ser un entero positivo, o quedar vacío para derivarlo del fee.';
+        }
+      }
+    }
     return null;
   }
 
@@ -171,6 +186,11 @@ export default function CreateOrchestratorWizard({
           reinvestThresholdUsd: Number(strategy.reinvestThresholdUsd),
           urgentAlertRepeatMinutes: Number(strategy.urgentAlertRepeatMinutes),
           maxSlippageBps: Number(strategy.maxSlippageBps),
+          // tickSpacing solo si el usuario lo overrideó: por defecto el
+          // backend lo deriva del fee tier y computa el poolId.
+          ...(version === 'v4' && v4TickSpacing !== ''
+            ? { v4TickSpacing: Number(v4TickSpacing) }
+            : {}),
         },
         protectionConfig: buildProtectionPayload(protection),
       };
@@ -212,7 +232,8 @@ export default function CreateOrchestratorWizard({
               token1Address={token1Address} setToken1Address={setToken1Address}
               feeTier={feeTier} setFeeTier={setFeeTier}
               initialTotalUsd={initialTotalUsd} setInitialTotalUsd={setInitialTotalUsd}
-              network={network} version={version}
+              network={network} version={version} setVersion={setVersion}
+              v4TickSpacing={v4TickSpacing} setV4TickSpacing={setV4TickSpacing}
             />
           )}
 
@@ -278,7 +299,8 @@ function IdentityStep({
   tokenOptions, token0Address, setToken0Address, token1Address, setToken1Address,
   feeTier, setFeeTier,
   initialTotalUsd, setInitialTotalUsd,
-  network, version,
+  network, version, setVersion,
+  v4TickSpacing, setV4TickSpacing,
 }) {
   return (
     <div className={styles.fields}>
@@ -300,21 +322,48 @@ function IdentityStep({
         </div>
         <div className={styles.field}>
           <label>Versión</label>
-          <input type="text" value={version} disabled />
+          <select aria-label="Versión" value={version} onChange={(e) => setVersion(e.target.value)}>
+            <option value="v3">v3</option>
+            <option value="v4">v4</option>
+          </select>
         </div>
       </div>
+
+      {version === 'v4' && (
+        <div className={styles.field}>
+          <label>Pool v4</label>
+          <p className={styles.hint}>
+            El poolId se computa a partir del par, el fee y el tick spacing —
+            no hace falta cargarlo. <strong>Solo se soportan pools sin hook y
+            con tokens ERC-20</strong> (no ETH nativo): la gestión on-chain de
+            posiciones rechaza ambos casos, así que un pool con hook se podría
+            crear pero después no se podría rebalancear ni cerrar.
+          </p>
+          <div className={styles.field}>
+            <label>Tick spacing</label>
+            <input
+              type="number"
+              aria-label="Tick spacing"
+              value={v4TickSpacing}
+              onChange={(e) => setV4TickSpacing(e.target.value)}
+              placeholder={`auto (${DEFAULT_V4_TICK_SPACING_BY_FEE[feeTier] ?? '—'})`}
+              min={1}
+            />
+          </div>
+        </div>
+      )}
 
       <div className={styles.row}>
         <div className={styles.field}>
           <label>Token 0</label>
-          <select value={token0Address} onChange={(e) => setToken0Address(e.target.value)}>
+          <select aria-label="Token 0" value={token0Address} onChange={(e) => setToken0Address(e.target.value)}>
             <option value="">— selecciona —</option>
             {tokenOptions.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
         </div>
         <div className={styles.field}>
           <label>Token 1</label>
-          <select value={token1Address} onChange={(e) => setToken1Address(e.target.value)}>
+          <select aria-label="Token 1" value={token1Address} onChange={(e) => setToken1Address(e.target.value)}>
             <option value="">— selecciona —</option>
             {tokenOptions.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>

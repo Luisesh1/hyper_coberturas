@@ -85,6 +85,18 @@ class LpOrchestratorService {
     return fn(undefined);
   }
 
+  /**
+   * Identidad extra del pool v4 para las acciones de posicion. Solo aplica
+   * un `tickSpacing` no estandar: el resto de la poolKey (currency0/1, fee,
+   * hooks) la lee `loadV4PositionContext` directamente del tokenId on-chain.
+   * Devuelve {} en v3 para no ensuciar el payload de las acciones existentes.
+   */
+  _v4IdentityPayload(orch) {
+    if (orch?.version !== 'v4') return {};
+    const tickSpacing = orch.strategyConfig?.v4TickSpacing;
+    return tickSpacing != null ? { tickSpacing: Number(tickSpacing) } : {};
+  }
+
   async _deactivateLinkedProtection(userId, protectionId, { orchestratorId, reason } = {}) {
     if (!protectionId) return null;
     try {
@@ -623,6 +635,7 @@ class LpOrchestratorService {
           version: orch.version,
           walletAddress: orch.walletAddress,
           positionIdentifier: reconcile.needsCollect.tokenId,
+          ...this._v4IdentityPayload(orch),
         },
       });
       await this.repo.appendActionLog({
@@ -700,6 +713,7 @@ class LpOrchestratorService {
         version: orchEffective.version,
         walletAddress: orchEffective.walletAddress,
         positionIdentifier: orchEffective.activePositionIdentifier,
+        ...this._v4IdentityPayload(orchEffective),
       },
     });
 

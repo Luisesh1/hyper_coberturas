@@ -58,9 +58,8 @@ describe('CreateOrchestratorWizard', () => {
 
     // Paso 1: Identidad
     await user.type(screen.getByPlaceholderText(/ej\. WETH\/USDC/i), 'Mi orq');
-    const selects = screen.getAllByRole('combobox');
-    await user.selectOptions(selects[0], '0x00000000000000000000000000000000000000AA');
-    await user.selectOptions(selects[1], '0x00000000000000000000000000000000000000BB');
+    await user.selectOptions(screen.getByLabelText('Token 0'), '0x00000000000000000000000000000000000000AA');
+    await user.selectOptions(screen.getByLabelText('Token 1'), '0x00000000000000000000000000000000000000BB');
     await user.click(screen.getByText(/Siguiente/));
 
     // Paso 2: Estrategia (los defaults son válidos)
@@ -102,9 +101,8 @@ describe('CreateOrchestratorWizard', () => {
     await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalled());
 
     await user.type(screen.getByPlaceholderText(/ej\. WETH\/USDC/i), 'X');
-    const selects = screen.getAllByRole('combobox');
-    await user.selectOptions(selects[0], '0x00000000000000000000000000000000000000AA');
-    await user.selectOptions(selects[1], '0x00000000000000000000000000000000000000BB');
+    await user.selectOptions(screen.getByLabelText('Token 0'), '0x00000000000000000000000000000000000000AA');
+    await user.selectOptions(screen.getByLabelText('Token 1'), '0x00000000000000000000000000000000000000BB');
     await user.click(screen.getByText(/Siguiente/));
     await waitFor(() => expect(screen.queryByText(/Ancho del rango/i)).toBeTruthy());
     await user.click(screen.getByText(/Siguiente/));

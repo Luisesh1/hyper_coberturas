@@ -14,6 +14,15 @@ const strategyConfigSchema = z.object({
   rangeVolMultiplier: z.number().positive().max(2).default(0.15),
   minRangeWidthPct: z.number().positive().lt(100).default(1),
   maxRangeWidthPct: z.number().positive().lt(100).default(30),
+  // --- Identidad del pool v4 (ignorada en v3) ---
+  // Un pool v4 se identifica por poolId = keccak(currency0, currency1, fee,
+  // tickSpacing, hooks). El poolId se computa y el tickSpacing se deriva del
+  // feeTier, asi que solo hace falta declararlo si el pool usa uno no
+  // estandar. NO hay campo de hooks: `loadV4PositionContext` rechaza todo
+  // pool con hook, de modo que una posicion asi no seria gestionable.
+  // Vive aca (y no en una columna nueva) porque strategy_config_json ya
+  // persiste con el orquestador y sobrevive a los kill+recreate.
+  v4TickSpacing: z.number().int().positive().max(32767).optional(),
 });
 
 const protectionConfigSchema = z.union([

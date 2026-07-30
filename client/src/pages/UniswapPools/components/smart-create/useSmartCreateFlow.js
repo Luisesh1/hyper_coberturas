@@ -18,6 +18,10 @@ import {
 export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
   const network = defaults?.network || 'arbitrum';
   const version = defaults?.version || 'v3';
+  // Identidad opcional del pool v4. Ausentes, el backend deriva tickSpacing
+  // del fee y computa el poolId — que es el caso de un pool sin hook.
+  const v4Hooks = defaults?.hooks || null;
+  const v4TickSpacing = defaults?.tickSpacing != null ? Number(defaults.tickSpacing) : null;
 
   // ── state ─────────────────────────────────────────────────────────
   const [step, setStep] = useState(STEP.POOL);
@@ -226,6 +230,8 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
         token1Address: resolvedToken1,
         fee,
         totalUsdTarget: Number(totalUsdTarget),
+        ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
+        ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
       });
       setToken0Address(resolvedToken0);
       setToken1Address(resolvedToken1);

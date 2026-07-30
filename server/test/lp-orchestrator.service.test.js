@@ -798,3 +798,100 @@ test('cerrar y archivar sobre un LP ya cerrado: no manda nada a firmar y cierra 
   await service.archive({ userId: 1, orchestratorId: id });
   assert.equal((await repo.getById(1, id)).status, 'archived');
 });
+
+// ─── Compatibilidad v3 / v4 ────────────────────────────────────────────────
+// En v4 la poolKey (currency0/1, fee, hooks) la lee `loadV4PositionContext`
+// del tokenId on-chain; lo unico que el orquestador tiene que reenviar es un
+// tickSpacing no estandar, porque el default se deriva del fee tier.
+
+test('v3: las acciones NO llevan campos de identidad v4', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    version: 'v3',
+    strategyConfig: { rangeWidthPct: 5, edgeMarginPct: 40, v4TickSpacing: 60 },
+  });
+  const prepareCalls = [];
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    positionActionsService: {
+      preparePositionAction: async (args) => { prepareCalls.push(args); return { txPlan: [{ to: '0xa', data: '0xb' }] }; },
+    },
+    uniswapService: makeFakeUniswapService(basePool()),
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.killLp({ userId: 1, orchestratorId: id, mode: 'keep' });
+  // Aunque el config traiga v4TickSpacing, en v3 no debe filtrarse.
+  assert.equal(prepareCalls[0].payload.tickSpacing, undefined);
+  assert.equal(prepareCalls[0].payload.version, 'v3');
+});
+
+test('v4 estandar: tampoco manda tickSpacing (el backend lo deriva del fee)', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    version: 'v4',
+    strategyConfig: { rangeWidthPct: 5, edgeMarginPct: 40 },
+  });
+  const prepareCalls = [];
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    positionActionsService: {
+      preparePositionAction: async (args) => { prepareCalls.push(args); return { txPlan: [{ to: '0xa', data: '0xb' }] }; },
+    },
+    uniswapService: makeFakeUniswapService(basePool({ version: 'v4' })),
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.killLp({ userId: 1, orchestratorId: id, mode: 'keep' });
+  assert.equal(prepareCalls[0].payload.version, 'v4');
+  assert.equal(prepareCalls[0].payload.tickSpacing, undefined);
+});
+
+test('v4 con tickSpacing no estandar: se propaga a la accion', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    version: 'v4',
+    strategyConfig: { rangeWidthPct: 5, edgeMarginPct: 40, v4TickSpacing: 200 },
+  });
+  const prepareCalls = [];
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    positionActionsService: {
+      preparePositionAction: async (args) => { prepareCalls.push(args); return { txPlan: [{ to: '0xa', data: '0xb' }] }; },
+    },
+    uniswapService: makeFakeUniswapService(basePool({ version: 'v4' })),
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.killLp({ userId: 1, orchestratorId: id, mode: 'keep' });
+  assert.equal(prepareCalls[0].payload.tickSpacing, 200);
+});
+
+test('v4: el escaneo de adopcion usa la version del orquestador', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    version: 'v4',
+    activePositionIdentifier: null,
+  });
+  const scanCalls = [];
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    positionActionsService: { preparePositionAction: async () => ({ txPlan: [] }) },
+    uniswapService: {
+      scanPoolsCreatedByWallet: async (args) => { scanCalls.push(args); return { pools: [] }; },
+    },
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.discoverAdoptableLps(1, id);
+  assert.equal(scanCalls.length, 1);
+  assert.equal(scanCalls[0].version, 'v4', 'debe escanear posiciones v4, no v3');
+});
