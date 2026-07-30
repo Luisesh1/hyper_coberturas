@@ -34,6 +34,8 @@ function buildAlchemyRpcUrls(apiKey) {
     optimism: `https://opt-mainnet.g.alchemy.com/v2/${apiKey}`,
     base: `https://base-mainnet.g.alchemy.com/v2/${apiKey}`,
     polygon: `https://polygon-mainnet.g.alchemy.com/v2/${apiKey}`,
+    // Testnet para validar flujos on-chain sin capital real.
+    baseSepolia: `https://base-sepolia.g.alchemy.com/v2/${apiKey}`,
   };
 }
 
@@ -45,6 +47,7 @@ const PUBLIC_RPC_DEFAULTS = {
   optimism: 'https://optimism-rpc.publicnode.com',
   base: 'https://base-rpc.publicnode.com',
   polygon: 'https://polygon-bor-rpc.publicnode.com',
+  baseSepolia: 'https://base-sepolia-rpc.publicnode.com',
 };
 
 const config = {
@@ -74,6 +77,7 @@ const config = {
       optimism: process.env.UNI_RPC_OPTIMISM || ALCHEMY_RPC_URLS.optimism || PUBLIC_RPC_DEFAULTS.optimism,
       base: process.env.UNI_RPC_BASE || ALCHEMY_RPC_URLS.base || PUBLIC_RPC_DEFAULTS.base,
       polygon: process.env.UNI_RPC_POLYGON || ALCHEMY_RPC_URLS.polygon || PUBLIC_RPC_DEFAULTS.polygon,
+      baseSepolia: process.env.UNI_RPC_BASE_SEPOLIA || ALCHEMY_RPC_URLS.baseSepolia || PUBLIC_RPC_DEFAULTS.baseSepolia,
     },
     fallbackRpcUrls: {
       ethereum: process.env.UNI_FALLBACK_RPC_ETHEREUM || PUBLIC_RPC_DEFAULTS.ethereum,
@@ -81,6 +85,7 @@ const config = {
       optimism: process.env.UNI_FALLBACK_RPC_OPTIMISM || PUBLIC_RPC_DEFAULTS.optimism,
       base: process.env.UNI_FALLBACK_RPC_BASE || PUBLIC_RPC_DEFAULTS.base,
       polygon: process.env.UNI_FALLBACK_RPC_POLYGON || PUBLIC_RPC_DEFAULTS.polygon,
+      baseSepolia: process.env.UNI_FALLBACK_RPC_BASE_SEPOLIA || PUBLIC_RPC_DEFAULTS.baseSepolia,
     },
     scanTimeoutMs: parseInt(process.env.UNI_SCAN_TIMEOUT_MS, 10) || 20_000,
   },

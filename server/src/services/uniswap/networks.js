@@ -70,6 +70,36 @@ const SUPPORTED_NETWORKS = {
       },
     },
   },
+  // ── Testnet ────────────────────────────────────────────────────────────
+  // Existe para validar los flujos on-chain (crear / rebalancear / cerrar,
+  // v3 y v4) sin capital real. Direcciones verificadas on-chain: el
+  // PositionManager y el StateView v4 devuelven ambos este PoolManager en
+  // `poolManager()`. Faucet: https://www.alchemy.com/faucets/base-sepolia
+  'base-sepolia': {
+    id: 'base-sepolia',
+    label: 'Base Sepolia (testnet)',
+    chainId: 84532,
+    nativeSymbol: 'ETH',
+    isTestnet: true,
+    explorerUrl: 'https://sepolia.basescan.org',
+    rpcUrl: RPC_DEFAULTS.baseSepolia,
+    fallbackRpcUrl: FALLBACK_RPC_DEFAULTS.baseSepolia,
+    versions: ['v3', 'v4'],
+    deployments: {
+      v3: {
+        kind: 'factory',
+        eventSource: '0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24',
+        positionManager: '0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2',
+      },
+      v4: {
+        kind: 'poolManager',
+        eventSource: '0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408',
+        stateView: '0x571291b572ed32ce6751a2Cb2486EbEe8DEfB9B4',
+        positionManager: '0x4B2C77d209D3405F41a037Ec6c77F7F5b8e2ca80',
+      },
+    },
+  },
+
   base: {
     id: 'base',
     label: 'Base',

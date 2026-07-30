@@ -77,12 +77,34 @@ test('support matrix expone redes populares con versiones soportadas', () => {
   const matrix = getSupportMatrix();
 
   assert.deepEqual(matrix.versions, ['v1', 'v2', 'v3', 'v4']);
-  assert.deepEqual(
-    matrix.networks.map((network) => network.id),
-    ['ethereum', 'arbitrum', 'base', 'optimism', 'polygon']
-  );
+  // Contiene las mainnets soportadas, sin fijar el orden ni el largo: agregar
+  // una red nueva (p. ej. una testnet) no deberia romper este test.
+  const ids = matrix.networks.map((network) => network.id);
+  for (const expected of ['ethereum', 'arbitrum', 'base', 'optimism', 'polygon']) {
+    assert.ok(ids.includes(expected), `falta la red ${expected}`);
+  }
   assert.ok(matrix.networks.find((network) => network.id === 'ethereum').versions.includes('v1'));
   assert.ok(!matrix.networks.find((network) => network.id === 'arbitrum').versions.includes('v1'));
+});
+
+test('base-sepolia esta disponible como testnet para validar flujos v3/v4', () => {
+  const cfg = SUPPORTED_NETWORKS['base-sepolia'];
+  assert.ok(cfg, 'la testnet debe estar registrada');
+  assert.equal(cfg.chainId, 84532);
+  assert.equal(cfg.isTestnet, true, 'debe marcarse como testnet');
+  assert.deepEqual(cfg.versions, ['v3', 'v4']);
+  // Direcciones verificadas on-chain (PositionManager y StateView v4 apuntan
+  // ambos a este PoolManager). Fijarlas evita que un typo pase inadvertido.
+  assert.equal(cfg.deployments.v4.eventSource, '0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408');
+  assert.equal(cfg.deployments.v4.positionManager, '0x4B2C77d209D3405F41a037Ec6c77F7F5b8e2ca80');
+  assert.equal(cfg.deployments.v4.stateView, '0x571291b572ed32ce6751a2Cb2486EbEe8DEfB9B4');
+  assert.equal(cfg.deployments.v3.positionManager, '0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2');
+});
+
+test('getNetworkConfig resuelve base-sepolia (el id sobrevive el lowercase)', () => {
+  const { getNetworkConfig } = require('../src/services/uniswap/networks');
+  assert.equal(getNetworkConfig('base-sepolia').chainId, 84532);
+  assert.equal(getNetworkConfig('BASE-SEPOLIA').chainId, 84532);
 });
 
 test('supported networks incluye deployments oficiales relevantes', () => {

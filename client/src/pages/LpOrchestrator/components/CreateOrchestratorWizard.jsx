@@ -44,8 +44,16 @@ const FEE_TIERS = [
 // mostrar el valor que el backend derivará; no se envía salvo override.
 const DEFAULT_V4_TICK_SPACING_BY_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
 
+// Redes donde se puede orquestar un LP. La testnet existe para validar los
+// flujos on-chain sin capital real; se marca para que no se confunda con
+// una red productiva.
+const NETWORK_OPTIONS = [
+  { id: 'arbitrum', label: 'Arbitrum One' },
+  { id: 'base-sepolia', label: 'Base Sepolia (testnet)', isTestnet: true },
+];
+
 export default function CreateOrchestratorWizard({
-  network = 'arbitrum',
+  network: initialNetwork = 'arbitrum',
   version: initialVersion = 'v3',
   walletAddress,
   accounts = [],
@@ -53,6 +61,7 @@ export default function CreateOrchestratorWizard({
   onCreated,
 }) {
   const [step, setStep] = useState(STEP.IDENTITY);
+  const [network, setNetwork] = useState(initialNetwork);
   const [version, setVersion] = useState(initialVersion);
   const [v4TickSpacing, setV4TickSpacing] = useState('');
   const [name, setName] = useState('');
@@ -65,6 +74,13 @@ export default function CreateOrchestratorWizard({
   const [protection, setProtection] = useState(buildDefaultProtection(1000));
   const [error, setError] = useState('');
   const [isBusy, setIsBusy] = useState(false);
+
+  // Las addresses de token no son portables entre redes: al cambiar de red
+  // hay que soltar el par elegido o se mandaria una address inexistente.
+  useEffect(() => {
+    setToken0Address('');
+    setToken1Address('');
+  }, [network]);
 
   useEffect(() => {
     let cancelled = false;
@@ -232,7 +248,8 @@ export default function CreateOrchestratorWizard({
               token1Address={token1Address} setToken1Address={setToken1Address}
               feeTier={feeTier} setFeeTier={setFeeTier}
               initialTotalUsd={initialTotalUsd} setInitialTotalUsd={setInitialTotalUsd}
-              network={network} version={version} setVersion={setVersion}
+              network={network} setNetwork={setNetwork}
+              version={version} setVersion={setVersion}
               v4TickSpacing={v4TickSpacing} setV4TickSpacing={setV4TickSpacing}
             />
           )}
@@ -299,7 +316,7 @@ function IdentityStep({
   tokenOptions, token0Address, setToken0Address, token1Address, setToken1Address,
   feeTier, setFeeTier,
   initialTotalUsd, setInitialTotalUsd,
-  network, version, setVersion,
+  network, setNetwork, version, setVersion,
   v4TickSpacing, setV4TickSpacing,
 }) {
   return (
@@ -318,7 +335,11 @@ function IdentityStep({
       <div className={styles.row}>
         <div className={styles.field}>
           <label>Red</label>
-          <input type="text" value={network} disabled />
+          <select aria-label="Red" value={network} onChange={(e) => setNetwork(e.target.value)}>
+            {NETWORK_OPTIONS.map((n) => (
+              <option key={n.id} value={n.id}>{n.label}</option>
+            ))}
+          </select>
         </div>
         <div className={styles.field}>
           <label>Versión</label>

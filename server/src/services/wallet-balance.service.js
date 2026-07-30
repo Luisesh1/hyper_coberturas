@@ -39,6 +39,13 @@ const DEFILLAMA_CHAIN_BY_NETWORK = {
 // Con RPCs públicos (publicnode, ankr, etc.) es la única forma estándar de
 // escanear balances sin un indexador externo. Cubre >95% de USD típico.
 const CURATED_TOKENS_BY_NETWORK = {
+  // Testnet: WETH y USDC alcanzan. El precio sale por SIMBOLO (WETH -> ETH de
+  // Hyperliquid, stables -> $1), asi que la valuacion funciona igual que en
+  // mainnet aunque estos tokens no tengan mercado propio.
+  'base-sepolia': [
+    { address: '0x4200000000000000000000000000000000000006', symbol: 'WETH', decimals: 18 },
+    { address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', symbol: 'USDC', decimals: 6 },
+  ],
   arbitrum: [
     { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', symbol: 'USDC',   decimals: 6 },
     { address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', symbol: 'USDC.E', decimals: 6 },

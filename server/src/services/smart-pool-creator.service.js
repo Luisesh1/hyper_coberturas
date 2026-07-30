@@ -43,6 +43,7 @@ const GAS_RESERVE_BY_NETWORK = {
   base: '0.0015',
   optimism: '0.0015',
   polygon: '1',
+  'base-sepolia': '0.0015',
 };
 
 const KNOWN_TOKENS = {
@@ -59,6 +60,11 @@ const KNOWN_TOKENS = {
     { symbol: 'USDT', address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6 },
     { symbol: 'ARB', address: '0x912CE59144191C1204E64559FE8253a0e49E6548', decimals: 18 },
     { symbol: 'WBTC', address: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', decimals: 8 },
+  ],
+  // Testnet: solo el par que se usa para validar los flujos v3/v4.
+  'base-sepolia': [
+    { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18, isWrappedNative: true },
+    { symbol: 'USDC', address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', decimals: 6 },
   ],
   base: [
     { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18, isWrappedNative: true },
