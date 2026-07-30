@@ -22,6 +22,7 @@ const balanceCacheService = require('./balance-cache.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const marketService = require('./market.service');
 const { resolveOrchestratorAccountId } = require('./orchestrator-account-resolver');
+const { recomputeNetPnl } = require('./lp-orchestrator/accounting');
 
 const FUNDING_CACHE_TTL_MS = 60_000;
 
@@ -278,10 +279,22 @@ class OrchestratorMetricsService {
     //   residualUsd      = (deltaQty − targetQty) × precio  (sub-hedge por zona)
     const hedgeTracking = await this._computeHedgeTracking(orchestrator, poolSnapshot, lastEval);
 
+    // --- PnL neto acumulado (contabilidad del orquestador) ---
+    // A diferencia de `totalUsd` (valor de mercado, contaminado por depositos
+    // y retiros de capital), esto es el PnL real: fees del LP, gas, slippage,
+    // PnL del hedge (realizado + mark-to-market), funding y deriva de precio.
+    // Se congela en cada snapshot para poder computar el PnL de una ventana
+    // temporal como diferencia de dos snapshots.
+    // Recomputamos el total desde sus componentes en vez de confiar en el
+    // `totalNetPnlUsd` persistido: es un no-op cuando la fila esta sana y
+    // corrige el valor si quedo desincronizado.
+    const accounting = recomputeNetPnl(orchestrator.accounting);
+
     return {
       walletUsd,
       lpUsd,
       hlAccountUsd,
+      accounting,
       wallet: walletDetail,
       lpSource: poolSnapshot ? {
         currentValueUsd: Number(poolSnapshot.currentValueUsd) || 0,

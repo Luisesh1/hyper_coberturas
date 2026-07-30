@@ -36,6 +36,51 @@ function fmtDateTime(ms) {
   return d.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function fmtSignedUsd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return `${n >= 0 ? '+' : '-'}${fmtUsd(Math.abs(n))}`;
+}
+
+// Componentes del PnL neto, en el mismo orden y con el mismo signo con que
+// `server/src/services/lp-orchestrator/accounting.js` los suma en
+// recomputeNetPnl(). `sign` es la contribucion al total (los costos restan).
+const PNL_COMPONENTS = [
+  { key: 'lpFeesUsd', label: 'Fees LP', sign: 1 },
+  { key: 'priceDriftUsd', label: 'Deriva de precio LP', sign: 1 },
+  { key: 'hedgeRealizedPnlUsd', label: 'Hedge realizado', sign: 1 },
+  { key: 'hedgeUnrealizedPnlUsd', label: 'Hedge no realizado', sign: 1 },
+  { key: 'hedgeFundingUsd', label: 'Funding', sign: 1 },
+  { key: 'gasSpentUsd', label: 'Gas', sign: -1 },
+  { key: 'swapSlippageUsd', label: 'Slippage swaps', sign: -1 },
+  { key: 'hedgeExecutionFeesUsd', label: 'Fees ejecucion hedge', sign: -1 },
+  { key: 'hedgeSlippageUsd', label: 'Slippage hedge', sign: -1 },
+];
+
+/**
+ * Desglose legible del PnL para el tooltip nativo del stat. Incluye los
+ * ajustes de capital (depositos/retiros al LP) como nota aparte: NO son PnL,
+ * pero explican por que "Δ rango" y "PnL total" pueden diferir.
+ */
+function buildPnlTooltip(accounting, rangeDeltaUsd, rangeLabel) {
+  if (!accounting) return 'Sin contabilidad disponible';
+  const lines = ['PnL neto acumulado (vida del orquestador)', ''];
+  for (const { key, label, sign } of PNL_COMPONENTS) {
+    const raw = Number(accounting[key]);
+    if (!Number.isFinite(raw) || raw === 0) continue;
+    lines.push(`${label}: ${fmtSignedUsd(sign * raw)}`);
+  }
+  lines.push('', `Total: ${fmtSignedUsd(accounting.totalNetPnlUsd)}`);
+  if (Number.isFinite(rangeDeltaUsd)) {
+    lines.push(`PnL en ${rangeLabel}: ${fmtSignedUsd(rangeDeltaUsd)}`);
+  }
+  const capital = Number(accounting.capitalAdjustmentsUsd);
+  if (Number.isFinite(capital) && capital !== 0) {
+    lines.push('', `Capital agregado/retirado (no es PnL): ${fmtSignedUsd(capital)}`);
+  }
+  return lines.join('\n');
+}
+
 export default function OrchestratorMetricChart({ orchestrator, range }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -95,6 +140,28 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
     return { current, first, deltaUsd, deltaPct, isLive: Boolean(liveStats) };
   }, [snapshots, liveStats]);
 
+  // PnL neto acumulado. La fuente de verdad es la contabilidad del propio
+  // orquestador (se refresca con el poll de la pagina); los snapshots solo
+  // aportan la baseline para acotar el PnL a la ventana seleccionada.
+  const pnl = useMemo(() => {
+    const accounting = liveStats?.accounting
+      || orchestrator.accounting
+      || stats.current?.breakdown?.accounting
+      || null;
+    if (!accounting || !Number.isFinite(Number(accounting.totalNetPnlUsd))) {
+      return { accounting: null, totalUsd: null, rangeUsd: null };
+    }
+    const totalUsd = Number(accounting.totalNetPnlUsd);
+    // Snapshots anteriores a este cambio no llevan `accounting`; en ese caso
+    // no hay baseline y omitimos el PnL del rango en vez de inventarlo.
+    const baseline = Number(stats.first?.breakdown?.accounting?.totalNetPnlUsd);
+    return {
+      accounting,
+      totalUsd,
+      rangeUsd: Number.isFinite(baseline) ? totalUsd - baseline : null,
+    };
+  }, [liveStats, orchestrator.accounting, stats.current, stats.first]);
+
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
@@ -108,6 +175,7 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
           lpUsd: data.lpUsd,
           hlAccountUsd: data.hlAccountUsd,
           hedgeTracking: data.breakdown?.hedgeTracking || null,
+          accounting: data.breakdown?.accounting || null,
         });
       }
     } catch (err) {
@@ -266,6 +334,9 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
 
   const deltaClass = stats.deltaUsd >= 0 ? styles.statDeltaPos : styles.statDeltaNeg;
   const deltaSign = stats.deltaUsd >= 0 ? '+' : '';
+  const pnlClass = pnl.totalUsd == null
+    ? ''
+    : (pnl.totalUsd >= 0 ? styles.statDeltaPos : styles.statDeltaNeg);
 
   return (
     <div className={styles.card}>
@@ -326,6 +397,15 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
               {stats.first
                 ? `${deltaSign}${fmtUsd(stats.deltaUsd)} (${deltaSign}${stats.deltaPct.toFixed(2)}%)`
                 : '—'}
+            </span>
+          </div>
+          <div className={styles.stat}>
+            <span className={styles.statLabel}>PnL total</span>
+            <span
+              className={`${styles.statValue} ${pnlClass}`}
+              title={buildPnlTooltip(pnl.accounting, pnl.rangeUsd, range?.label || 'el rango')}
+            >
+              {pnl.totalUsd != null ? fmtSignedUsd(pnl.totalUsd) : '—'}
             </span>
           </div>
           {stats.current?.hedgeTracking?.hasHedge && (

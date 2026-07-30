@@ -72,6 +72,12 @@ export default function MetricasPage() {
             la posicion LP de Uniswap y la cuenta de Hyperliquid vinculada — por cada
             orquestador. Los snapshots se capturan cada hora en punto.
           </p>
+          <p className={styles.subtitle}>
+            <strong>Δ rango</strong> mide el cambio de ese valor de mercado (incluye
+            depositos y retiros). <strong>PnL total</strong> es la ganancia neta real
+            acumulada: fees del LP + deriva de precio + PnL del hedge + funding − gas −
+            slippage − fees de ejecucion. Pasa el cursor por encima para ver el desglose.
+          </p>
         </div>
       </div>
 

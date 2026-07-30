@@ -138,3 +138,53 @@ test('captureOne: HL=0 sin previo sano (orq nuevo/no linkeado) → SÍ persiste 
     assert.equal(insertCalls(), 1);
   });
 });
+
+// --- PnL neto acumulado en el breakdown ---
+// El snapshot congela la contabilidad del orquestador para que /metricas pueda
+// mostrar el PnL real (fees, gas, slippage, hedge, funding, drift) y acotarlo a
+// una ventana temporal como diferencia entre dos snapshots.
+const walletBalanceService = require('../src/services/wallet-balance.service');
+
+function withWalletStub(totalUsd, fn) {
+  const orig = walletBalanceService.getAllTokenBalancesUsd;
+  walletBalanceService.getAllTokenBalancesUsd = async () => ({ totalUsd });
+  return Promise.resolve(fn()).finally(() => {
+    walletBalanceService.getAllTokenBalancesUsd = orig;
+  });
+}
+
+// Orquestador sin hedge vinculado: el resolver corta sin pegarle a la red.
+function unhedgedOrchestrator(accounting) {
+  return {
+    id: 7, userId: 1, walletAddress: '0xabc', network: 'arbitrum',
+    accountId: null, activeProtectedPoolId: null, accounting,
+  };
+}
+
+test('computeBreakdown expone el PnL neto acumulado con todos sus componentes', async () => {
+  const svc = new OrchestratorMetricsService();
+  await withWalletStub(12, async () => {
+    const b = await svc.computeBreakdown(unhedgedOrchestrator({
+      lpFeesUsd: 40, gasSpentUsd: 6, swapSlippageUsd: 2,
+      hedgeRealizedPnlUsd: 15, hedgeUnrealizedPnlUsd: -4, hedgeFundingUsd: 3,
+      hedgeExecutionFeesUsd: 1, hedgeSlippageUsd: 0.5, priceDriftUsd: -20,
+      capitalAdjustmentsUsd: 500, totalNetPnlUsd: 0, lpCount: 2,
+    }));
+    // 40 - 6 - 2 + 15 - 4 + 3 - 1 - 0.5 - 20 = 24.5 (recomputado, no se confia
+    // en el totalNetPnlUsd persistido)
+    assert.ok(Math.abs(b.accounting.totalNetPnlUsd - 24.5) < 1e-9, `pnl=${b.accounting.totalNetPnlUsd}`);
+    assert.equal(b.accounting.lpFeesUsd, 40);
+    assert.equal(b.accounting.hedgeFundingUsd, 3);
+    // Los ajustes de capital se conservan pero NO entran al PnL.
+    assert.equal(b.accounting.capitalAdjustmentsUsd, 500);
+  });
+});
+
+test('computeBreakdown: orquestador sin contabilidad → PnL en cero, no null', async () => {
+  const svc = new OrchestratorMetricsService();
+  await withWalletStub(12, async () => {
+    const b = await svc.computeBreakdown(unhedgedOrchestrator(null));
+    assert.equal(b.accounting.totalNetPnlUsd, 0);
+    assert.equal(b.accounting.lpFeesUsd, 0);
+  });
+});
