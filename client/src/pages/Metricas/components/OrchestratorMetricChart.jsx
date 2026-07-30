@@ -160,7 +160,9 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
       totalUsd,
       rangeUsd: Number.isFinite(baseline) ? totalUsd - baseline : null,
     };
-  }, [liveStats, orchestrator.accounting, stats.current, stats.first]);
+    // `stats` ya es un useMemo: su referencia solo cambia cuando cambian los
+    // snapshots o el live, asi que alcanza con depender del objeto entero.
+  }, [liveStats, orchestrator.accounting, stats]);
 
   const handleRefresh = async () => {
     if (refreshing) return;

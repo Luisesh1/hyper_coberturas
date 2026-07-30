@@ -129,7 +129,15 @@ export function useBotForm({ bots, selectedAsset, defaultAccountId, onReload, ad
 
   const refreshRuns = useCallback(async () => {
     if (!selectedId) return;
-    try { const r = await botsApi.getRuns(selectedId); setRuns(r); } catch {}
+    try {
+      const r = await botsApi.getRuns(selectedId);
+      setRuns(r);
+    } catch (err) {
+      // Refresh de fondo (se dispara con cada evento WS del bot): no
+      // notificamos para no spamear al usuario, pero lo dejamos en consola
+      // para que un endpoint caido siga siendo diagnosticable.
+      console.warn(`[bots] refreshRuns fallo para bot #${selectedId}:`, err.message);
+    }
   }, [selectedId]);
 
   return {
