@@ -94,6 +94,23 @@ export function parseHexOrDecimalBigInt(value) {
   return BigInt(stringValue);
 }
 
+/**
+ * Un plan de transacción sin `to` o sin `data` no es firmable: la wallet lo
+ * rechaza con un mensaje genérico ("Missing or invalid parameters") que no
+ * dice nada del origen real. Lo detectamos antes de llamar a la wallet para
+ * poder explicar qué pasó. `data` puede faltar legítimamente en un envío de
+ * ETH puro, así que solo se exige cuando el plan no mueve valor.
+ */
+export function findInvalidTxPlanReason(tx) {
+  if (!tx || typeof tx !== 'object') return 'el plan de transacción está vacío';
+  const isHexAddress = typeof tx.to === 'string' && /^0x[0-9a-fA-F]{40}$/.test(tx.to.trim());
+  if (!isHexAddress) return `destino inválido (to=${tx.to ?? 'ausente'})`;
+  const hasData = typeof tx.data === 'string' && /^0x([0-9a-fA-F]{2})*$/.test(tx.data.trim());
+  const movesValue = tx.value && tx.value !== '0x0' && tx.value !== '0x';
+  if (!hasData && !movesValue) return `calldata inválida (data=${tx.data ?? 'ausente'})`;
+  return null;
+}
+
 export function buildTransactionParams({ address, tx, includeGas = true }) {
   const txParams = {
     from: address,
@@ -152,6 +169,9 @@ export function formatFriendlyWalletError(code, defaultMessage) {
       return 'La transacción falló on-chain.';
     case 'tx_timeout':
       return 'La red está tardando demasiado en confirmar la transacción.';
+    case 'invalid_tx_plan':
+      return defaultMessage
+        || 'El plan de transacción vino incompleto del servidor. Refrescá la posición y volvé a intentar.';
     default:
       return defaultMessage || 'No se pudo enviar la transacción.';
   }
@@ -256,6 +276,23 @@ export async function sendWalletTransactionDetailed({
         message: formatFriendlyWalletError('request_pending'),
         rawCode: -32002,
         rawMessage: 'request already pending',
+      },
+    };
+  }
+
+  const invalidPlanReason = findInvalidTxPlanReason(tx);
+  if (invalidPlanReason) {
+    return {
+      hash: null,
+      normalizedError: {
+        code: 'invalid_tx_plan',
+        message: formatFriendlyWalletError(
+          'invalid_tx_plan',
+          `El plan de transacción vino incompleto (${invalidPlanReason}). `
+          + 'Refrescá la posición y volvé a intentar — puede que la acción ya se haya ejecutado.'
+        ),
+        rawCode: null,
+        rawMessage: `invalid tx plan: ${invalidPlanReason}`,
       },
     };
   }

@@ -680,3 +680,121 @@ test('recordTxFinalized NO recalcula gas si el cliente ya envió gasCostUsd', as
   const o = await repo.getById(1, id);
   assert.equal(o.accounting.gasSpentUsd, 1.25);
 });
+
+// ─── Flujo del botón "Cerrar y archivar" (kill mode 'keep' + archive) ───────
+// El botón encadena: killLp(mode:'keep') → firma en la wallet →
+// recordTxFinalized → archive. Los tests cubren cada eslabón y los dos
+// caminos de recuperación que se observaron en producción.
+
+test('killLp mode keep: prepara close-keep-assets con el payload del orquestador', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo);
+  const prepareCalls = [];
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    positionActionsService: {
+      preparePositionAction: async (args) => {
+        prepareCalls.push(args);
+        return { txPlan: [{ to: '0xnfpm', data: '0xdead' }], estimatedCosts: {} };
+      },
+    },
+    uniswapService: makeFakeUniswapService(basePool()),
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  const result = await service.killLp({ userId: 1, orchestratorId: id, mode: 'keep' });
+
+  // 'keep' fuerza conservar token0/token1 aunque el par tenga un stable.
+  assert.equal(result.action, 'close-keep-assets');
+  assert.equal(result.alreadyClosed, undefined);
+  assert.equal(prepareCalls.length, 1);
+  assert.equal(prepareCalls[0].action, 'close-keep-assets');
+  assert.deepEqual(prepareCalls[0].payload, {
+    network: 'arbitrum',
+    version: 'v3',
+    walletAddress: '0xabc',
+    positionIdentifier: '777',
+  });
+  // El plan debe llegar firmable: sin `to`/`data` la wallet lo rechaza con
+  // "Missing or invalid parameters" y el usuario no sabe qué pasó.
+  assert.ok(result.prepareResult.txPlan[0].to, 'el txPlan debe traer destino');
+  assert.ok(result.prepareResult.txPlan[0].data, 'el txPlan debe traer calldata');
+});
+
+test('cerrar y archivar: la cadena completa deja el orquestador archivado', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, { activeProtectedPoolId: 9 });
+  const protectionService = makeFakeProtectionService();
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    positionActionsService: {
+      preparePositionAction: async () => ({ txPlan: [{ to: '0xnfpm', data: '0xdead' }], estimatedCosts: {} }),
+    },
+    uniswapService: makeFakeUniswapService(basePool()),
+    uniswapProtectionService: protectionService,
+    protectedPoolRepository: { getById: async () => null },
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  const kill = await service.killLp({ userId: 1, orchestratorId: id, mode: 'keep' });
+  assert.equal(kill.action, 'close-keep-assets');
+
+  await service.recordTxFinalized({
+    userId: 1,
+    orchestratorId: id,
+    action: 'close-keep-assets',
+    finalizeResult: { txHashes: ['0xclose'], refreshedSnapshot: { liquidity: '0', currentValueUsd: 0 } },
+    expected: { gasCostUsd: 0.5, slippageCostUsd: 0 },
+  });
+
+  const closed = await repo.getById(1, id);
+  assert.equal(closed.phase, 'idle');
+  assert.equal(closed.activePositionIdentifier, null, 'el LP debe quedar desligado');
+  assert.equal(closed.activeProtectedPoolId, null, 'la protección debe quedar desligada');
+  // El hedge se cierra vía deactivate: sin esto queda un short huérfano.
+  assert.equal(protectionService.calls.length, 1);
+  assert.equal(protectionService.calls[0].protectionId, 9);
+
+  // archive solo pasa con el LP ya desligado (lo valida el repo fake igual que pg).
+  await service.archive({ userId: 1, orchestratorId: id });
+  assert.equal((await repo.getById(1, id)).status, 'archived');
+});
+
+test('cerrar y archivar sobre un LP ya cerrado: no manda nada a firmar y cierra el hedge', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, { activeProtectedPoolId: 9 });
+  const protectionService = makeFakeProtectionService();
+  let prepareCalled = false;
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    positionActionsService: {
+      preparePositionAction: async () => { prepareCalled = true; return { txPlan: [] }; },
+    },
+    // Sin pools vivas → el reconciliador declara el LP cerrado on-chain.
+    uniswapService: makeFakeUniswapService(null),
+    uniswapProtectionService: protectionService,
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  const result = await service.killLp({ userId: 1, orchestratorId: id, mode: 'keep' });
+
+  assert.equal(result.alreadyClosed, true);
+  assert.equal(result.prepareResult, null, 'no debe haber plan que firmar');
+  assert.equal(prepareCalled, false, 'no debe prepararse una tx para una posición vacía');
+  // Este es el caso que dejó shorts abiertos: el hedge tiene que cerrarse
+  // igual aunque el LP ya no exista.
+  assert.equal(protectionService.calls.length, 1);
+  assert.equal(protectionService.calls[0].protectionId, 9);
+
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.activePositionIdentifier, null);
+  assert.equal(orch.activeProtectedPoolId, null);
+  await service.archive({ userId: 1, orchestratorId: id });
+  assert.equal((await repo.getById(1, id)).status, 'archived');
+});
