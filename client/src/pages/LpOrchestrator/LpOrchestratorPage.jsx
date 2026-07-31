@@ -391,7 +391,17 @@ export default function LpOrchestratorPage() {
   }, [walletConn.isConnected, refresh]);
 
   const handleSmartCreateFinalized = useCallback(async (finalizeArg) => {
-    if (!creatingLpFor) return;
+    // Si esto se dispara sin orquestador en contexto, el LP ya está on-chain y
+    // no tenemos a quién vincularlo: avisamos en vez de descartarlo en
+    // silencio, que es lo que dejaba la posición huérfana sin ninguna pista.
+    if (!creatingLpFor) {
+      setError(
+        'La posición se creó on-chain pero se perdió la referencia al orquestador '
+        + '(¿se cerró el modal?). Vinculala con "Adoptar LP existente".'
+      );
+      refresh().catch(() => {});
+      return;
+    }
     // SmartCreatePoolModal entrega { txHashes, finalizeResult }. El backend
     // espera el shape interno (con positionChanges/refreshedSnapshot), así
     // que desempaquetamos antes de adjuntar y propagamos los txHashes.
@@ -404,11 +414,13 @@ export default function LpOrchestratorPage() {
         protectionConfig: creatingLpFor.protectionConfig || { enabled: false },
       });
     } catch (err) {
-      // El attach-lp falló (probablemente race condition con shutdown del
-      // server, o un timeout). El LP YA está creado on-chain — informamos
-      // al usuario y le indicamos cómo recuperarlo con "Adoptar LP existente".
-      const friendlyMessage = `${err.message || 'No se pudo adjuntar el LP al orquestador.'} El LP YA está en tu wallet — usa "Adoptar LP existente" en el orquestador para vincularlo.`;
-      setError(friendlyMessage);
+      // El attach-lp falló. Con `partial` la causa es conocida: el finalize no
+      // llegó a producir el identificador de la posición, así que el attach no
+      // tenía con qué trabajar. En ambos casos el LP YA está creado on-chain.
+      const causa = finalizeArg?.partial
+        ? 'El servidor no terminó de conciliar la operación, así que no se pudo vincular automáticamente.'
+        : (err.message || 'No se pudo adjuntar el LP al orquestador.');
+      setError(`${causa} El LP YA está en tu wallet — usa "Adoptar LP existente" en el orquestador para vincularlo.`);
     } finally {
       setCreatingLpFor(null);
       refresh().catch(() => {});

@@ -681,3 +681,17 @@ input[type='number']:focus {
     padding: 1rem 1.5rem 0;
   }
 }
+
+/* Aviso sobre un exito parcial: la posicion existe pero quedo algo pendiente
+   (p. ej. vincularla al orquestador). No es un error — no debe leerse como
+   que la creacion fallo. */
+.warning {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(224, 164, 88, 0.4);
+  background: rgba(224, 164, 88, 0.1);
+  color: #e0a458;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}

@@ -397,8 +397,34 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
       finalizeKind: 'position_action',
     });
 
-    if (finalizeResult?.status === 'done') {
-      onFinalized?.({ txHashes: finalizeResult.txHashes || execution.txHashes, finalizeResult });
+    // Si hay txHashes, las transacciones YA se confirmaron on-chain: la
+    // posicion existe y hay que avisarle al caller aunque el finalize del
+    // servidor no haya llegado a 'done' (runPlan devuelve txHashes con status
+    // no-terminal cuando el polling de la operacion falla o expira).
+    //
+    // Antes solo se llamaba a onFinalized con status 'done'. Un finalize a
+    // medias no vinculaba el LP al orquestador NI mostraba error: el usuario
+    // veia la plata salir de la wallet y ninguna posicion en la app, sin
+    // ninguna pista de que la posicion existia y habia que adoptarla.
+    // Caso silencioso que dejaba posiciones huerfanas: `runPlan` devuelve un
+    // objeto CON txHashes pero status distinto de 'done' cuando las txs ya se
+    // confirmaron on-chain y lo que fallo fue la conciliacion del backend.
+    // Antes solo se avisaba con status 'done', asi que el usuario veia salir
+    // la plata y ninguna posicion en la app, sin pista de que existia.
+    //
+    // El resto de los fallos (una tx que revierte, el finalize que no se
+    // envia) devuelven null y ya los muestra el runner con su propio error;
+    // no los tocamos para no tapar ese mensaje.
+    if (finalizeResult?.txHashes?.length) {
+      const parcial = finalizeResult.status !== 'done';
+      onFinalized?.({ txHashes: finalizeResult.txHashes, finalizeResult, partial: parcial });
+      if (parcial) {
+        setError(
+          'Las transacciones se confirmaron on-chain pero el servidor no terminó de '
+          + 'conciliar la operación. La posición YA existe en tu wallet — si no aparece '
+          + 'en el orquestador, vinculala con "Adoptar LP existente".'
+        );
+      }
     } else if (!finalizeResult && execution.currentTx?.label) {
       setFailedTxLabel(execution.currentTx.label);
     }

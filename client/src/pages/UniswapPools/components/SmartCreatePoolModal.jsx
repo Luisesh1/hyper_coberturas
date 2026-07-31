@@ -174,6 +174,7 @@ export default function SmartCreatePoolModal({
             prepareData={flow.prepareData}
             explorerUrl={explorerUrl}
             onClose={onClose}
+            warning={flow.error}
           />
         )}
 

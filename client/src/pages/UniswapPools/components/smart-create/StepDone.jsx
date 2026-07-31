@@ -9,6 +9,10 @@ export default function StepDone({
   prepareData,
   explorerUrl,
   onClose,
+  // Aviso mostrado junto al exito: las txs se confirmaron pero quedo algo
+  // pendiente (tipicamente la conciliacion en el backend). Sin esto el
+  // usuario ve "creada correctamente" y no se entera de que falta vincularla.
+  warning,
 }) {
   return (
     <section className={styles.section}>
@@ -16,6 +20,7 @@ export default function StepDone({
         <div className={styles.checkmark}>✓</div>
         <p>Posición LP creada correctamente.</p>
       </div>
+      {warning && <div className={styles.warning}>{warning}</div>}
       {txHashes.length > 0 && (
         <div className={styles.txList}>
           <h4>Transacciones confirmadas ({txHashes.length})</h4>

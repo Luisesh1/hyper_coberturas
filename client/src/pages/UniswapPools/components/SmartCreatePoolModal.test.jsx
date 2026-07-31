@@ -418,6 +418,7 @@ describe('SmartCreatePoolModal', () => {
           newPositionIdentifier: '789',
         },
       },
+      partial: false,
     }));
     expect(await screen.findByText(/Posición LP creada correctamente/i)).toBeTruthy();
   }, 20000);
@@ -515,4 +516,51 @@ describe('SmartCreatePoolModal', () => {
     expect(await screen.findByText(/El plan expiró/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: /Firmar con wallet/i })).toBeTruthy();
   }, 15000);
+
+  // Regresion: `runPlan` devuelve txHashes con status no-terminal cuando el
+  // polling del finalize falla, pero las txs YA se confirmaron on-chain. Antes
+  // ese caso no llamaba a onFinalized ni mostraba error: el LP quedaba
+  // huerfano (creado on-chain, invisible en la app) sin ninguna pista.
+  it('avisa y entrega el resultado aunque el finalize no llegue a done', async () => {
+    const onFinalized = vi.fn();
+    executionController.setConfig({
+      outcome: 'done',
+      txHashes: ['0xaaa', '0xbbb'],
+      result: {
+        status: 'finalize_pending',
+        txHashes: ['0xaaa', '0xbbb'],
+      },
+    });
+
+    render(
+      <SmartCreatePoolModal
+        wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
+        defaults={{ network: 'arbitrum', version: 'v3' }}
+        meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'], explorerUrl: 'https://arbiscan.io' }] }}
+        onClose={vi.fn()}
+        onFinalized={onFinalized}
+      />
+    );
+
+    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum'));
+    await userEvent.selectOptions(screen.getByLabelText(/Token 0/i), '0x00000000000000000000000000000000000000AA');
+    await userEvent.selectOptions(screen.getByLabelText(/Token 1/i), '0x00000000000000000000000000000000000000BB');
+    await userEvent.clear(screen.getByLabelText(/Valor total objetivo/i));
+    await userEvent.type(screen.getByLabelText(/Valor total objetivo/i), '1000');
+    await userEvent.click(screen.getByRole('button', { name: /Analizar pool y rango/i }));
+    await screen.findByText(/Paso 2: Rango y composición/i);
+    await userEvent.click(screen.getByRole('button', { name: /Continuar a fondeo/i }));
+    await screen.findByText(/Paso 3: Capital fuente y swaps/i);
+    await userEvent.click(screen.getByRole('button', { name: /Revisar y preparar firma/i }));
+    await screen.findByText(/Paso 4: Review y firma/i);
+    await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
+
+    // Se entrega igual, marcado como parcial, para que el caller intente
+    // vincular y sepa por que puede no lograrlo.
+    await waitFor(() => expect(onFinalized).toHaveBeenCalledWith(
+      expect.objectContaining({ txHashes: ['0xaaa', '0xbbb'], partial: true })
+    ));
+    // Y el usuario tiene que enterarse de que la posicion existe.
+    expect(await screen.findByText(/YA existe en tu wallet/i)).toBeTruthy();
+  }, 20000);
 });
