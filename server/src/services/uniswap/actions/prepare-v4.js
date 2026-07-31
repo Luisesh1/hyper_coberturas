@@ -65,6 +65,30 @@ const {
   loadV4PositionContext,
 } = require('./helpers');
 
+/**
+ * Tope de gasto para un MINT_POSITION de v4.
+ *
+ * El PositionManager calcula on-chain el monto EXACTO que requiere la
+ * liquidez pedida y revierte con `MaximumAmountExceeded(max, requerido)` si
+ * supera el tope. Nosotros derivamos la liquidez de los montos deseados con
+ * `estimateLiquidityForAmounts`, asi que el requerido casi siempre difiere un
+ * poco por redondeo (v4 redondea hacia arriba lo que cobra) y por el
+ * movimiento de precio entre la cotizacion y la firma.
+ *
+ * Pasar `amountMax = amountDesired` deja CERO margen: cualquier desvio hacia
+ * arriba revierte. Aplicamos la misma tolerancia de slippage que el resto del
+ * flujo. Es un tope de gasto, no un monto a gastar: si el pool requiere
+ * menos, se cobra menos.
+ */
+function applyMintSlippageCeiling(amountRaw, slippageBps) {
+  const amount = BigInt(amountRaw || 0n);
+  if (amount <= 0n) return amount;
+  const bps = Number.isFinite(Number(slippageBps)) && Number(slippageBps) > 0
+    ? BigInt(Math.round(Number(slippageBps)))
+    : BigInt(DEFAULT_SLIPPAGE_BPS);
+  return amount + (amount * bps) / 10_000n;
+}
+
 async function prepareIncreaseLiquidityV4(payload) {
   const ctx = await loadV4PositionContext(payload);
   const amount0Desired = toBigIntAmount(payload.amount0Desired, ctx.token0.decimals, 'amount0Desired');
@@ -317,6 +341,8 @@ async function prepareReinvestFeesV4(payload) {
 
 async function prepareModifyRangeV4(payload) {
   const ctx = await loadV4PositionContext(payload);
+  // Tolerancia aplicada al tope de gasto del mint (ver applyMintSlippageCeiling).
+  const mintSlippageBps = payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const { lowerPrice, upperPrice } = validatePriceRange(payload.rangeLowerPrice, payload.rangeUpperPrice);
 
   const amount0Current = toBigIntAmount(ctx.currentAmounts.amount0 || 0, ctx.token0.decimals, 'amount0Current');
@@ -448,8 +474,8 @@ async function prepareModifyRangeV4(payload) {
         tickLower,
         tickUpper,
         liquidity: liquidityDelta,
-        amount0Max: amount0Desired,
-        amount1Max: amount1Desired,
+        amount0Max: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
+        amount1Max: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
         owner: ctx.normalizedWallet,
       }),
       encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
@@ -526,6 +552,8 @@ async function prepareModifyRangeV4(payload) {
 }
 
 async function prepareCreatePositionV4(payload) {
+  // Tolerancia aplicada al tope de gasto del mint (ver applyMintSlippageCeiling).
+  const mintSlippageBps = payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const usingSmartFunding = payload.totalUsdTarget != null
     || Array.isArray(payload.fundingSelections)
     || Array.isArray(payload.importTokenAddresses);
@@ -636,8 +664,8 @@ async function prepareCreatePositionV4(payload) {
           tickLower,
           tickUpper,
           liquidity: liquidityDelta,
-          amount0Max: amount0Desired,
-          amount1Max: amount1Desired,
+          amount0Max: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
+          amount1Max: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
           owner: normalizedWallet,
         }),
         encodeV4CloseCurrencyParams(dummyCtx.poolKey.currency0),
@@ -808,8 +836,8 @@ async function prepareCreatePositionV4(payload) {
         tickLower,
         tickUpper,
         liquidity: liquidityDelta,
-        amount0Max: amount0Desired,
-        amount1Max: amount1Desired,
+        amount0Max: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
+        amount1Max: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
         owner: normalizedWallet,
       }),
       encodeV4CloseCurrencyParams(poolKey.currency0),
@@ -1285,6 +1313,9 @@ async function prepareCloseToUsdcV4(payload) {
 }
 
 module.exports = {
+  // Exportado para test: sin margen, el mint v4 revierte con
+  // MaximumAmountExceeded ante cualquier redondeo hacia arriba.
+  applyMintSlippageCeiling,
   prepareIncreaseLiquidityV4,
   prepareDecreaseLiquidityV4,
   prepareReinvestFeesV4,
