@@ -7,7 +7,10 @@
 
 const { ethers } = require('ethers');
 const { ValidationError } = require('../../errors/app-error');
-const { tickToRawSqrtRatio } = require('../../domains/uniswap/pools/domain/position-action-math');
+// OJO: `position-action-math` NO exporta tickToRawSqrtRatio — importarlo de
+// ahi dejaba `undefined` y reventaba con "is not a function" en el primer
+// mint v4 (unico camino que llama a estimateLiquidityForAmounts).
+const { tickToRawSqrtRatio } = require('./pool-math');
 
 /**
  * Convierte un precio (en token1/token0) al tick más cercano según el spacing
