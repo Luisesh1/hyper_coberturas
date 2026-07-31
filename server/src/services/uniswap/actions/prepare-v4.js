@@ -90,6 +90,9 @@ function applyMintSlippageCeiling(amountRaw, slippageBps) {
 }
 
 async function prepareIncreaseLiquidityV4(payload) {
+  // Mismo margen que el mint: INCREASE_LIQUIDITY tambien revierte con
+  // MaximumAmountExceeded si el limite no cubre lo que el pool requiere.
+  const mintSlippageBps = payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const ctx = await loadV4PositionContext(payload);
   const amount0Desired = toBigIntAmount(payload.amount0Desired, ctx.token0.decimals, 'amount0Desired');
   const amount1Desired = toBigIntAmount(payload.amount1Desired, ctx.token1.decimals, 'amount1Desired');
@@ -108,7 +111,7 @@ async function prepareIncreaseLiquidityV4(payload) {
     token: ctx.token0,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: amount0Desired,
+    amount: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
@@ -118,7 +121,7 @@ async function prepareIncreaseLiquidityV4(payload) {
     token: ctx.token1,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: amount1Desired,
+    amount: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
@@ -134,8 +137,8 @@ async function prepareIncreaseLiquidityV4(payload) {
       encodeV4ModifyLiquidityParams({
         tokenId: ctx.tokenId,
         liquidity: liquidityDelta,
-        amount0Limit: amount0Desired,
-        amount1Limit: amount1Desired,
+        amount0Limit: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
+        amount1Limit: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
       }),
       encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
       encodeV4CloseCurrencyParams(ctx.poolKey.currency1),
@@ -438,7 +441,7 @@ async function prepareModifyRangeV4(payload) {
     token: ctx.token0,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: amount0Desired,
+    amount: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
@@ -448,7 +451,7 @@ async function prepareModifyRangeV4(payload) {
     token: ctx.token1,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: amount1Desired,
+    amount: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
@@ -620,7 +623,7 @@ async function prepareCreatePositionV4(payload) {
       token: token0,
       walletAddress: normalizedWallet,
       spender: positionManagerAddress,
-      amount: amount0Desired,
+      amount: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
       chainId: networkConfig.chainId,
       requiresApproval,
       txPlan,
@@ -631,7 +634,7 @@ async function prepareCreatePositionV4(payload) {
       token: token1,
       walletAddress: normalizedWallet,
       spender: positionManagerAddress,
-      amount: amount1Desired,
+      amount: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
       chainId: networkConfig.chainId,
       requiresApproval,
       txPlan,
@@ -800,7 +803,7 @@ async function prepareCreatePositionV4(payload) {
     token: canonicalToken0,
     walletAddress: normalizedWallet,
     spender: positionManagerAddress,
-    amount: amount0Desired,
+    amount: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
     chainId: networkConfig.chainId,
     requiresApproval,
     txPlan,
@@ -810,7 +813,7 @@ async function prepareCreatePositionV4(payload) {
     token: canonicalToken1,
     walletAddress: normalizedWallet,
     spender: positionManagerAddress,
-    amount: amount1Desired,
+    amount: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
     chainId: networkConfig.chainId,
     requiresApproval,
     txPlan,

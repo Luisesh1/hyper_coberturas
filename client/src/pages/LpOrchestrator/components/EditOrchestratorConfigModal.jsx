@@ -4,6 +4,8 @@ import ProtectionFormFields, {
   buildProtectionPayload,
   validateProtectionForm,
 } from './ProtectionFormFields';
+import StrategyFieldInput from './StrategyFieldInput';
+import { validateStrategyFields } from './strategy-fields';
 import styles from './CreateOrchestratorWizard.module.css';
 
 // Convierte el `protectionConfig` persistido (forma payload/backend) al shape
@@ -64,31 +66,9 @@ export default function EditOrchestratorConfigModal({
   const handleStrategyField = (key, value) => setStrategy((prev) => ({ ...prev, [key]: value }));
 
   function validate() {
-    const rwNum = Number(strategy.rangeWidthPct);
-    if (!Number.isFinite(rwNum) || rwNum <= 0 || rwNum >= 100) {
-      return 'El ancho del rango debe estar entre 0 y 100%.';
-    }
-    const emNum = Number(strategy.edgeMarginPct);
-    if (!Number.isFinite(emNum) || emNum < 5 || emNum > 49) {
-      return 'El margen de borde debe estar entre 5% y 49%.';
-    }
-    const cr = Number(strategy.costToRewardThreshold);
-    if (!Number.isFinite(cr) || cr <= 0 || cr >= 1) {
-      return 'El umbral coste/recompensa debe estar entre 0 y 1.';
-    }
-    const cooldown = Number(strategy.minRebalanceCooldownSec);
-    if (!Number.isFinite(cooldown) || cooldown < 0) {
-      return 'El cooldown anti-thrashing debe ser ≥ 0.';
-    }
-    const alertMin = Number(strategy.urgentAlertRepeatMinutes);
-    if (!Number.isFinite(alertMin) || alertMin < 1 || alertMin > 1440) {
-      return 'La repetición de alerta urgente debe estar entre 1 y 1440 min.';
-    }
-    const slip = Number(strategy.maxSlippageBps);
-    if (!Number.isFinite(slip) || slip < 1 || slip > 1000) {
-      return 'El max slippage (bps) debe estar entre 1 y 1000.';
-    }
-    return validateProtectionForm(protection);
+    // Los rangos salen de la definicion compartida: antes este modal validaba
+    // 6 campos y el wizard solo 3, sobre los mismos limites.
+    return validateStrategyFields(strategy) || validateProtectionForm(protection);
   }
 
   // Calcula qué campos de estrategia cambiaron respecto al persistido. Solo
@@ -182,79 +162,55 @@ export default function EditOrchestratorConfigModal({
 
             <div className={styles.fields}>
               <div className={styles.row}>
-                <div className={styles.field}>
-                  <label>Ancho del rango (±%)</label>
-                  <input
-                    type="number" min="0.1" max="99" step="0.5"
+                <StrategyFieldInput
+                    fieldKey="rangeWidthPct"
                     value={strategy.rangeWidthPct}
-                    onChange={(e) => handleStrategyField('rangeWidthPct', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
-                <div className={styles.field}>
-                  <label>Margen de borde (%)</label>
-                  <input
-                    type="number" min="5" max="49" step="1"
+                <StrategyFieldInput
+                    fieldKey="edgeMarginPct"
                     value={strategy.edgeMarginPct}
-                    onChange={(e) => handleStrategyField('edgeMarginPct', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
               </div>
 
               <div className={styles.row}>
-                <div className={styles.field}>
-                  <label>Umbral coste / recompensa</label>
-                  <input
-                    type="number" min="0.01" max="0.99" step="0.01"
+                <StrategyFieldInput
+                    fieldKey="costToRewardThreshold"
                     value={strategy.costToRewardThreshold}
-                    onChange={(e) => handleStrategyField('costToRewardThreshold', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
-                <div className={styles.field}>
-                  <label>Umbral reinvest fees (USD)</label>
-                  <input
-                    type="number" min="0" step="1"
+                <StrategyFieldInput
+                    fieldKey="reinvestThresholdUsd"
                     value={strategy.reinvestThresholdUsd}
-                    onChange={(e) => handleStrategyField('reinvestThresholdUsd', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
               </div>
 
               <div className={styles.row}>
-                <div className={styles.field}>
-                  <label>Repetir alerta urgente cada (min)</label>
-                  <input
-                    type="number" min="1" max="1440" step="1"
+                <StrategyFieldInput
+                    fieldKey="urgentAlertRepeatMinutes"
                     value={strategy.urgentAlertRepeatMinutes}
-                    onChange={(e) => handleStrategyField('urgentAlertRepeatMinutes', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
-                <div className={styles.field}>
-                  <label>Cooldown anti-thrashing (s)</label>
-                  <input
-                    type="number" min="0" step="60"
+                <StrategyFieldInput
+                    fieldKey="minRebalanceCooldownSec"
                     value={strategy.minRebalanceCooldownSec}
-                    onChange={(e) => handleStrategyField('minRebalanceCooldownSec', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
               </div>
 
               <div className={styles.row}>
-                <div className={styles.field}>
-                  <label>Min ganancias netas LP para rebalancear (USD)</label>
-                  <input
-                    type="number" min="0" step="1"
+                <StrategyFieldInput
+                    fieldKey="minNetLpEarningsForRebalanceUsd"
                     value={strategy.minNetLpEarningsForRebalanceUsd}
-                    onChange={(e) => handleStrategyField('minNetLpEarningsForRebalanceUsd', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
-                <div className={styles.field}>
-                  <label>Max slippage swaps (bps)</label>
-                  <input
-                    type="number" min="1" max="1000" step="1"
+                <StrategyFieldInput
+                    fieldKey="maxSlippageBps"
                     value={strategy.maxSlippageBps}
-                    onChange={(e) => handleStrategyField('maxSlippageBps', e.target.value)}
+                    onChange={handleStrategyField}
                   />
-                </div>
               </div>
             </div>
           </section>

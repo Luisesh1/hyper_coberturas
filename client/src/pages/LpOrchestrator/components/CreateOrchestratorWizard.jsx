@@ -5,6 +5,8 @@ import ProtectionFormFields, {
   buildProtectionPayload,
   validateProtectionForm,
 } from './ProtectionFormFields';
+import StrategyFieldInput, { FieldLabel } from './StrategyFieldInput';
+import { validateStrategyFields } from './strategy-fields';
 import styles from './CreateOrchestratorWizard.module.css';
 
 const STEP = {
@@ -145,19 +147,7 @@ export default function CreateOrchestratorWizard({
   }
 
   function validateStrategy() {
-    const rw = Number(strategy.rangeWidthPct);
-    if (!Number.isFinite(rw) || rw <= 0 || rw >= 100) {
-      return 'El ancho del rango debe estar entre 0 y 100%.';
-    }
-    const em = Number(strategy.edgeMarginPct);
-    if (!Number.isFinite(em) || em < 5 || em > 49) {
-      return 'El margen de borde debe estar entre 5% y 49%.';
-    }
-    const cr = Number(strategy.costToRewardThreshold);
-    if (!Number.isFinite(cr) || cr <= 0 || cr >= 1) {
-      return 'El umbral coste/recompensa debe estar entre 0 y 1.';
-    }
-    return null;
+    return validateStrategyFields(strategy);
   }
 
   function handleNext() {
@@ -459,90 +449,46 @@ function StrategyStep({ strategy, setStrategy }) {
       </div>
 
       <div className={styles.row}>
-        <div className={styles.field}>
-          <FieldLabel
-            text="Ancho del rango (±%)"
-            tooltip="Define el ancho del LP en Uniswap V3. El LP se centra en el precio actual y se extiende ±este % a cada lado. Valores típicos: 1-3% (estrecho, más fees, mayor riesgo de salir de rango), 5-10% (medio), >10% (amplio, menos fees, más estable)."
-          />
-          <input
-            type="number" min="0.1" max="99" step="0.5"
+        <StrategyFieldInput
+            fieldKey="rangeWidthPct"
             value={strategy.rangeWidthPct}
-            onChange={(e) => handleField('rangeWidthPct', e.target.value)}
+            onChange={handleField}
+            hint={<>Ej: 5 → el LP cubrirá precio × [0.95, 1.05]</>}
           />
-          <span className={styles.hint}>
-            Ej: 5 → el LP cubrirá precio × [0.95, 1.05]
-          </span>
-        </div>
-        <div className={styles.field}>
-          <FieldLabel
-            text="Margen de borde (%)"
-            tooltip="Cuánto del rango cuenta como 'borde' a cada lado. Si pones 40%, los bordes ocupan el 40% inferior + 40% superior = 80%, y el centro 'sin alerta' es solo el 20% central. Cuando el precio entra al borde, el orquestador evalúa si vale la pena rebalancear."
-          />
-          <input
-            type="number" min="5" max="49" step="1"
+        <StrategyFieldInput
+            fieldKey="edgeMarginPct"
             value={strategy.edgeMarginPct}
-            onChange={(e) => handleField('edgeMarginPct', e.target.value)}
+            onChange={handleField}
+            hint={<>Centro sin alerta: <strong>{centralPct != null ? `${centralPct}%` : '—'}</strong> del rango</>}
           />
-          <span className={styles.hint}>
-            Centro sin alerta: <strong>{centralPct != null ? `${centralPct}%` : '—'}</strong> del rango
-          </span>
-        </div>
       </div>
 
       <div className={styles.row}>
-        <div className={styles.field}>
-          <FieldLabel
-            text="Umbral coste / recompensa"
-            tooltip="Solo se recomienda rebalancear cuando el coste estimado (gas + slippage) es menor que ganancias_netas × este valor. Default 0.33 → coste < 1/3 de las ganancias netas del LP. Subirlo recomienda más rebalanceos; bajarlo, menos."
-          />
-          <input
-            type="number" min="0.01" max="0.99" step="0.01"
+        <StrategyFieldInput
+            fieldKey="costToRewardThreshold"
             value={strategy.costToRewardThreshold}
-            onChange={(e) => handleField('costToRewardThreshold', e.target.value)}
+            onChange={handleField}
+            hint={<>0.33 = coste &lt; 1/3 ganancias</>}
           />
-          <span className={styles.hint}>
-            0.33 = coste &lt; 1/3 ganancias
-          </span>
-        </div>
-        <div className={styles.field}>
-          <FieldLabel
-            text="Umbral reinvest fees (USD)"
-            tooltip="El orquestador recomendará cobrar/reinvertir las fees del LP cuando las acumuladas superen este USD. Pon 0 para desactivar la recomendación."
-          />
-          <input
-            type="number" min="0" step="1"
+        <StrategyFieldInput
+            fieldKey="reinvestThresholdUsd"
             value={strategy.reinvestThresholdUsd}
-            onChange={(e) => handleField('reinvestThresholdUsd', e.target.value)}
+            onChange={handleField}
+            hint={<>Recomienda cobrar a partir de este monto</>}
           />
-          <span className={styles.hint}>
-            Recomienda cobrar a partir de este monto
-          </span>
-        </div>
       </div>
 
       <div className={styles.row}>
-        <div className={styles.field}>
-          <FieldLabel
-            text="Repetir alerta urgente cada (min)"
-            tooltip="Cuando el LP queda fuera de rango, el orquestador envía una alerta y la repite cada N minutos hasta que el precio vuelva al rango o la posición se ajuste."
-          />
-          <input
-            type="number" min="1" max="1440" step="1"
+        <StrategyFieldInput
+            fieldKey="urgentAlertRepeatMinutes"
             value={strategy.urgentAlertRepeatMinutes}
-            onChange={(e) => handleField('urgentAlertRepeatMinutes', e.target.value)}
+            onChange={handleField}
           />
-        </div>
-        <div className={styles.field}>
-          <FieldLabel
-            text="Cooldown anti-thrashing (s)"
-            tooltip="Tiempo mínimo (en segundos) entre rebalanceos consecutivos para evitar que pequeñas oscilaciones del precio disparen muchos rebalanceos seguidos."
-          />
-          <input
-            type="number" min="0" step="60"
+        <StrategyFieldInput
+            fieldKey="minRebalanceCooldownSec"
             value={strategy.minRebalanceCooldownSec}
-            onChange={(e) => handleField('minRebalanceCooldownSec', e.target.value)}
+            onChange={handleField}
           />
-        </div>
       </div>
     </div>
   );
@@ -642,15 +588,3 @@ function Stepper({ currentIndex, stepOrder }) {
   );
 }
 
-function FieldLabel({ text, tooltip }) {
-  return (
-    <label className={styles.fieldLabel}>
-      {text}
-      {tooltip && (
-        <span className={styles.tooltipIcon} title={tooltip} aria-label={tooltip}>
-          ⓘ
-        </span>
-      )}
-    </label>
-  );
-}
