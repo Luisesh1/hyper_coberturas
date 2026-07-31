@@ -133,6 +133,19 @@ router.get('/smart-create/token-list', asyncHandler(async (req, res) => {
   res.json({ success: true, data: list });
 }));
 
+/**
+ * GET /smart-create/pools?network=&version=
+ * Pools que EXISTEN on-chain para esa red + version. La UI lo usa para
+ * ofrecer solo pares seleccionables en vez de dejar componer uno inexistente
+ * y fallar recien al crear la posicion.
+ */
+router.get('/smart-create/pools', asyncHandler(async (req, res) => {
+  const network = String(req.query.network || 'arbitrum');
+  const version = String(req.query.version || 'v3');
+  const data = await smartPoolCreatorService.discoverAvailablePools({ network, version });
+  res.json({ success: true, data });
+}));
+
 router.get('/smart-create/assets', asyncHandler(async (req, res) => {
   const network = String(req.query.network || 'ethereum');
   const walletAddress = String(req.query.walletAddress || '').trim();

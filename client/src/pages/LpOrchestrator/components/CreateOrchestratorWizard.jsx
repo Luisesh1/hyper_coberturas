@@ -32,13 +32,6 @@ const DEFAULT_STRATEGY = {
   maxSlippageBps: '100',
 };
 
-const FEE_TIERS = [
-  { value: 100, label: '0.01%' },
-  { value: 500, label: '0.05%' },
-  { value: 3000, label: '0.30%' },
-  { value: 10000, label: '1.00%' },
-];
-
 // Espejo de DEFAULT_V4_TICK_SPACING_BY_FEE en
 // server/src/services/smart-pool-creator.service.js. Solo se usa para
 // mostrar el valor que el backend derivará; no se envía salvo override.
@@ -47,6 +40,11 @@ const DEFAULT_V4_TICK_SPACING_BY_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 }
 // Redes donde se puede orquestar un LP. La testnet existe para validar los
 // flujos on-chain sin capital real; se marca para que no se confunda con
 // una red productiva.
+// Identidad estable de un pool dentro de la lista (par + fee la fijan).
+function poolKeyOf(pool) {
+  return `${pool.token0.address}-${pool.token1.address}-${pool.fee}`;
+}
+
 const NETWORK_OPTIONS = [
   { id: 'arbitrum', label: 'Arbitrum One' },
   { id: 'base-sepolia', label: 'Base Sepolia (testnet)', isTestnet: true },
@@ -63,32 +61,48 @@ export default function CreateOrchestratorWizard({
   const [step, setStep] = useState(STEP.IDENTITY);
   const [network, setNetwork] = useState(initialNetwork);
   const [version, setVersion] = useState(initialVersion);
-  const [v4TickSpacing, setV4TickSpacing] = useState('');
   const [name, setName] = useState('');
-  const [tokenList, setTokenList] = useState([]);
-  const [token0Address, setToken0Address] = useState('');
-  const [token1Address, setToken1Address] = useState('');
-  const [feeTier, setFeeTier] = useState(3000);
+  const [pools, setPools] = useState([]);
+  const [poolsLoading, setPoolsLoading] = useState(false);
+  const [poolsError, setPoolsError] = useState('');
+  const [selectedPoolKey, setSelectedPoolKey] = useState('');
   const [initialTotalUsd, setInitialTotalUsd] = useState('1000');
   const [strategy, setStrategy] = useState(DEFAULT_STRATEGY);
   const [protection, setProtection] = useState(buildDefaultProtection(1000));
   const [error, setError] = useState('');
   const [isBusy, setIsBusy] = useState(false);
 
-  // Las addresses de token no son portables entre redes: al cambiar de red
-  // hay que soltar el par elegido o se mandaria una address inexistente.
-  useEffect(() => {
-    setToken0Address('');
-    setToken1Address('');
-  }, [network]);
-
+  // Solo se puede crear una posicion sobre un pool que YA existe (tanto en v3
+  // como en v4), asi que la lista se resuelve on-chain y el usuario elige de
+  // ahi. Cambiar de red o de version invalida la seleccion previa.
   useEffect(() => {
     let cancelled = false;
-    uniswapApi.getSmartCreateTokenList(network)
-      .then((list) => { if (!cancelled) setTokenList(Array.isArray(list) ? list : []); })
-      .catch(() => { if (!cancelled) setTokenList([]); });
+    setPoolsLoading(true);
+    setPoolsError('');
+    setSelectedPoolKey('');
+    uniswapApi.getSmartCreatePools({ network, version })
+      .then((data) => {
+        if (cancelled) return;
+        const found = Array.isArray(data?.pools) ? data.pools : [];
+        setPools(found);
+        // Preseleccionamos el primero con liquidez para que el camino feliz
+        // sea un click menos.
+        const first = found.find((p) => p.hasLiquidity) || found[0];
+        if (first) setSelectedPoolKey(poolKeyOf(first));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPools([]);
+        setPoolsError(err?.message || 'error desconocido');
+      })
+      .finally(() => { if (!cancelled) setPoolsLoading(false); });
     return () => { cancelled = true; };
-  }, [network]);
+  }, [network, version]);
+
+  const selectedPool = useMemo(
+    () => pools.find((p) => poolKeyOf(p) === selectedPoolKey) || null,
+    [pools, selectedPoolKey]
+  );
 
   // Mientras la protección esté desactivada, recalculamos los defaults
   // (notional + auto-tune) cuando cambie el capital inicial o el ancho del
@@ -103,38 +117,16 @@ export default function CreateOrchestratorWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTotalUsd, strategy.rangeWidthPct]);
 
-  const tokenOptions = useMemo(() => (
-    tokenList.map((t) => ({
-      value: t.address,
-      label: `${t.symbol} (${t.address.slice(0, 6)}…${t.address.slice(-4)})`,
-      symbol: t.symbol,
-    }))
-  ), [tokenList]);
-
-  function findSymbol(address) {
-    const tok = tokenList.find((t) => t.address.toLowerCase() === String(address || '').toLowerCase());
-    return tok?.symbol || '';
-  }
-
   function validateIdentity() {
     if (!name.trim()) return 'Pon un nombre al orquestador.';
-    if (!token0Address) return 'Selecciona el primer token del par.';
-    if (!token1Address) return 'Selecciona el segundo token del par.';
-    if (token0Address.toLowerCase() === token1Address.toLowerCase()) {
-      return 'Los dos tokens deben ser distintos.';
-    }
+    if (poolsLoading) return 'Esperá a que termine de cargar la lista de pools.';
+    // El pool sale de la lista descubierta on-chain, asi que no hace falta
+    // validar par ni fee: no se puede componer una combinacion inexistente.
+    if (!selectedPool) return 'Selecciona un pool.';
     if (!Number(initialTotalUsd) || Number(initialTotalUsd) <= 0) {
       return 'El capital inicial debe ser un número positivo.';
     }
     if (!walletAddress) return 'Conecta una wallet antes de crear el orquestador.';
-    if (version === 'v4') {
-      if (v4TickSpacing !== '') {
-        const ts = Number(v4TickSpacing);
-        if (!Number.isInteger(ts) || ts <= 0) {
-          return 'El tick spacing debe ser un entero positivo, o quedar vacío para derivarlo del fee.';
-        }
-      }
-    }
     return null;
   }
 
@@ -187,11 +179,11 @@ export default function CreateOrchestratorWizard({
         network,
         version,
         walletAddress,
-        token0Address,
-        token1Address,
-        token0Symbol: findSymbol(token0Address) || 'TOKEN0',
-        token1Symbol: findSymbol(token1Address) || 'TOKEN1',
-        feeTier: Number(feeTier),
+        token0Address: selectedPool.token0.address,
+        token1Address: selectedPool.token1.address,
+        token0Symbol: selectedPool.token0.symbol,
+        token1Symbol: selectedPool.token1.symbol,
+        feeTier: Number(selectedPool.fee),
         initialTotalUsd: Number(initialTotalUsd),
         strategyConfig: {
           rangeWidthPct: Number(strategy.rangeWidthPct),
@@ -202,10 +194,12 @@ export default function CreateOrchestratorWizard({
           reinvestThresholdUsd: Number(strategy.reinvestThresholdUsd),
           urgentAlertRepeatMinutes: Number(strategy.urgentAlertRepeatMinutes),
           maxSlippageBps: Number(strategy.maxSlippageBps),
-          // tickSpacing solo si el usuario lo overrideó: por defecto el
-          // backend lo deriva del fee tier y computa el poolId.
-          ...(version === 'v4' && v4TickSpacing !== ''
-            ? { v4TickSpacing: Number(v4TickSpacing) }
+          // El tickSpacing viene del pool descubierto on-chain; solo se
+          // persiste si difiere del que el backend derivaria del fee tier.
+          ...(version === 'v4'
+            && selectedPool.tickSpacing != null
+            && selectedPool.tickSpacing !== DEFAULT_V4_TICK_SPACING_BY_FEE[selectedPool.fee]
+            ? { v4TickSpacing: Number(selectedPool.tickSpacing) }
             : {}),
         },
         protectionConfig: buildProtectionPayload(protection),
@@ -243,14 +237,11 @@ export default function CreateOrchestratorWizard({
           {step === STEP.IDENTITY && (
             <IdentityStep
               name={name} setName={setName}
-              tokenOptions={tokenOptions}
-              token0Address={token0Address} setToken0Address={setToken0Address}
-              token1Address={token1Address} setToken1Address={setToken1Address}
-              feeTier={feeTier} setFeeTier={setFeeTier}
+              pools={pools} poolsLoading={poolsLoading} poolsError={poolsError}
+              selectedPoolKey={selectedPoolKey} setSelectedPoolKey={setSelectedPoolKey}
               initialTotalUsd={initialTotalUsd} setInitialTotalUsd={setInitialTotalUsd}
               network={network} setNetwork={setNetwork}
               version={version} setVersion={setVersion}
-              v4TickSpacing={v4TickSpacing} setV4TickSpacing={setV4TickSpacing}
             />
           )}
 
@@ -271,11 +262,11 @@ export default function CreateOrchestratorWizard({
           {step === STEP.REVIEW && (
             <ReviewStep
               name={name}
-              token0Symbol={findSymbol(token0Address)}
-              token1Symbol={findSymbol(token1Address)}
+              token0Symbol={selectedPool?.token0.symbol || ''}
+              token1Symbol={selectedPool?.token1.symbol || ''}
               network={network}
               version={version}
-              feeTier={feeTier}
+              feeTier={selectedPool?.fee}
               initialTotalUsd={initialTotalUsd}
               strategy={strategy}
               protection={protection}
@@ -313,11 +304,10 @@ export default function CreateOrchestratorWizard({
 
 function IdentityStep({
   name, setName,
-  tokenOptions, token0Address, setToken0Address, token1Address, setToken1Address,
-  feeTier, setFeeTier,
+  pools, poolsLoading, poolsError,
+  selectedPoolKey, setSelectedPoolKey,
   initialTotalUsd, setInitialTotalUsd,
   network, setNetwork, version, setVersion,
-  v4TickSpacing, setV4TickSpacing,
 }) {
   return (
     <div className={styles.fields}>
@@ -350,61 +340,49 @@ function IdentityStep({
         </div>
       </div>
 
-      {version === 'v4' && (
-        <div className={styles.field}>
-          <label>Pool v4</label>
-          <p className={styles.hint}>
-            El poolId se computa a partir del par, el fee y el tick spacing —
-            no hace falta cargarlo. <strong>Solo se soportan pools sin hook y
-            con tokens ERC-20</strong> (no ETH nativo): la gestión on-chain de
-            posiciones rechaza ambos casos, así que un pool con hook se podría
-            crear pero después no se podría rebalancear ni cerrar.
-          </p>
-          <div className={styles.field}>
-            <label>Tick spacing</label>
-            <input
-              type="number"
-              aria-label="Tick spacing"
-              value={v4TickSpacing}
-              onChange={(e) => setV4TickSpacing(e.target.value)}
-              placeholder={`auto (${DEFAULT_V4_TICK_SPACING_BY_FEE[feeTier] ?? '—'})`}
-              min={1}
-            />
-          </div>
-        </div>
-      )}
-
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label>Token 0</label>
-          <select aria-label="Token 0" value={token0Address} onChange={(e) => setToken0Address(e.target.value)}>
-            <option value="">— selecciona —</option>
-            {tokenOptions.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-        </div>
-        <div className={styles.field}>
-          <label>Token 1</label>
-          <select aria-label="Token 1" value={token1Address} onChange={(e) => setToken1Address(e.target.value)}>
-            <option value="">— selecciona —</option>
-            {tokenOptions.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-        </div>
-      </div>
-
       <div className={styles.field}>
-        <label>Fee tier</label>
-        <div className={styles.feeTiers}>
-          {FEE_TIERS.map((tier) => (
-            <button
-              key={tier.value}
-              type="button"
-              className={`${styles.feeBtn} ${feeTier === tier.value ? styles.feeBtnActive : ''}`}
-              onClick={() => setFeeTier(tier.value)}
-            >
-              {tier.label}
-            </button>
-          ))}
-        </div>
+        <label>Pool</label>
+        {version === 'v4' && (
+          <p className={styles.hint}>
+            Solo se listan pools <strong>sin hook y con tokens ERC-20</strong>:
+            la gestión on-chain rechaza los hooks y el ETH nativo, así que un
+            pool así se podría crear pero no rebalancear ni cerrar.
+          </p>
+        )}
+        {poolsLoading && <p className={styles.hint}>Buscando pools en {network}…</p>}
+        {!poolsLoading && poolsError && (
+          <p className={styles.hint}>No se pudieron cargar los pools: {poolsError}</p>
+        )}
+        {!poolsLoading && !poolsError && pools.length === 0 && (
+          <p className={styles.hint}>
+            No hay pools {version} en esta red para los tokens conocidos.
+            Probá con la otra versión.
+          </p>
+        )}
+        {!poolsLoading && pools.length > 0 && (
+          <div className={styles.poolList} role="radiogroup" aria-label="Pool">
+            {pools.map((pool) => {
+              const id = poolKeyOf(pool);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedPoolKey === id}
+                  className={`${styles.poolBtn} ${selectedPoolKey === id ? styles.poolBtnActive : ''}`}
+                  onClick={() => setSelectedPoolKey(id)}
+                  title={pool.hasLiquidity
+                    ? `${pool.label} · ${pool.fee / 10000}%`
+                    : 'Este pool existe pero no tiene liquidez: el swap de fondeo puede fallar'}
+                >
+                  <span className={styles.poolPair}>{pool.label}</span>
+                  <span className={styles.poolFee}>{pool.fee / 10000}%</span>
+                  {!pool.hasLiquidity && <span className={styles.poolWarn}>sin liquidez</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className={styles.field}>

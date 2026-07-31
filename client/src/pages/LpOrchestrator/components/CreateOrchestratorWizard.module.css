@@ -134,6 +134,54 @@
   color: var(--uni-cyan);
 }
 
+/* Lista de pools existentes on-chain. Grilla flexible para que entren tanto
+   los 4 fee tiers de un solo par (testnet) como decenas de pares (mainnet). */
+.poolList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.poolBtn {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--uni-border);
+  background: var(--uni-bg-1);
+  color: var(--uni-text-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.poolBtnActive {
+  background: rgba(102, 225, 219, 0.15);
+  border-color: var(--uni-cyan);
+  color: var(--uni-cyan);
+}
+
+.poolPair {
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.poolFee {
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
+.poolWarn {
+  margin-left: auto;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #e0a458;
+}
+
 .review {
   display: flex;
   flex-direction: column;

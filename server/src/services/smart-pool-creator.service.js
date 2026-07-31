@@ -1938,6 +1938,130 @@ async function buildIncreaseLiquidityFundingPlan({
   return plan;
 }
 
+/**
+ * Descubre que pools EXISTEN realmente on-chain para una red + version,
+ * combinando los tokens conocidos con los fee tiers soportados.
+ *
+ * Existe porque hasta ahora el wizard dejaba elegir cualquier par + fee y el
+ * usuario recien se enteraba de que el pool no existia al intentar crear la
+ * posicion (el creador solo opera sobre pools existentes, tanto en v3 como
+ * en v4). Ahora la UI puede ofrecer solo lo seleccionable.
+ *
+ * v3: se resuelve con `factory.getPool(t0, t1, fee)`; direccion cero = no existe.
+ * v4: no hay factory — el poolId se computa determinsticamente y se comprueba
+ *     que este inicializado mirando `slot0.sqrtPriceX96 > 0` en el StateView.
+ *
+ * Devuelve siempre los pools existentes, con `hasLiquidity` para que la UI
+ * pueda advertir sobre los que estan vacios (crear ahi es valido pero el
+ * swap de fondeo puede fallar por falta de profundidad).
+ */
+// Concurrencia acotada local: `mapConcurrent` vive en uniswap.service, que
+// importar desde aca crearia un ciclo. Con 5 tokens son hasta 40 sondeos.
+async function _probeConcurrent(items, limit, worker) {
+  const out = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      out[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return out;
+}
+
+async function discoverAvailablePools({ network, version }) {
+  const networkConfig = getNetworkConfig(network);
+  if (!networkConfig.versions.includes(version)) {
+    throw new ValidationError(`La red ${networkConfig.label} no soporta ${version}`);
+  }
+  if (version !== 'v3' && version !== 'v4') {
+    throw new ValidationError('Solo se pueden descubrir pools v3 o v4');
+  }
+
+  const provider = getProvider(networkConfig);
+  const tokens = getKnownTokens(network);
+  const fees = Object.keys(DEFAULT_V4_TICK_SPACING_BY_FEE).map(Number);
+
+  // Todas las combinaciones par x fee. Con 5 tokens son 10 pares x 4 fees.
+  const combos = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    for (let j = i + 1; j < tokens.length; j += 1) {
+      for (const fee of fees) combos.push({ tokenA: tokens[i], tokenB: tokens[j], fee });
+    }
+  }
+
+  const factory = version === 'v3'
+    ? onChainManager.getContract({
+      runner: provider,
+      address: ethers.getAddress(networkConfig.deployments.v3.eventSource),
+      abi: V3_FACTORY_ABI,
+    })
+    : null;
+  const stateView = version === 'v4'
+    ? onChainManager.getContract({
+      runner: provider,
+      address: ethers.getAddress(networkConfig.deployments.v4.stateView),
+      abi: V4_STATE_VIEW_ABI,
+    })
+    : null;
+
+  const found = await _probeConcurrent(combos, 6, async ({ tokenA, tokenB, fee }) => {
+    const ordered = sortTokensByAddress(tokenA, tokenB);
+    const tickSpacing = DEFAULT_V4_TICK_SPACING_BY_FEE[fee];
+    const base = {
+      version,
+      network: networkConfig.id,
+      fee,
+      tickSpacing,
+      token0: { symbol: ordered.token0.symbol, address: ordered.token0.address, decimals: ordered.token0.decimals },
+      token1: { symbol: ordered.token1.symbol, address: ordered.token1.address, decimals: ordered.token1.decimals },
+      label: `${ordered.token0.symbol}/${ordered.token1.symbol}`,
+    };
+
+    try {
+      if (version === 'v3') {
+        const poolAddress = await factory.getPool(ordered.token0.address, ordered.token1.address, fee);
+        if (!poolAddress || poolAddress === ethers.ZeroAddress) return null;
+        const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
+        const [slot0, liquidity] = await Promise.all([
+          pool.slot0(),
+          pool.liquidity().catch(() => 0n),
+        ]);
+        if (!slot0?.sqrtPriceX96 || BigInt(slot0.sqrtPriceX96) <= 0n) return null;
+        return { ...base, poolAddress, poolId: null, hasLiquidity: BigInt(liquidity) > 0n };
+      }
+
+      const poolId = computeV4PoolId({
+        currency0: ordered.token0.address,
+        currency1: ordered.token1.address,
+        fee,
+        tickSpacing,
+        hooks: normalizeHooksAddress(null),
+      });
+      const slot0 = await stateView.getSlot0(poolId);
+      if (!slot0?.sqrtPriceX96 || BigInt(slot0.sqrtPriceX96) <= 0n) return null;
+      const liquidity = await stateView.getLiquidity(poolId).catch(() => 0n);
+      return { ...base, poolAddress: null, poolId, hasLiquidity: BigInt(liquidity) > 0n };
+    } catch (err) {
+      // Un pool inexistente hace revert en getSlot0; no es un error a propagar.
+      logger.debug?.('discover_pools_probe_failed', {
+        network: networkConfig.id, version, fee, pair: base.label, error: err.message,
+      });
+      return null;
+    }
+  });
+
+  const pools = found.filter(Boolean)
+    .sort((a, b) => (Number(b.hasLiquidity) - Number(a.hasLiquidity)) || (a.fee - b.fee));
+
+  logger.info('discover_pools_completed', {
+    network: networkConfig.id, version, probed: combos.length, found: pools.length,
+  });
+  return { network: networkConfig.id, version, pools };
+}
+
 module.exports = {
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_V4_TICK_SPACING_BY_FEE,
@@ -1948,6 +2072,7 @@ module.exports = {
   buildIncreaseLiquidityFundingPlan,
   computeAmountsFromWeight,
   computeRangeSuggestions,
+  discoverAvailablePools,
   computeToken0Pct,
   getCanonicalUsdcToken,
   getGasReserveAmount,

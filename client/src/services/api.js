@@ -265,6 +265,9 @@ export const uniswapApi = {
     }),
   getSmartCreateTokenList: (network) =>
     request('GET', `/uniswap/smart-create/token-list?network=${encodeURIComponent(network)}`),
+  // Pools que existen on-chain para esa red + version.
+  getSmartCreatePools: ({ network, version }) =>
+    request('GET', `/uniswap/smart-create/pools?network=${encodeURIComponent(network)}&version=${encodeURIComponent(version)}`),
   getSmartCreateAssets: ({ network, walletAddress, importTokenAddresses = [] }) => {
     const params = new URLSearchParams();
     params.set('network', network);
