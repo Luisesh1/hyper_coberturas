@@ -110,7 +110,11 @@ function buildWrapNativeTx(token, amount, chainId) {
       chainId,
       kind: 'wrap_native',
       label: `Wrap native to ${token.symbol}`,
-      value: ethers.toBeHex(amount),
+      // `toQuantity`, no `toBeHex`: el JSON-RPC exige QUANTITY sin ceros a la
+      // izquierda y `toBeHex` alinea a bytes (1 ETH -> 0x0de0b6b3a7640000).
+      // Los nodos estrictos (Arbitrum Nitro) tiran "hex number with leading
+      // zero digits" y la wallet lo reporta como parametros invalidos.
+      value: ethers.toQuantity(amount),
       meta: {
         tokenAddress: token.address,
         tokenSymbol: token.symbol,

@@ -111,18 +111,32 @@ export function findInvalidTxPlanReason(tx) {
   return null;
 }
 
+/**
+ * Un QUANTITY de JSON-RPC es hex compacto y sin ceros a la izquierda: `0x1`,
+ * nunca `0x01`. Los nodos estrictos (Arbitrum Nitro y cualquier geth) rechazan
+ * la tx entera con "hex number with leading zero digits" y la wallet lo
+ * reporta como parametros faltantes o invalidos, sin decir cual. Normalizamos
+ * aca para que un valor mal codificado del servidor no llegue nunca a firmar.
+ */
+export function toRpcQuantity(value) {
+  try {
+    return `0x${parseHexOrDecimalBigInt(value).toString(16)}`;
+  } catch {
+    return '0x0';
+  }
+}
+
 export function buildTransactionParams({ address, tx, includeGas = true }) {
   const txParams = {
     from: address,
     to: tx.to,
     data: tx.data,
-    value: tx.value || '0x0',
+    value: toRpcQuantity(tx.value || '0x0'),
   };
 
   if (includeGas) {
-    if (tx.gas) txParams.gas = tx.gas;
-    else if (tx.gasEstimate) txParams.gas = tx.gasEstimate;
-    else if (tx.gasLimit) txParams.gas = tx.gasLimit;
+    const gas = tx.gas || tx.gasEstimate || tx.gasLimit;
+    if (gas) txParams.gas = toRpcQuantity(gas);
   }
 
   return txParams;

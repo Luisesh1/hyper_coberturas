@@ -51,6 +51,22 @@ describe('buildTransactionParams', () => {
     expect(buildTransactionParams({ address: '0xme', tx, includeGas: true }).gas).toBe('0x5208');
     expect(buildTransactionParams({ address: '0xme', tx, includeGas: false }).gas).toBeUndefined();
   });
+
+  // Arbitrum Nitro rechaza la tx entera si el value trae ceros a la izquierda
+  // ("hex number with leading zero digits"), y la wallet lo reporta como
+  // "Missing or invalid parameters [codigo -32000]". El servidor ya lo emite
+  // canonico, pero normalizamos igual para que no vuelva a llegar a firmar.
+  it('normaliza value y gas a QUANTITY sin ceros a la izquierda', () => {
+    const tx = validTx({ value: '0x0de0b6b3a7640000', gas: '0x05208' });
+    const params = buildTransactionParams({ address: '0xme', tx });
+    expect(params.value).toBe('0xde0b6b3a7640000');
+    expect(params.gas).toBe('0x5208');
+  });
+
+  it('acepta un value decimal del servidor', () => {
+    const params = buildTransactionParams({ address: '0xme', tx: validTx({ value: '1000000000000000000' }) });
+    expect(params.value).toBe('0xde0b6b3a7640000');
+  });
 });
 
 describe('sendWalletTransactionDetailed con plan inválido', () => {
