@@ -125,8 +125,13 @@ function ensureSupportedAction(action) {
 
 // ─── Token Queries ───────────────────────────────────────────────────
 
-async function getTokenInfo(provider, address) {
+async function getTokenInfo(provider, address, { nativeSymbol = 'ETH' } = {}) {
   const tokenAddress = normalizeAddress(address, 'token');
+  // En v4 el ETH nativo es una currency valida (address(0)). No es un
+  // contrato: llamarle symbol()/decimals() devolveria basura silenciosamente.
+  if (isZeroAddress(tokenAddress)) {
+    return { address: tokenAddress, symbol: nativeSymbol, decimals: 18, isNative: true };
+  }
   const contract = onChainManager.getContract({ runner: provider, address: tokenAddress, abi: ERC20_ABI });
   const [symbol, decimals] = await Promise.all([
     contract.symbol().catch(() => 'UNKNOWN'),
@@ -727,9 +732,6 @@ async function loadV4PositionContext({ network, walletAddress, positionIdentifie
   if (hasHooks(normalizedPoolKey.hooks)) {
     throw new ValidationError('Los pools v4 con hooks no estan soportados en gestion on-chain por ahora');
   }
-  if (isZeroAddress(normalizedPoolKey.currency0) || isZeroAddress(normalizedPoolKey.currency1)) {
-    throw new ValidationError('Los pools v4 con token nativo no estan soportados en gestion on-chain por ahora');
-  }
 
   const decodedPosition = decodeV4PositionInfo(rawPositionInfo);
   const poolId = computeV4PoolId(normalizedPoolKey);
@@ -744,8 +746,8 @@ async function loadV4PositionContext({ network, walletAddress, positionIdentifie
     stateView.getLiquidity(poolId).catch(() => 0n),
     stateView.getPositionInfo(poolId, positionId),
     stateView.getFeeGrowthInside(poolId, decodedPosition.tickLower, decodedPosition.tickUpper),
-    getTokenInfo(provider, normalizedPoolKey.currency0),
-    getTokenInfo(provider, normalizedPoolKey.currency1),
+    getTokenInfo(provider, normalizedPoolKey.currency0, { nativeSymbol: networkConfig.nativeSymbol }),
+    getTokenInfo(provider, normalizedPoolKey.currency1, { nativeSymbol: networkConfig.nativeSymbol }),
   ]);
 
   const currentAmounts = liquidityToTokenAmounts({

@@ -2,6 +2,7 @@
  * Constructores de transacciones para Uniswap V4 (PositionManager y Universal Router).
  */
 
+const { ethers } = require('ethers');
 const { ValidationError } = require('../../errors/app-error');
 const {
   buildV4ModifyLiquiditiesCalldata,
@@ -11,8 +12,13 @@ const { encodeTx, deadlineFromNow } = require('./tx-encoders');
 
 /**
  * Construye una tx que llama a `modifyLiquidities` en el PositionManager V4.
+ *
+ * `value` solo se usa cuando una de las currencies del pool es ETH nativo: en
+ * v4 el nativo no se aprueba ni se transfiere con transferFrom, se envia con
+ * la transaccion. Debe cubrir el techo con slippage, y el sobrante se
+ * recupera con la accion SWEEP.
  */
-function buildV4ModifyTx(ctx, { actionCodes, params, label, kind, meta = {} }) {
+function buildV4ModifyTx(ctx, { actionCodes, params, label, kind, meta = {}, value }) {
   return encodeTx(
     ctx.positionManagerAddress,
     buildV4ModifyLiquiditiesCalldata({
@@ -24,6 +30,7 @@ function buildV4ModifyTx(ctx, { actionCodes, params, label, kind, meta = {} }) {
       chainId: ctx.networkConfig.chainId,
       kind,
       label,
+      ...(value != null && BigInt(value) > 0n ? { value: ethers.toQuantity(BigInt(value)) } : {}),
       meta,
     }
   );

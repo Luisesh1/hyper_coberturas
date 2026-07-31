@@ -31,6 +31,9 @@ const DEFAULT_POOL_VALUE_BUFFER = 1.05;
 // superan el valor del swap, así que es preferible aceptar ese sub-déficit y
 // dejar el dust en la wallet en vez de generar una tx extra (approve + swap).
 const MIN_SWAP_USD = 1.5;
+// ETH nativo como currency de un pool v4 (address(0)).
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
 const DEFAULT_V4_TICK_SPACING_BY_FEE = {
   100: 1,
   500: 10,
@@ -1992,6 +1995,25 @@ async function discoverAvailablePools({ network, version }) {
     }
   }
 
+  // En v4 el ETH nativo es una currency valida, y el pool NATIVO/X es distinto
+  // del WRAPPED/X: en Arbitrum el nativo tiene ~80x mas liquidez. Sondeamos
+  // ambos y que el usuario elija con el dato a la vista.
+  if (version === 'v4') {
+    const wrapped = tokens.find((t) => t.isWrappedNative);
+    if (wrapped) {
+      const nativo = {
+        symbol: networkConfig.nativeSymbol,
+        address: ZERO_ADDRESS,
+        decimals: 18,
+        isNative: true,
+      };
+      for (const token of tokens) {
+        if (token.address.toLowerCase() === wrapped.address.toLowerCase()) continue;
+        for (const fee of fees) combos.push({ tokenA: nativo, tokenB: token, fee });
+      }
+    }
+  }
+
   const factory = version === 'v3'
     ? onChainManager.getContract({
       runner: provider,
@@ -2018,6 +2040,7 @@ async function discoverAvailablePools({ network, version }) {
       token0: { symbol: ordered.token0.symbol, address: ordered.token0.address, decimals: ordered.token0.decimals },
       token1: { symbol: ordered.token1.symbol, address: ordered.token1.address, decimals: ordered.token1.decimals },
       label: `${ordered.token0.symbol}/${ordered.token1.symbol}`,
+      isNative: Boolean(tokenA.isNative || tokenB.isNative),
     };
 
     try {

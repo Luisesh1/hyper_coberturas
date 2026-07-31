@@ -150,6 +150,16 @@ function encodeV4SettleAllParams(currency, maxAmount) {
   return ethers.AbiCoder.defaultAbiCoder().encode(['address', 'uint256'], [currency, BigInt(maxAmount)]);
 }
 
+/**
+ * SWEEP devuelve al `recipient` lo que haya quedado del currency en el
+ * PositionManager. Es obligatorio cuando se paga con ETH nativo: se envia un
+ * `value` que cubre el techo de slippage y el sobrante queda atrapado en el
+ * contrato si no se barre.
+ */
+function encodeV4SweepParams(currency, recipient) {
+  return ethers.AbiCoder.defaultAbiCoder().encode(['address', 'address'], [currency, recipient]);
+}
+
 function encodeV4TakeAllParams(currency, minAmount) {
   return ethers.AbiCoder.defaultAbiCoder().encode(['address', 'uint256'], [currency, BigInt(minAmount)]);
 }
@@ -192,6 +202,7 @@ module.exports = {
   encodeV4ModifyLiquidityParams,
   encodeV4SettleAllParams,
   encodeV4SwapExactInSingleParams,
+  encodeV4SweepParams,
   encodeV4TakeAllParams,
   getUniversalRouterAddress,
   hasHooks,
