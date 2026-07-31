@@ -1,7 +1,11 @@
-import { arbitrum, base, mainnet, optimism, polygon } from 'wagmi/chains';
+import { arbitrum, base, baseSepolia, mainnet, optimism, polygon } from 'wagmi/chains';
 import { createPublicClient, fallback, http } from 'viem';
 
-export const SUPPORTED_CHAINS = [mainnet, arbitrum, base, optimism, polygon];
+// baseSepolia es la testnet donde se validan los flujos on-chain. Tiene que
+// estar aca ademas de en el networks.js del servidor: wagmi/WalletConnect solo
+// declaran estas cadenas en la sesion, y pedir una tx de una cadena ausente
+// hace que la wallet la rechace con "Missing or invalid parameters".
+export const SUPPORTED_CHAINS = [mainnet, arbitrum, base, optimism, polygon, baseSepolia];
 
 const CHAIN_BY_ID = new Map(SUPPORTED_CHAINS.map((chain) => [Number(chain.id), chain]));
 
@@ -11,6 +15,7 @@ const DEFAULT_RPC_URLS = {
   [base.id]: ['https://base-rpc.publicnode.com', 'https://mainnet.base.org'],
   [optimism.id]: ['https://optimism-rpc.publicnode.com', 'https://rpc.ankr.com/optimism'],
   [polygon.id]: ['https://polygon-bor-rpc.publicnode.com', 'https://rpc.ankr.com/polygon'],
+  [baseSepolia.id]: ['https://base-sepolia-rpc.publicnode.com', 'https://sepolia.base.org'],
 };
 
 const ENV_RPC_URLS = {
@@ -19,6 +24,7 @@ const ENV_RPC_URLS = {
   [base.id]: import.meta.env.VITE_UNI_RPC_BASE,
   [optimism.id]: import.meta.env.VITE_UNI_RPC_OPTIMISM,
   [polygon.id]: import.meta.env.VITE_UNI_RPC_POLYGON,
+  [baseSepolia.id]: import.meta.env.VITE_UNI_RPC_BASE_SEPOLIA,
 };
 
 const CLIENT_CACHE = new Map();
