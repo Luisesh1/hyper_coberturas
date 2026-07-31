@@ -136,6 +136,11 @@
 
 /* Lista de pools existentes on-chain. Grilla flexible para que entren tanto
    los 4 fee tiers de un solo par (testnet) como decenas de pares (mainnet). */
+.poolSearch {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
 .poolList {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

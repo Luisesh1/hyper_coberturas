@@ -195,9 +195,17 @@ export function normalizeWalletError(err, { phase = 'wallet' } = {}) {
   else if (phase === 'preflight') code = 'preflight_reverted';
   else if (phase === 'receipt' && /timeout|timed out|esperando confirmaci/i.test(message)) code = 'tx_timeout';
 
+  // Un error sin codigo reconocido no se puede diagnosticar a ciegas: el
+  // mensaje de la wallet suele ser generico ("Missing or invalid parameters")
+  // y no dice cual de los parametros ni por que. Adjuntamos el codigo crudo
+  // para poder identificarlo sin tener que reproducir el escenario.
+  const friendlyMessage = code === 'unknown' && Number.isFinite(numericCode)
+    ? `${formatFriendlyWalletError(code, rawMessage)} [codigo ${numericCode}]`
+    : formatFriendlyWalletError(code, rawMessage);
+
   return {
     code,
-    message: formatFriendlyWalletError(code, rawMessage),
+    message: friendlyMessage,
     rawCode: Number.isFinite(numericCode) ? numericCode : null,
     rawMessage,
     cause: err,

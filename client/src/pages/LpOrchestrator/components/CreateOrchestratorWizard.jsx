@@ -66,6 +66,7 @@ export default function CreateOrchestratorWizard({
   const [poolsLoading, setPoolsLoading] = useState(false);
   const [poolsError, setPoolsError] = useState('');
   const [selectedPoolKey, setSelectedPoolKey] = useState('');
+  const [poolSearch, setPoolSearch] = useState('');
   const [initialTotalUsd, setInitialTotalUsd] = useState('1000');
   const [strategy, setStrategy] = useState(DEFAULT_STRATEGY);
   const [protection, setProtection] = useState(buildDefaultProtection(1000));
@@ -103,6 +104,19 @@ export default function CreateOrchestratorWizard({
     () => pools.find((p) => poolKeyOf(p) === selectedPoolKey) || null,
     [pools, selectedPoolKey]
   );
+
+  // Filtra por simbolo o por fee ("weth", "usdc", "0.05"). Mainnet devuelve
+  // decenas de pools y buscarlos a ojo es incomodo.
+  const visiblePools = useMemo(() => {
+    const term = poolSearch.trim().toLowerCase();
+    if (!term) return pools;
+    return pools.filter((pool) => (
+      pool.label.toLowerCase().includes(term)
+      || pool.token0.symbol.toLowerCase().includes(term)
+      || pool.token1.symbol.toLowerCase().includes(term)
+      || `${pool.fee / 10000}`.includes(term)
+    ));
+  }, [pools, poolSearch]);
 
   // Mientras la protección esté desactivada, recalculamos los defaults
   // (notional + auto-tune) cuando cambie el capital inicial o el ancho del
@@ -237,7 +251,9 @@ export default function CreateOrchestratorWizard({
           {step === STEP.IDENTITY && (
             <IdentityStep
               name={name} setName={setName}
-              pools={pools} poolsLoading={poolsLoading} poolsError={poolsError}
+              pools={visiblePools} totalPools={pools.length}
+              poolSearch={poolSearch} setPoolSearch={setPoolSearch}
+              poolsLoading={poolsLoading} poolsError={poolsError}
               selectedPoolKey={selectedPoolKey} setSelectedPoolKey={setSelectedPoolKey}
               initialTotalUsd={initialTotalUsd} setInitialTotalUsd={setInitialTotalUsd}
               network={network} setNetwork={setNetwork}
@@ -304,7 +320,8 @@ export default function CreateOrchestratorWizard({
 
 function IdentityStep({
   name, setName,
-  pools, poolsLoading, poolsError,
+  pools, totalPools, poolSearch, setPoolSearch,
+  poolsLoading, poolsError,
   selectedPoolKey, setSelectedPoolKey,
   initialTotalUsd, setInitialTotalUsd,
   network, setNetwork, version, setVersion,
@@ -353,11 +370,24 @@ function IdentityStep({
         {!poolsLoading && poolsError && (
           <p className={styles.hint}>No se pudieron cargar los pools: {poolsError}</p>
         )}
-        {!poolsLoading && !poolsError && pools.length === 0 && (
+        {!poolsLoading && !poolsError && totalPools > 0 && (
+          <input
+            type="search"
+            aria-label="Buscar pool"
+            className={styles.poolSearch}
+            value={poolSearch}
+            onChange={(e) => setPoolSearch(e.target.value)}
+            placeholder={`Buscar entre ${totalPools} pools — token o fee (ej. WETH, 0.05)`}
+          />
+        )}
+        {!poolsLoading && !poolsError && totalPools === 0 && (
           <p className={styles.hint}>
             No hay pools {version} en esta red para los tokens conocidos.
             Probá con la otra versión.
           </p>
+        )}
+        {!poolsLoading && !poolsError && totalPools > 0 && pools.length === 0 && (
+          <p className={styles.hint}>Ningún pool coincide con «{poolSearch}».</p>
         )}
         {!poolsLoading && pools.length > 0 && (
           <div className={styles.poolList} role="radiogroup" aria-label="Pool">
