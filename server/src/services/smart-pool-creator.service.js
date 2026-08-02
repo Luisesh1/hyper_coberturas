@@ -34,6 +34,10 @@ const MIN_SWAP_USD = 1.5;
 // ETH nativo como currency de un pool v4 (address(0)).
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+function isZeroAddress(address) {
+  return String(address || '').toLowerCase() === ZERO_ADDRESS;
+}
+
 const DEFAULT_V4_TICK_SPACING_BY_FEE = {
   100: 1,
   500: 10,
@@ -307,7 +311,18 @@ async function getTokenBalance(provider, tokenAddress, walletAddress) {
   return contract.balanceOf(walletAddress).catch(() => 0n);
 }
 
-async function getTokenInfoFromChain(provider, tokenAddress) {
+async function getTokenInfoFromChain(provider, tokenAddress, { nativeSymbol = 'ETH' } = {}) {
+  // En v4 el ETH nativo es una currency valida (address(0)). No es un
+  // contrato: llamarle symbol()/decimals() devolveria 'UNKNOWN' y romperia la
+  // valuacion en USD, que se resuelve por simbolo.
+  if (isZeroAddress(tokenAddress)) {
+    return {
+      address: ZERO_ADDRESS,
+      symbol: nativeSymbol,
+      decimals: 18,
+      isNative: true,
+    };
+  }
   const contract = onChainManager.getContract({ runner: provider, address: tokenAddress, abi: ERC20_ABI });
   const [symbol, decimals] = await Promise.all([
     contract.symbol().catch(() => 'UNKNOWN'),
@@ -1340,10 +1355,11 @@ async function buildFundingPlan({
     walletAddress: normalizedWallet,
     includeTokenAddresses: importTokenAddresses,
   });
-  const provider = getProvider(getNetworkConfig(network));
+  const networkConfigForTokens = getNetworkConfig(network);
+  const provider = getProvider(networkConfigForTokens);
   const [token0, token1] = await Promise.all([
-    getTokenInfoFromChain(provider, token0Address),
-    getTokenInfoFromChain(provider, token1Address),
+    getTokenInfoFromChain(provider, token0Address, { nativeSymbol: networkConfigForTokens.nativeSymbol }),
+    getTokenInfoFromChain(provider, token1Address, { nativeSymbol: networkConfigForTokens.nativeSymbol }),
   ]);
   const poolContext = await resolvePoolContext({
     network,
@@ -1374,12 +1390,33 @@ async function buildFundingPlan({
   );
 
   const wrappedNative = getWrappedNativeToken(network);
+
+  // Un pool v4 puede tener ETH nativo (address(0)) como currency. Para PLANEAR
+  // — matchear activos de la wallet, buscar rutas, valuar — lo representamos
+  // con su wrapped: son 1:1 y el router nunca entrega nativo, siempre WETH.
+  // Al final del plan se agrega el unwrap de lo que haya que devolver a nativo.
+  // Sin esto el lado nativo no lo puede fondear NADA (ni el ETH de la wallet,
+  // cuyo id es 'native' y nunca matchea contra 0x000…0) y el plan queda
+  // siempre a medio fondear.
+  const nativeSide = isZeroAddress(token0.address)
+    ? 'token0'
+    : (isZeroAddress(token1.address) ? 'token1' : null);
+  if (nativeSide && !wrappedNative) {
+    throw buildFundingDomainError(
+      'NATIVE_POOL_UNSUPPORTED_NETWORK',
+      `No hay wrapped native configurado en ${networkConfigForTokens.label} para fondear un pool con ${networkConfigForTokens.nativeSymbol} nativo.`,
+      { network }
+    );
+  }
+  const planToken0 = nativeSide === 'token0' ? { ...wrappedNative, decimals: token0.decimals } : token0;
+  const planToken1 = nativeSide === 'token1' ? { ...wrappedNative, decimals: token1.decimals } : token1;
+
   // El optimizador necesita conocer el wrapped native para tratar a `ETH`
   // como direct cuando WETH es uno de los lados del par.
   const optimalSelectionResult = buildOptimalFundingSelection({
     assets: fundingUniverse.assets,
-    token0Address: token0.address,
-    token1Address: token1.address,
+    token0Address: planToken0.address,
+    token1Address: planToken1.address,
     totalUsdTarget,
     targetWeightToken0Pct,
     wrappedNativeAddress: wrappedNative?.address || null,
@@ -1408,10 +1445,10 @@ async function buildFundingPlan({
     let availableRaw = BigInt(entry.requestedRaw);
     if (availableRaw <= 0n) continue;
 
-    const directToken0 = asset.address.toLowerCase() === token0.address.toLowerCase()
-      || (asset.isNative && wrappedNative && wrappedNative.address.toLowerCase() === token0.address.toLowerCase());
-    const directToken1 = asset.address.toLowerCase() === token1.address.toLowerCase()
-      || (asset.isNative && wrappedNative && wrappedNative.address.toLowerCase() === token1.address.toLowerCase());
+    const directToken0 = asset.address.toLowerCase() === planToken0.address.toLowerCase()
+      || (asset.isNative && wrappedNative && wrappedNative.address.toLowerCase() === planToken0.address.toLowerCase());
+    const directToken1 = asset.address.toLowerCase() === planToken1.address.toLowerCase()
+      || (asset.isNative && wrappedNative && wrappedNative.address.toLowerCase() === planToken1.address.toLowerCase());
 
     if (directToken0 && remaining0 > 0n) {
       const directRaw = availableRaw > remaining0 ? remaining0 : availableRaw;
@@ -1480,9 +1517,9 @@ async function buildFundingPlan({
       continue;
     }
 
-    const sourceUsdPrice = asset.address.toLowerCase() === token0.address.toLowerCase()
+    const sourceUsdPrice = asset.address.toLowerCase() === planToken0.address.toLowerCase()
       ? token0UsdPrice
-      : asset.address.toLowerCase() === token1.address.toLowerCase()
+      : asset.address.toLowerCase() === planToken1.address.toLowerCase()
         ? token1UsdPrice
         : asset.usdPrice;
     if (!Number.isFinite(sourceUsdPrice) || sourceUsdPrice <= 0) {
@@ -1504,20 +1541,20 @@ async function buildFundingPlan({
       // antes (ej. una ruta no encontrada para este asset → ese target
       // queda fuera para los próximos intentos del mismo asset).
       let candidateTarget = pickTargetTokenByUsdDeficit({
-        remaining0Raw: exhaustedTargets.has(token0.address.toLowerCase()) ? 0n : remaining0,
-        remaining1Raw: exhaustedTargets.has(token1.address.toLowerCase()) ? 0n : remaining1,
-        token0,
-        token1,
+        remaining0Raw: exhaustedTargets.has(planToken0.address.toLowerCase()) ? 0n : remaining0,
+        remaining1Raw: exhaustedTargets.has(planToken1.address.toLowerCase()) ? 0n : remaining1,
+        token0: planToken0,
+        token1: planToken1,
         token0UsdPrice,
         token1UsdPrice,
       });
-      const candidateRemainingRaw = candidateTarget.address.toLowerCase() === token0.address.toLowerCase() ? remaining0 : remaining1;
+      const candidateRemainingRaw = candidateTarget.address.toLowerCase() === planToken0.address.toLowerCase() ? remaining0 : remaining1;
       // Si el candidato elegido tiene deficit 0 (porque el otro lado está
       // lleno y este lado fue marcado exhausted), salimos.
       if (candidateRemainingRaw <= 0n || exhaustedTargets.has(candidateTarget.address.toLowerCase())) break;
 
       const targetToken = candidateTarget;
-      const targetUsdPrice = targetToken.address.toLowerCase() === token0.address.toLowerCase() ? token0UsdPrice : token1UsdPrice;
+      const targetUsdPrice = targetToken.address.toLowerCase() === planToken0.address.toLowerCase() ? token0UsdPrice : token1UsdPrice;
       const deficitRaw = candidateRemainingRaw;
       const deficitUsd = rawToAmount(deficitRaw, targetToken.decimals) * targetUsdPrice;
       const availableUsd = rawToAmount(availableRaw, asset.decimals) * sourceUsdPrice;
@@ -1593,7 +1630,7 @@ async function buildFundingPlan({
         amountOutMinimum: ethers.formatUnits(hop.amountOutMinimumRaw, hop.tokenOut.decimals),
         amountOutMinimumRaw: hop.amountOutMinimumRaw.toString(),
         estimatedSlippageBps: Number(maxSlippageBps),
-        direction: isLastHop && targetToken.address.toLowerCase() === token0.address.toLowerCase() ? 'to_token0' : isLastHop ? 'to_token1' : 'hop',
+        direction: isLastHop && targetToken.address.toLowerCase() === planToken0.address.toLowerCase() ? 'to_token0' : isLastHop ? 'to_token1' : 'hop',
         currentPrice: hop.currentPrice,
         wrapToken: isFirstHop && asset.isNative && wrappedNative ? wrappedNative : null,
         hopIndex,
@@ -1605,7 +1642,7 @@ async function buildFundingPlan({
     const lastHop = route.hops[route.hops.length - 1];
     const creditedOutRaw = lastHop.amountOutMinimumRaw > 0n ? lastHop.amountOutMinimumRaw : lastHop.expectedOutRaw;
 
-    if (targetToken.address.toLowerCase() === token0.address.toLowerCase()) {
+    if (targetToken.address.toLowerCase() === planToken0.address.toLowerCase()) {
       finalAmount0Raw += creditedOutRaw;
       remaining0 = remaining0 > creditedOutRaw ? remaining0 - creditedOutRaw : 0n;
     } else {
@@ -1636,6 +1673,20 @@ async function buildFundingPlan({
   const finalValueUsd =
     (rawToAmount(finalAmount0Raw, token0.decimals) * token0UsdPrice)
     + (rawToAmount(finalAmount1Raw, token1.decimals) * token1UsdPrice);
+
+  // Todo lo que aterriza en el lado nativo aterriza como wrapped: el aporte
+  // directo del ETH de la wallet se envuelve junto con el resto (lo hace el
+  // prepare, igual que para un pool WETH), y despues se desenvuelve el total
+  // de una sola vez. Un solo wrap y un solo unwrap en vez de uno por fuente.
+  const nativeSettlement = nativeSide
+    ? {
+      side: nativeSide,
+      symbol: networkConfigForTokens.nativeSymbol,
+      wrappedAddress: wrappedNative.address,
+      wrappedSymbol: wrappedNative.symbol,
+      unwrapRaw: (nativeSide === 'token0' ? finalAmount0Raw : finalAmount1Raw).toString(),
+    }
+    : null;
 
   // Threshold de aceptación del plan: 0.93 (= aceptamos hasta 7% bajo el
   // target). Esto da margen para que el dust skipping (MIN_SWAP_USD) +
@@ -1775,6 +1826,7 @@ async function buildFundingPlan({
     recommendedFundingSelection: optimalSelectionResult.selection,
     recommendedSwapCount: optimalSelectionResult.estimatedSwapCount,
     wrappedNativeAddress: wrappedNative?.address || null,
+    nativeSettlement,
     swapPlan,
     expectedPostSwapBalances: {
       amount0: ethers.formatUnits(finalAmount0Raw, token0.decimals),

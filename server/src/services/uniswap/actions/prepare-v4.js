@@ -10,6 +10,7 @@ const {
 } = require('../constants');
 const {
   buildUnwrapNativeTx,
+  buildWrapNativeTx,
 } = require('../tx-encoders');
 const {
   buildV4ModifyTx,
@@ -90,6 +91,53 @@ function applyMintSlippageCeiling(amountRaw, slippageBps) {
     ? BigInt(Math.round(Number(slippageBps)))
     : BigInt(DEFAULT_SLIPPAGE_BPS);
   return amount + (amount * bps) / 10_000n;
+}
+
+/**
+ * Acciones, params y `value` del mint v4, compartidos por las dos ramas de
+ * `prepareCreatePositionV4` (con y sin smart funding). Estaban duplicados y la
+ * rama de smart funding — la que usa el wizard — se quedo sin el tratamiento
+ * del lado nativo: aprobaba address(0) como si fuera un ERC-20 y minteaba con
+ * value 0, asi que un pool con ETH nativo no se podia crear.
+ *
+ * El nativo no se aprueba ni se mueve con transferFrom: se paga con el `value`
+ * de la tx cubriendo el techo con slippage, y se agrega SWEEP para recuperar
+ * el sobrante — sin SWEEP queda atrapado en el PositionManager.
+ */
+function buildV4MintActions({ poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, owner }) {
+  const nativeIsCurrency0 = isZeroAddress(poolKey.currency0);
+  const nativeIsCurrency1 = isZeroAddress(poolKey.currency1);
+  const usaNativo = nativeIsCurrency0 || nativeIsCurrency1;
+
+  const actionCodes = [
+    V4_ACTIONS.MINT_POSITION,
+    V4_ACTIONS.CLOSE_CURRENCY,
+    V4_ACTIONS.CLOSE_CURRENCY,
+  ];
+  const params = [
+    encodeV4MintParams({ poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, owner }),
+    encodeV4CloseCurrencyParams(poolKey.currency0),
+    encodeV4CloseCurrencyParams(poolKey.currency1),
+  ];
+  const v4Actions = ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'];
+
+  if (usaNativo) {
+    actionCodes.push(V4_ACTIONS.SWEEP);
+    params.push(encodeV4SweepParams(ZERO_ADDRESS_V4, owner));
+    v4Actions.push('SWEEP');
+  }
+
+  const value = nativeIsCurrency0 ? amount0Max : (nativeIsCurrency1 ? amount1Max : 0n);
+  return { actionCodes, params, v4Actions, value };
+}
+
+/**
+ * Permit2 sobre el lado nativo generaria una tx invalida: address(0) no es un
+ * contrato ERC-20. Ese lado se paga con el `value` del mint.
+ */
+async function appendMintApprovalIfErc20(options) {
+  if (isZeroAddress(options.token?.address)) return;
+  await appendPermit2Approvals(options);
 }
 
 async function prepareIncreaseLiquidityV4(payload) {
@@ -613,6 +661,24 @@ async function prepareCreatePositionV4(payload) {
     const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
     const requiresApproval = [];
     const txPlan = [];
+
+    // Los aportes nativos directos (ETH de la wallet usado como uno de los
+    // lados) se envuelven en una sola tx, igual que en v3. Los wraps que
+    // necesitan los swaps ya los agrega appendFundingSwapTransactions.
+    let totalNativeWrapRaw = 0n;
+    for (const asset of (plan.selectedFundingAssets || [])) {
+      if (asset.isNative && (asset.fundingRole === 'direct_token0' || asset.fundingRole === 'direct_token1')) {
+        totalNativeWrapRaw += BigInt(asset.useAmountRaw || 0);
+      }
+    }
+    if (totalNativeWrapRaw > 0n && plan.wrappedNativeAddress) {
+      txPlan.push(buildWrapNativeTx(
+        { address: plan.wrappedNativeAddress, symbol: plan.nativeSettlement?.wrappedSymbol || 'WETH' },
+        totalNativeWrapRaw,
+        networkConfig.chainId
+      ));
+    }
+
     await appendFundingSwapTransactions({
       provider,
       networkConfig,
@@ -621,23 +687,40 @@ async function prepareCreatePositionV4(payload) {
       requiresApproval,
       txPlan,
     });
-    await appendPermit2Approvals({
+
+    // El pool tiene ETH nativo como currency: el fondeo dejo todo en wrapped
+    // (el router nunca entrega nativo), asi que hay que desenvolverlo antes
+    // del mint, que paga ese lado con el `value` de la tx.
+    //
+    // Se desenvuelve el monto planeado, no el techo con slippage: ese margen
+    // (~1% de un lado) sale del nativo libre que la reserva de gas ya deja en
+    // la wallet, y lo que el mint no consuma vuelve por SWEEP.
+    if (plan.nativeSettlement && BigInt(plan.nativeSettlement.unwrapRaw || 0) > 0n) {
+      txPlan.push(buildUnwrapNativeTx(
+        { address: plan.nativeSettlement.wrappedAddress, symbol: plan.nativeSettlement.wrappedSymbol },
+        BigInt(plan.nativeSettlement.unwrapRaw),
+        networkConfig.chainId
+      ));
+    }
+    const amount0Max = applyMintSlippageCeiling(amount0Desired, mintSlippageBps);
+    const amount1Max = applyMintSlippageCeiling(amount1Desired, mintSlippageBps);
+    await appendMintApprovalIfErc20({
       provider,
       token: token0,
       walletAddress: normalizedWallet,
       spender: positionManagerAddress,
-      amount: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
+      amount: amount0Max,
       chainId: networkConfig.chainId,
       requiresApproval,
       txPlan,
       enforceBalance: false,
     });
-    await appendPermit2Approvals({
+    await appendMintApprovalIfErc20({
       provider,
       token: token1,
       walletAddress: normalizedWallet,
       spender: positionManagerAddress,
-      amount: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
+      amount: amount1Max,
       chainId: networkConfig.chainId,
       requiresApproval,
       txPlan,
@@ -658,33 +741,28 @@ async function prepareCreatePositionV4(payload) {
       poolId: plan.poolId,
       tickSpacing: Number(plan.tickSpacing),
     };
+    const mint = buildV4MintActions({
+      poolKey: dummyCtx.poolKey,
+      tickLower,
+      tickUpper,
+      liquidity: liquidityDelta,
+      amount0Max,
+      amount1Max,
+      owner: normalizedWallet,
+    });
     txPlan.push(buildV4ModifyTx(dummyCtx, {
-      actionCodes: [
-        V4_ACTIONS.MINT_POSITION,
-        V4_ACTIONS.CLOSE_CURRENCY,
-        V4_ACTIONS.CLOSE_CURRENCY,
-      ],
-      params: [
-        encodeV4MintParams({
-          poolKey: dummyCtx.poolKey,
-          tickLower,
-          tickUpper,
-          liquidity: liquidityDelta,
-          amount0Max: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
-          amount1Max: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
-          owner: normalizedWallet,
-        }),
-        encodeV4CloseCurrencyParams(dummyCtx.poolKey.currency0),
-        encodeV4CloseCurrencyParams(dummyCtx.poolKey.currency1),
-      ],
+      actionCodes: mint.actionCodes,
+      params: mint.params,
+      value: mint.value,
       label: 'Create position (v4)',
       kind: 'create_position_v4',
       meta: {
-        v4Actions: ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+        v4Actions: mint.v4Actions,
         poolId: plan.poolId,
         tickSpacing: Number(plan.tickSpacing),
         hooks: plan.hooks,
         createsNewPosition: true,
+        nativeValue: mint.value ? mint.value.toString() : null,
       },
     }));
 
@@ -833,55 +911,31 @@ async function prepareCreatePositionV4(payload) {
     poolId,
     tickSpacing,
   };
-  // Pago del lado nativo: en v4 el ETH nativo no se aprueba ni se mueve con
-  // transferFrom — se envia como `value` de la transaccion. Se manda el techo
-  // con slippage y se agrega SWEEP para recuperar lo que no se consuma; sin
-  // SWEEP el sobrante queda atrapado en el PositionManager.
   const amount0Max = applyMintSlippageCeiling(amount0Desired, mintSlippageBps);
   const amount1Max = applyMintSlippageCeiling(amount1Desired, mintSlippageBps);
-  const nativeIsCurrency0 = isZeroAddress(poolKey.currency0);
-  const nativeIsCurrency1 = isZeroAddress(poolKey.currency1);
-  const usaNativo = nativeIsCurrency0 || nativeIsCurrency1;
-  const nativeValue = nativeIsCurrency0 ? amount0Max : (nativeIsCurrency1 ? amount1Max : 0n);
-
-  const mintActions = [
-    V4_ACTIONS.MINT_POSITION,
-    V4_ACTIONS.CLOSE_CURRENCY,
-    V4_ACTIONS.CLOSE_CURRENCY,
-  ];
-  const mintParams = [
-    encodeV4MintParams({
-      poolKey,
-      tickLower,
-      tickUpper,
-      liquidity: liquidityDelta,
-      amount0Max,
-      amount1Max,
-      owner: normalizedWallet,
-    }),
-    encodeV4CloseCurrencyParams(poolKey.currency0),
-    encodeV4CloseCurrencyParams(poolKey.currency1),
-  ];
-  if (usaNativo) {
-    mintActions.push(V4_ACTIONS.SWEEP);
-    mintParams.push(encodeV4SweepParams(ZERO_ADDRESS_V4, normalizedWallet));
-  }
+  const mint = buildV4MintActions({
+    poolKey,
+    tickLower,
+    tickUpper,
+    liquidity: liquidityDelta,
+    amount0Max,
+    amount1Max,
+    owner: normalizedWallet,
+  });
 
   txPlan.push(buildV4ModifyTx(dummyCtx, {
-    actionCodes: mintActions,
-    params: mintParams,
-    value: nativeValue,
+    actionCodes: mint.actionCodes,
+    params: mint.params,
+    value: mint.value,
     label: 'Create position (v4)',
     kind: 'create_position_v4',
     meta: {
-      v4Actions: usaNativo
-        ? ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'SWEEP']
-        : ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+      v4Actions: mint.v4Actions,
       poolId,
       tickSpacing,
       hooks,
       createsNewPosition: true,
-      nativeValue: nativeValue ? nativeValue.toString() : null,
+      nativeValue: mint.value ? mint.value.toString() : null,
     },
   }));
 
@@ -1347,6 +1401,9 @@ module.exports = {
   // Exportado para test: sin margen, el mint v4 revierte con
   // MaximumAmountExceeded ante cualquier redondeo hacia arriba.
   applyMintSlippageCeiling,
+  // Exportado para test: el lado nativo se paga con el `value` del mint y se
+  // barre con SWEEP, y las dos ramas de create-position deben coincidir.
+  buildV4MintActions,
   prepareIncreaseLiquidityV4,
   prepareDecreaseLiquidityV4,
   prepareReinvestFeesV4,
