@@ -29,6 +29,7 @@ export default function StepFunding({
   onClose,
   refreshFundingPlan,
   handleApplyRecommended,
+  handleRetryFunding,
   handlePrepareReview,
 }) {
   return (
@@ -115,8 +116,8 @@ export default function StepFunding({
             <button type="button" className={styles.secondaryBtn} onClick={() => setStep(STEP.POOL)}>
               Reducir monto objetivo
             </button>
-            <button type="button" className={styles.secondaryBtn} onClick={() => refreshFundingPlan({ preserveSelections: true })}>
-              Reintentar
+            <button type="button" className={styles.secondaryBtn} onClick={handleRetryFunding}>
+              Reintentar con todos los activos
             </button>
           </div>
         </div>

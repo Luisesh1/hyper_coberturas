@@ -136,6 +136,7 @@ export default function SmartCreatePoolModal({
             onClose={onClose}
             refreshFundingPlan={flow.refreshFundingPlan}
             handleApplyRecommended={flow.handleApplyRecommended}
+            handleRetryFunding={flow.handleRetryFunding}
             handlePrepareReview={flow.handlePrepareReview}
           />
         )}

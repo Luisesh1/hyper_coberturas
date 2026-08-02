@@ -329,6 +329,59 @@ describe('SmartCreatePoolModal', () => {
     expect(uniswapApi.smartCreateFundingPlan).toHaveBeenCalledWith(expect.objectContaining({ network: 'arbitrum' }));
   }, 15000);
 
+  // Caso real: una wallet con $167 pedia $100 y el wizard solo tenia $50
+  // habilitados. "Reintentar" reenviaba esa misma seleccion, asi que fallaba
+  // igual, y en estado de error el boton "Usar recomendado" no se renderiza
+  // (vive en el panel del plan, que es null). El usuario quedaba sin salida.
+  it('reintentar tras un fallo suelta la selección para que el server re-optimice', async () => {
+    const fundingError = new Error(
+      'Seleccionaste $50.43 de los $167.66 que tenés en Arbitrum One.'
+    );
+    fundingError.code = 'INSUFFICIENT_SELECTED_FUNDING';
+    fundingError.details = {
+      network: 'arbitrum',
+      totalUsdTarget: 100,
+      deployableUsd: 50.43,
+      missingUsd: 49.57,
+      selectedUsd: 50.43,
+      usableFundingUsd: 167.66,
+      availableFundingAssets: [],
+    };
+    uniswapApi.smartCreateFundingPlan.mockRejectedValueOnce(fundingError);
+
+    render(
+      <SmartCreatePoolModal
+        wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
+        sendTransaction={vi.fn()}
+        defaults={{ network: 'arbitrum', version: 'v3' }}
+        meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'] }] }}
+        onClose={vi.fn()}
+        onFinalized={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum'));
+
+    await userEvent.selectOptions(screen.getByLabelText(/Token 0/i), '0x00000000000000000000000000000000000000AA');
+    await userEvent.selectOptions(screen.getByLabelText(/Token 1/i), '0x00000000000000000000000000000000000000BB');
+    await userEvent.clear(screen.getByLabelText(/Valor total objetivo/i));
+    await userEvent.type(screen.getByLabelText(/Valor total objetivo/i), '100');
+    await userEvent.click(screen.getByRole('button', { name: /Analizar pool y rango/i }));
+    await screen.findByText(/Paso 2: Rango y composición/i);
+    await userEvent.click(screen.getByRole('button', { name: /Continuar a fondeo/i }));
+
+    // El titulo manda a habilitar activos, no a buscar capital.
+    await screen.findByText(/Falta habilitar activos/i);
+    expect(screen.getByText(/Seleccionado:/i)).toBeTruthy();
+
+    uniswapApi.smartCreateFundingPlan.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: /Reintentar con todos los activos/i }));
+
+    await waitFor(() => expect(uniswapApi.smartCreateFundingPlan).toHaveBeenCalled());
+    const retryPayload = uniswapApi.smartCreateFundingPlan.mock.calls.at(-1)[0];
+    expect(retryPayload.fundingSelections).toBeUndefined();
+  }, 15000);
+
   it('muestra error parcial si el runner falla después de confirmar txs previas', async () => {
     executionController.setConfig({
       outcome: 'error',

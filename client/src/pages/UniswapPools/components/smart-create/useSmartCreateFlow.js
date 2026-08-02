@@ -317,6 +317,19 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
     await refreshFundingPlan({ preserveSelections: false });
   }
 
+  /**
+   * Reintento desde el panel de error. NO preserva la selección: si el plan
+   * fallo porque lo habilitado no cubria el objetivo, reenviar esa misma
+   * selección vuelve a fallar igual, y en estado de error `fundingPlan` es
+   * null asi que "Usar recomendado" ni se renderiza — el usuario quedaba sin
+   * salida. Soltando la selección el server vuelve a optimizar sobre toda la
+   * wallet y los checkboxes se repueblan con lo que eligio.
+   */
+  async function handleRetryFunding() {
+    setHasFundingEdits(false);
+    await refreshFundingPlan({ preserveSelections: false });
+  }
+
   async function handleApplyRecommended() {
     const recommended = fundingPlan?.recommendedFundingSelection;
     if (!Array.isArray(recommended) || recommended.length === 0) return;
@@ -526,6 +539,7 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
     handleAnalyzePool,
     handleContinueToFunding,
     handleApplyRecommended,
+    handleRetryFunding,
     handlePrepareReview,
     handleExecute,
     handleReset,
