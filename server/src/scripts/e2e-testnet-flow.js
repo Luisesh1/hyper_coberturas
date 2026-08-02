@@ -61,11 +61,16 @@ const CONFIG = {
   rangeWidthPct: Number(process.env.E2E_TESTNET_RANGE_PCT || 20),
   slippageBps: Number(process.env.E2E_TESTNET_SLIPPAGE_BPS || 100),
   receiptTimeoutMs: Number(process.env.E2E_TESTNET_RECEIPT_TIMEOUT_MS || 180_000),
+  useNative: process.env.E2E_TESTNET_NATIVE === '1',
+  // Pasos a saltear, separados por coma (p.ej. increase). Sirve para seguir
+  // validando el resto del ciclo cuando un paso tiene un bug conocido.
+  skip: String(process.env.E2E_TESTNET_SKIP || '').split(',').map((s) => s.trim()).filter(Boolean),
 };
 
 // Un QUANTITY de JSON-RPC es hex compacto sin ceros a la izquierda.
 const RPC_QUANTITY = /^0x(0|[1-9a-f][0-9a-f]*)$/;
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 // ─── Salida ──────────────────────────────────────────────────────────
 
@@ -80,6 +85,11 @@ function logStep(name) {
 }
 
 async function runStep(name, fn) {
+  if (CONFIG.skip.some((s) => name.startsWith(s))) {
+    logStep(`${name} [SALTEADO]`);
+    stepResults.push({ name, ok: true, skipped: true, ms: 0 });
+    return null;
+  }
   logStep(name);
   const startedAt = Date.now();
   try {
@@ -128,11 +138,21 @@ function assertTxPlanShape(tx, label) {
   }
 }
 
-async function executeTxPlan(txPlan, { wallet, provider, label }) {
+async function executeTxPlan(txPlan, { wallet, provider, label, nonceRef }) {
   const receipts = [];
   if (!Array.isArray(txPlan) || txPlan.length === 0) {
     log(`  (${label}: txPlan vacio)`);
     return receipts;
+  }
+
+  // El nonce se lleva a mano y COMPARTIDO entre todos los planes de la
+  // corrida. ethers lo resuelve por RPC y cachea el resultado unos
+  // milisegundos; mandando txs de corrido —y mas contra un nodo que mina al
+  // instante— la siguiente reusa el nonce de la anterior y muere con "nonce
+  // too low". Releerlo al empezar cada plan no alcanza: el cache sobrevive
+  // entre planes.
+  if (nonceRef.value == null) {
+    nonceRef.value = await provider.getTransactionCount(wallet.address, 'pending');
   }
 
   for (const [index, tx] of txPlan.entries()) {
@@ -164,6 +184,7 @@ async function executeTxPlan(txPlan, { wallet, provider, label }) {
       data: tx.data,
       value: BigInt(rawParams.value),
       gasLimit: (BigInt(estimatedGas) * 125n) / 100n,
+      nonce: nonceRef.value++,
     });
     const receipt = await sent.wait(1, CONFIG.receiptTimeoutMs);
     if (!receipt || receipt.status !== 1) {
@@ -198,15 +219,20 @@ function extractMintedTokenId(receipts, positionManagerAddress, walletAddress) {
 
 // ─── Flujo ───────────────────────────────────────────────────────────
 
-function resolvePair(network) {
+function resolvePair(network, networkConfig) {
   const known = getKnownTokens(network);
-  const weth = known.find((t) => t.isWrappedNative);
   const usdc = known.find((t) => t.symbol === 'USDC');
-  if (!weth || !usdc) {
-    throw new Error(`No hay par WETH/USDC conocido en ${network}`);
+  // Con USE_NATIVE probamos el pool NATIVO/USDC, que es una currency distinta
+  // del WRAPPED/USDC en v4 y tiene su propio camino de fondeo (unwrap) y de
+  // pago (`value` + SWEEP).
+  const base = CONFIG.useNative
+    ? { symbol: networkConfig.nativeSymbol, address: ZERO_ADDRESS, decimals: 18, isNative: true }
+    : known.find((t) => t.isWrappedNative);
+  if (!base || !usdc) {
+    throw new Error(`No hay par ${CONFIG.useNative ? 'nativo' : 'WETH'}/USDC conocido en ${network}`);
   }
   // El orden canonico lo define la address, no la preferencia del usuario.
-  const { token0, token1 } = sortTokensByAddress(weth, usdc);
+  const { token0, token1 } = sortTokensByAddress(base, usdc);
   return { token0, token1 };
 }
 
@@ -219,20 +245,37 @@ async function main() {
   }
 
   const networkConfig = getNetworkConfig(CONFIG.network);
+  const provider = getProvider(networkConfig);
+
   // Guardarrail: este script firma y gasta. Si alguna vez apunta a mainnet
   // por un typo en el env, que muera aca.
+  //
+  // La excepcion es un fork local (anvil --fork-url): tiene el chainId y el
+  // estado de la red real — pools con liquidez de verdad, que una testnet no
+  // tiene — pero el dinero es de mentira. Se verifica preguntandole al nodo
+  // por un metodo que SOLO existe en anvil: contra un RPC real esto falla y
+  // el guardarrail se mantiene.
+  let esFork = false;
   if (!networkConfig.isTestnet) {
-    throw new Error(
-      `${networkConfig.label} no es una testnet. Este script firma transacciones `
-      + 'reales: solo corre contra redes con isTestnet=true.'
-    );
+    try {
+      await provider.send('anvil_nodeInfo', []);
+      esFork = true;
+    } catch {
+      esFork = false;
+    }
+    if (!esFork) {
+      throw new Error(
+        `${networkConfig.label} no es una testnet y el RPC configurado no es un fork local. `
+        + 'Este script firma transacciones reales: solo corre contra redes con '
+        + 'isTestnet=true o contra un fork de anvil.'
+      );
+    }
   }
-
-  const provider = getProvider(networkConfig);
   const wallet = new ethers.Wallet(CONFIG.privateKey, provider);
-  const { token0, token1 } = resolvePair(CONFIG.network);
+  const nonceRef = { value: null };
+  const { token0, token1 } = resolvePair(CONFIG.network, networkConfig);
 
-  log(`Red      : ${networkConfig.label} (chainId ${networkConfig.chainId})`);
+  log(`Red      : ${networkConfig.label} (chainId ${networkConfig.chainId})${esFork ? '  [FORK LOCAL]' : ''}`);
   log(`Version  : ${CONFIG.version}`);
   log(`Wallet   : ${wallet.address}`);
   log(`Par      : ${token0.symbol}/${token1.symbol} fee=${CONFIG.fee}`);
@@ -292,7 +335,7 @@ async function main() {
   // 2. Create position ------------------------------------------------
   const tokenId = await runStep('create-position', async () => {
     const prepared = await preparePositionAction({ action: 'create-position', payload: createPayload });
-    const receipts = await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'create' });
+    const receipts = await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'create', nonceRef });
     if (DRY_RUN) return null;
 
     const positionManager = networkConfig.deployments[CONFIG.version].positionManager;
@@ -328,7 +371,7 @@ async function main() {
         maxSlippageBps: CONFIG.slippageBps,
       },
     });
-    await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'increase' });
+    await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'increase', nonceRef });
   });
 
   // 4. Decrease 50% ---------------------------------------------------
@@ -337,7 +380,7 @@ async function main() {
       action: 'decrease-liquidity',
       payload: { ...positionPayload, liquidityPercent: 50 },
     });
-    await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'decrease' });
+    await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'decrease', nonceRef });
   });
 
   // 5. Close ----------------------------------------------------------
@@ -349,7 +392,7 @@ async function main() {
         action: 'close-keep-assets',
         payload: positionPayload,
       });
-      await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'close' });
+      await executeTxPlan(prepared.txPlan, { wallet, provider, label: 'close', nonceRef });
     });
   }
 }
