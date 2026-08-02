@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   findInvalidTxPlanReason,
   buildTransactionParams,
+  findReceiptDespiteError,
   prefersEstimatedGas,
   withFailingTxContext,
   sendWalletTransactionDetailed,
@@ -151,5 +152,35 @@ describe('sendWalletTransactionDetailed con plan inválido', () => {
     expect(provider.request.mock.calls[0][0].method).toBe('eth_sendTransaction');
     expect(hash).toBe('0xhash');
     expect(normalizedError).toBeNull();
+  });
+});
+
+// Una tx que SI se ejecuto on-chain reportada como fallida es el peor error
+// posible del runner: aborta el plan a la mitad y el usuario cree que no paso
+// nada. Ocurria porque observar bloques y consultar el recibo pueden caer en
+// nodos distintos.
+describe('findReceiptDespiteError', () => {
+  it('rescata el recibo cuando aparece en un reintento', async () => {
+    const getTransactionReceipt = vi.fn()
+      .mockRejectedValueOnce(new Error('not found'))
+      .mockResolvedValueOnce({ transactionHash: '0xabc', status: 'success' });
+    const receipt = await findReceiptDespiteError(
+      { getTransactionReceipt }, '0xabc', { attempts: 3, pollMs: 1 }
+    );
+    expect(receipt.status).toBe('success');
+    expect(getTransactionReceipt).toHaveBeenCalledTimes(2);
+  });
+
+  it('devuelve null si de verdad no está', async () => {
+    const getTransactionReceipt = vi.fn().mockRejectedValue(new Error('not found'));
+    const receipt = await findReceiptDespiteError(
+      { getTransactionReceipt }, '0xabc', { attempts: 2, pollMs: 1 }
+    );
+    expect(receipt).toBeNull();
+  });
+
+  it('no explota sin cliente o sin hash', async () => {
+    expect(await findReceiptDespiteError(null, '0xabc')).toBeNull();
+    expect(await findReceiptDespiteError({ getTransactionReceipt: vi.fn() }, null)).toBeNull();
   });
 });

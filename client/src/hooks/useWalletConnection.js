@@ -32,6 +32,7 @@ import {
   buildPreparedTransactionRequest,
   buildTransactionParams,
   extractTxHash,
+  findReceiptDespiteError,
   formatFriendlyWalletError,
   normalizeReceiptStatus,
   normalizeWalletError,
@@ -312,6 +313,21 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
         status: normalizeReceiptStatus(receipt.status),
       };
     } catch (err) {
+      // Ultima chance antes de dar por fallada la tx: preguntar el recibo
+      // directo. `waitForTransactionReceipt` observa bloques y consulta el
+      // recibo, y con varios nodos detras esas dos cosas pueden ver estados
+      // distintos — una tx que SI entro se reporta como no encontrada. Dar
+      // por fallado algo que se ejecuto on-chain es el peor error posible
+      // aca: aborta el plan a la mitad y el usuario cree que no paso nada.
+      const rescatado = await findReceiptDespiteError(publicClient, txHash);
+      if (rescatado) {
+        return {
+          ...rescatado,
+          transactionHash: rescatado.transactionHash || txHash,
+          status: normalizeReceiptStatus(rescatado.status),
+        };
+      }
+
       const normalized = normalizeWalletError(err, { phase: 'receipt' });
       setError(normalized.message);
       const wrapped = new Error(normalized.message);

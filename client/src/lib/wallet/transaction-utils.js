@@ -468,3 +468,24 @@ export function buildPreparedTransactionRequest(tx, address) {
     ...(tx.gasEstimate ? { gas: parseHexOrDecimalBigInt(tx.gasEstimate) } : {}),
   });
 }
+
+/**
+ * Busca el recibo directo, reintentando, cuando `waitForTransactionReceipt`
+ * ya se dio por vencido. Existe porque observar bloques y consultar el recibo
+ * pueden resolverse contra nodos distintos: una tx que SI se ejecuto aparece
+ * como no encontrada, el plan se aborta a la mitad y el usuario cree que no
+ * paso nada. Devuelve null si de verdad no esta.
+ */
+export async function findReceiptDespiteError(publicClient, txHash, { attempts = 5, pollMs = 1200 } = {}) {
+  if (!publicClient?.getTransactionReceipt || !txHash) return null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
+      if (receipt) return receipt;
+    } catch {
+      // Todavia no visible en el nodo que respondio; reintentamos.
+    }
+    if (attempt < attempts - 1) await sleep(pollMs);
+  }
+  return null;
+}

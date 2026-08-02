@@ -61,10 +61,16 @@ export function getChainById(chainId) {
 
 export function createTransportForChain(chainId) {
   const urls = buildRpcUrls(chainId);
+  // `rank: false` a proposito. Rankear reordena los transportes segun latencia
+  // y hace que llamadas consecutivas caigan en nodos distintos. Para esperar
+  // un recibo eso es veneno: se transmite por un nodo y se pregunta por el
+  // recibo a otro que todavia no vio el bloque, asi que una tx que si entro
+  // aparece como "no encontrada". Con orden estable se usa siempre el primero
+  // y solo se cae al segundo si el primero falla.
   return fallback(
     urls.map((url) => http(url)),
     {
-      rank: true,
+      rank: false,
       retryCount: 3,
       retryDelay: 150,
     }
