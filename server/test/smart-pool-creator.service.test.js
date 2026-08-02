@@ -10,7 +10,42 @@ const {
   orientRangeToCanonicalOrder,
   pickTargetTokenByUsdDeficit,
   sortTokensByAddress,
+  sumSelectedFundingUsd,
 } = require('../src/services/smart-pool-creator.service');
+
+// Caso real: una wallet con $167 en Arbitrum (USDC 63.92, USDT 50.43, WETH
+// 49.96) pedia un LP de $100 y recibia "El capital no alcanza para fondear el
+// LP". El capital estaba: en el wizard solo habia quedado habilitado el USDT,
+// asi que el planner solo podia usar $50.43. Distinguir seleccion de capital
+// necesita saber cuanto vale lo seleccionado.
+test('sumSelectedFundingUsd suma el USD de los activos habilitados', () => {
+  const seleccion = [
+    { asset: { usdValue: 63.92, balanceRaw: '63920000', usableBalanceRaw: '63920000' }, requestedRaw: '63920000' },
+    { asset: { usdValue: 50.43, balanceRaw: '50430000', usableBalanceRaw: '50430000' }, requestedRaw: '50430000' },
+  ];
+  assert.equal(Number(sumSelectedFundingUsd(seleccion).toFixed(2)), 114.35);
+});
+
+test('prorratea cuando se pide solo una parte del balance', () => {
+  const seleccion = [
+    { asset: { usdValue: 100, balanceRaw: '1000', usableBalanceRaw: '1000' }, requestedRaw: '250' },
+  ];
+  assert.equal(sumSelectedFundingUsd(seleccion), 25);
+});
+
+test('no cuenta mas del balance aunque se pida de mas', () => {
+  const seleccion = [
+    { asset: { usdValue: 100, balanceRaw: '1000', usableBalanceRaw: '1000' }, requestedRaw: '9999' },
+  ];
+  assert.equal(sumSelectedFundingUsd(seleccion), 100);
+});
+
+test('ignora activos sin balance, sin precio o con datos corruptos', () => {
+  assert.equal(sumSelectedFundingUsd([]), 0);
+  assert.equal(sumSelectedFundingUsd([{ asset: { usdValue: 10, balanceRaw: '0' }, requestedRaw: '0' }]), 0);
+  assert.equal(sumSelectedFundingUsd([{ asset: { usdValue: 0, balanceRaw: '100' }, requestedRaw: '100' }]), 0);
+  assert.equal(sumSelectedFundingUsd([{ asset: { usdValue: NaN, balanceRaw: '100' }, requestedRaw: '100' }]), 0);
+});
 
 test('computeRangeSuggestions genera presets ATR y fallback validos', () => {
   const atrSuggestions = computeRangeSuggestions(2500, 50, true);

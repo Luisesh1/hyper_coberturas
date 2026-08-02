@@ -73,6 +73,11 @@ export function formatFundingIssueTitle(issue) {
       return 'Saldo insuficiente en la red seleccionada';
     case 'NO_SUPPORTED_SWAP_ROUTE':
       return 'No hay ruta de swap soportada';
+    // No decir "no alcanza el capital" cuando la wallet tiene de sobra y lo
+    // que falta es habilitar activos: manda al usuario a buscar fondos que ya
+    // tiene.
+    case 'INSUFFICIENT_SELECTED_FUNDING':
+      return 'Falta habilitar activos para fondear el LP';
     case 'INSUFFICIENT_DIRECT_OR_SWAP_OUTPUT':
       return 'El capital no alcanza para fondear el LP';
     default:

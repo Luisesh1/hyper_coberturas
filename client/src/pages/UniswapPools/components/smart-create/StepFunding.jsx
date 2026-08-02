@@ -89,6 +89,13 @@ export default function StepFunding({
           {fundingIssue.details?.missingUsd > 0 && (
             <div>Falta estimada: {formatUsd(fundingIssue.details.missingUsd)}</div>
           )}
+          {fundingIssue.details?.selectedUsd != null
+            && fundingIssue.details.selectedUsd < fundingIssue.details.usableFundingUsd && (
+            <div>
+              Seleccionado: {formatUsd(fundingIssue.details.selectedUsd)} de{' '}
+              {formatUsd(fundingIssue.details.usableFundingUsd)} disponibles
+            </div>
+          )}
           {(fundingIssue.details?.warnings || []).length > 0 && (
             <div style={{ marginTop: '8px' }}>
               <div style={{ fontSize: '0.78rem', color: '#f5a623', marginBottom: '4px' }}>

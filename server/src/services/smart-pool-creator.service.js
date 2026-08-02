@@ -396,12 +396,31 @@ function logFundingFailure(code, payload = {}) {
   });
 }
 
+/**
+ * Valor en USD de lo que el usuario dejó seleccionado para fondear, que puede
+ * ser un subconjunto de lo que tiene en la wallet. `usdValue` del asset cubre
+ * el balance entero, asi que se prorratea por la porcion pedida.
+ */
+function sumSelectedFundingUsd(selectedAssets = []) {
+  return selectedAssets.reduce((sum, entry) => {
+    const asset = entry?.asset;
+    const usdValue = Number(asset?.usdValue || 0);
+    if (!Number.isFinite(usdValue) || usdValue <= 0) return sum;
+    const balanceRaw = BigInt(asset.usableBalanceRaw || asset.balanceRaw || '0');
+    if (balanceRaw <= 0n) return sum;
+    const requestedRaw = BigInt(entry.requestedRaw || '0');
+    const portion = requestedRaw >= balanceRaw ? 1 : Number(requestedRaw) / Number(balanceRaw);
+    return sum + (usdValue * portion);
+  }, 0);
+}
+
 function summarizeFundingDiagnostics({
   network,
   fundingUniverse,
   availableFundingAssets,
   totalUsdTarget,
   deployableUsd = 0,
+  selectedUsd = null,
   warnings = [],
 }) {
   const totalTarget = Number(totalUsdTarget || 0);
@@ -435,6 +454,7 @@ function summarizeFundingDiagnostics({
     deployableUsd: Number(Number(deployableUsd || 0).toFixed(2)),
     missingUsd: Number(Math.max(totalTarget - Number(deployableUsd || 0), 0).toFixed(2)),
     usableFundingUsd: Number(usableFundingUsd.toFixed(2)),
+    selectedUsd: selectedUsd == null ? null : Number(Number(selectedUsd).toFixed(2)),
     warnings,
     sameNetworkOnly: true,
     nativeAsset,
@@ -1629,6 +1649,7 @@ async function buildFundingPlan({
       availableFundingAssets: fundingUniverse.assets,
       totalUsdTarget,
       deployableUsd: finalValueUsd,
+      selectedUsd: sumSelectedFundingUsd(selectedAssets),
       warnings,
     });
     const hasFundingAssets = (fundingUniverse.assets || []).some((asset) => BigInt(asset.usableBalanceRaw || asset.balanceRaw || '0') > 0n);
@@ -1678,11 +1699,37 @@ async function buildFundingPlan({
       );
     }
 
+    // El planner solo puede usar los activos que vinieron seleccionados. Si la
+    // wallet tiene de sobra pero lo seleccionado no llega, el problema es la
+    // seleccion y no el capital: decirlo con ese nombre evita mandar al
+    // usuario a buscar fondos que ya tiene.
+    const minimoAceptable = Number(totalUsdTarget) * 0.93;
+    if (diagnostics.selectedUsd != null
+      && diagnostics.selectedUsd < minimoAceptable
+      && diagnostics.usableFundingUsd >= minimoAceptable) {
+      logFundingFailure('INSUFFICIENT_SELECTED_FUNDING', {
+        network: poolContext.networkConfig.id,
+        walletAddress: normalizedWallet,
+        totalUsdTarget: Number(totalUsdTarget),
+        deployableUsd: Number(finalValueUsd.toFixed(2)),
+        selectedUsd: diagnostics.selectedUsd,
+        usableFundingUsd: diagnostics.usableFundingUsd,
+      });
+      throw buildFundingDomainError(
+        'INSUFFICIENT_SELECTED_FUNDING',
+        `Seleccionaste $${diagnostics.selectedUsd.toFixed(2)} de los `
+        + `$${diagnostics.usableFundingUsd.toFixed(2)} que tenés en ${poolContext.networkConfig.label}. `
+        + `Habilitá más activos en la lista de fondeo o bajá el objetivo a $${diagnostics.selectedUsd.toFixed(2)}.`,
+        diagnostics
+      );
+    }
+
     logFundingFailure('INSUFFICIENT_DIRECT_OR_SWAP_OUTPUT', {
       network: poolContext.networkConfig.id,
       walletAddress: normalizedWallet,
       totalUsdTarget: Number(totalUsdTarget),
       deployableUsd: Number(finalValueUsd.toFixed(2)),
+      selectedUsd: diagnostics.selectedUsd,
       missingRouteCount,
     });
     throw buildFundingDomainError(
@@ -2109,4 +2156,5 @@ module.exports = {
   resolveBestDirectRoute,
   resolveBestRoute,
   sortTokensByAddress,
+  sumSelectedFundingUsd,
 };
