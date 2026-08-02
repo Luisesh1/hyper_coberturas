@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { uniswapApi, lpOrchestratorApi } from '../../../services/api';
 import ProtectionFormFields, {
   buildDefaultProtection,
@@ -8,6 +8,12 @@ import ProtectionFormFields, {
 import StrategyFieldInput, { FieldLabel } from './StrategyFieldInput';
 import { validateStrategyFields } from './strategy-fields';
 import styles from './CreateOrchestratorWizard.module.css';
+import {
+  favoriteKeyOf,
+  loadFavorites,
+  sortFavoritesFirst,
+  toggleFavorite,
+} from './favoritePools';
 
 const STEP = {
   IDENTITY: 'identity',
@@ -69,6 +75,7 @@ export default function CreateOrchestratorWizard({
   const [poolsError, setPoolsError] = useState('');
   const [selectedPoolKey, setSelectedPoolKey] = useState('');
   const [poolSearch, setPoolSearch] = useState('');
+  const [favorites, setFavorites] = useState(() => loadFavorites());
   const [initialTotalUsd, setInitialTotalUsd] = useState('1000');
   const [strategy, setStrategy] = useState(DEFAULT_STRATEGY);
   const [protection, setProtection] = useState(buildDefaultProtection(1000));
@@ -119,6 +126,18 @@ export default function CreateOrchestratorWizard({
       || `${pool.fee / 10000}`.includes(term)
     ));
   }, [pools, poolSearch]);
+
+  // Los favoritos suben al tope de la lista ya filtrada, para que sigan
+  // visibles sin importar cuantos pools devuelva la red.
+  const orderedPools = useMemo(
+    () => sortFavoritesFirst(visiblePools, { favorites, network, version, poolKeyOf }),
+    [visiblePools, favorites, network, version]
+  );
+
+  const handleToggleFavorite = useCallback((pool) => {
+    const key = favoriteKeyOf({ network, version, poolKey: poolKeyOf(pool) });
+    setFavorites((prev) => toggleFavorite(prev, key));
+  }, [network, version]);
 
   // Mientras la protección esté desactivada, recalculamos los defaults
   // (notional + auto-tune) cuando cambie el capital inicial o el ancho del
@@ -241,7 +260,8 @@ export default function CreateOrchestratorWizard({
           {step === STEP.IDENTITY && (
             <IdentityStep
               name={name} setName={setName}
-              pools={visiblePools} totalPools={pools.length}
+              pools={orderedPools} totalPools={pools.length}
+              favorites={favorites} onToggleFavorite={handleToggleFavorite}
               poolSearch={poolSearch} setPoolSearch={setPoolSearch}
               poolsLoading={poolsLoading} poolsError={poolsError}
               selectedPoolKey={selectedPoolKey} setSelectedPoolKey={setSelectedPoolKey}
@@ -310,7 +330,7 @@ export default function CreateOrchestratorWizard({
 
 function IdentityStep({
   name, setName,
-  pools, totalPools, poolSearch, setPoolSearch,
+  pools, totalPools, poolSearch, setPoolSearch, favorites, onToggleFavorite,
   poolsLoading, poolsError,
   selectedPoolKey, setSelectedPoolKey,
   initialTotalUsd, setInitialTotalUsd,
@@ -383,22 +403,41 @@ function IdentityStep({
           <div className={styles.poolList} role="radiogroup" aria-label="Pool">
             {pools.map((pool) => {
               const id = poolKeyOf(pool);
+              const esFavorito = (favorites || []).includes(
+                favoriteKeyOf({ network, version, poolKey: id })
+              );
+              // La estrella va FUERA del boton de seleccion: un boton anidado
+              // dentro de otro no es HTML valido y rompe la navegacion por
+              // teclado del radiogroup.
               return (
-                <button
-                  key={id}
-                  type="button"
-                  role="radio"
-                  aria-checked={selectedPoolKey === id}
-                  className={`${styles.poolBtn} ${selectedPoolKey === id ? styles.poolBtnActive : ''}`}
-                  onClick={() => setSelectedPoolKey(id)}
-                  title={pool.hasLiquidity
-                    ? `${pool.label} · ${pool.fee / 10000}%`
-                    : 'Este pool existe pero no tiene liquidez: el swap de fondeo puede fallar'}
-                >
-                  <span className={styles.poolPair}>{pool.label}</span>
-                  <span className={styles.poolFee}>{pool.fee / 10000}%</span>
-                  {!pool.hasLiquidity && <span className={styles.poolWarn}>sin liquidez</span>}
-                </button>
+                <div key={id} className={styles.poolItem}>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={selectedPoolKey === id}
+                    className={`${styles.poolBtn} ${selectedPoolKey === id ? styles.poolBtnActive : ''}`}
+                    onClick={() => setSelectedPoolKey(id)}
+                    title={pool.hasLiquidity
+                      ? `${pool.label} · ${pool.fee / 10000}%`
+                      : 'Este pool existe pero no tiene liquidez: el swap de fondeo puede fallar'}
+                  >
+                    <span className={styles.poolPair}>{pool.label}</span>
+                    <span className={styles.poolFee}>{pool.fee / 10000}%</span>
+                    {!pool.hasLiquidity && <span className={styles.poolWarn}>sin liquidez</span>}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.favBtn} ${esFavorito ? styles.favBtnOn : ''}`}
+                    aria-pressed={esFavorito}
+                    aria-label={esFavorito
+                      ? `Quitar ${pool.label} de favoritos`
+                      : `Marcar ${pool.label} como favorito`}
+                    title={esFavorito ? 'Quitar de favoritos' : 'Marcar como favorito'}
+                    onClick={() => onToggleFavorite(pool)}
+                  >
+                    {esFavorito ? '★' : '☆'}
+                  </button>
+                </div>
               );
             })}
           </div>

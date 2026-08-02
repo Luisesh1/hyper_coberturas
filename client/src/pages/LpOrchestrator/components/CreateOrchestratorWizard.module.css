@@ -150,6 +150,42 @@
   padding: 2px;
 }
 
+.poolItem {
+  position: relative;
+  display: flex;
+}
+
+/* El boton de seleccion ocupa todo el ancho; la estrella se superpone a la
+   derecha para no romper la grilla de la lista. */
+.poolItem .poolBtn {
+  flex: 1;
+  padding-right: 26px;
+}
+
+.favBtn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  border: none;
+  background: transparent;
+  color: var(--uni-text-2, #97a9bd);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 3px 4px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.favBtn:hover,
+.favBtn:focus-visible {
+  opacity: 1;
+}
+
+.favBtnOn {
+  color: #f5c542;
+  opacity: 1;
+}
+
 .poolBtn {
   display: flex;
   align-items: baseline;
