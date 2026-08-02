@@ -141,14 +141,12 @@ export function toRpcQuantity(value) {
  */
 const GAS_ESTIMATE_KINDS = [
   'mint_position',
-  'create_position',
-  'increase_liquidity',
-  'decrease_liquidity',
-  'reinvest_fees',
-  'close_keep_assets',
-  'close_to_usdc',
   'wrap_native',
-  'unwrap_native',
+  // Solo el equivalente v4 de mint_position. Ampliar esta lista a increase /
+  // decrease / close / reinvest cambia el comportamiento de flujos v3 que ya
+  // andaban: para esas kinds el gas del preflight se descartaba y se volvia a
+  // estimar contra la wallet. Si se vuelve a tocar, probarlo en v3 primero.
+  'create_position_v4',
 ];
 
 /**

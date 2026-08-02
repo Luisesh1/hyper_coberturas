@@ -12,24 +12,23 @@ import {
 // 'increase_liquidity_v4', etc. Todo el flujo v4 quedo sin gas pre-estimado y
 // la wallet devolvia "Missing or invalid parameters [codigo -32000]".
 describe('prefersEstimatedGas', () => {
-  it('cubre las kinds de v4, no solo las de v3', () => {
-    for (const kind of [
-      'create_position_v4',
-      'mint_position_v4',
-      'increase_liquidity_v4',
-      'decrease_liquidity_v4',
-      'reinvest_fees_v4',
-      'close_keep_assets_v4',
-      'close_to_usdc_v4_withdraw',
-    ]) {
-      expect(prefersEstimatedGas(kind), `${kind} deberia llevar gas pre-estimado`).toBe(true);
-    }
+  it('cubre el mint de v4, que es el equivalente de mint_position', () => {
+    expect(prefersEstimatedGas('create_position_v4')).toBe(true);
+    expect(prefersEstimatedGas('mint_position_v4')).toBe(true);
   });
 
   it('sigue cubriendo v3 y los wraps', () => {
     expect(prefersEstimatedGas('mint_position')).toBe(true);
     expect(prefersEstimatedGas('wrap_native')).toBe(true);
-    expect(prefersEstimatedGas('unwrap_native')).toBe(true);
+  });
+
+  // Ampliar la lista a estas kinds cambio el comportamiento de flujos v3 que
+  // ya andaban: se descartaba el gas del preflight y se re-estimaba contra la
+  // wallet. Quedan fuera a proposito.
+  it('NO toca las kinds que v3 ya venia usando sin pre-estimacion', () => {
+    for (const kind of ['increase_liquidity', 'decrease_liquidity', 'collect_fees', 'reinvest_fees', 'unwrap_native']) {
+      expect(prefersEstimatedGas(kind), `${kind} no deberia pre-estimarse`).toBe(false);
+    }
   });
 
   it('no estima approvals ni kinds vacías', () => {
