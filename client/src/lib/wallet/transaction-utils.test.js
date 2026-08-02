@@ -2,8 +2,60 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   findInvalidTxPlanReason,
   buildTransactionParams,
+  prefersEstimatedGas,
+  withFailingTxContext,
   sendWalletTransactionDetailed,
 } from './transaction-utils';
+
+// El mint v4 llegaba a MetaMask sin gas: la comparacion era exacta contra
+// 'mint_position' y las kinds de v4 se llaman 'create_position_v4',
+// 'increase_liquidity_v4', etc. Todo el flujo v4 quedo sin gas pre-estimado y
+// la wallet devolvia "Missing or invalid parameters [codigo -32000]".
+describe('prefersEstimatedGas', () => {
+  it('cubre las kinds de v4, no solo las de v3', () => {
+    for (const kind of [
+      'create_position_v4',
+      'mint_position_v4',
+      'increase_liquidity_v4',
+      'decrease_liquidity_v4',
+      'reinvest_fees_v4',
+      'close_keep_assets_v4',
+      'close_to_usdc_v4_withdraw',
+    ]) {
+      expect(prefersEstimatedGas(kind), `${kind} deberia llevar gas pre-estimado`).toBe(true);
+    }
+  });
+
+  it('sigue cubriendo v3 y los wraps', () => {
+    expect(prefersEstimatedGas('mint_position')).toBe(true);
+    expect(prefersEstimatedGas('wrap_native')).toBe(true);
+    expect(prefersEstimatedGas('unwrap_native')).toBe(true);
+  });
+
+  it('no estima approvals ni kinds vacías', () => {
+    expect(prefersEstimatedGas('approval')).toBe(false);
+    expect(prefersEstimatedGas('permit2_approval')).toBe(false);
+    expect(prefersEstimatedGas(undefined)).toBe(false);
+    expect(prefersEstimatedGas('')).toBe(false);
+  });
+});
+
+describe('withFailingTxContext', () => {
+  it('agrega la etiqueta de la tx que fallo', () => {
+    const result = withFailingTxContext(
+      { code: 'unknown', message: 'No se pudo enviar la transacción. [codigo -32000]' },
+      { label: 'Create position (v4)', kind: 'create_position_v4' }
+    );
+    expect(result.message).toContain('Create position (v4)');
+    expect(result.failingTxKind).toBe('create_position_v4');
+  });
+
+  it('no rompe si no hay error o no hay etiqueta', () => {
+    expect(withFailingTxContext(null, { label: 'x' })).toBeNull();
+    const sinLabel = { code: 'unknown', message: 'boom' };
+    expect(withFailingTxContext(sinLabel, {})).toEqual(sinLabel);
+  });
+});
 
 const VALID_TO = '0xC36442b4a4522E871399CD717aBDD847Ab11FE88';
 

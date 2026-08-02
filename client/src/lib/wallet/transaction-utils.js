@@ -126,6 +126,54 @@ export function toRpcQuantity(value) {
   }
 }
 
+/**
+ * Kinds cuyo gas estimamos nosotros en vez de dejarselo a la wallet. Son las
+ * txs pesadas — crear/modificar posicion y los wrap/unwrap — donde la
+ * estimacion interna de la wallet falla seguido y devuelve un error opaco
+ * ("Missing or invalid parameters [codigo -32000]") que no dice ni cual de las
+ * txs del plan fallo.
+ *
+ * Se matchea por PREFIJO a proposito: la comparacion era exacta contra
+ * 'mint_position', y cuando llego v4 las kinds pasaron a llamarse
+ * `create_position_v4`, `increase_liquidity_v4`, etc. Ninguna volvio a
+ * matchear, asi que TODO el flujo v4 se quedo sin gas pre-estimado sin que
+ * nadie lo notara.
+ */
+const GAS_ESTIMATE_KINDS = [
+  'mint_position',
+  'create_position',
+  'increase_liquidity',
+  'decrease_liquidity',
+  'reinvest_fees',
+  'close_keep_assets',
+  'close_to_usdc',
+  'wrap_native',
+  'unwrap_native',
+];
+
+/**
+ * Un plan de creacion de LP son 5 transacciones. Si la wallet rechaza una con
+ * su mensaje generico, el usuario ve el mismo texto sin importar cual fallo, y
+ * diagnosticar obliga a reconstruir el plan entero desde el servidor. Pegamos
+ * la etiqueta de la tx al mensaje para no perder ese dato.
+ */
+export function withFailingTxContext(normalizedError, tx) {
+  const label = tx?.label || tx?.kind;
+  if (!normalizedError || !label) return normalizedError;
+  return {
+    ...normalizedError,
+    message: `${normalizedError.message} (transacción: ${label})`,
+    failingTxLabel: label,
+    failingTxKind: tx?.kind || null,
+  };
+}
+
+export function prefersEstimatedGas(kind) {
+  const normalized = String(kind || '');
+  if (!normalized) return false;
+  return GAS_ESTIMATE_KINDS.some((base) => normalized === base || normalized.startsWith(`${base}_`));
+}
+
 export function buildTransactionParams({ address, tx, includeGas = true }) {
   const txParams = {
     from: address,
@@ -339,7 +387,7 @@ export async function sendWalletTransactionDetailed({
     }
 
     const baseTxParams = buildTransactionParams({ address, tx, includeGas: false });
-    const shouldPreferEstimatedGas = tx?.kind === 'mint_position' || tx?.kind === 'wrap_native';
+    const shouldPreferEstimatedGas = prefersEstimatedGas(tx?.kind);
     const estimatedGas = shouldPreferEstimatedGas ? await estimateTransactionGas(provider, baseTxParams) : null;
 
     const txHash = await provider.request({
@@ -405,7 +453,7 @@ export async function sendWalletTransactionDetailed({
 
     return {
       hash: null,
-      normalizedError: normalizeWalletError(err),
+      normalizedError: withFailingTxContext(normalizeWalletError(err), tx),
     };
   } finally {
     if (actionKey) PROMPT_LOCKS.delete(actionKey);
