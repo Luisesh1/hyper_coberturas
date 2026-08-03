@@ -19,13 +19,17 @@ const CHAIN_BY_ID = new Map(SUPPORTED_CHAINS.map((chain) => [Number(chain.id), c
 // parameters." — no dice una palabra de autenticacion. Ese texto se venia
 // leyendo como si la tx tuviera los parametros mal, cuando el problema era el
 // RPC. Verificado: los cinco endpoints de Ankr responden -32000 Unauthorized.
+// El PRIMERO tiene que poder servir `eth_getTransactionReceipt` de bloques ya
+// pasados: sin eso no se puede esperar la confirmacion de una tx. publicnode
+// responde 403 "Archive requests require a personal token" en esas consultas
+// aunque conteste bien la cabeza de la cadena, asi que queda de respaldo.
 const DEFAULT_RPC_URLS = {
-  [mainnet.id]: ['https://ethereum-rpc.publicnode.com', 'https://eth.drpc.org'],
-  [arbitrum.id]: ['https://arbitrum-one-rpc.publicnode.com', 'https://arb1.arbitrum.io/rpc'],
-  [base.id]: ['https://base-rpc.publicnode.com', 'https://mainnet.base.org'],
-  [optimism.id]: ['https://optimism-rpc.publicnode.com', 'https://mainnet.optimism.io'],
-  [polygon.id]: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon.drpc.org'],
-  [baseSepolia.id]: ['https://base-sepolia-rpc.publicnode.com', 'https://sepolia.base.org'],
+  [mainnet.id]: ['https://eth.drpc.org', 'https://ethereum-rpc.publicnode.com'],
+  [arbitrum.id]: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum.drpc.org'],
+  [base.id]: ['https://mainnet.base.org', 'https://base-rpc.publicnode.com'],
+  [optimism.id]: ['https://mainnet.optimism.io', 'https://optimism-rpc.publicnode.com'],
+  [polygon.id]: ['https://polygon.drpc.org', 'https://polygon-bor-rpc.publicnode.com'],
+  [baseSepolia.id]: ['https://sepolia.base.org', 'https://base-sepolia-rpc.publicnode.com'],
 };
 
 // Hosts que dejaron de servir sin API key. Un test bloquea que vuelvan a

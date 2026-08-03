@@ -43,7 +43,7 @@ const ALCHEMY_API_KEY = getAlchemyApiKey();
 const ALCHEMY_RPC_URLS = buildAlchemyRpcUrls(ALCHEMY_API_KEY);
 const PUBLIC_RPC_DEFAULTS = {
   ethereum: 'https://ethereum-rpc.publicnode.com',
-  arbitrum: 'https://arbitrum-one-rpc.publicnode.com',
+  arbitrum: 'https://arb1.arbitrum.io/rpc',
   optimism: 'https://optimism-rpc.publicnode.com',
   base: 'https://base-rpc.publicnode.com',
   polygon: 'https://polygon-bor-rpc.publicnode.com',

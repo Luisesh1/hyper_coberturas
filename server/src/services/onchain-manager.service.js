@@ -285,6 +285,19 @@ class OnChainManager {
     timeoutMs = 90_000,
     scope = 'default',
   }) {
+    // Consulta directa primero. `waitForTransaction` de ethers no pregunta por
+    // el recibo: se suscribe a eventos de bloque y recien ahi mira. Si el
+    // provider quedo en mal estado o el nodo no emite bloques, se cuelga hasta
+    // el timeout AUNQUE la tx este minada hace rato — que es el caso normal
+    // aca, porque quien llama ya espero las confirmaciones del lado del
+    // cliente. Un `getTransactionReceipt` lo resuelve en una sola llamada.
+    const inmediato = await this._track(
+      scope,
+      'getTransactionReceipt',
+      () => this.getProvider(networkConfig, { scope }).getTransactionReceipt(txHash)
+    ).catch(() => null);
+    if (inmediato) return inmediato;
+
     return this._track(scope, 'waitForReceipt', () => this.getProvider(networkConfig, { scope }).waitForTransaction(txHash, confirmations, timeoutMs));
   }
 
