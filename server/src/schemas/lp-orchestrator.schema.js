@@ -116,8 +116,71 @@ const updateOrchestratorConfigSchema = z.object({
   message: 'Debe enviarse strategyConfig o protectionConfig',
 });
 
+// ── Wizard unificado ───────────────────────────────────────────────────────
+// El plan es lo que el wizard tiene en la mano antes de firmar: pool, rango,
+// capital y cobertura. `strategyConfig` no viaja completo porque el ancho de
+// rango se deriva del rango elegido (ver create-saga.buildOrchestratorPayload).
+
+const wizardProtectionSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    accountId: z.number().int().positive(),
+    leverage: z.number().int().positive(),
+    configuredNotionalUsd: z.number().positive().nullable().optional(),
+    bandMode: z.enum(['adaptive', 'fixed']).optional(),
+    baseRebalancePriceMovePct: z.number().positive().lt(100).optional(),
+    rebalanceIntervalSec: z.number().int().min(60).optional(),
+    targetHedgeRatio: z.number().positive().max(2).optional(),
+    minRebalanceNotionalUsd: z.number().positive().optional(),
+    maxSlippageBps: z.number().int().min(1).max(500).optional(),
+    twapMinNotionalUsd: z.number().positive().optional(),
+  }),
+]);
+
+const lpPlanSchema = z.object({
+  mode: z.enum(['standalone', 'orchestrated']).default('orchestrated'),
+  name: z.string().min(1).max(255),
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().min(1),
+  token0Address: z.string().min(1),
+  token1Address: z.string().min(1),
+  token0Symbol: z.string().min(1),
+  token1Symbol: z.string().min(1),
+  feeTier: z.number().int().positive().optional(),
+  capitalUsd: z.number().positive(),
+  rangeLowerPrice: z.number().positive(),
+  rangeUpperPrice: z.number().positive(),
+  priceCurrent: z.number().positive(),
+  strategy: strategyConfigPatchSchema.optional(),
+  protection: wizardProtectionSchema,
+});
+
+// El pre-flight corre antes de que exista el rango definitivo, así que pide
+// menos que el plan completo: solo lo que condiciona la cobertura.
+const preflightProtectionSchema = z.object({
+  token0Symbol: z.string().min(1),
+  token1Symbol: z.string().min(1),
+  capitalUsd: z.number().positive(),
+  protection: wizardProtectionSchema,
+});
+
+const createIntentSchema = z.object({
+  plan: lpPlanSchema,
+});
+
+const commitIntentSchema = z.object({
+  operationKey: z.string().min(1),
+  finalizeResult: z.object({}).passthrough(),
+});
+
 module.exports = {
   strategyConfigSchema,
+  lpPlanSchema,
+  preflightProtectionSchema,
+  createIntentSchema,
+  commitIntentSchema,
   strategyConfigPatchSchema,
   protectionConfigSchema,
   createOrchestratorSchema,

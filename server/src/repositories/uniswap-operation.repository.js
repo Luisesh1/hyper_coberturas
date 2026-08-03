@@ -36,6 +36,9 @@ function mapRow(row) {
     status: row.status,
     step: row.step,
     result: parseJsonSafe(row.result_json, null),
+    // Solo lo usa `orchestrated_lp_create`: es el plan del wizard, guardado
+    // antes de la primera firma para poder reconciliar sin el cliente.
+    plan: parseJsonSafe(row.plan_json, null),
     errorCode: row.error_code || null,
     errorMessage: row.error_message || null,
     replacementMap: parseJsonSafe(row.replacement_map_json, {}),
@@ -51,12 +54,14 @@ async function createOrReuse(record, executor) {
     `INSERT INTO position_action_operations (
        user_id, operation_key, kind, action, network, version, wallet_address,
        position_identifier, tx_hashes_json, status, step, result_json, error_code,
-       error_message, replacement_map_json, created_at, updated_at, finished_at
+       error_message, replacement_map_json, created_at, updated_at, finished_at,
+       plan_json
      )
      VALUES (
        $1, $2, $3, $4, $5, $6, $7,
        $8, $9, $10, $11, $12, $13,
-       $14, $15, $16, $17, $18
+       $14, $15, $16, $17, $18,
+       $19
      )
      ON CONFLICT (operation_key) DO UPDATE
        SET updated_at = EXCLUDED.updated_at
@@ -80,6 +85,7 @@ async function createOrReuse(record, executor) {
       now,
       now,
       record.finishedAt ?? null,
+      toJson(record.plan || null),
     ]
   );
   return mapRow(rows[0]);
@@ -128,13 +134,46 @@ async function claimPending(limit = 20, executor) {
   }
   const { rows } = await executor.query(
     `SELECT * FROM position_action_operations
-      WHERE status IN ('queued', 'waiting_receipts', 'refreshing_snapshot', 'migrating_protection')
+      WHERE status IN (
+        'queued', 'waiting_receipts', 'refreshing_snapshot', 'migrating_protection',
+        -- Un commit que arrancó y no terminó: el proceso murió a mitad. Es
+        -- idempotente, así que retomarlo es seguro.
+        'committing'
+      )
       ORDER BY updated_at ASC, id ASC
       LIMIT $1
       FOR UPDATE SKIP LOCKED`,
     [limit]
   );
   return rows.map(mapRow);
+}
+
+/**
+ * Caduca intenciones que nunca llegaron a firmarse. Sin esto se acumularían
+ * para siempre planes de wizards que el usuario simplemente cerró.
+ *
+ * Solo toca las que no tienen ninguna tx asociada: si hay txHashes, el LP
+ * puede existir on-chain y la operación necesita conciliación humana, no
+ * un borrado silencioso.
+ */
+async function expireStaleIntents(olderThanMs, executor) {
+  const cutoff = Date.now() - olderThanMs;
+  const { rows } = await exec(executor).query(
+    `UPDATE position_action_operations
+        SET status = 'failed',
+            step = 'failed',
+            error_code = 'INTENT_EXPIRED',
+            error_message = 'La intención caducó sin llegar a firmarse.',
+            updated_at = $1,
+            finished_at = $1
+      WHERE kind = 'orchestrated_lp_create'
+        AND status = 'awaiting_signature'
+        AND updated_at < $2
+        AND tx_hashes_json IN ('[]', 'null')
+      RETURNING id`,
+    [Date.now(), cutoff]
+  );
+  return rows.length;
 }
 
 async function updateState(id, patch = {}, executor) {
@@ -148,7 +187,9 @@ async function updateState(id, patch = {}, executor) {
             error_message = $6,
             replacement_map_json = COALESCE($7, replacement_map_json),
             updated_at = $8,
-            finished_at = COALESCE($9, finished_at)
+            finished_at = COALESCE($9, finished_at),
+            tx_hashes_json = COALESCE($10, tx_hashes_json),
+            position_identifier = COALESCE($11, position_identifier)
       WHERE id = $1
       RETURNING *`,
     [
@@ -161,6 +202,10 @@ async function updateState(id, patch = {}, executor) {
       patch.replacementMap !== undefined ? toJson(patch.replacementMap) : null,
       now,
       patch.finishedAt ?? null,
+      // La intención se registra antes de firmar, así que los txHashes y el
+      // identificador de la posición llegan en un update posterior.
+      patch.txHashes !== undefined ? toJson(patch.txHashes) : null,
+      patch.positionIdentifier ?? null,
     ]
   );
   return mapRow(rows[0]);
@@ -172,5 +217,6 @@ module.exports = {
   getByOperationKey,
   listPending,
   claimPending,
+  expireStaleIntents,
   updateState,
 };

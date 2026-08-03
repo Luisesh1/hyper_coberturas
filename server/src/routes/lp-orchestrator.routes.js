@@ -5,16 +5,58 @@ const { validate } = require('../middleware/validate.middleware');
 const { requireIntParam } = require('../middleware/parse-params');
 const lpOrchestratorService = require('../services/lp-orchestrator.service');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
+const { runProtectionPreflight } = require('../services/lp-orchestrator/protection-preflight');
+const { LpCreateSaga } = require('../services/lp-orchestrator/create-saga');
 const {
   createOrchestratorSchema,
   updateOrchestratorConfigSchema,
   attachLpSchema,
   recordTxFinalizedSchema,
   killLpSchema,
+  preflightProtectionSchema,
+  createIntentSchema,
+  commitIntentSchema,
 } = require('../schemas/lp-orchestrator.schema');
 
 const router = Router();
 router.use(authenticate);
+
+const createSaga = new LpCreateSaga();
+
+// ── Wizard unificado ───────────────────────────────────────────────────────
+
+/**
+ * Dry-run de la cobertura. Se llama en el paso Cobertura del wizard, antes
+ * de cualquier firma: si no pasa, no se llega a gastar gas.
+ */
+router.post('/preflight-protection', validate(preflightProtectionSchema), asyncHandler(async (req, res) => {
+  const data = await runProtectionPreflight({ userId: req.user.userId, plan: req.body });
+  res.json({ success: true, data });
+}));
+
+/**
+ * Registra la intención antes de la primera firma. Devuelve la clave con la
+ * que el cliente (o el worker) confirmará el commit.
+ */
+router.post('/create-intent', validate(createIntentSchema), asyncHandler(async (req, res) => {
+  const data = await createSaga.beginIntent({ userId: req.user.userId, plan: req.body.plan });
+  res.status(201).json({ success: true, data });
+}));
+
+/**
+ * Cierra la saga: abre la cobertura, crea el orquestador y lo vincula todo,
+ * o compensa. Idempotente por `operationKey`.
+ */
+router.post('/commit-intent', validate(commitIntentSchema), asyncHandler(async (req, res) => {
+  const data = await createSaga.commitIntent({
+    userId: req.user.userId,
+    operationKey: req.body.operationKey,
+    finalizeResult: req.body.finalizeResult,
+  });
+  // Una compensación NO es un error de la petición: el servidor hizo
+  // exactamente lo que debía. El cliente distingue por `status`.
+  res.json({ success: true, data });
+}));
 
 router.get('/', asyncHandler(async (req, res) => {
   const includeArchived = req.query.includeArchived === 'true';

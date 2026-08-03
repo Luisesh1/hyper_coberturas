@@ -168,7 +168,15 @@ class LpOrchestratorService {
    * activo, crea la protección si está configurada y asienta el primer
    * snapshot de contabilidad.
    */
-  async attachLp({ userId, orchestratorId, finalizeResult, protectionConfig }) {
+  /**
+   * @param {'strict'|'lenient'} [params.protectionFailureMode]
+   *   `lenient` (por defecto) registra el fallo de la protección y sigue: es
+   *   el comportamiento que necesita `adoptLp`, donde el LP ya existía antes
+   *   y dejarlo sin vincular sería peor que dejarlo sin cobertura.
+   *   `strict` propaga el error para que la saga de creación compense — un
+   *   orquestador que se cree "protegido" sin hedge opera descubierto.
+   */
+  async attachLp({ userId, orchestratorId, finalizeResult, protectionConfig, protectionFailureMode = 'lenient' }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
       throw new ValidationError('Este orquestador ya tiene un LP activo. Mátalo antes de adjuntar otro.');
@@ -210,9 +218,20 @@ class LpOrchestratorService {
       } catch (err) {
         this.logger.warn('lp_orchestrator_protection_creation_failed', {
           orchestratorId,
+          protectionFailureMode,
           error: err.message,
         });
-        // No abortamos: el LP quedó creado. Solo registramos el fallo.
+        if (protectionFailureMode === 'strict') {
+          // La saga de creación compensa arriba: cierra el hedge si llegó a
+          // abrirse y borra el orquestador. Seguir aquí dejaría un
+          // orquestador en `lp_active` con `activeProtectedPoolId = null`,
+          // es decir operando descubierto mientras la UI lo pinta protegido.
+          const failure = new Error(`No se pudo crear la protección: ${err.message}`);
+          failure.code = 'PROTECTION_CREATION_FAILED';
+          failure.cause = err;
+          throw failure;
+        }
+        // `lenient`: el LP quedó creado. Solo registramos el fallo.
       }
     }
 

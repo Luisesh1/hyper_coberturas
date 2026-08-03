@@ -8,6 +8,10 @@ const claimFeesService = require('./uniswap-claim-fees.service');
 const { AppError, NotFoundError } = require('../errors/app-error');
 const { CLOSE_ACTIONS } = require('./uniswap/constants');
 
+// Una intención sin firmar caduca a los 30 min: más que de sobra para
+// completar un wizard, y poco para que se acumulen planes muertos.
+const STALE_INTENT_TTL_MS = 30 * 60_000;
+
 function buildOperationKey({ kind, userId, action, txHashes }) {
   const sortedHashes = [...new Set((txHashes || []).filter(Boolean).map((item) => String(item).toLowerCase()))].sort();
   const raw = [kind, userId, action, ...sortedHashes].join(':');
@@ -154,6 +158,12 @@ class UniswapOperationService {
         return claimed;
       });
 
+      // Barrido de intenciones que el usuario abandonó sin firmar. Va aquí y
+      // no en su propio intervalo para no añadir otro temporizador.
+      await this.operationRepo.expireStaleIntents(STALE_INTENT_TTL_MS).catch((err) => {
+        this.logger.warn('uniswap_operation_expire_intents_failed', { error: err.message });
+      });
+
       for (const operation of operations) {
         await this.processOne(operation).catch((err) => {
           this.logger.error('uniswap_operation_process_failed', {
@@ -174,7 +184,43 @@ class UniswapOperationService {
     if (operation.kind === 'claim_fees') {
       return this._processClaimFees(operation);
     }
+    if (operation.kind === 'orchestrated_lp_create') {
+      return this._processOrchestratedLpCreate(operation);
+    }
     return this._processPositionAction(operation);
+  }
+
+  /**
+   * Retoma un commit de la saga que arrancó y no terminó (el proceso murió a
+   * mitad). `commitIntent` es idempotente por `operationKey`, así que
+   * reintentarlo no duplica orquestadores ni hedges.
+   */
+  async _processOrchestratedLpCreate(operation) {
+    const saga = this.lpCreateSaga || require('./lp-orchestrator/create-saga.js');
+    const instance = saga.LpCreateSaga ? new saga.LpCreateSaga() : saga;
+    try {
+      const result = await instance.commitIntent({
+        userId: operation.userId,
+        operationKey: operation.operationKey,
+        finalizeResult: operation.result?.finalizeResult || {
+          positionIdentifier: operation.positionIdentifier,
+          txHashes: operation.txHashes,
+        },
+      });
+      return buildOperationEnvelope(await this.operationRepo.getById(operation.userId, operation.id))
+        || result;
+    } catch (err) {
+      // No se marca `failed` a la ligera: el LP puede estar minado. Queda en
+      // `needs_reconcile` para que aparezca como pendiente de revisión.
+      const updated = await this.operationRepo.updateState(operation.id, {
+        status: 'needs_reconcile',
+        step: 'needs_reconcile',
+        errorCode: err.code || 'ORCHESTRATED_CREATE_NEEDS_RECONCILE',
+        errorMessage: err.message,
+        finishedAt: Date.now(),
+      });
+      return buildOperationEnvelope(updated);
+    }
   }
 
   _kick() {

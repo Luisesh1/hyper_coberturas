@@ -895,3 +895,80 @@ test('v4: el escaneo de adopcion usa la version del orquestador', async () => {
   assert.equal(scanCalls.length, 1);
   assert.equal(scanCalls[0].version, 'v4', 'debe escanear posiciones v4, no v3');
 });
+
+// ── attachLp: modo de fallo de la protección ───────────────────────────────
+
+function makeServiceWithFailingProtection(repo) {
+  return new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    db: fakeDb,
+    uniswapService: makeFakeUniswapService(basePool()),
+    uniswapProtectionService: {
+      async createProtectedPool() {
+        throw new Error('margen insuficiente');
+      },
+    },
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+  });
+}
+
+test('attachLp lenient: la protección que falla no aborta el vínculo del LP', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    activePositionIdentifier: null,
+    activePoolAddress: null,
+    phase: 'idle',
+  });
+  const service = makeServiceWithFailingProtection(repo);
+
+  await service.attachLp({
+    userId: 1,
+    orchestratorId: id,
+    finalizeResult: {
+      txHashes: ['0xcreate'],
+      positionChanges: { newPositionIdentifier: '999' },
+      refreshedSnapshot: { identifier: '999', poolAddress: '0xpool2' },
+    },
+    protectionConfig: { enabled: true, accountId: 2, leverage: 3 },
+  });
+
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.phase, 'lp_active');
+  assert.equal(orch.activeProtectedPoolId, null);
+});
+
+test('attachLp strict: la protección que falla propaga y no deja el LP vinculado', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    activePositionIdentifier: null,
+    activePoolAddress: null,
+    phase: 'idle',
+  });
+  const service = makeServiceWithFailingProtection(repo);
+
+  await assert.rejects(
+    () => service.attachLp({
+      userId: 1,
+      orchestratorId: id,
+      finalizeResult: {
+        txHashes: ['0xcreate'],
+        positionChanges: { newPositionIdentifier: '999' },
+        refreshedSnapshot: { identifier: '999', poolAddress: '0xpool2' },
+      },
+      protectionConfig: { enabled: true, accountId: 2, leverage: 3 },
+      protectionFailureMode: 'strict',
+    }),
+    (err) => {
+      assert.equal(err.code, 'PROTECTION_CREATION_FAILED');
+      assert.match(err.message, /margen insuficiente/);
+      return true;
+    }
+  );
+
+  // Lo importante: el orquestador NO quedó marcado como activo con un LP
+  // que cree protegido. La saga lo borrará, pero aunque no lo hiciera el
+  // estado sigue siendo consistente.
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.phase, 'idle');
+  assert.equal(orch.activePositionIdentifier, null);
+});

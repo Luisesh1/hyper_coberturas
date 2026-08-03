@@ -360,6 +360,26 @@ async function archive(userId, id, { stoppedAt = Date.now() } = {}, executor) {
   return rows[0]?.id || null;
 }
 
+/**
+ * Borrado duro. Solo para compensar una creación que falló a medias: el
+ * orquestador se creó hace segundos, nunca llegó a operar y dejarlo
+ * archivado ensuciaría la lista con un registro que no representa nada.
+ * El action_log cae por ON DELETE CASCADE.
+ *
+ * La guarda de `active_position_identifier IS NULL` impide usar esto sobre
+ * un orquestador con un LP vivo: ese camino es `killLp` + `archive`.
+ */
+async function remove(userId, id, executor) {
+  const { rows } = await exec(executor).query(
+    `DELETE FROM lp_orchestrators
+      WHERE user_id = $1 AND id = $2
+        AND active_position_identifier IS NULL
+      RETURNING id`,
+    [userId, id]
+  );
+  return rows[0]?.id || null;
+}
+
 // ---------- action_log -----------------------------------------------------
 
 async function appendActionLog(entry, executor) {
@@ -514,6 +534,7 @@ module.exports = {
   clearUrgentAlert,
   findFinalizedByTxHash,
   archive,
+  remove,
   appendActionLog,
   listActionLog,
   findLastNotification,
