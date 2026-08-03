@@ -28,6 +28,14 @@ export function deriveRangeWidthPct(range) {
   return Math.round(((upper - lower) / 2 / center) * 100 * 100) / 100;
 }
 
+/**
+ * Espejo de DEFAULT_V4_TICK_SPACING_BY_FEE en
+ * server/src/services/smart-pool-creator.service.js. Solo se usa para saber
+ * si el pool declara un tickSpacing distinto del que el backend derivaría
+ * del fee: si coincide, no hace falta persistirlo.
+ */
+const DEFAULT_V4_TICK_SPACING_BY_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
+
 export default function useUnifiedLpFlow({
   mode = 'orchestrated',
   wallet,
@@ -35,6 +43,12 @@ export default function useUnifiedLpFlow({
   onCompleted,
 }) {
   const isOrchestrated = mode === 'orchestrated';
+
+  // Red y versión son estado del wizard, no sólo un default heredado: el
+  // flujo orquestado tiene que poder crear tanto en v3 como en v4. Cambiarlas
+  // reinicia el análisis del pool a través de los efectos de useSmartCreateFlow.
+  const [network, setNetwork] = useState(defaults?.network || 'arbitrum');
+  const [version, setVersion] = useState(defaults?.version || 'v3');
 
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -96,7 +110,12 @@ export default function useUnifiedLpFlow({
     }
   }, [isOrchestrated, onCompleted]);
 
-  const flow = useSmartCreateFlow({ wallet, defaults, onFinalized: handleFinalized });
+  const flowDefaults = useMemo(
+    () => ({ ...defaults, network, version }),
+    [defaults, network, version]
+  );
+
+  const flow = useSmartCreateFlow({ wallet, defaults: flowDefaults, onFinalized: handleFinalized });
 
   // Nombre autocompletado desde el pool mientras el usuario no lo toque.
   const suggestedName = useMemo(() => {
@@ -120,6 +139,15 @@ export default function useUnifiedLpFlow({
   const effectiveRangeWidthPct = strategy.rangeWidthDecoupled
     ? Number(strategy.rangeWidthPct) || null
     : derivedRangeWidthPct;
+
+  // El tickSpacing real del pool lo resuelve el backend al preparar las txs.
+  const v4TickSpacingOverride = useMemo(() => {
+    if (version !== 'v4') return null;
+    const actual = flow.prepareData?.tickSpacing;
+    if (actual == null) return null;
+    const derived = DEFAULT_V4_TICK_SPACING_BY_FEE[Number(flow.fee)];
+    return Number(actual) === derived ? null : Number(actual);
+  }, [version, flow.prepareData, flow.fee]);
 
   /** El plan es lo que viaja al servidor: pre-flight, intención y commit. */
   const buildPlan = useCallback(() => {
@@ -148,12 +176,16 @@ export default function useUnifiedLpFlow({
         edgeMarginPct: Number(strategy.edgeMarginPct),
         ...(effectiveRangeWidthPct != null ? { rangeWidthPct: effectiveRangeWidthPct } : {}),
         rangeWidthDecoupled: !!strategy.rangeWidthDecoupled,
+        // En v4 el tickSpacing forma parte de la identidad del pool. Solo se
+        // manda si difiere del que el backend derivaría del fee tier; si
+        // coincide, persistirlo sería ruido.
+        ...(v4TickSpacingOverride != null ? { v4TickSpacing: v4TickSpacingOverride } : {}),
       },
       protection: protectionPayload,
     };
   }, [
     mode, isOrchestrated, effectiveName, wallet, protection, strategy,
-    effectiveRangeWidthPct, flow.network, flow.version, flow.token0Address,
+    effectiveRangeWidthPct, v4TickSpacingOverride, flow.network, flow.version, flow.token0Address,
     flow.token1Address, flow.fee, flow.totalUsdTarget, flow.activeRange,
     flow.suggestions, flow.tokenOptions,
   ]);
@@ -215,6 +247,20 @@ export default function useUnifiedLpFlow({
     return flow.step;
   }, [outcome, flow.step, isOrchestrated, protectionDone]);
 
+  /**
+   * Cambiar de red puede dejar la versión elegida sin soporte. En vez de
+   * dejar que el análisis falle con un "pool no encontrado", se ajusta a una
+   * versión que la red sí tenga.
+   */
+  const handleNetworkChange = useCallback((nextNetwork, networkOptions = []) => {
+    setNetwork(nextNetwork);
+    const supported = (networkOptions.find((n) => n.id === nextNetwork)?.versions || [])
+      .filter((v) => v === 'v3' || v === 'v4');
+    if (supported.length && !supported.includes(version)) {
+      setVersion(supported[0]);
+    }
+  }, [version]);
+
   const backFromReview = useCallback(() => {
     if (isOrchestrated) setProtectionDone(false);
     else flow.setStep(STEP.FUNDING);
@@ -237,6 +283,12 @@ export default function useUnifiedLpFlow({
     mode,
     isOrchestrated,
     step,
+
+    network,
+    version,
+    setNetwork,
+    setVersion,
+    handleNetworkChange,
 
     name: effectiveName,
     setName: (value) => { setNameTouched(true); setName(value); },

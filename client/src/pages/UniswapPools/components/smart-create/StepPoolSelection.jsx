@@ -24,6 +24,9 @@ export default function StepPoolSelection({
   tokenOptions,
   error,
   handleAnalyzePool,
+  // El wizard orquestado tiene sus propios selectores de red y versión, así
+  // que estos tiles de solo lectura repetirían el mismo dato dos veces.
+  hideContextTiles = false,
 }) {
   return (
     <section className={styles.section}>
@@ -32,14 +35,18 @@ export default function StepPoolSelection({
       </div>
 
       <div className={styles.summaryGrid}>
-        <div className={styles.summaryTile}>
-          <span className={styles.tileLabel}>Red activa</span>
-          <strong className={styles.tileValue}>{selectedNetwork?.label || network}</strong>
-        </div>
-        <div className={styles.summaryTile}>
-          <span className={styles.tileLabel}>Versión activa</span>
-          <strong className={styles.tileValue}>{String(version).toUpperCase()}</strong>
-        </div>
+        {!hideContextTiles && (
+          <>
+            <div className={styles.summaryTile}>
+              <span className={styles.tileLabel}>Red activa</span>
+              <strong className={styles.tileValue}>{selectedNetwork?.label || network}</strong>
+            </div>
+            <div className={styles.summaryTile}>
+              <span className={styles.tileLabel}>Versión activa</span>
+              <strong className={styles.tileValue}>{String(version).toUpperCase()}</strong>
+            </div>
+          </>
+        )}
         <div className={styles.summaryTile}>
           <span className={styles.tileLabel}>Wallet conectada</span>
           <strong className={styles.tileValue}>{wallet?.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'No conectada'}</strong>

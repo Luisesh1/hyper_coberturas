@@ -338,3 +338,39 @@ test('intención: commit sobre una clave inexistente falla en vez de crear a cie
     /No existe la intención/
   );
 });
+
+// ── identidad v4 y flags de UI ────────────────────────────────────────────
+
+test('payload v4: conserva el tickSpacing como parte de la identidad del pool', () => {
+  const plan = {
+    ...BASE_PLAN,
+    version: 'v4',
+    strategy: { edgeMarginPct: 40, v4TickSpacing: 30 },
+  };
+  const payload = buildOrchestratorPayload(plan);
+
+  assert.equal(payload.version, 'v4');
+  assert.equal(payload.strategyConfig.v4TickSpacing, 30);
+});
+
+test('payload v3: descarta el tickSpacing, que ahí no significa nada', () => {
+  const plan = {
+    ...BASE_PLAN,
+    version: 'v3',
+    strategy: { edgeMarginPct: 40, v4TickSpacing: 30 },
+  };
+  const payload = buildOrchestratorPayload(plan);
+
+  assert.equal(payload.strategyConfig.v4TickSpacing, undefined);
+});
+
+test('payload: rangeWidthDecoupled es un flag de UI y no se persiste', () => {
+  const plan = {
+    ...BASE_PLAN,
+    strategy: { edgeMarginPct: 40, rangeWidthPct: 12, rangeWidthDecoupled: true },
+  };
+  const payload = buildOrchestratorPayload(plan);
+
+  assert.equal(payload.strategyConfig.rangeWidthPct, 12, 'el ancho desacoplado sí manda');
+  assert.equal('rangeWidthDecoupled' in payload.strategyConfig, false);
+});

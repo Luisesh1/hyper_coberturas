@@ -67,6 +67,15 @@ export default function UnifiedLpWizard({
     ? meta.networks
     : [{ id: 'ethereum', label: 'Ethereum', versions: ['v3'] }];
   const selectedNetwork = networkOptions.find((item) => item.id === flow.network) || networkOptions[0];
+  // Dos filtros distintos y ambos necesarios: la red puede no tener una de
+  // las versiones (ofrecerla daría un "pool no encontrado" sin explicación),
+  // y `meta` lista también v2, que el orquestador no gestiona — dejarla
+  // elegible llevaría al usuario hasta Revisión para chocar contra el schema.
+  const ORCHESTRABLE_VERSIONS = ['v3', 'v4'];
+  const networkVersions = Array.isArray(selectedNetwork?.versions) && selectedNetwork.versions.length
+    ? selectedNetwork.versions
+    : ORCHESTRABLE_VERSIONS;
+  const availableVersions = networkVersions.filter((v) => ORCHESTRABLE_VERSIONS.includes(v));
 
   const items = stepperItems(isOrchestrated);
   const currentIndex = Math.max(0, items.findIndex((item) => item.id === step));
@@ -107,6 +116,47 @@ export default function UnifiedLpWizard({
 
         {!flow.isBusy && step === POOL && (
           <div className={styles.stepBody}>
+            {/* En modo standalone la red y la versión las manda la página de
+                Uniswap Pools; duplicar el control ahí sería una segunda fuente
+                de verdad. En modo orquestado el wizard es el único dueño. */}
+            {isOrchestrated && (
+              <div className={styles.selectorRow}>
+                <div className={styles.field}>
+                  <label htmlFor="orch-network">Red</label>
+                  <select
+                    id="orch-network"
+                    value={unified.network}
+                    onChange={(e) => unified.handleNetworkChange(e.target.value, networkOptions)}
+                  >
+                    {networkOptions.map((n) => (
+                      <option key={n.id} value={n.id}>{n.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label htmlFor="orch-version">Versión</label>
+                  <select
+                    id="orch-version"
+                    value={unified.version}
+                    onChange={(e) => unified.setVersion(e.target.value)}
+                  >
+                    {availableVersions.map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {isOrchestrated && unified.version === 'v4' && (
+              <p className={styles.hint}>
+                En v4 solo son gestionables los pools <strong>sin hook y con tokens
+                ERC-20</strong>: la gestión on-chain rechaza los hooks y el ETH
+                nativo, así que un pool así se podría crear pero no rebalancear
+                ni cerrar.
+              </p>
+            )}
+
             {isOrchestrated && (
               <div className={styles.field}>
                 <label htmlFor="orch-name">Nombre del orquestador</label>
@@ -141,6 +191,7 @@ export default function UnifiedLpWizard({
               tokenOptions={flow.tokenOptions}
               error={flow.error}
               handleAnalyzePool={flow.handleAnalyzePool}
+              hideContextTiles={isOrchestrated}
             />
           </div>
         )}

@@ -138,6 +138,18 @@ const wizardProtectionSchema = z.union([
   }),
 ]);
 
+// La estrategia que manda el wizard NO es strategyConfigPatchSchema: lleva
+// dos campos propios que aquel descartaría en silencio (zod strippea las
+// claves desconocidas), dejando el desacople del rango sin efecto y el
+// tickSpacing de v4 perdido.
+const wizardStrategySchema = strategyConfigPatchSchema.extend({
+  // El usuario desacopló el ancho de rebalanceo del rango inicial.
+  rangeWidthDecoupled: z.boolean().optional(),
+  // Solo v4: se persiste cuando el pool declara un tickSpacing distinto del
+  // que el backend derivaría del fee tier.
+  v4TickSpacing: z.number().int().positive().max(32767).optional(),
+});
+
 const lpPlanSchema = z.object({
   mode: z.enum(['standalone', 'orchestrated']).default('orchestrated'),
   name: z.string().min(1).max(255),
@@ -153,7 +165,7 @@ const lpPlanSchema = z.object({
   rangeLowerPrice: z.number().positive(),
   rangeUpperPrice: z.number().positive(),
   priceCurrent: z.number().positive(),
-  strategy: strategyConfigPatchSchema.optional(),
+  strategy: wizardStrategySchema.optional(),
   protection: wizardProtectionSchema,
 });
 
@@ -177,6 +189,7 @@ const commitIntentSchema = z.object({
 
 module.exports = {
   strategyConfigSchema,
+  wizardStrategySchema,
   lpPlanSchema,
   preflightProtectionSchema,
   createIntentSchema,

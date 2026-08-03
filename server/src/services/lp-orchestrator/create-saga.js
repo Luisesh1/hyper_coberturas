@@ -40,6 +40,17 @@ function buildOrchestratorPayload(plan) {
   const capitalUsd = Number(plan.capitalUsd);
   const protection = plan.protection || {};
 
+  // `rangeWidthDecoupled` es un flag de la UI: describe cómo se llegó al
+  // ancho, no cómo debe operar el orquestador. No se persiste.
+  const { rangeWidthDecoupled: _uiFlag, v4TickSpacing, ...strategyRest } = strategy;
+
+  // El tickSpacing solo tiene sentido en v4, donde forma parte de la
+  // identidad del pool (poolId = keccak(...tickSpacing...)). En v3 se
+  // descarta para no ensuciar la config con un campo inerte.
+  const v4Identity = plan.version === 'v4' && v4TickSpacing != null
+    ? { v4TickSpacing: Number(v4TickSpacing) }
+    : {};
+
   return {
     name: plan.name,
     network: plan.network,
@@ -53,8 +64,9 @@ function buildOrchestratorPayload(plan) {
     // Un solo capital: el que se despliega es el que persiste el orquestador.
     initialTotalUsd: capitalUsd,
     strategyConfig: {
-      ...strategy,
+      ...strategyRest,
       rangeWidthPct,
+      ...v4Identity,
     },
     protectionConfig: protection.enabled === false
       ? { enabled: false }
