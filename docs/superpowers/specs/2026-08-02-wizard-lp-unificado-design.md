@@ -130,8 +130,15 @@ El wizard bloquea el avance a Revisión si el pre-flight no pasa.
 de la primera firma**. Reusa `operation_key` para idempotencia y el worker de
 `uniswap-operation.service.js` para la reconciliación.
 
-Si el cliente desaparece entre la firma y el commit, el worker encuentra la operación con
-las txs minadas y termina el commit —o ejecuta la compensación— sin el usuario.
+**Alcance real de la recuperación automática.** El worker retoma las operaciones en estado
+`committing` — es decir, aquellas en las que el cliente ya llamó a `commit-intent` y el
+servidor murió a mitad. Ese caso se cierra solo, porque `commitIntent` es idempotente.
+
+Lo que **no** se puede recuperar automáticamente es que el navegador muera entre la firma
+del mint y la llamada a `commit-intent`: sin esa llamada el servidor nunca recibe los
+txHashes, y no hay forma de adivinarlos. En ese caso queda la intención registrada con el
+plan completo (que hoy no existe en absoluto), y el LP se recupera con «Adoptar LP
+existente». Las intenciones que caducan sin firmarse se limpian a los 30 minutos.
 
 #### Commit y compensación
 

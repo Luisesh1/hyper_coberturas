@@ -5,12 +5,11 @@ import { useConfirmAction } from '../../hooks/useConfirmAction';
 import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
 import OrchestratorCard from './components/OrchestratorCard';
-import CreateOrchestratorWizard from './components/CreateOrchestratorWizard';
 import EditOrchestratorConfigModal from './components/EditOrchestratorConfigModal';
 import ActionLogDrawer from './components/ActionLogDrawer';
 import OrchestratorIssueModal from './components/OrchestratorIssueModal';
 import PositionActionModal from '../UniswapPools/components/PositionActionModal';
-import SmartCreatePoolModal from '../UniswapPools/components/SmartCreatePoolModal';
+import UnifiedLpWizard from '../../features/lp-wizard/UnifiedLpWizard';
 import SmartAddLiquidityModal from '../UniswapPools/components/SmartAddLiquidityModal';
 import WalletConnectSetupModal from '../../components/shared/WalletConnectSetupModal';
 import { formatUsd } from '../UniswapPools/utils/pool-formatters';
@@ -34,7 +33,6 @@ export default function LpOrchestratorPage() {
   const [showInactive, setShowInactive] = useState(false);
   const [activeAction, setActiveAction] = useState(null); // { action, orchestrator, pool }
   const [addingLiquidityTo, setAddingLiquidityTo] = useState(null); // { orchestrator, pool }
-  const [creatingLpFor, setCreatingLpFor] = useState(null); // orchestrator
   const [archiveAfterKillId, setArchiveAfterKillId] = useState(null); // orchestrator id
   const [evaluatingId, setEvaluatingId] = useState(null);
   const [error, setError] = useState('');
@@ -390,42 +388,28 @@ export default function LpOrchestratorPage() {
     }
   }, [walletConn.isConnected, refresh]);
 
-  const handleSmartCreateFinalized = useCallback(async (finalizeArg) => {
-    // Si esto se dispara sin orquestador en contexto, el LP ya está on-chain y
-    // no tenemos a quién vincularlo: avisamos en vez de descartarlo en
-    // silencio, que es lo que dejaba la posición huérfana sin ninguna pista.
-    if (!creatingLpFor) {
-      setError(
-        'La posición se creó on-chain pero se perdió la referencia al orquestador '
-        + '(¿se cerró el modal?). Vinculala con "Adoptar LP existente".'
-      );
-      refresh().catch(() => {});
-      return;
-    }
-    // SmartCreatePoolModal entrega { txHashes, finalizeResult }. El backend
-    // espera el shape interno (con positionChanges/refreshedSnapshot), así
-    // que desempaquetamos antes de adjuntar y propagamos los txHashes.
-    const innerFinalize = finalizeArg?.finalizeResult || finalizeArg || {};
-    const txHashes = finalizeArg?.txHashes || innerFinalize?.txHashes || [];
-    const attachPayload = { ...innerFinalize, txHashes };
-    try {
-      await lpOrchestratorApi.attachLp(creatingLpFor.id, {
-        finalizeResult: attachPayload,
-        protectionConfig: creatingLpFor.protectionConfig || { enabled: false },
-      });
-    } catch (err) {
-      // El attach-lp falló. Con `partial` la causa es conocida: el finalize no
-      // llegó a producir el identificador de la posición, así que el attach no
-      // tenía con qué trabajar. En ambos casos el LP YA está creado on-chain.
-      const causa = finalizeArg?.partial
-        ? 'El servidor no terminó de conciliar la operación, así que no se pudo vincular automáticamente.'
-        : (err.message || 'No se pudo adjuntar el LP al orquestador.');
-      setError(`${causa} El LP YA está en tu wallet — usa "Adoptar LP existente" en el orquestador para vincularlo.`);
-    } finally {
-      setCreatingLpFor(null);
-      refresh().catch(() => {});
-    }
-  }, [creatingLpFor, refresh]);
+  /**
+   * Salidas para el LP que sobrevive a una compensación. La saga ya deshizo
+   * todo lo reversible; lo único que queda es el LP minado, y qué hacer con
+   * él es una decisión de dinero que toma el usuario, no el sistema.
+   */
+  const handleCloseSurvivingLp = useCallback(async (lp) => {
+    setError(
+      `El LP #${lp?.positionIdentifier ?? ''} sigue en tu wallet sin cobertura. `
+      + 'Vinculalo con "Adoptar LP existente" y usá "Matar LP" para cerrarlo, '
+      + 'que es el camino que verifica el estado on-chain antes de firmar.'
+    );
+    refresh().catch(() => {});
+  }, [refresh]);
+
+  const handleKeepLpWithoutProtection = useCallback(async (lp) => {
+    setError(
+      `El LP #${lp?.positionIdentifier ?? ''} quedó creado sin cobertura. `
+      + 'Creá el orquestador con la protección desactivada y adoptalo con '
+      + '"Adoptar LP existente".'
+    );
+    refresh().catch(() => {});
+  }, [refresh]);
 
   const summary = useMemo(() => {
     const active = orchestrators.filter((o) => o.status === 'active');
@@ -487,26 +471,6 @@ export default function LpOrchestratorPage() {
       walletAddress: walletConn.address || orch.walletAddress,
     };
   }, [activeAction, walletConn.address]);
-
-  const smartCreateDefaults = useMemo(() => {
-    if (!creatingLpFor) return null;
-    return {
-      network: creatingLpFor.network,
-      version: creatingLpFor.version,
-      walletAddress: walletConn.address || creatingLpFor.walletAddress,
-      // Pre-cargamos par/fee/capital del orquestador para que el modal salte
-      // el primer paso y no pida los mismos datos que el wizard ya recogió.
-      token0Address: creatingLpFor.token0Address,
-      token1Address: creatingLpFor.token1Address,
-      fee: creatingLpFor.feeTier,
-      totalUsdTarget: creatingLpFor.initialTotalUsd,
-      // En v4 solo reenviamos el tickSpacing si el orquestador lo declaró:
-      // por defecto el backend lo deriva del fee y computa el poolId.
-      ...(creatingLpFor.version === 'v4' && creatingLpFor.strategyConfig?.v4TickSpacing != null
-        ? { tickSpacing: Number(creatingLpFor.strategyConfig.v4TickSpacing) }
-        : {}),
-    };
-  }, [creatingLpFor, walletConn.address]);
 
   return (
     <div className={styles.page}>
@@ -666,22 +630,23 @@ export default function LpOrchestratorPage() {
         />
       )}
 
+      {/* Un solo modal para todo el flujo. Antes eran dos encadenados: el
+          orquestador se creaba en BD y, si el segundo fallaba o se cerraba,
+          quedaba huérfano sin LP. Ahora nada se persiste hasta que la saga
+          confirma, y si algo falla se compensa. */}
       {showWizard && (
-        <CreateOrchestratorWizard
-          network="arbitrum"
-          walletAddress={walletConn.address}
+        <UnifiedLpWizard
+          mode="orchestrated"
+          wallet={walletState}
+          defaults={{ network: 'arbitrum', version: 'v3' }}
+          meta={meta}
           accounts={accounts}
           onClose={() => setShowWizard(false)}
-          onCreated={(created) => {
-            setShowWizard(false);
+          onCompleted={() => {
             refresh().catch(() => {});
-            // Encadenamos la creación del LP con los datos del orquestador
-            // recién creado: el SmartCreatePoolModal recibe par/fee/capital
-            // y salta directamente al paso de rango.
-            if (created && walletConn.isConnected) {
-              setCreatingLpFor(created);
-            }
           }}
+          onCloseLp={handleCloseSurvivingLp}
+          onKeepWithoutProtection={handleKeepLpWithoutProtection}
         />
       )}
 
@@ -730,18 +695,6 @@ export default function LpOrchestratorPage() {
               .catch((err) => setError(err.message || 'No se pudo registrar el aumento de liquidez.'))
               .finally(() => { refresh().catch(() => {}); });
           }}
-        />
-      )}
-
-      {creatingLpFor && smartCreateDefaults && (
-        <SmartCreatePoolModal
-          wallet={walletState}
-          sendTransaction={walletConn.sendTransaction}
-          waitForTransactionReceipt={walletConn.waitForTransactionReceipt}
-          defaults={smartCreateDefaults}
-          meta={meta}
-          onClose={() => setCreatingLpFor(null)}
-          onFinalized={handleSmartCreateFinalized}
         />
       )}
 
