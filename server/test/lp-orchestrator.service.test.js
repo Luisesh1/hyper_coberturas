@@ -106,6 +106,7 @@ function makeFakeNotifier() {
     verificationFailed: async (...args) => { calls.push({ kind: 'verificationFailed', args }); },
     lpKilled: async (...args) => { calls.push({ kind: 'lpKilled', args }); },
     positionMissing: async (...args) => { calls.push({ kind: 'positionMissing', args }); },
+    protectionMissing: async (...args) => { calls.push({ kind: 'protectionMissing', args }); },
   };
 }
 
@@ -988,6 +989,11 @@ function makeAttachDeps(overrides = {}) {
       },
       async deactivateProtectedPool() { return null; },
     },
+    // Sin esto, `_recoverMissingProtection` cae al `protectedPoolRepository`
+    // real (Task 5 fix round 1, Q-1) y toca pg de verdad en los tests.
+    // `null` = no hay protección reutilizable, el camino por defecto de
+    // estos tests.
+    protectedPoolRepository: { async findReusableByIdentity() { return null; } },
     protectedPoolRefreshService: { async refreshProtection() { return null; } },
     ...overrides,
   };
@@ -1205,4 +1211,158 @@ test('_recoverMissingProtection persiste el backoff cuando vuelve a fallar', asy
   const after = await repo.getById(3, id);
   assert.equal(after.strategyState.protectionRetry.attempts, 1);
   assert.ok(after.strategyState.protectionRetry.nextAttemptAt > Date.now());
+});
+
+// ──────────────── Fix round 1 (code review) ────────────────
+
+test('_recoverMissingProtection respeta el backoff persistido y no reintenta antes de tiempo', async () => {
+  const { repo, created, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  await repo.updateActiveLp(3, id, {
+    activePositionIdentifier: '191720',
+    activePoolAddress: '0xpool',
+    activeProtectedPoolId: null,
+    phase: 'lp_active',
+  });
+  await repo.updateStrategyState(3, id, {
+    strategyState: { protectionRetry: { attempts: 1, nextAttemptAt: Date.now() + 60_000 } },
+  });
+  const orch = await repo.getById(3, id);
+  orch.protectionConfig = { enabled: true, accountId: 8, configuredNotionalUsd: 50 };
+
+  const result = await service._recoverMissingProtection(orch);
+
+  assert.deepEqual(result, { recovered: false, skipped: 'backoff' });
+  assert.equal(created.length, 0, 'no debe intentar crear nada mientras esta en backoff');
+});
+
+test('_evaluateOne: el backoff de protectionRetry sobrevive el resto del tick (CRITICAL fix round 1)', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    protectionConfig: { enabled: true, accountId: 8, configuredNotionalUsd: 50 },
+    activeProtectedPoolId: null,
+  });
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    uniswapService: makeFakeUniswapService(basePool()),
+    costEstimator: { estimateModifyRangeCost: async () => ({ totalCostUsd: 0 }), invalidate: () => {} },
+    loadWalletPoolSnapshot: async () => ({
+      identifier: '777', network: 'arbitrum', version: 'v3', owner: '0xabc',
+    }),
+    protectedPoolRepository: { async findReusableByIdentity() { return null; } },
+    uniswapProtectionService: {
+      async createProtectedPool() { throw new Error('margen insuficiente'); },
+      async deactivateProtectedPool() { return null; },
+    },
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  const orch = await repo.getById(1, id);
+  await service._evaluateOne(orch);
+
+  // Antes del fix, la escritura del camino normal de `_evaluateOne` (mas
+  // abajo en el mismo tick) sobrescribia `strategy_state_json` entero con
+  // el `orch.strategyState` que _recoverMissingProtection nunca actualizo
+  // en memoria, borrando el `protectionRetry` recien persistido.
+  const after = await repo.getById(1, id);
+  assert.ok(after.strategyState.protectionRetry, 'protectionRetry debe sobrevivir al resto del tick');
+  assert.equal(after.strategyState.protectionRetry.attempts, 1);
+});
+
+test('attachLp resetea protectionRetry: un LP nuevo no hereda el backoff agotado del anterior (Q-3 fix round 1)', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    strategyState: { protectionRetry: { attempts: 8, nextAttemptAt: 0, exhausted: true } },
+    activePositionIdentifier: null,
+    phase: 'idle',
+  });
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+  await service.attachLp({
+    userId: 1,
+    orchestratorId: id,
+    finalizeResult: {
+      txHashes: ['0xnew'],
+      positionChanges: { newPositionIdentifier: '888' },
+      refreshedSnapshot: { identifier: '888' },
+    },
+    protectionConfig: { enabled: false },
+  });
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.strategyState.protectionRetry, null, 'attachLp debe limpiar protectionRetry heredado');
+});
+
+test('_recoverMissingProtection reutiliza una proteccion ya activa en vez de crear una segunda (Q-1 fix round 1)', async () => {
+  const notified = [];
+  const { repo, created, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    protectedPoolRepository: {
+      async findReusableByIdentity() { return { id: 99, status: 'active' }; },
+    },
+    uniswapProtectionService: {
+      // Si esto se llama, el fix no esta reutilizando la proteccion existente.
+      async createProtectedPool() { throw new Error('no deberia crearse una segunda proteccion'); },
+      async deactivateProtectedPool() { return null; },
+    },
+    notifier: {
+      async protectionMissing(orch, info) { notified.push(info); },
+      async urgentOutOfRange() {}, async recommendRebalance() {},
+      async recommendCollectFees() {}, async actionFinalized() {},
+      async verificationFailed() {}, async lpKilled() {}, async positionMissing() {},
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  await repo.updateActiveLp(3, id, {
+    activePositionIdentifier: '191720',
+    activePoolAddress: '0xpool',
+    activeProtectedPoolId: null,
+    phase: 'lp_active',
+  });
+  const orch = await repo.getById(3, id);
+  orch.protectionConfig = { enabled: true, accountId: 8, configuredNotionalUsd: 50 };
+
+  const result = await service._recoverMissingProtection(orch);
+
+  assert.equal(result.recovered, true);
+  assert.equal(created.length, 0, 'no debe llamar a createProtectedPool si ya existe una activa');
+  assert.equal(notified.length, 0);
+  const after = await repo.getById(3, id);
+  assert.equal(after.activeProtectedPoolId, 99);
+});
+
+test('_recoverMissingProtection: si la transaccion de vinculacion falla, el protectedPoolId creado viaja en el error (Q-1 fix round 1)', async () => {
+  const { repo, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    db: {
+      transaction: async () => { throw new Error('conexion perdida'); },
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  await repo.updateActiveLp(3, id, {
+    activePositionIdentifier: '191720',
+    activePoolAddress: '0xpool',
+    activeProtectedPoolId: null,
+    phase: 'lp_active',
+  });
+  const orch = await repo.getById(3, id);
+  orch.protectionConfig = { enabled: true, accountId: 8, configuredNotionalUsd: 50 };
+
+  await assert.rejects(
+    () => service._recoverMissingProtection(orch),
+    (err) => {
+      assert.equal(err.protectedPoolId, 77, 'el id de la proteccion creada debe viajar en el error para no perderse');
+      return true;
+    }
+  );
 });

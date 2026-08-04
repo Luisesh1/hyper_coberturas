@@ -268,11 +268,17 @@ class LpOrchestratorService {
         activeProtectedPoolId: protectedPoolId,
         phase: 'lp_active',
       }, client);
-      // Reset del baseline del hedge y del tracking de time-in-range:
-      // el próximo tick los tomará como inicio (sin computar delta) para
-      // evitar doble conteo del estado del nuevo hedge / nuevo LP.
+      // Reset del baseline del hedge, del tracking de time-in-range y del
+      // reintento de cobertura pendiente: el próximo tick los toma como
+      // inicio (sin computar delta) para evitar doble conteo del estado
+      // del nuevo hedge / nuevo LP. `protectionRetry` en null es lo que
+      // evita que un LP nuevo herede el backoff agotado del anterior — sin
+      // esto, matar y re-adjuntar un LP tras 8 fallos deja el nuevo LP
+      // igual de bloqueado que el viejo aunque ya no tenga motivo.
       await this.repo.updateStrategyState(userId, orchestratorId, {
-        strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
+        strategyState: {
+          ...orch.strategyState, hedgeBaseline: null, timeTracking: null, protectionRetry: null,
+        },
       }, client);
       await this.repo.appendActionLog({
         orchestratorId,
@@ -1294,8 +1300,10 @@ class LpOrchestratorService {
 
   /**
    * Reintenta crear la cobertura de un LP que quedó descubierto. Devuelve
-   * `{ recovered, skipped }`. Nunca lanza: el tick de evaluación debe
-   * seguir aunque la cobertura siga sin poder crearse.
+   * `{ recovered, skipped }`. Nunca lanza por fallos de negocio (crear la
+   * protección puede fallar; se registra y se agenda el próximo intento).
+   * Un fallo de infraestructura al persistir sí se propaga — el hook en
+   * `_evaluateOne` lo captura y lo registra.
    */
   async _recoverMissingProtection(orch) {
     const now = Date.now();
@@ -1308,25 +1316,41 @@ class LpOrchestratorService {
     let error = null;
 
     try {
-      const pool = await this._loadProtectionSnapshot(orch, orch.activePositionIdentifier);
-      const protection = orch.protectionConfig || {};
-      const result = await this.uniswapProtectionService.createProtectedPool({
-        userId: orch.userId,
-        pool,
-        accountId: protection.accountId,
-        leverage: protection.leverage,
-        configuredNotionalUsd: protection.configuredNotionalUsd,
-        stopLossDifferencePct: protection.stopLossDifferencePct,
-        protectionMode: 'delta_neutral',
-        bandMode: protection.bandMode,
-        baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct,
-        rebalanceIntervalSec: protection.rebalanceIntervalSec,
-        targetHedgeRatio: protection.targetHedgeRatio,
-        minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd,
-        maxSlippageBps: protection.maxSlippageBps,
-        twapMinNotionalUsd: protection.twapMinNotionalUsd,
+      // Si un intento anterior llegó a crear la protección (incluso abrió
+      // el short real en Hyperliquid) pero la transacción que la vinculaba
+      // falló después, `createProtectedPool` la rechazaría con "ya tiene
+      // una proteccion activa" — un falso fallo sobre una cobertura que sí
+      // existe. Buscarla primero por identidad y reutilizarla evita crear
+      // una segunda y evita esa alerta falsa.
+      const existing = await this.protectedPoolRepo.findReusableByIdentity(orch.userId, {
+        network: orch.network,
+        version: orch.version,
+        walletAddress: orch.walletAddress,
+        positionIdentifier: orch.activePositionIdentifier,
       });
-      protectedPoolId = result?.id || result?.protectedPoolId || null;
+      if (existing?.status === 'active') {
+        protectedPoolId = existing.id;
+      } else {
+        const pool = await this._loadProtectionSnapshot(orch, orch.activePositionIdentifier);
+        const protection = orch.protectionConfig || {};
+        const result = await this.uniswapProtectionService.createProtectedPool({
+          userId: orch.userId,
+          pool,
+          accountId: protection.accountId,
+          leverage: protection.leverage,
+          configuredNotionalUsd: protection.configuredNotionalUsd,
+          stopLossDifferencePct: protection.stopLossDifferencePct,
+          protectionMode: 'delta_neutral',
+          bandMode: protection.bandMode,
+          baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct,
+          rebalanceIntervalSec: protection.rebalanceIntervalSec,
+          targetHedgeRatio: protection.targetHedgeRatio,
+          minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd,
+          maxSlippageBps: protection.maxSlippageBps,
+          twapMinNotionalUsd: protection.twapMinNotionalUsd,
+        });
+        protectedPoolId = result?.id || result?.protectedPoolId || null;
+      }
     } catch (err) {
       error = err.message;
     }
@@ -1337,30 +1361,48 @@ class LpOrchestratorService {
       now,
     });
 
-    await this._withTransaction(async (client) => {
-      if (protectedPoolId) {
-        await this.repo.updateActiveLp(orch.userId, orch.id, {
-          activePositionIdentifier: orch.activePositionIdentifier,
-          activePoolAddress: orch.activePoolAddress,
-          activeProtectedPoolId: protectedPoolId,
+    try {
+      await this._withTransaction(async (client) => {
+        if (protectedPoolId) {
+          await this.repo.updateActiveLp(orch.userId, orch.id, {
+            activePositionIdentifier: orch.activePositionIdentifier,
+            activePoolAddress: orch.activePoolAddress,
+            activeProtectedPoolId: protectedPoolId,
+          }, client);
+        }
+        await this.repo.updateStrategyState(orch.userId, orch.id, {
+          strategyState: { ...orch.strategyState, protectionRetry: retryState },
         }, client);
-      }
-      await this.repo.updateStrategyState(orch.userId, orch.id, {
-        strategyState: { ...orch.strategyState, protectionRetry: retryState },
-      }, client);
-      await this.repo.appendActionLog({
-        orchestratorId: orch.id,
-        kind: 'recovery',
-        reason: protectedPoolId ? 'protection_recreated' : 'protection_recreate_failed',
-        positionIdentifier: orch.activePositionIdentifier,
-      }, client);
-    });
+        await this.repo.appendActionLog({
+          orchestratorId: orch.id,
+          kind: 'recovery',
+          reason: protectedPoolId ? 'protection_recreated' : 'protection_recreate_failed',
+          positionIdentifier: orch.activePositionIdentifier,
+        }, client);
+      });
+    } catch (txErr) {
+      // La protección (posiblemente con un hedge real ya abierto) puede
+      // haberse creado igual: dejamos su id colgado del error para que el
+      // log del hook la haga trazable. El orquestador se queda sin
+      // `activeProtectedPoolId` hasta el próximo intento, que la
+      // encontrará vía `findReusableByIdentity` y la vinculará sin
+      // recrearla.
+      txErr.protectedPoolId = protectedPoolId;
+      throw txErr;
+    }
+
+    // Reflejar en memoria lo que se acaba de persistir: si no se actualiza
+    // aquí, el resto de este mismo tick de `_evaluateOne` sigue leyendo el
+    // `strategyState` viejo y su propio write (camino normal, más abajo)
+    // sobrescribe `strategy_state_json` entero — borrando el
+    // `protectionRetry` que acabamos de guardar. Ver Task 5 fix round 1.
+    orch.strategyState = { ...orch.strategyState, protectionRetry: retryState };
 
     if (protectedPoolId) {
       this.logger.info('lp_orchestrator_protection_recovered', {
         orchestratorId: orch.id,
         protectedPoolId,
-        attempts: previous?.attempts || 0,
+        attempts: (previous?.attempts || 0) + 1,
       });
       orch.activeProtectedPoolId = protectedPoolId;
       return { recovered: true };
@@ -1372,11 +1414,15 @@ class LpOrchestratorService {
       exhausted: retryState.exhausted,
       error,
     });
-    await this.notifier.protectionMissing(orch, {
-      attempts: retryState.attempts,
-      lastError: error,
-      exhausted: retryState.exhausted,
-    });
+    try {
+      await this.notifier.protectionMissing(orch, {
+        attempts: retryState.attempts,
+        lastError: error,
+        exhausted: retryState.exhausted,
+      });
+    } catch (err) {
+      this.logger.warn('lp_orchestrator_notify_failed', { error: err.message });
+    }
     return { recovered: false };
   }
 
@@ -1395,6 +1441,7 @@ class LpOrchestratorService {
       } catch (err) {
         this.logger.warn('lp_orchestrator_protection_recovery_unhandled', {
           orchestratorId: orch.id,
+          protectedPoolId: err.protectedPoolId ?? null,
           error: err.message,
         });
       }
