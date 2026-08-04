@@ -1141,3 +1141,68 @@ test('attachLp nunca pasa un stub sin mode a createProtectedPool', async () => {
   const orch = await repo.getById(3, id);
   assert.equal(orch.activeProtectedPoolId, null);
 });
+
+test('_evaluateOne reintenta la cobertura ausente y la vincula', async () => {
+  const { repo, created, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    notifier: {
+      async protectionMissing() {},
+      async urgentOutOfRange() {}, async recommendRebalance() {},
+      async recommendCollectFees() {}, async actionFinalized() {},
+      async verificationFailed() {}, async lpKilled() {}, async positionMissing() {},
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  await repo.updateActiveLp(3, id, {
+    activePositionIdentifier: '191720',
+    activePoolAddress: '0xpool',
+    activeProtectedPoolId: null,
+    phase: 'lp_active',
+  });
+  const orch = await repo.getById(3, id);
+  orch.protectionConfig = { enabled: true, accountId: 8, configuredNotionalUsd: 50 };
+
+  const result = await service._recoverMissingProtection(orch);
+
+  assert.equal(result.recovered, true);
+  assert.equal(created.length, 1);
+  const after = await repo.getById(3, id);
+  assert.equal(after.activeProtectedPoolId, 77);
+});
+
+test('_recoverMissingProtection persiste el backoff cuando vuelve a fallar', async () => {
+  const notified = [];
+  const { repo, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    uniswapProtectionService: {
+      async createProtectedPool() { throw new Error('margen insuficiente'); },
+      async deactivateProtectedPool() { return null; },
+    },
+    notifier: {
+      async protectionMissing(orch, info) { notified.push(info); },
+      async urgentOutOfRange() {}, async recommendRebalance() {},
+      async recommendCollectFees() {}, async actionFinalized() {},
+      async verificationFailed() {}, async lpKilled() {}, async positionMissing() {},
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  await repo.updateActiveLp(3, id, {
+    activePositionIdentifier: '191720',
+    activePoolAddress: '0xpool',
+    activeProtectedPoolId: null,
+    phase: 'lp_active',
+  });
+  const orch = await repo.getById(3, id);
+  orch.protectionConfig = { enabled: true, accountId: 8, configuredNotionalUsd: 50 };
+
+  const result = await service._recoverMissingProtection(orch);
+
+  assert.equal(result.recovered, false);
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0].attempts, 1);
+  const after = await repo.getById(3, id);
+  assert.equal(after.strategyState.protectionRetry.attempts, 1);
+  assert.ok(after.strategyState.protectionRetry.nextAttemptAt > Date.now());
+});

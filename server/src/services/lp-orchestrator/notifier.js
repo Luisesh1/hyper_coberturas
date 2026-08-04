@@ -144,6 +144,24 @@ class LpOrchestratorNotifier {
     ];
     await this._sendTelegram(orchestrator.userId, lines.join('\n'));
   }
+
+  async protectionMissing(orchestrator, { attempts = 0, lastError = null, exhausted = false } = {}) {
+    const head = this._header(orchestrator);
+    const lines = [
+      head,
+      '',
+      exhausted
+        ? '🛑 <b>LP SIN COBERTURA — reintentos agotados</b>'
+        : '⚠️ <b>LP sin cobertura delta-neutral</b>',
+      'El LP está activo pero la protección no se pudo crear.',
+      `Intentos: ${attempts}`,
+      lastError ? `Motivo: ${escapeHtml(lastError)}` : null,
+      exhausted
+        ? 'No se reintentará más. Revisa la cuenta de Hyperliquid y vuelve a vincular la cobertura a mano.'
+        : 'Se reintentará automáticamente.',
+    ].filter(Boolean);
+    await this._sendTelegram(orchestrator.userId, lines.join('\n'));
+  }
 }
 
 function escapeHtml(text) {

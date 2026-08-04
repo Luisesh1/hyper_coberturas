@@ -45,6 +45,7 @@ const accounting = require('./lp-orchestrator/accounting');
 const LpOrchestratorCostEstimator = require('./lp-orchestrator/cost-estimator');
 const verifier = require('./lp-orchestrator/verifier');
 const LpOrchestratorNotifier = require('./lp-orchestrator/notifier');
+const protectionRecovery = require('./lp-orchestrator/protection-recovery');
 
 const FAILED_COOLDOWN_MS = 60 * 60 * 1000; // 1 h tras drift detectado
 const POSITION_MISSING_CONFIRMATIONS = config.deltaNeutral.positionMissingConfirmations || 2;
@@ -66,6 +67,7 @@ class LpOrchestratorService {
       logger: deps.logger || logger,
     });
     this.verifier = deps.verifier || verifier;
+    this.protectionRecovery = deps.protectionRecovery || protectionRecovery;
     this.notifier = deps.notifier || new LpOrchestratorNotifier({ logger: deps.logger || logger });
     this.logger = deps.logger || logger;
     // Inyectable para tests: si el caller no pasa `db`, usamos el real.
@@ -1290,10 +1292,112 @@ class LpOrchestratorService {
     });
   }
 
+  /**
+   * Reintenta crear la cobertura de un LP que quedó descubierto. Devuelve
+   * `{ recovered, skipped }`. Nunca lanza: el tick de evaluación debe
+   * seguir aunque la cobertura siga sin poder crearse.
+   */
+  async _recoverMissingProtection(orch) {
+    const now = Date.now();
+    if (!this.protectionRecovery.shouldAttemptNow(orch, now)) {
+      return { recovered: false, skipped: 'backoff' };
+    }
+
+    const previous = this.protectionRecovery.readRetryState(orch);
+    let protectedPoolId = null;
+    let error = null;
+
+    try {
+      const pool = await this._loadProtectionSnapshot(orch, orch.activePositionIdentifier);
+      const protection = orch.protectionConfig || {};
+      const result = await this.uniswapProtectionService.createProtectedPool({
+        userId: orch.userId,
+        pool,
+        accountId: protection.accountId,
+        leverage: protection.leverage,
+        configuredNotionalUsd: protection.configuredNotionalUsd,
+        stopLossDifferencePct: protection.stopLossDifferencePct,
+        protectionMode: 'delta_neutral',
+        bandMode: protection.bandMode,
+        baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct,
+        rebalanceIntervalSec: protection.rebalanceIntervalSec,
+        targetHedgeRatio: protection.targetHedgeRatio,
+        minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd,
+        maxSlippageBps: protection.maxSlippageBps,
+        twapMinNotionalUsd: protection.twapMinNotionalUsd,
+      });
+      protectedPoolId = result?.id || result?.protectedPoolId || null;
+    } catch (err) {
+      error = err.message;
+    }
+
+    const retryState = this.protectionRecovery.nextRetryState(previous, {
+      ok: Boolean(protectedPoolId),
+      error,
+      now,
+    });
+
+    await this._withTransaction(async (client) => {
+      if (protectedPoolId) {
+        await this.repo.updateActiveLp(orch.userId, orch.id, {
+          activePositionIdentifier: orch.activePositionIdentifier,
+          activePoolAddress: orch.activePoolAddress,
+          activeProtectedPoolId: protectedPoolId,
+        }, client);
+      }
+      await this.repo.updateStrategyState(orch.userId, orch.id, {
+        strategyState: { ...orch.strategyState, protectionRetry: retryState },
+      }, client);
+      await this.repo.appendActionLog({
+        orchestratorId: orch.id,
+        kind: 'recovery',
+        reason: protectedPoolId ? 'protection_recreated' : 'protection_recreate_failed',
+        positionIdentifier: orch.activePositionIdentifier,
+      }, client);
+    });
+
+    if (protectedPoolId) {
+      this.logger.info('lp_orchestrator_protection_recovered', {
+        orchestratorId: orch.id,
+        protectedPoolId,
+        attempts: previous?.attempts || 0,
+      });
+      orch.activeProtectedPoolId = protectedPoolId;
+      return { recovered: true };
+    }
+
+    this.logger.warn('lp_orchestrator_protection_recovery_failed', {
+      orchestratorId: orch.id,
+      attempts: retryState.attempts,
+      exhausted: retryState.exhausted,
+      error,
+    });
+    await this.notifier.protectionMissing(orch, {
+      attempts: retryState.attempts,
+      lastError: error,
+      exhausted: retryState.exhausted,
+    });
+    return { recovered: false };
+  }
+
   async _evaluateOne(orch) {
     if (orch.status !== 'active') return { skipped: 'not_active' };
     if (orch.phase === 'idle' || !orch.activePositionIdentifier) {
       return { skipped: 'no_active_lp' };
+    }
+
+    // Antes de evaluar el rango: si el LP pidió cobertura y no la tiene,
+    // está corriendo descubierto. Recuperarla es más urgente que decidir
+    // si conviene rebalancear.
+    if (this.protectionRecovery.needsProtectionRecovery(orch)) {
+      try {
+        await this._recoverMissingProtection(orch);
+      } catch (err) {
+        this.logger.warn('lp_orchestrator_protection_recovery_unhandled', {
+          orchestratorId: orch.id,
+          error: err.message,
+        });
+      }
     }
 
     const hasLiquidity = (p) => {
