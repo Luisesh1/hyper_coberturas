@@ -47,4 +47,52 @@ describe('getOrchestratorIssue', () => {
   it('no genera chip cuando el orquestador esta sano', () => {
     expect(getOrchestratorIssue(makeOrchestrator(), 1_710_000_100_000)).toBeNull();
   });
+
+  it('marca como incidencia urgente un LP activo sin cobertura', () => {
+    const issue = getOrchestratorIssue(makeOrchestrator({
+      activePositionIdentifier: '191720',
+      activeProtectedPoolId: null,
+      protectionConfig: { enabled: true, accountId: 8 },
+      strategyState: { protectionRetry: { attempts: 2, lastError: 'margen insuficiente' } },
+    }), 1_710_000_100_000);
+
+    expect(issue).toEqual(expect.objectContaining({
+      kind: 'unprotected',
+      tone: 'urgent',
+      chipLabel: 'Sin cobertura',
+    }));
+    expect(issue.summary).toMatch(/sin cobertura/i);
+  });
+
+  it('no marca incidencia si el LP tiene cobertura vinculada', () => {
+    const issue = getOrchestratorIssue(makeOrchestrator({
+      activePositionIdentifier: '191720',
+      activeProtectedPoolId: 77,
+      protectionConfig: { enabled: true, accountId: 8 },
+    }), 1_710_000_100_000);
+
+    expect(issue).toBeNull();
+  });
+
+  it('no marca incidencia si el orquestador no pidio cobertura', () => {
+    const issue = getOrchestratorIssue(makeOrchestrator({
+      activePositionIdentifier: '191720',
+      activeProtectedPoolId: null,
+      protectionConfig: { enabled: false },
+    }), 1_710_000_100_000);
+
+    expect(issue).toBeNull();
+  });
+
+  it('el estado failed sigue teniendo prioridad sobre sin cobertura', () => {
+    const issue = getOrchestratorIssue(makeOrchestrator({
+      phase: 'failed',
+      lastError: 'verification_failed:range_mismatch',
+      activePositionIdentifier: '191720',
+      activeProtectedPoolId: null,
+      protectionConfig: { enabled: true },
+    }), 1_710_000_100_000);
+
+    expect(issue.kind).toBe('failed');
+  });
 });
