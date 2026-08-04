@@ -1085,6 +1085,39 @@ test('attachLp aborta por defecto si la proteccion falla', async () => {
   assert.equal(orch.activePositionIdentifier, undefined, 'no debe quedar LP adjunto');
 });
 
+test('adoptLp linkea el LP aunque la protección falle (adopción manual asume el riesgo)', async () => {
+  const { repo, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    uniswapProtectionService: {
+      async createProtectedPool() { throw new Error('margen insuficiente'); },
+      async deactivateProtectedPool() { return null; },
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  // Evita cualquier lectura on-chain real: adoptLp verifica la posición
+  // vía _inspectPositionOnChain antes de adjuntarla. Simulamos un NFT con
+  // liquidez que sí pertenece a la wallet del orquestador.
+  service._inspectPositionOnChain = async () => ({
+    tokenId: '191720',
+    owner: '0xabc',
+    liquidity: 1n,
+    tokensOwed0: 0n,
+    tokensOwed1: 0n,
+    hasTokensOwed: false,
+    hasLiquidity: true,
+  });
+
+  await service.adoptLp(3, id, {
+    positionIdentifier: '191720',
+    protectionConfig: { enabled: true, accountId: 8, configuredNotionalUsd: 50 },
+  });
+
+  const orch = await repo.getById(3, id);
+  assert.equal(orch.activePositionIdentifier, '191720', 'la adopción debe dejar el LP vinculado pese al fallo de protección');
+  assert.equal(orch.activeProtectedPoolId, null);
+});
+
 test('attachLp nunca pasa un stub sin mode a createProtectedPool', async () => {
   const { repo, created, deps } = makeAttachDeps({
     loadWalletPoolSnapshot: async () => {
