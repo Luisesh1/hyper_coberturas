@@ -978,6 +978,17 @@ test('attachLp strict: la protección que falla propaga y no deja el LP vinculad
 function makeAttachDeps(overrides = {}) {
   const repo = makeFakeRepo();
   const created = [];
+  // Sin esto, `_recoverMissingProtection` cae al `protectedPoolRepository`
+  // real (Task 5 fix round 1, Q-1) y toca pg de verdad en los tests.
+  // `findReusableByIdentity -> null` = no hay protección reutilizable, el
+  // camino por defecto de estos tests. `getById` cubre otras rutas del
+  // servicio (killLp, accounting) que también usan `protectedPoolRepo` y
+  // que de lo contrario revientan con un TypeError poco útil si un test
+  // basado en `makeAttachDeps` las toca (fix round 2).
+  const defaultProtectedPoolRepository = {
+    async findReusableByIdentity() { return null; },
+    async getById() { return null; },
+  };
   const deps = {
     lpOrchestratorRepository: repo,
     db: fakeDb,
@@ -989,13 +1000,14 @@ function makeAttachDeps(overrides = {}) {
       },
       async deactivateProtectedPool() { return null; },
     },
-    // Sin esto, `_recoverMissingProtection` cae al `protectedPoolRepository`
-    // real (Task 5 fix round 1, Q-1) y toca pg de verdad en los tests.
-    // `null` = no hay protección reutilizable, el camino por defecto de
-    // estos tests.
-    protectedPoolRepository: { async findReusableByIdentity() { return null; } },
     protectedPoolRefreshService: { async refreshProtection() { return null; } },
     ...overrides,
+    // Merge dedicado: un override parcial de `protectedPoolRepository`
+    // (p.ej. solo `findReusableByIdentity`) no debe perder `getById`.
+    protectedPoolRepository: {
+      ...defaultProtectedPoolRepository,
+      ...(overrides.protectedPoolRepository || {}),
+    },
   };
   return { repo, created, deps };
 }
@@ -1303,15 +1315,18 @@ test('attachLp resetea protectionRetry: un LP nuevo no hereda el backoff agotado
 
 test('_recoverMissingProtection reutiliza una proteccion ya activa en vez de crear una segunda (Q-1 fix round 1)', async () => {
   const notified = [];
+  // OJO: no se sobreescribe `uniswapProtectionService` — se deja el
+  // default de `makeAttachDeps`, que empuja a `created` y devuelve
+  // `{ id: 77 }`. Así `created.length === 0` es una señal real (fix
+  // round 2, minor): si el guard de reutilización se rompiera y el
+  // código cayera a `createProtectedPool`, `created` dejaría de estar
+  // vacío y `activeProtectedPoolId` terminaría en 77 en vez de 99.
   const { repo, created, deps } = makeAttachDeps({
     loadWalletPoolSnapshot: async () => goodSnapshot,
     protectedPoolRepository: {
-      async findReusableByIdentity() { return { id: 99, status: 'active' }; },
-    },
-    uniswapProtectionService: {
-      // Si esto se llama, el fix no esta reutilizando la proteccion existente.
-      async createProtectedPool() { throw new Error('no deberia crearse una segunda proteccion'); },
-      async deactivateProtectedPool() { return null; },
+      async findReusableByIdentity() {
+        return { id: 99, status: 'active', protectionMode: 'delta_neutral', accountId: 8 };
+      },
     },
     notifier: {
       async protectionMissing(orch, info) { notified.push(info); },
@@ -1365,4 +1380,99 @@ test('_recoverMissingProtection: si la transaccion de vinculacion falla, el prot
       return true;
     }
   );
+});
+
+// ──────────────── Fix round 2 (code review) ────────────────
+
+test('_recoverMissingProtection NO reutiliza una proteccion activa en otro protectionMode (fix round 2)', async () => {
+  const notified = [];
+  const { repo, created, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    protectedPoolRepository: {
+      async findReusableByIdentity() {
+        // Misma posicion, pero el usuario la protegio a mano en modo
+        // `dynamic` (no delta-neutral) — no es el motor que el
+        // orquestador pidio, aunque coincida en identidad de posicion.
+        return { id: 55, status: 'active', protectionMode: 'dynamic', accountId: 8 };
+      },
+    },
+    uniswapProtectionService: {
+      // Al no reutilizar, debe caer aqui — igual que en produccion, donde
+      // `createProtectedPool` rechazaria la posicion con este mismo error.
+      async createProtectedPool(args) {
+        created.push(args);
+        throw new Error('Este pool ya tiene una proteccion activa');
+      },
+      async deactivateProtectedPool() { return null; },
+    },
+    notifier: {
+      async protectionMissing(orch, info) { notified.push(info); },
+      async urgentOutOfRange() {}, async recommendRebalance() {},
+      async recommendCollectFees() {}, async actionFinalized() {},
+      async verificationFailed() {}, async lpKilled() {}, async positionMissing() {},
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  await repo.updateActiveLp(3, id, {
+    activePositionIdentifier: '191720',
+    activePoolAddress: '0xpool',
+    activeProtectedPoolId: null,
+    phase: 'lp_active',
+  });
+  const orch = await repo.getById(3, id);
+  orch.protectionConfig = { enabled: true, accountId: 8, configuredNotionalUsd: 50 };
+
+  const result = await service._recoverMissingProtection(orch);
+
+  assert.equal(result.recovered, false, 'no debe reportarse cubierto por una proteccion que no es delta-neutral');
+  assert.equal(created.length, 1, 'debe intentar crear en vez de vincular silenciosamente la proteccion ajena');
+  assert.equal(notified.length, 1, 'debe alertar en lugar de reportar una cobertura falsa');
+  const after = await repo.getById(3, id);
+  assert.equal(after.activeProtectedPoolId, null, 'no debe vincular una proteccion que no es la que se pidio');
+});
+
+test('_recoverMissingProtection NO reutiliza una proteccion delta-neutral activa en otra cuenta de Hyperliquid (fix round 2)', async () => {
+  const notified = [];
+  const { repo, created, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    protectedPoolRepository: {
+      async findReusableByIdentity() {
+        // Misma posicion, modo correcto, pero en OTRA cuenta de
+        // Hyperliquid que la que el orquestador configuro.
+        return { id: 55, status: 'active', protectionMode: 'delta_neutral', accountId: 3 };
+      },
+    },
+    uniswapProtectionService: {
+      async createProtectedPool(args) {
+        created.push(args);
+        throw new Error('Este pool ya tiene una proteccion activa');
+      },
+      async deactivateProtectedPool() { return null; },
+    },
+    notifier: {
+      async protectionMissing(orch, info) { notified.push(info); },
+      async urgentOutOfRange() {}, async recommendRebalance() {},
+      async recommendCollectFees() {}, async actionFinalized() {},
+      async verificationFailed() {}, async lpKilled() {}, async positionMissing() {},
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+  await repo.updateActiveLp(3, id, {
+    activePositionIdentifier: '191720',
+    activePoolAddress: '0xpool',
+    activeProtectedPoolId: null,
+    phase: 'lp_active',
+  });
+  const orch = await repo.getById(3, id);
+  orch.protectionConfig = { enabled: true, accountId: 8, configuredNotionalUsd: 50 };
+
+  const result = await service._recoverMissingProtection(orch);
+
+  assert.equal(result.recovered, false);
+  assert.equal(created.length, 1, 'debe intentar crear en vez de vincular la proteccion de otra cuenta');
+  assert.equal(notified.length, 1);
+  const after = await repo.getById(3, id);
+  assert.equal(after.activeProtectedPoolId, null);
 });

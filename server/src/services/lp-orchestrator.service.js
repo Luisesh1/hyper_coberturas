@@ -1316,23 +1316,37 @@ class LpOrchestratorService {
     let error = null;
 
     try {
+      const protection = orch.protectionConfig || {};
       // Si un intento anterior llegó a crear la protección (incluso abrió
       // el short real en Hyperliquid) pero la transacción que la vinculaba
       // falló después, `createProtectedPool` la rechazaría con "ya tiene
       // una proteccion activa" — un falso fallo sobre una cobertura que sí
       // existe. Buscarla primero por identidad y reutilizarla evita crear
       // una segunda y evita esa alerta falsa.
+      //
+      // Pero solo cuenta si es LA MISMA cobertura que se pidió: modo
+      // `delta_neutral` y la misma cuenta de Hyperliquid. Una protección
+      // `static`/`dynamic` (o en otra cuenta) puede coincidir en identidad
+      // de posición porque el usuario la creó a mano para otro fin —
+      // vincularla dejaría el orquestador creyéndose cubierto por un motor
+      // que no lo está operando: la misma clase de fallo silencioso que
+      // este plan existe para eliminar, solo que más difícil de notar. Si
+      // no coincide, se deja caer a `createProtectedPool`, que fallará
+      // ruidosamente con la alerta de siempre — un fallo visible es mejor
+      // que una falsa sensación de cobertura.
       const existing = await this.protectedPoolRepo.findReusableByIdentity(orch.userId, {
         network: orch.network,
         version: orch.version,
         walletAddress: orch.walletAddress,
         positionIdentifier: orch.activePositionIdentifier,
       });
-      if (existing?.status === 'active') {
+      const reusable = existing?.status === 'active'
+        && existing.protectionMode === 'delta_neutral'
+        && Number(existing.accountId) === Number(protection.accountId);
+      if (reusable) {
         protectedPoolId = existing.id;
       } else {
         const pool = await this._loadProtectionSnapshot(orch, orch.activePositionIdentifier);
-        const protection = orch.protectionConfig || {};
         const result = await this.uniswapProtectionService.createProtectedPool({
           userId: orch.userId,
           pool,
