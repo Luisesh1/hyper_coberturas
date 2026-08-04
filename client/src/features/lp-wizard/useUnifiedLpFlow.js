@@ -117,13 +117,39 @@ export default function useUnifiedLpFlow({
 
   const flow = useSmartCreateFlow({ wallet, defaults: flowDefaults, onFinalized: handleFinalized });
 
+  /**
+   * Símbolo de un token del par a partir de su address.
+   *
+   * El orden importa: `suggestions.token0/token1` los resuelve el backend
+   * contra la cadena, así que cubren también las addresses pegadas a mano
+   * que no están en el catálogo local. Se busca por address y no por índice
+   * porque el backend puede devolverlos en orden de pool (ver
+   * `requestedTokenOrderReversed`), que no tiene por qué coincidir con el
+   * que eligió el usuario.
+   *
+   * `tokenOptions` NO sirve aquí: sus items son `{ label, value }` para el
+   * <select>, sin `address` ni `symbol`. Buscar ahí devolvía siempre
+   * `undefined` y el pre-flight rechazaba el plan con "token0Symbol:
+   * expected string, received undefined".
+   */
+  const symbolForAddress = useCallback((address) => {
+    if (!address) return undefined;
+    const target = String(address).toLowerCase();
+    const fromSuggestions = [flow.suggestions?.token0, flow.suggestions?.token1]
+      .find((token) => String(token?.address || '').toLowerCase() === target);
+    if (fromSuggestions?.symbol) return fromSuggestions.symbol;
+    return flow.tokenList?.find(
+      (token) => String(token?.address || '').toLowerCase() === target
+    )?.symbol;
+  }, [flow.suggestions, flow.tokenList]);
+
   // Nombre autocompletado desde el pool mientras el usuario no lo toque.
   const suggestedName = useMemo(() => {
-    const t0 = flow.tokenOptions?.find((t) => t.address === flow.token0Address)?.symbol;
-    const t1 = flow.tokenOptions?.find((t) => t.address === flow.token1Address)?.symbol;
+    const t0 = symbolForAddress(flow.token0Address);
+    const t1 = symbolForAddress(flow.token1Address);
     if (!t0 || !t1) return '';
     return `${t0}/${t1} ${(Number(flow.fee) / 10000).toFixed(2)}% · ${flow.network}`;
-  }, [flow.tokenOptions, flow.token0Address, flow.token1Address, flow.fee, flow.network]);
+  }, [symbolForAddress, flow.token0Address, flow.token1Address, flow.fee, flow.network]);
 
   const effectiveName = nameTouched ? name : (name || suggestedName);
 
@@ -151,8 +177,6 @@ export default function useUnifiedLpFlow({
 
   /** El plan es lo que viaja al servidor: pre-flight, intención y commit. */
   const buildPlan = useCallback(() => {
-    const t0 = flow.tokenOptions?.find((t) => t.address === flow.token0Address);
-    const t1 = flow.tokenOptions?.find((t) => t.address === flow.token1Address);
     const protectionPayload = isOrchestrated
       ? buildProtectionPayload(protection)
       : { enabled: false };
@@ -165,8 +189,8 @@ export default function useUnifiedLpFlow({
       walletAddress: wallet?.address,
       token0Address: flow.token0Address,
       token1Address: flow.token1Address,
-      token0Symbol: t0?.symbol,
-      token1Symbol: t1?.symbol,
+      token0Symbol: symbolForAddress(flow.token0Address),
+      token1Symbol: symbolForAddress(flow.token1Address),
       feeTier: Number(flow.fee),
       capitalUsd: Number(flow.totalUsdTarget),
       rangeLowerPrice: Number(flow.activeRange?.rangeLowerPrice),
@@ -187,7 +211,7 @@ export default function useUnifiedLpFlow({
     mode, isOrchestrated, effectiveName, wallet, protection, strategy,
     effectiveRangeWidthPct, v4TickSpacingOverride, flow.network, flow.version, flow.token0Address,
     flow.token1Address, flow.fee, flow.totalUsdTarget, flow.activeRange,
-    flow.suggestions, flow.tokenOptions,
+    flow.suggestions, symbolForAddress,
   ]);
 
   /** Dry-run de la cobertura. Bloquea el avance a Revisión si no pasa. */
