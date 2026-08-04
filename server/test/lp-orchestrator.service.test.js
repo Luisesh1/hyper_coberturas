@@ -972,3 +972,110 @@ test('attachLp strict: la protección que falla propaga y no deja el LP vinculad
   assert.equal(orch.phase, 'idle');
   assert.equal(orch.activePositionIdentifier, null);
 });
+
+function makeAttachDeps(overrides = {}) {
+  const repo = makeFakeRepo();
+  const created = [];
+  const deps = {
+    lpOrchestratorRepository: repo,
+    db: fakeDb,
+    logger: { info() {}, warn() {}, error() {} },
+    uniswapProtectionService: {
+      async createProtectedPool(args) {
+        created.push(args);
+        return { id: 77 };
+      },
+      async deactivateProtectedPool() { return null; },
+    },
+    protectedPoolRefreshService: { async refreshProtection() { return null; } },
+    ...overrides,
+  };
+  return { repo, created, deps };
+}
+
+async function seedOrchestrator(repo) {
+  const id = await repo.create({
+    userId: 3,
+    name: 'test',
+    network: 'arbitrum',
+    version: 'v4',
+    walletAddress: '0xabc',
+    token0Symbol: 'WETH',
+    token1Symbol: 'USDC',
+    phase: 'idle',
+    status: 'active',
+    accounting: {
+      totalGasUsd: 0,
+      totalSlippageUsd: 0,
+      totalFeesCollectedUsd: 0,
+      totalNetPnlUsd: 0,
+      lpCount: 0,
+    },
+    strategyState: {},
+  });
+  return id;
+}
+
+const goodSnapshot = {
+  mode: 'lp_position',
+  version: 'v4',
+  identifier: '191720',
+  poolAddress: '0xpool',
+  rangeLowerPrice: 2000,
+  rangeUpperPrice: 2400,
+  priceCurrent: 2200,
+  currentValueUsd: 99.5,
+  owner: '0xabc',
+  token0: { symbol: 'WETH' },
+  token1: { symbol: 'USDC' },
+};
+
+test('attachLp recarga el snapshot cuando finalize no lo trajo', async () => {
+  let loaderCalls = 0;
+  const { repo, created, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => {
+      loaderCalls += 1;
+      return goodSnapshot;
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+
+  await service.attachLp({
+    userId: 3,
+    orchestratorId: id,
+    finalizeResult: { positionChanges: { newPositionIdentifier: '191720' } },
+    protectionConfig: { enabled: true, accountId: 8, configuredNotionalUsd: 50 },
+    protectionFailureMode: 'lenient',
+  });
+
+  assert.equal(loaderCalls, 1);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].pool.mode, 'lp_position');
+  const orch = await repo.getById(3, id);
+  assert.equal(orch.activeProtectedPoolId, 77);
+});
+
+test('attachLp nunca pasa un stub sin mode a createProtectedPool', async () => {
+  const { repo, created, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => {
+      const err = new Error('no aparece');
+      err.code = 'SNAPSHOT_NOT_FOUND';
+      throw err;
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+
+  await service.attachLp({
+    userId: 3,
+    orchestratorId: id,
+    finalizeResult: { positionChanges: { newPositionIdentifier: '191720' } },
+    protectionConfig: { enabled: true, accountId: 8, configuredNotionalUsd: 50 },
+    protectionFailureMode: 'lenient',
+  });
+
+  assert.equal(created.length, 0, 'no debe intentarse crear la proteccion sin snapshot');
+  const orch = await repo.getById(3, id);
+  assert.equal(orch.activeProtectedPoolId, null);
+});

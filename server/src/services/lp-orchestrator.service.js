@@ -17,6 +17,7 @@ const uniswapService = require('./uniswap.service');
 const positionActionsService = require('./uniswap-position-actions.service');
 const uniswapProtectionService = require('./uniswap-protection.service');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
+const { loadWalletPoolSnapshot } = require('./uniswap/actions/helpers');
 const logger = require('./logger.service');
 const onChainManager = require('./onchain-manager.service');
 const { ValidationError } = require('../errors/app-error');
@@ -57,6 +58,7 @@ class LpOrchestratorService {
     this.positionActionsService = deps.positionActionsService || positionActionsService;
     this.uniswapProtectionService = deps.uniswapProtectionService || uniswapProtectionService;
     this.protectedPoolRefreshService = deps.protectedPoolRefreshService || protectedPoolRefreshService;
+    this.loadWalletPoolSnapshot = deps.loadWalletPoolSnapshot || loadWalletPoolSnapshot;
     this.rangeEvaluator = deps.rangeEvaluator || rangeEvaluator;
     this.accounting = deps.accounting || accounting;
     this.costEstimator = deps.costEstimator || new LpOrchestratorCostEstimator({
@@ -176,6 +178,22 @@ class LpOrchestratorService {
    *   `strict` propaga el error para que la saga de creación compense — un
    *   orquestador que se cree "protegido" sin hedge opera descubierto.
    */
+  /**
+   * Snapshot fiable de la posición para crear la cobertura. `finalizeResult`
+   * lo trae casi siempre, pero cuando el escaneo post-mint llegó tarde viene
+   * vacío. Antes se fabricaba un stub `{identifier, network, version}` que
+   * `normalizePoolSnapshot` rechazaba con un mensaje sobre la versión — el
+   * LP acababa adjunto y descubierto. Ahora se recarga o se falla claro.
+   */
+  async _loadProtectionSnapshot(orch, positionIdentifier) {
+    return this.loadWalletPoolSnapshot(orch.userId, {
+      network: orch.network,
+      version: orch.version,
+      walletAddress: orch.walletAddress,
+      positionIdentifier: String(positionIdentifier),
+    });
+  }
+
   async attachLp({ userId, orchestratorId, finalizeResult, protectionConfig, protectionFailureMode = 'lenient' }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
@@ -193,11 +211,8 @@ class LpOrchestratorService {
     let protectedPoolId = null;
     if (protectionConfig && protectionConfig.enabled !== false) {
       try {
-        const pool = refreshedSnapshot || {
-          identifier: newPositionIdentifier,
-          network: orch.network,
-          version: orch.version,
-        };
+        const pool = refreshedSnapshot
+          || await this._loadProtectionSnapshot(orch, newPositionIdentifier);
         const protectionResult = await this.uniswapProtectionService.createProtectedPool({
           userId,
           pool,
@@ -219,6 +234,7 @@ class LpOrchestratorService {
         this.logger.warn('lp_orchestrator_protection_creation_failed', {
           orchestratorId,
           protectionFailureMode,
+          code: err.code || null,
           error: err.message,
         });
         if (protectionFailureMode === 'strict') {
@@ -227,11 +243,14 @@ class LpOrchestratorService {
           // orquestador en `lp_active` con `activeProtectedPoolId = null`,
           // es decir operando descubierto mientras la UI lo pinta protegido.
           const failure = new Error(`No se pudo crear la protección: ${err.message}`);
-          failure.code = 'PROTECTION_CREATION_FAILED';
+          failure.code = err.code === 'SNAPSHOT_NOT_FOUND'
+            ? 'PROTECTION_SNAPSHOT_UNAVAILABLE'
+            : 'PROTECTION_CREATION_FAILED';
           failure.cause = err;
           throw failure;
         }
-        // `lenient`: el LP quedó creado. Solo registramos el fallo.
+        // `lenient`: el LP quedó creado. El loop lo reintentará (ver
+        // protection-recovery) y la UI lo marcará como descubierto.
       }
     }
 
