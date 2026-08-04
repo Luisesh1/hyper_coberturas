@@ -84,8 +84,16 @@ function normalizePoolSnapshot(pool) {
   if (!pool || typeof pool !== 'object') {
     throw new ValidationError('pool es requerido');
   }
-  if (pool.mode !== 'lp_position' || !['v3', 'v4'].includes(pool.version)) {
+  if (!['v3', 'v4'].includes(pool.version)) {
     throw new ValidationError('Solo se pueden proteger posiciones LP de Uniswap V3/V4');
+  }
+  // `mode` distinto de `lp_position` casi siempre significa que el caller
+  // pasó un objeto incompleto (identificador + red + versión) porque no
+  // consiguió el snapshot real, no que la posición no sea protegible.
+  if (pool.mode !== 'lp_position') {
+    throw new ValidationError(
+      'El snapshot del pool está incompleto: falta el detalle de la posición LP'
+    );
   }
 
   const rangeLowerPrice = asPositiveNumber(pool.rangeLowerPrice);
