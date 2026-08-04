@@ -72,6 +72,7 @@ const finalizeResultSchema = z.object({
 const attachLpSchema = z.object({
   finalizeResult: finalizeResultSchema,
   protectionConfig: protectionConfigSchema.optional(),
+  protectionFailureMode: z.enum(['strict', 'lenient']).optional(),
 });
 
 const recordTxFinalizedSchema = z.object({

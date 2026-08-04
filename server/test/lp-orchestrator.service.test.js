@@ -930,6 +930,7 @@ test('attachLp lenient: la protección que falla no aborta el vínculo del LP', 
       refreshedSnapshot: { identifier: '999', poolAddress: '0xpool2' },
     },
     protectionConfig: { enabled: true, accountId: 2, leverage: 3 },
+    protectionFailureMode: 'lenient',
   });
 
   const orch = await repo.getById(1, id);
@@ -1054,6 +1055,34 @@ test('attachLp recarga el snapshot cuando finalize no lo trajo', async () => {
   assert.equal(created[0].pool.mode, 'lp_position');
   const orch = await repo.getById(3, id);
   assert.equal(orch.activeProtectedPoolId, 77);
+});
+
+test('attachLp aborta por defecto si la proteccion falla', async () => {
+  const { repo, deps } = makeAttachDeps({
+    loadWalletPoolSnapshot: async () => goodSnapshot,
+    uniswapProtectionService: {
+      async createProtectedPool() { throw new Error('margen insuficiente'); },
+      async deactivateProtectedPool() { return null; },
+    },
+  });
+  const service = new LpOrchestratorService(deps);
+  const id = await seedOrchestrator(repo);
+
+  await assert.rejects(
+    () => service.attachLp({
+      userId: 3,
+      orchestratorId: id,
+      finalizeResult: { positionChanges: { newPositionIdentifier: '191720' } },
+      protectionConfig: { enabled: true, accountId: 8, configuredNotionalUsd: 50 },
+    }),
+    (err) => {
+      assert.equal(err.code, 'PROTECTION_CREATION_FAILED');
+      return true;
+    }
+  );
+
+  const orch = await repo.getById(3, id);
+  assert.equal(orch.activePositionIdentifier, undefined, 'no debe quedar LP adjunto');
 });
 
 test('attachLp nunca pasa un stub sin mode a createProtectedPool', async () => {

@@ -171,12 +171,12 @@ class LpOrchestratorService {
    * snapshot de contabilidad.
    */
   /**
-   * @param {'strict'|'lenient'} [params.protectionFailureMode]
-   *   `lenient` (por defecto) registra el fallo de la protección y sigue: es
-   *   el comportamiento que necesita `adoptLp`, donde el LP ya existía antes
-   *   y dejarlo sin vincular sería peor que dejarlo sin cobertura.
-   *   `strict` propaga el error para que la saga de creación compense — un
-   *   orquestador que se cree "protegido" sin hedge opera descubierto.
+   * @param {'strict'|'lenient'} [params.protectionFailureMode] Default `strict`:
+   *   si la cobertura no se puede crear, el caller debe compensar y abortar —
+   *   un orquestador que se cree "protegido" sin hedge opera descubierto.
+   *   `lenient` registra el fallo de la protección y sigue: es el
+   *   comportamiento que necesita `adoptLp`, donde el LP ya existía antes y
+   *   dejarlo sin vincular sería peor que dejarlo sin cobertura.
    */
   /**
    * Snapshot fiable de la posición para crear la cobertura. `finalizeResult`
@@ -194,7 +194,7 @@ class LpOrchestratorService {
     });
   }
 
-  async attachLp({ userId, orchestratorId, finalizeResult, protectionConfig, protectionFailureMode = 'lenient' }) {
+  async attachLp({ userId, orchestratorId, finalizeResult, protectionConfig, protectionFailureMode = 'strict' }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
       throw new ValidationError('Este orquestador ya tiene un LP activo. Mátalo antes de adjuntar otro.');
@@ -1277,11 +1277,16 @@ class LpOrchestratorService {
       refreshedSnapshot: null,
     };
 
+    // `lenient`: el LP ya existía on-chain antes de esta llamada (adopción
+    // manual). Si la cobertura falla, dejar el LP sin vincular sería peor
+    // que dejarlo vinculado y descubierto — el usuario está aceptando la
+    // exposición a sabiendas al adoptarlo.
     return this.attachLp({
       userId,
       orchestratorId,
       finalizeResult: syntheticFinalize,
       protectionConfig: protectionConfig || orch.protectionConfig || { enabled: false },
+      protectionFailureMode: 'lenient',
     });
   }
 

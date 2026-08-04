@@ -46,3 +46,16 @@ test('plan: acepta v3 y v4, y rechaza cualquier otra versión', () => {
   assert.equal(lpPlanSchema.parse({ ...BASE, version: 'v4' }).version, 'v4');
   assert.throws(() => lpPlanSchema.parse({ ...BASE, version: 'v2' }));
 });
+
+test('attachLpSchema acepta protectionFailureMode explicito', () => {
+  const { attachLpSchema } = require('../src/schemas/lp-orchestrator.schema');
+  const parsed = attachLpSchema.parse({
+    finalizeResult: { txHashes: ['0xcreate'], positionChanges: { newPositionIdentifier: '191720' } },
+    protectionFailureMode: 'lenient',
+  });
+  assert.equal(parsed.protectionFailureMode, 'lenient');
+  assert.throws(() => attachLpSchema.parse({
+    finalizeResult: { txHashes: ['0xcreate'], positionChanges: { newPositionIdentifier: '191720' } },
+    protectionFailureMode: 'whatever',
+  }));
+});
