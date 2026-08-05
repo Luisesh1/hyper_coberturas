@@ -67,6 +67,7 @@ const {
   appendPermit2Approvals,
   appendFundingSwapTransactions,
   loadV4PositionContext,
+  getBalancesAndAllowancesBatch,
 } = require('./helpers');
 
 /**
@@ -91,6 +92,74 @@ function applyMintSlippageCeiling(amountRaw, slippageBps) {
     ? BigInt(Math.round(Number(slippageBps)))
     : BigInt(DEFAULT_SLIPPAGE_BPS);
   return amount + (amount * bps) / 10_000n;
+}
+
+/**
+ * Encoge los montos deseados para que el TECHO de gasto quepa en la wallet.
+ *
+ * `amountMax` es lo que el PositionManager puede llegar a tirar por Permit2.
+ * Con `desired` = saldo entero de un token — el caso de quien aporta todo su
+ * USDC — el techo queda 0.5% POR ENCIMA del saldo y el transferFrom revierte
+ * con TRANSFER_FROM_FAILED, aunque el `desired` si cupiera.
+ *
+ * Rechazar el plan seria correcto pero inutil: el usuario no tiene forma de
+ * saber que le sobra pedir un 0.5% menos. Se aporta ese pelin menos de ese
+ * lado y el margen de slippage sigue existiendo, que es para lo que esta.
+ *
+ * Un `desired` que YA no cabe en el saldo no se toca: eso no es falta de
+ * margen, es falta de fondos, y lo tiene que cazar el chequeo de balance.
+ */
+async function fitDesiredAmountsToBalance({
+  provider, networkConfig, walletAddress, token0, token1,
+  amount0Desired, amount1Desired, slippageBps, swapPlan = [],
+}) {
+  const erc20 = [
+    { token: token0, desired: amount0Desired, key: 'amount0' },
+    { token: token1, desired: amount1Desired, key: 'amount1' },
+    // El lado nativo se paga con el `value` de la tx, no con transferFrom.
+  ].filter((side) => !isZeroAddress(side.token?.address) && side.desired > 0n);
+
+  const fitted = { amount0: amount0Desired, amount1: amount1Desired };
+  if (erc20.length === 0) return fitted;
+
+  const balances = await getBalancesAndAllowancesBatch({
+    provider,
+    networkConfig,
+    tokens: erc20.map((side) => side.token),
+    walletAddress,
+  });
+
+  // El fondeo inteligente puede traer parte del token de un swap del MISMO
+  // plan, asi que el saldo de ahora no es el tope real. Se cuenta el minOut
+  // (no el estimado) y se descuenta lo que los swaps gastan de ese token.
+  const creditFromPlan = (address) => {
+    const target = String(address).toLowerCase();
+    let credit = 0n;
+    for (const swap of (swapPlan || [])) {
+      if (String(swap.tokenOut?.address || '').toLowerCase() === target) {
+        credit += BigInt(swap.amountOutMinimumRaw || 0);
+      }
+      if (String(swap.tokenIn?.address || '').toLowerCase() === target) {
+        credit -= BigInt(swap.amountInRaw || 0);
+      }
+    }
+    return credit;
+  };
+
+  const bps = Number.isFinite(Number(slippageBps)) && Number(slippageBps) > 0
+    ? BigInt(Math.round(Number(slippageBps)))
+    : BigInt(DEFAULT_SLIPPAGE_BPS);
+
+  erc20.forEach((side, i) => {
+    const available = (balances[i]?.balance ?? 0n) + creditFromPlan(side.token.address);
+    if (available <= 0n) return;
+    // Falta de fondos, no de margen: que lo cace el chequeo de balance.
+    if (side.desired > available) return;
+    if (applyMintSlippageCeiling(side.desired, slippageBps) <= available) return;
+    fitted[side.key] = (available * 10_000n) / (10_000n + bps);
+  });
+
+  return fitted;
 }
 
 /**
@@ -184,8 +253,16 @@ async function prepareIncreaseLiquidityV4(payload) {
   // MaximumAmountExceeded si el limite no cubre lo que el pool requiere.
   const mintSlippageBps = payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const ctx = await loadV4PositionContext(payload);
-  const amount0Desired = toBigIntAmount(payload.amount0Desired, ctx.token0.decimals, 'amount0Desired');
-  const amount1Desired = toBigIntAmount(payload.amount1Desired, ctx.token1.decimals, 'amount1Desired');
+  const { amount0: amount0Desired, amount1: amount1Desired } = await fitDesiredAmountsToBalance({
+    provider: ctx.provider,
+    networkConfig: ctx.networkConfig,
+    walletAddress: ctx.normalizedWallet,
+    token0: ctx.token0,
+    token1: ctx.token1,
+    amount0Desired: toBigIntAmount(payload.amount0Desired, ctx.token0.decimals, 'amount0Desired'),
+    amount1Desired: toBigIntAmount(payload.amount1Desired, ctx.token1.decimals, 'amount1Desired'),
+    slippageBps: mintSlippageBps,
+  });
   const liquidityDelta = estimateLiquidityForAmounts({
     amount0Raw: amount0Desired,
     amount1Raw: amount1Desired,
@@ -703,8 +780,17 @@ async function prepareCreatePositionV4(payload) {
     });
     const token0 = canonicalPlan.token0;
     const token1 = canonicalPlan.token1;
-    const amount0Desired = canonicalPlan.amount0Desired;
-    const amount1Desired = canonicalPlan.amount1Desired;
+    const { amount0: amount0Desired, amount1: amount1Desired } = await fitDesiredAmountsToBalance({
+      provider,
+      networkConfig,
+      walletAddress: normalizedWallet,
+      token0,
+      token1,
+      amount0Desired: canonicalPlan.amount0Desired,
+      amount1Desired: canonicalPlan.amount1Desired,
+      slippageBps: mintSlippageBps,
+      swapPlan: plan.swapPlan,
+    });
     const tickLower = priceToNearestTick(canonicalPlan.rangeLowerPrice, token0.decimals, token1.decimals, Number(plan.tickSpacing), 'down');
     const tickUpper = priceToNearestTick(canonicalPlan.rangeUpperPrice, token0.decimals, token1.decimals, Number(plan.tickSpacing), 'up');
     validateTickRange(tickLower, tickUpper);
@@ -895,8 +981,16 @@ async function prepareCreatePositionV4(payload) {
   });
   const canonicalToken0 = canonicalPlan.token0;
   const canonicalToken1 = canonicalPlan.token1;
-  const amount0Desired = canonicalPlan.amount0Desired;
-  const amount1Desired = canonicalPlan.amount1Desired;
+  const { amount0: amount0Desired, amount1: amount1Desired } = await fitDesiredAmountsToBalance({
+    provider,
+    networkConfig,
+    walletAddress: normalizedWallet,
+    token0: canonicalToken0,
+    token1: canonicalToken1,
+    amount0Desired: canonicalPlan.amount0Desired,
+    amount1Desired: canonicalPlan.amount1Desired,
+    slippageBps: mintSlippageBps,
+  });
   const poolKey = {
     currency0: canonicalToken0.address,
     currency1: canonicalToken1.address,
@@ -1471,6 +1565,9 @@ module.exports = {
   // Exportado para test: sin margen, el mint v4 revierte con
   // MaximumAmountExceeded ante cualquier redondeo hacia arriba.
   applyMintSlippageCeiling,
+  // Exportado para test: aportar el saldo entero de un token hacia que el
+  // techo no cupiera y el mint reventaba con TRANSFER_FROM_FAILED.
+  fitDesiredAmountsToBalance,
   // Exportado para test: el lado nativo se paga con el `value` del mint y se
   // barre con SWEEP, y las dos ramas de create-position deben coincidir.
   buildV4MintActions,
