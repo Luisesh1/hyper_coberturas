@@ -315,6 +315,24 @@ export default function useUnifiedLpFlow({
     intentRef.current = null;
   }, []);
 
+  /**
+   * Reintento tras un fallo de firma. Limpia el flujo base y ademas lo propio
+   * del modo orquestado: el pre-flight ya validado, la intencion registrada y
+   * el paso de cobertura dado por superado.
+   *
+   * Sin esto el reintento arrancaba con `protectionDone` en true y se saltaba
+   * el paso de cobertura entero: se firmaba con un pre-flight que valido OTRO
+   * plan. Si en el reintento cambiaba el par, la red o el capital, la
+   * cobertura no se revalidaba nunca contra lo que realmente se iba a crear.
+   */
+  const handleReset = useCallback(() => {
+    setOutcome(null);
+    setProtectionDone(false);
+    setPreflight(null);
+    intentRef.current = null;
+    flow.handleReset();
+  }, [flow]);
+
   return {
     flow,
     mode,
@@ -349,5 +367,6 @@ export default function useUnifiedLpFlow({
     commitBusy,
     outcome,
     resetOutcome,
+    handleReset,
   };
 }

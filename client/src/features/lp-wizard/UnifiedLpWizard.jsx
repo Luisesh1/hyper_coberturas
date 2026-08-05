@@ -385,7 +385,9 @@ export default function UnifiedLpWizard({
             prepareData={flow.prepareData}
             explorerUrl={selectedNetwork?.explorerUrl || null}
             failedTxLabel={flow.failedTxLabel}
-            handleReset={flow.handleReset}
+            // El del hook unificado, no el del flujo base: el reintento tiene
+            // que invalidar tambien el pre-flight de cobertura y la intencion.
+            handleReset={unified.handleReset}
             onClose={onClose}
           />
         )}

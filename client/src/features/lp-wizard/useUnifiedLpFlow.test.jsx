@@ -262,3 +262,74 @@ describe('useUnifiedLpFlow — standalone entrega el finalize al caller', () => 
     expect(lpOrchestratorApi.commitIntent).not.toHaveBeenCalled();
   });
 });
+
+// Regresión de un caso real: fallo una tx al crear un orquestador, el usuario
+// reintento, y el reintento fue directo de `prepare` a `create-intent` sin
+// pasar por `preflight-protection`. `protectionDone` seguia en true tras el
+// reset, asi que el wizard se saltaba el paso de cobertura entero y firmaba
+// con un pre-flight que habia validado el plan ANTERIOR.
+describe('useUnifiedLpFlow — reintento tras un fallo de firma', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lpOrchestratorApi.preflightProtection.mockResolvedValue({ ok: true, checks: [] });
+    lpOrchestratorApi.createIntent.mockResolvedValue({ operationKey: 'op-1' });
+  });
+
+  async function llegarARevision() {
+    smartCreateFlow.current = makeFlow({ step: 'review', handleReset: vi.fn() });
+    const view = renderHook(() => useUnifiedLpFlow({
+      mode: 'orchestrated',
+      wallet: { address: '0x1111111111111111111111111111111111111111' },
+      defaults: { network: 'arbitrum', version: 'v4' },
+    }));
+    // Con el paso de cobertura sin superar, REVIEW se intercepta con PROTECTION.
+    expect(view.result.current.step).toBe('protection');
+    await act(async () => {
+      await view.result.current.handleContinueFromProtection();
+    });
+    expect(view.result.current.step).toBe('review');
+    return view;
+  }
+
+  it('vuelve a exigir el paso de cobertura', async () => {
+    const view = await llegarARevision();
+
+    act(() => { view.result.current.handleReset(); });
+
+    expect(view.result.current.step).toBe('protection');
+  });
+
+  it('limpia el pre-flight validado del intento anterior', async () => {
+    const view = await llegarARevision();
+    expect(view.result.current.preflight).toEqual({ ok: true, checks: [] });
+
+    act(() => { view.result.current.handleReset(); });
+
+    expect(view.result.current.preflight).toBe(null);
+  });
+
+  it('resetea también el flujo base', async () => {
+    const view = await llegarARevision();
+
+    act(() => { view.result.current.handleReset(); });
+
+    expect(smartCreateFlow.current.handleReset).toHaveBeenCalledTimes(1);
+  });
+
+  it('el reintento registra una intención nueva, no reusa la abandonada', async () => {
+    const view = await llegarARevision();
+    await act(async () => { await view.result.current.handleSignAndCreate(); });
+    expect(lpOrchestratorApi.createIntent).toHaveBeenCalledTimes(1);
+
+    act(() => { view.result.current.handleReset(); });
+    await act(async () => {
+      await view.result.current.handleContinueFromProtection();
+    });
+    lpOrchestratorApi.createIntent.mockResolvedValue({ operationKey: 'op-2' });
+    await act(async () => { await view.result.current.handleSignAndCreate(); });
+
+    // Dos intenciones distintas: la abandonada caduca sola por TTL en el
+    // servidor, pero jamás se firma contra ella.
+    expect(lpOrchestratorApi.createIntent).toHaveBeenCalledTimes(2);
+  });
+});
