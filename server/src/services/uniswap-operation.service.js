@@ -8,6 +8,11 @@ const claimFeesService = require('./uniswap-claim-fees.service');
 const { AppError, NotFoundError } = require('../errors/app-error');
 const { CLOSE_ACTIONS } = require('./uniswap/constants');
 
+// Una intención sin firmar caduca a los 30 min: más que de sobra para
+// completar un wizard, y poco para que se acumulen planes muertos.
+const STALE_INTENT_TTL_MS = 30 * 60_000;
+const OPERATION_LEASE_MS = 120_000;
+
 function buildOperationKey({ kind, userId, action, txHashes }) {
   const sortedHashes = [...new Set((txHashes || []).filter(Boolean).map((item) => String(item).toLowerCase()))].sort();
   const raw = [kind, userId, action, ...sortedHashes].join(':');
@@ -43,6 +48,7 @@ function buildOperationEnvelope(operation) {
 
 class UniswapOperationService {
   constructor(deps = {}) {
+    this.db = deps.db || db;
     this.intervalMs = deps.intervalMs || config.intervals.uniswapOperationPollMs;
     this.logger = deps.logger || logger;
     this.operationRepo = deps.operationRepo || operationRepo;
@@ -50,6 +56,7 @@ class UniswapOperationService {
     this.claimFeesService = deps.claimFeesService || claimFeesService;
     this.interval = null;
     this.running = false;
+    this.workerId = deps.workerId || `uniswap-worker:${process.pid}:${crypto.randomUUID()}`;
   }
 
   start() {
@@ -141,21 +148,25 @@ class UniswapOperationService {
     if (this.running) return;
     this.running = true;
     try {
-      // Reserva atómicamente las operaciones pendientes con FOR UPDATE SKIP LOCKED
-      // marcándolas `processing` dentro de la misma tx. Otros workers
-      // concurrentes no volverán a verlas hasta que terminemos o liberemos.
-      const operations = await db.transaction(async (client) => {
-        const claimed = await this.operationRepo.claimPending(20, client);
-        if (claimed.length === 0) return [];
-        const now = Date.now();
-        for (const op of claimed) {
-          await this.operationRepo.updateState(op.id, { step: op.step || op.status, updatedAt: now }, client);
-        }
-        return claimed;
+      // Reserva atómicamente las operaciones pendientes con un lease durable.
+      // Otros workers no volverán a verlas hasta que expire o se libere.
+      const operations = await this.db.transaction(async (client) => {
+        const claimToken = crypto.randomUUID();
+        return this.operationRepo.claimPending(1, {
+          claimToken,
+          claimOwner: this.workerId,
+          leaseMs: OPERATION_LEASE_MS,
+        }, client);
+      });
+
+      // Barrido de intenciones que el usuario abandonó sin firmar. Va aquí y
+      // no en su propio intervalo para no añadir otro temporizador.
+      await this.operationRepo.expireStaleIntents(STALE_INTENT_TTL_MS).catch((err) => {
+        this.logger.warn('uniswap_operation_expire_intents_failed', { error: err.message });
       });
 
       for (const operation of operations) {
-        await this.processOne(operation).catch((err) => {
+        await this._processClaimed(operation).catch((err) => {
           this.logger.error('uniswap_operation_process_failed', {
             operationId: operation.id,
             kind: operation.kind,
@@ -169,12 +180,77 @@ class UniswapOperationService {
     }
   }
 
+  async _processClaimed(operation) {
+    const renewEveryMs = Math.max(5_000, Math.floor(OPERATION_LEASE_MS / 3));
+    const heartbeat = typeof this.operationRepo.renewClaim === 'function'
+      ? setInterval(() => {
+        this.operationRepo.renewClaim(operation.id, operation.claimToken, OPERATION_LEASE_MS)
+          .catch((err) => this.logger.warn('uniswap_operation_lease_renew_failed', {
+            operationId: operation.id,
+            error: err.message,
+          }));
+      }, renewEveryMs)
+      : null;
+    heartbeat?.unref?.();
+    try {
+      return await this.processOne(operation);
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      if (typeof this.operationRepo.releaseClaim === 'function') {
+        await this.operationRepo.releaseClaim(operation.id, operation.claimToken).catch((err) => {
+          this.logger.warn('uniswap_operation_lease_release_failed', {
+            operationId: operation.id,
+            error: err.message,
+          });
+        });
+      }
+    }
+  }
+
   async processOne(operation) {
     if (!operation) return null;
     if (operation.kind === 'claim_fees') {
       return this._processClaimFees(operation);
     }
+    if (operation.kind === 'orchestrated_lp_create') {
+      return this._processOrchestratedLpCreate(operation);
+    }
     return this._processPositionAction(operation);
+  }
+
+  /**
+   * Retoma un commit de la saga que arrancó y no terminó (el proceso murió a
+   * mitad). `commitIntent` es idempotente por `operationKey`, así que
+   * reintentarlo no duplica orquestadores ni hedges.
+   */
+  async _processOrchestratedLpCreate(operation) {
+    const saga = this.lpCreateSaga || require('./lp-orchestrator/create-saga.js');
+    const instance = saga.LpCreateSaga ? new saga.LpCreateSaga() : saga;
+    try {
+      const result = await instance.commitIntent({
+        userId: operation.userId,
+        operationKey: operation.operationKey,
+        claimToken: operation.claimToken,
+        claimOwner: operation.claimOwner,
+        finalizeResult: operation.result?.finalizeResult || {
+          positionIdentifier: operation.positionIdentifier,
+          txHashes: operation.txHashes,
+        },
+      });
+      return buildOperationEnvelope(await this.operationRepo.getById(operation.userId, operation.id))
+        || result;
+    } catch (err) {
+      // No se marca `failed` a la ligera: el LP puede estar minado. Queda en
+      // `needs_reconcile` para que aparezca como pendiente de revisión.
+      const updated = await this.operationRepo.updateState(operation.id, {
+        status: 'needs_reconcile',
+        step: 'needs_reconcile',
+        errorCode: err.code || 'ORCHESTRATED_CREATE_NEEDS_RECONCILE',
+        errorMessage: err.message,
+        finishedAt: Date.now(),
+      });
+      return buildOperationEnvelope(updated);
+    }
   }
 
   _kick() {

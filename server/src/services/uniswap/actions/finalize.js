@@ -421,6 +421,7 @@ async function finalizePositionActionAfterReceipts({
         network,
         version,
         positionIdentifier: finalPositionIdentifier,
+        code: err.code || null,
         error: err.message,
       });
     }

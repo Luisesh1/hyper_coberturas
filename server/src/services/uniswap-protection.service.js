@@ -84,8 +84,16 @@ function normalizePoolSnapshot(pool) {
   if (!pool || typeof pool !== 'object') {
     throw new ValidationError('pool es requerido');
   }
-  if (pool.mode !== 'lp_position' || !['v3', 'v4'].includes(pool.version)) {
+  if (!['v3', 'v4'].includes(pool.version)) {
     throw new ValidationError('Solo se pueden proteger posiciones LP de Uniswap V3/V4');
+  }
+  // `mode` distinto de `lp_position` casi siempre significa que el caller
+  // pasó un objeto incompleto (identificador + red + versión) porque no
+  // consiguió el snapshot real, no que la posición no sea protegible.
+  if (pool.mode !== 'lp_position') {
+    throw new ValidationError(
+      'El snapshot del pool está incompleto: falta el detalle de la posición LP'
+    );
   }
 
   const rangeLowerPrice = asPositiveNumber(pool.rangeLowerPrice);
@@ -829,6 +837,7 @@ async function createDeltaNeutralProtectedPool({
   minRebalanceNotionalUsd,
   maxSlippageBps,
   twapMinNotionalUsd,
+  creationOperationId,
 }, deps = {}) {
   if (!candidate.deltaNeutralEligible) {
     throw new ValidationError(candidate.deltaNeutralReason || 'El pool no es elegible para delta-neutral');
@@ -871,6 +880,11 @@ async function createDeltaNeutralProtectedPool({
     walletAddress: snapshot.owner,
     positionIdentifier: snapshot.identifier,
   });
+  if (existing?.status === 'active'
+      && creationOperationId != null
+      && Number(existing.creationOperationId) === Number(creationOperationId)) {
+    return repository.getById(userId, existing.id);
+  }
   if (existing?.status === 'active') {
     throw new ValidationError('Este pool ya tiene una proteccion activa');
   }
@@ -961,6 +975,7 @@ async function createDeltaNeutralProtectedPool({
     leverage: normalizedLeverage,
     marginMode: 'isolated',
     createdAt,
+    creationOperationId: creationOperationId ?? null,
   };
 
   let protectionId = existing?.id || null;
@@ -1013,6 +1028,9 @@ async function createDeltaNeutralProtectedPool({
       ...initialRangeMetrics,
       updatedAt: createdAt,
     });
+    if (typeof repository.assignCreationOperation === 'function') {
+      await repository.assignCreationOperation(userId, protectionId, creationOperationId ?? null);
+    }
   } else {
     protectionId = await repository.create({
       ...baseRecord,
@@ -1070,6 +1088,7 @@ async function createProtectedPool({
   minRebalanceNotionalUsd,
   maxSlippageBps,
   twapMinNotionalUsd,
+  creationOperationId,
 }, deps = {}) {
   const snapshot = normalizePoolSnapshot(pool);
   const candidate = await buildProtectionCandidate(snapshot, deps);
@@ -1108,6 +1127,7 @@ async function createProtectedPool({
       minRebalanceNotionalUsd,
       maxSlippageBps,
       twapMinNotionalUsd,
+      creationOperationId,
     }, deps);
   }
   const normalizedReentryBufferPct = normalizeReentryBufferPct(reentryBufferPct, normalizedProtectionMode);

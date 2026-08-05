@@ -749,6 +749,31 @@ test('deactivateProtectedPool cancela hedges activos, desvincula hedges y marca 
   assert.equal(result.status, 'inactive');
 });
 
+test('distingue version no soportada de snapshot sin mode', async () => {
+  await assert.rejects(
+    () => createProtectedPool({
+      userId: 3,
+      pool: { mode: 'lp_position', version: 'v2', identifier: '1' },
+    }),
+    (err) => {
+      assert.match(err.message, /V3\/V4/);
+      return true;
+    }
+  );
+
+  await assert.rejects(
+    () => createProtectedPool({
+      userId: 3,
+      pool: { version: 'v4', identifier: '191720' },
+    }),
+    (err) => {
+      assert.match(err.message, /snapshot/i);
+      assert.doesNotMatch(err.message, /V3\/V4/);
+      return true;
+    }
+  );
+});
+
 test('deactivateProtectedPool delega la desactivacion delta-neutral al servicio dedicado', async () => {
   const delegated = [];
 

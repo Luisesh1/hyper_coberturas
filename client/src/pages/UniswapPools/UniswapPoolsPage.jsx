@@ -14,7 +14,7 @@ import PoolCard from './components/PoolCard';
 import ProtectedPoolCard from './components/ProtectedPoolCard';
 import ApplyProtectionModal from './components/ApplyProtectionModal';
 import PositionActionModal from './components/PositionActionModal';
-import SmartCreatePoolModal from './components/SmartCreatePoolModal';
+import UnifiedLpWizard from '../../features/lp-wizard/UnifiedLpWizard';
 import SkeletonCard from './components/SkeletonCard';
 import WalletConnectSetupModal from '../../components/shared/WalletConnectSetupModal';
 import { formatApiError } from '../../utils/errorFormatter';
@@ -596,15 +596,13 @@ export default function UniswapPoolsPage() {
       )}
 
       {showSmartCreate && (
-        <SmartCreatePoolModal
+        <UnifiedLpWizard
+          mode="standalone"
           wallet={walletState}
-          sendTransaction={walletConn.sendTransaction}
-          waitForTransactionReceipt={walletConn.waitForTransactionReceipt}
           defaults={{ network, version }}
           meta={meta}
           onClose={() => setShowSmartCreate(false)}
-          onFinalized={() => {
-            setShowSmartCreate(false);
+          onCompleted={() => {
             refreshVisibleData().catch(() => {});
           }}
         />

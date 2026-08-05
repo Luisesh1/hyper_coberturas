@@ -79,6 +79,7 @@ function mapRow(row) {
     lastError: row.last_error || null,
     lastUrgentAlertAt: row.last_urgent_alert_at != null ? Number(row.last_urgent_alert_at) : null,
     lastDecision: row.last_decision || null,
+    creationOperationId: row.creation_operation_id != null ? Number(row.creation_operation_id) : null,
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     stoppedAt: row.stopped_at != null ? Number(row.stopped_at) : null,
@@ -98,7 +99,7 @@ async function create(record, executor) {
        accounting_json,
        next_eligible_attempt_at, cooldown_reason, consecutive_failures, last_error,
        last_urgent_alert_at, last_decision,
-       created_at, updated_at
+       created_at, updated_at, creation_operation_id
      )
      VALUES (
        $1, $2, $3, $4, $5, $6,
@@ -109,8 +110,10 @@ async function create(record, executor) {
        $21,
        $22, $23, $24, $25,
        $26, $27,
-       $28, $29
+       $28, $29, $30
      )
+     ON CONFLICT (creation_operation_id) WHERE creation_operation_id IS NOT NULL
+     DO UPDATE SET updated_at = EXCLUDED.updated_at
      RETURNING id`,
     [
       record.userId,
@@ -142,6 +145,7 @@ async function create(record, executor) {
       record.lastDecision || null,
       now,
       record.updatedAt || now,
+      record.creationOperationId ?? null,
     ]
   );
   return rows[0]?.id || null;
@@ -360,6 +364,51 @@ async function archive(userId, id, { stoppedAt = Date.now() } = {}, executor) {
   return rows[0]?.id || null;
 }
 
+/**
+ * Borrado duro. Solo para compensar una creación que falló a medias: el
+ * orquestador se creó hace segundos, nunca llegó a operar y dejarlo
+ * archivado ensuciaría la lista con un registro que no representa nada.
+ * El action_log cae por ON DELETE CASCADE.
+ *
+ * La guarda de `active_position_identifier IS NULL` impide usar esto sobre
+ * un orquestador con un LP vivo: ese camino es `killLp` + `archive`.
+ */
+async function remove(userId, id, executor) {
+  const { rows } = await exec(executor).query(
+    `DELETE FROM lp_orchestrators
+      WHERE user_id = $1 AND id = $2
+        AND active_position_identifier IS NULL
+      RETURNING id`,
+    [userId, id]
+  );
+  return rows[0]?.id || null;
+}
+
+async function removeOwnedByOperation(userId, id, creationOperationId, executor) {
+  const { rows } = await exec(executor).query(
+    `DELETE FROM lp_orchestrators
+      WHERE user_id = $1 AND id = $2
+        AND creation_operation_id = $3
+        AND active_position_identifier IS NULL
+      RETURNING id`,
+    [userId, id, creationOperationId]
+  );
+  return rows[0]?.id || null;
+}
+
+async function findActiveByProtectedPoolId(userId, protectedPoolId, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT * FROM lp_orchestrators
+      WHERE user_id = $1
+        AND active_protected_pool_id = $2
+        AND status = 'active'
+      ORDER BY id ASC
+      LIMIT 1`,
+    [userId, protectedPoolId]
+  );
+  return mapRow(rows[0]);
+}
+
 // ---------- action_log -----------------------------------------------------
 
 async function appendActionLog(entry, executor) {
@@ -514,6 +563,9 @@ module.exports = {
   clearUrgentAlert,
   findFinalizedByTxHash,
   archive,
+  remove,
+  removeOwnedByOperation,
+  findActiveByProtectedPoolId,
   appendActionLog,
   listActionLog,
   findLastNotification,

@@ -3,10 +3,10 @@ import { lpOrchestratorApi } from '../../../services/api';
 import ProtectionFormFields, {
   buildProtectionPayload,
   validateProtectionForm,
-} from './ProtectionFormFields';
+} from '../../../features/lp-wizard/ProtectionFormFields';
 import StrategyFieldInput from './StrategyFieldInput';
 import { validateStrategyFields } from './strategy-fields';
-import styles from './CreateOrchestratorWizard.module.css';
+import styles from './StrategyFieldInput.module.css';
 
 // Convierte el `protectionConfig` persistido (forma payload/backend) al shape
 // del form (strings para inputs). Si viene null/undefined, muestra la UI

@@ -294,6 +294,13 @@ export const lpOrchestratorApi = {
   },
   getById: (id) => request('GET', `/lp-orchestrators/${id}`),
   create: (payload) => request('POST', '/lp-orchestrators', payload),
+  // Wizard unificado: dry-run de la cobertura, intención previa a la firma y
+  // commit idempotente de la saga.
+  preflightProtection: (payload) =>
+    request('POST', '/lp-orchestrators/preflight-protection', payload, { timeoutMs: 30_000 }),
+  createIntent: (plan) => request('POST', '/lp-orchestrators/create-intent', { plan }),
+  commitIntent: (payload) =>
+    request('POST', '/lp-orchestrators/commit-intent', payload, { timeoutMs: 120_000 }),
   evaluate: (id) => request('POST', `/lp-orchestrators/${id}/evaluate`, {}),
   reconcile: (id) => request('POST', `/lp-orchestrators/${id}/reconcile`, {}, { timeoutMs: 60_000 }),
   attachLp: (id, payload) => request('POST', `/lp-orchestrators/${id}/attach-lp`, payload),

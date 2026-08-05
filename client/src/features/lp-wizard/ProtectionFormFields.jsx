@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { formatAccountIdentity } from '../../../utils/hyperliquidAccounts';
-import { formatUsd } from '../../UniswapPools/utils/pool-formatters';
+import { formatAccountIdentity } from '../../utils/hyperliquidAccounts';
+import { formatUsd } from '../../pages/UniswapPools/utils/pool-formatters';
 import styles from './ProtectionFormFields.module.css';
 
 const DELTA_NEUTRAL_PRESETS = [

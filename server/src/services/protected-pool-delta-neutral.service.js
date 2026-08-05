@@ -1,4 +1,5 @@
 const config = require('../config');
+const crypto = require('node:crypto');
 const db = require('../db');
 const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
@@ -31,6 +32,7 @@ const POSITION_MISSING_GRACE_MS = 15 * 60_000;
 // max($1, 1% del tamaño original) se consideran polvo y no bloquean deactivate.
 const DEACTIVATION_RESIDUAL_DUST_USD = 1;
 const DEACTIVATION_RESIDUAL_PCT = 0.01;
+const DELTA_NEUTRAL_LOCK_NAMESPACE = 0x444e;
 const {
   DEFAULT_BAND_MODE,
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
@@ -115,6 +117,9 @@ class ProtectedPoolDeltaNeutralService {
     };
     // Inyectable para tests: fallback a db real si no se pasa.
     this._db = deps.db || db;
+    this.useDistributedLocks = deps.useDistributedLocks != null
+      ? deps.useDistributedLocks
+      : Boolean(process.env.DATABASE_URL || (process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE));
     this.interval = null;
     this.running = false;
     this.lastEvalAt = new Map();
@@ -127,6 +132,7 @@ class ProtectedPoolDeltaNeutralService {
     // sin perder reconciliación útil porque los fills llegan en ráfagas
     // tras una ejecución, no de forma continua.
     this.userFillsCache = new Map();
+    this.evaluationLocks = new Map();
     this.hybridStats = {
       marketTicks: 0,
       truthRefreshes: 0,
@@ -1360,7 +1366,55 @@ class ProtectedPoolDeltaNeutralService {
     });
   }
 
-  async evaluateProtection(protection, { marketContext = null, forceReason = null, forceRebalance = false } = {}) {
+  async evaluateProtection(protection, options = {}) {
+    const protectionId = Number(protection?.id);
+    if (!Number.isInteger(protectionId) || protectionId <= 0) return null;
+    const existing = this.evaluationLocks.get(protectionId);
+    if (existing) return existing;
+
+    const evaluation = this._withProtectionEvaluationLock(protection, options)
+      .finally(() => this.evaluationLocks.delete(protectionId));
+    this.evaluationLocks.set(protectionId, evaluation);
+    return evaluation;
+  }
+
+  async _withProtectionEvaluationLock(protection, options) {
+    const pool = this._db?.pool;
+    if (!this.useDistributedLocks || !pool || typeof pool.connect !== 'function') {
+      return this._evaluateProtectionUnlocked(protection, options);
+    }
+
+    const client = await pool.connect();
+    let acquired = false;
+    try {
+      const { rows } = await client.query(
+        'SELECT pg_try_advisory_lock($1::integer, $2::integer) AS acquired',
+        [DELTA_NEUTRAL_LOCK_NAMESPACE, Number(protection.id)]
+      );
+      acquired = rows[0]?.acquired === true;
+      if (!acquired) {
+        this.logger.info?.('delta_neutral_evaluation_lock_busy', {
+          protectionId: protection.id,
+          userId: protection.userId,
+        });
+        return null;
+      }
+      return await this._evaluateProtectionUnlocked(protection, options);
+    } finally {
+      if (acquired) {
+        await client.query(
+          'SELECT pg_advisory_unlock($1::integer, $2::integer)',
+          [DELTA_NEUTRAL_LOCK_NAMESPACE, Number(protection.id)]
+        ).catch((err) => this.logger.error('delta_neutral_evaluation_unlock_failed', {
+          protectionId: protection.id,
+          error: err.message,
+        }));
+      }
+      client.release();
+    }
+  }
+
+  async _evaluateProtectionUnlocked(protection, { marketContext = null, forceReason = null, forceRebalance = false } = {}) {
     const current = await this.repo.getById(protection.userId, protection.id);
     if (!current || current.status !== 'active' || current.protectionMode !== 'delta_neutral') {
       return null;
@@ -1638,6 +1692,10 @@ class ProtectedPoolDeltaNeutralService {
       lastTargetQty: metrics.targetQty,
       lastShadowTargetQty: metrics.shadowTargetQty ?? null,
       lastActualQty: actualQty,
+      monitorHeartbeatAt: Date.now(),
+      coverageRatioPct: Number(metrics.targetQty) > NEAR_ZERO_TARGET_QTY
+        ? (actualQty / Number(metrics.targetQty)) * 100
+        : actualQty <= NEAR_ZERO_TARGET_QTY ? 100 : null,
       effectiveBandPct: band.effectiveBandPct,
       rv4hPct: band.rv4hPct,
       rv24hPct: band.rv24hPct,
@@ -1699,6 +1757,19 @@ class ProtectedPoolDeltaNeutralService {
     nextState.lastSpotFailureAt = spotFailureReason ? Date.now() : (strategyState.lastSpotFailureAt || null);
     nextState.lastSpotFailureReason = spotFailureReason || null;
     nextState.truthPending = normalizeStrategyState(activeProtection.strategyState).truthPending === true;
+
+    if (Number.isFinite(nextState.coverageRatioPct)
+        && Number(metrics.targetQty) > NEAR_ZERO_TARGET_QTY
+        && (nextState.coverageRatioPct < 90 || nextState.coverageRatioPct > 110)) {
+      this.logger.warn?.('delta_neutral_coverage_out_of_band', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        targetQty: Number(metrics.targetQty),
+        actualQty,
+        coverageRatioPct: nextState.coverageRatioPct,
+      });
+    }
 
     this.logger.info?.('delta_neutral_position_observed', {
       protectionId: activeProtection.id,
@@ -2152,6 +2223,25 @@ class ProtectedPoolDeltaNeutralService {
       });
       return strategyState;
     }
+    if (typeof hl?.getPosition === 'function') {
+      let latestPosition = await hl.getPosition(protection.inferredAsset);
+      if (!latestPosition && Number(actualQty) > 0) {
+        latestPosition = await hl.getPosition(protection.inferredAsset);
+        if (!latestPosition) {
+          const err = new Error('No se pudo confirmar la posición justo antes de ejecutar; se bloquea el rebalanceo.');
+          err.code = 'POSITION_RECONCILIATION_REQUIRED';
+          throw err;
+        }
+      }
+      const latestSignedQty = Number(latestPosition?.szi || 0);
+      if (latestSignedQty > 0) {
+        const err = new Error(`Existe una posición long inesperada en ${protection.inferredAsset}; se requiere reconciliación.`);
+        err.code = 'UNEXPECTED_HEDGE_DIRECTION';
+        throw err;
+      }
+      actualQty = latestSignedQty < 0 ? Math.abs(latestSignedQty) : 0;
+    }
+
     const driftQty = Number(metrics.targetQty) - Number(actualQty);
     const driftUsd = Math.abs(driftQty) * currentPrice;
     if (!Number.isFinite(driftQty) || Math.abs(driftQty) < 1e-8) {
@@ -2203,6 +2293,9 @@ class ProtectedPoolDeltaNeutralService {
       driftUsd,
     };
 
+    const unresolvedExecution = ['pending', 'unknown'].includes(strategyState.lastExecutionOutcome)
+      && strategyState.pendingExecutionId;
+    const executionId = unresolvedExecution || crypto.randomUUID();
     let executionSummary;
     try {
       await this.repo.updateStrategyState(protection.userId, protection.id, {
@@ -2211,6 +2304,7 @@ class ProtectedPoolDeltaNeutralService {
           status: 'executing',
           lastExecutionAttemptAt: Date.now(),
           lastExecutionOutcome: 'pending',
+          pendingExecutionId: executionId,
         },
         priceCurrent: currentPrice,
         executionMode,
@@ -2223,6 +2317,7 @@ class ProtectedPoolDeltaNeutralService {
           currentPrice,
           driftQty,
           actualQty,
+          executionId,
         });
       } else {
         executionSummary = await this._runSingleAdjustment({
@@ -2232,6 +2327,7 @@ class ProtectedPoolDeltaNeutralService {
           currentPrice,
           driftQty,
           actualQty,
+          executionId,
         });
       }
       // Los fills recién ejecutados no aparecerán en el cache de 30 s, así
@@ -2240,12 +2336,15 @@ class ProtectedPoolDeltaNeutralService {
       this._invalidateUserFillsCache(hl);
     } catch (err) {
       this._invalidateUserFillsCache(hl);
+      const outcomeUnknown = /timeout|timed out|econnreset|socket hang up|network|fetch failed/i
+        .test(String(err?.message || ''));
       const failedState = {
         ...strategyState,
         status: executionMode === 'TWAP' ? 'degraded_partial' : 'partial_hedge_warning',
         lastError: err.message,
         lastExecutionAttemptAt: Date.now(),
-        lastExecutionOutcome: 'failed',
+        lastExecutionOutcome: outcomeUnknown ? 'unknown' : 'failed',
+        pendingExecutionId: outcomeUnknown ? executionId : null,
         minDwellUntil: Date.now() + this.minDwellMs,
       };
       const cooldown = buildCooldown(err, failedState);
@@ -2324,6 +2423,7 @@ class ProtectedPoolDeltaNeutralService {
       lastError: executionSummary.partial ? 'El rebalance TWAP quedo parcial.' : null,
       lastExecutionAttemptAt: Date.now(),
       lastExecutionOutcome: executionSummary.partial ? 'partial' : 'success',
+      pendingExecutionId: null,
       nextEligibleAttemptAt: null,
       cooldownReason: null,
       minDwellUntil: Date.now() + this.minDwellMs,
@@ -2401,7 +2501,23 @@ class ProtectedPoolDeltaNeutralService {
     return updatedState;
   }
 
-  async _runSingleAdjustment({ protection, tradingService, hl, currentPrice, driftQty, actualQty = 0 }) {
+  _executionCloid(executionId, step) {
+    return `0x${crypto.createHash('sha256')
+      .update(`delta-neutral:${executionId}:${step}`)
+      .digest('hex')
+      .slice(0, 32)}`;
+  }
+
+  async _runSingleAdjustment({
+    protection,
+    tradingService,
+    hl,
+    currentPrice,
+    driftQty,
+    actualQty = 0,
+    executionId = crypto.randomUUID(),
+    step = 'ioc',
+  }) {
     if (driftQty > 0) {
       await this._ensureIsolatedMarginBuffer(protection, hl, currentPrice, driftQty, actualQty);
       const result = await tradingService.openPosition({
@@ -2410,6 +2526,7 @@ class ProtectedPoolDeltaNeutralService {
         size: driftQty,
         leverage: protection.leverage,
         marginMode: 'isolated',
+        cloid: this._executionCloid(executionId, `${step}:increase`),
       });
       const fillPrice = Number(result.fillPrice || currentPrice);
       const executedQty = result.filledQty != null ? result.filledQty : driftQty;
@@ -2426,6 +2543,7 @@ class ProtectedPoolDeltaNeutralService {
     const result = await tradingService.closePosition({
       asset: protection.inferredAsset,
       size: reduceQty,
+      cloid: this._executionCloid(executionId, `${step}:decrease`),
     });
     const fillPrice = Number(result.closePrice || currentPrice);
     const executedQty = result.filledQty != null ? result.filledQty : reduceQty;
@@ -2438,7 +2556,15 @@ class ProtectedPoolDeltaNeutralService {
     };
   }
 
-  async _runTwap({ protection, tradingService, hl, currentPrice, driftQty, actualQty = 0 }) {
+  async _runTwap({
+    protection,
+    tradingService,
+    hl,
+    currentPrice,
+    driftQty,
+    actualQty = 0,
+    executionId = crypto.randomUUID(),
+  }) {
     const direction = driftQty > 0 ? 'increase' : 'decrease';
     const totalQty = Math.abs(driftQty);
     const slicesPlanned = Math.max(
@@ -2487,10 +2613,12 @@ class ProtectedPoolDeltaNeutralService {
             size: qty,
             leverage: protection.leverage,
             marginMode: 'isolated',
+            cloid: this._executionCloid(executionId, `twap:${index}:increase`),
           })
           : await tradingService.closePosition({
             asset: protection.inferredAsset,
             size: qty,
+            cloid: this._executionCloid(executionId, `twap:${index}:decrease`),
           });
         lastFillPrice = Number(sliceResult.fillPrice || sliceResult.closePrice || currentPrice);
         const actualSliceQty = Number.isFinite(Number(sliceResult.filledQty)) ? Number(sliceResult.filledQty) : qty;
@@ -2511,6 +2639,8 @@ class ProtectedPoolDeltaNeutralService {
             currentPrice,
             driftQty: direction === 'increase' ? remainingQty : -remainingQty,
             actualQty: actualQty + executedQtyReal,
+            executionId,
+            step: 'twap-emergency',
           });
           totalFees += Number(emergency.executionFeeUsd || 0);
           totalSlippage += Number(emergency.slippageUsd || 0);

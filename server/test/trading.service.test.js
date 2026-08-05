@@ -105,6 +105,35 @@ test('openPosition refresca cache y notifica incluyendo la cuenta', async () => 
   }
 });
 
+test('openPosition propaga el cloid idempotente hasta Hyperliquid', async () => {
+  const placed = [];
+  const { service } = createTrading({
+    hl: {
+      placeOrder: async (input) => {
+        placed.push(input);
+        return { statuses: ['ok'] };
+      },
+    },
+  });
+  const release = withPatched(balanceCacheService, {
+    refreshSnapshot: async () => {},
+  });
+
+  try {
+    await service.openPosition({
+      asset: 'BTC',
+      side: 'short',
+      size: 0.01,
+      leverage: 5,
+      marginMode: 'isolated',
+      cloid: '0x0123456789abcdef0123456789abcdef',
+    });
+    assert.equal(placed[0].cloid, '0x0123456789abcdef0123456789abcdef');
+  } finally {
+    release();
+  }
+});
+
 test('closePosition refresca cache y notifica incluyendo la cuenta', async () => {
   const { service, tgCalls, account } = createTrading({
     hl: {

@@ -805,3 +805,137 @@ test('evaluateProtection degrada a spot_stale si falla spot y el snapshot esta v
   assert.match(protection.strategyState.lastError, /precio actual del pool/i);
   assert.equal(decisions.at(-1).finalStrategyStatus, 'spot_stale');
 });
+
+test('evaluateProtection serializa dos evaluaciones concurrentes de la misma protección', async () => {
+  let evaluations = 0;
+  let unblock;
+  const gate = new Promise((resolve) => { unblock = resolve; });
+  const service = new ProtectedPoolDeltaNeutralService();
+  service._withProtectionEvaluationLock = async () => {
+    evaluations += 1;
+    await gate;
+    return { status: 'healthy' };
+  };
+
+  const first = service.evaluateProtection({ id: 55 });
+  const second = service.evaluateProtection({ id: 55 });
+  await Promise.resolve();
+  assert.equal(evaluations, 1);
+  unblock();
+
+  const [a, b] = await Promise.all([first, second]);
+  assert.deepEqual(a, { status: 'healthy' });
+  assert.deepEqual(b, { status: 'healthy' });
+  assert.equal(evaluations, 1);
+});
+
+test('el lock distribuido omite la evaluación cuando otro proceso posee la protección', async () => {
+  let unlockedCalls = 0;
+  let releases = 0;
+  const service = new ProtectedPoolDeltaNeutralService({
+    db: {
+      pool: {
+        connect: async () => ({
+          query: async () => ({ rows: [{ acquired: false }] }),
+          release: () => { releases += 1; },
+        }),
+      },
+    },
+    useDistributedLocks: true,
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  service._evaluateProtectionUnlocked = async () => {
+    unlockedCalls += 1;
+  };
+
+  const result = await service.evaluateProtection({ id: 55, userId: 1 });
+
+  assert.equal(result, null);
+  assert.equal(unlockedCalls, 0);
+  assert.equal(releases, 1);
+});
+
+test('_runSingleAdjustment reutiliza el mismo cloid para el mismo executionId', async () => {
+  const cloids = [];
+  const service = new ProtectedPoolDeltaNeutralService();
+  service._ensureIsolatedMarginBuffer = async () => {};
+  const args = {
+    protection: { id: 55, inferredAsset: 'ETH', leverage: 7 },
+    tradingService: {
+      openPosition: async (input) => {
+        cloids.push(input.cloid);
+        return { fillPrice: 2500, filledQty: input.size };
+      },
+    },
+    hl: {},
+    currentPrice: 2500,
+    driftQty: 0.01,
+    executionId: 'execution-abc',
+  };
+
+  await service._runSingleAdjustment(args);
+  await service._runSingleAdjustment(args);
+
+  assert.equal(cloids.length, 2);
+  assert.equal(cloids[0], cloids[1]);
+  assert.match(cloids[0], /^0x[0-9a-f]{32}$/);
+});
+
+test('_executeRebalance relee la posición y no duplica un hedge ya abierto', async () => {
+  let orders = 0;
+  const service = new ProtectedPoolDeltaNeutralService({
+    logger: { info() {}, warn() {}, error() {} },
+  });
+
+  const result = await service._executeRebalance({
+    protection: { id: 55, userId: 1, inferredAsset: 'ETH' },
+    tradingService: {
+      openPosition: async () => { orders += 1; },
+      closePosition: async () => { orders += 1; },
+    },
+    hl: { getPosition: async () => ({ szi: '-0.02' }) },
+    actualQty: 0,
+    currentPrice: 2500,
+    metrics: { targetQty: 0.02, deltaQty: 0.02, gamma: 0 },
+    band: {},
+    strategyState: { status: 'tracking' },
+    reason: 'test',
+  });
+
+  assert.equal(result.status, 'tracking');
+  assert.equal(orders, 0);
+});
+
+test('_executeRebalance se bloquea si pierde una posición existente antes de ordenar', async () => {
+  let reads = 0;
+  let orders = 0;
+  const service = new ProtectedPoolDeltaNeutralService({
+    logger: { info() {}, warn() {}, error() {} },
+  });
+
+  await assert.rejects(
+    () => service._executeRebalance({
+      protection: { id: 55, userId: 1, inferredAsset: 'ETH' },
+      tradingService: {
+        openPosition: async () => { orders += 1; },
+        closePosition: async () => { orders += 1; },
+      },
+      hl: {
+        getPosition: async () => {
+          reads += 1;
+          return null;
+        },
+      },
+      actualQty: 0.02,
+      currentPrice: 2500,
+      metrics: { targetQty: 0.04, deltaQty: 0.04, gamma: 0 },
+      band: {},
+      strategyState: { status: 'tracking' },
+      reason: 'test',
+    }),
+    (err) => err.code === 'POSITION_RECONCILIATION_REQUIRED'
+  );
+
+  assert.equal(reads, 2);
+  assert.equal(orders, 0);
+});

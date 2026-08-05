@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import SmartCreatePoolModal from './SmartCreatePoolModal';
+import UnifiedLpWizard from './UnifiedLpWizard';
 
 const { uniswapApi } = vi.hoisted(() => ({
   uniswapApi: {
@@ -65,11 +65,11 @@ const { executionController } = vi.hoisted(() => {
   };
 });
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../services/api', () => ({
   uniswapApi,
 }));
 
-vi.mock('../../../hooks/useWalletExecution', async () => {
+vi.mock('../../hooks/useWalletExecution', async () => {
   const React = await import('react');
 
   const STATES = {
@@ -148,7 +148,7 @@ vi.mock('../../../hooks/useWalletExecution', async () => {
   };
 });
 
-describe('SmartCreatePoolModal', () => {
+describe('UnifiedLpWizard · modo standalone', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     executionController.resetAll();
@@ -237,13 +237,14 @@ describe('SmartCreatePoolModal', () => {
 
   it('recorre el wizard completo hasta review mostrando swaps, approvals y mint', async () => {
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         sendTransaction={vi.fn()}
         defaults={{ network: 'ethereum', version: 'v3' }}
         meta={{ networks: [{ id: 'ethereum', label: 'Ethereum', versions: ['v3', 'v4'] }] }}
         onClose={vi.fn()}
-        onFinalized={vi.fn()}
+        onCompleted={vi.fn()}
       />
     );
 
@@ -272,7 +273,7 @@ describe('SmartCreatePoolModal', () => {
       ]),
     })));
 
-    expect(await screen.findByText(/Paso 4: Review y firma/i)).toBeTruthy();
+    expect(await screen.findByText(/Se ejecutará en este orden/i)).toBeTruthy();
     expect(screen.getByText(/Activos fuente seleccionados/i)).toBeTruthy();
     expect(screen.getByText(/Transacciones a firmar \(3\)/i)).toBeTruthy();
     expect(screen.getByText(/Approve USDC/i)).toBeTruthy();
@@ -301,13 +302,14 @@ describe('SmartCreatePoolModal', () => {
     uniswapApi.smartCreateFundingPlan.mockRejectedValueOnce(fundingError);
 
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         sendTransaction={vi.fn()}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'ethereum', label: 'Ethereum', versions: ['v3'] }, { id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'] }] }}
         onClose={vi.fn()}
-        onFinalized={vi.fn()}
+        onCompleted={vi.fn()}
       />
     );
 
@@ -350,13 +352,14 @@ describe('SmartCreatePoolModal', () => {
     uniswapApi.smartCreateFundingPlan.mockRejectedValueOnce(fundingError);
 
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         sendTransaction={vi.fn()}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'] }] }}
         onClose={vi.fn()}
-        onFinalized={vi.fn()}
+        onCompleted={vi.fn()}
       />
     );
 
@@ -393,12 +396,13 @@ describe('SmartCreatePoolModal', () => {
     });
 
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'] }] }}
         onClose={vi.fn()}
-        onFinalized={vi.fn()}
+        onCompleted={vi.fn()}
       />
     );
 
@@ -412,8 +416,8 @@ describe('SmartCreatePoolModal', () => {
     await userEvent.click(screen.getByRole('button', { name: /Continuar a fondeo/i }));
     await screen.findByText(/Paso 3: Capital fuente y swaps/i);
     await userEvent.click(screen.getByRole('button', { name: /Revisar y preparar firma/i }));
-    await screen.findByText(/Paso 4: Review y firma/i);
-    await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
+    await screen.findByText(/Se ejecutará en este orden/i);
+    await userEvent.click(screen.getByRole('button', { name: /Firmar y crear/i }));
 
     await waitFor(() => expect(executionController.runPlan).toHaveBeenCalledWith(expect.objectContaining({
       action: 'create-position',
@@ -426,7 +430,7 @@ describe('SmartCreatePoolModal', () => {
   }, 15000);
 
   it('entrega el resultado final al cerrar el wizard con el runner común', async () => {
-    const onFinalized = vi.fn();
+    const onCompleted = vi.fn();
     executionController.setConfig({
       outcome: 'done',
       txHashes: ['0xaaa', '0xbbb', '0xccc'],
@@ -440,12 +444,13 @@ describe('SmartCreatePoolModal', () => {
     });
 
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'], explorerUrl: 'https://arbiscan.io' }] }}
         onClose={vi.fn()}
-        onFinalized={onFinalized}
+        onCompleted={onCompleted}
       />
     );
 
@@ -459,20 +464,12 @@ describe('SmartCreatePoolModal', () => {
     await userEvent.click(screen.getByRole('button', { name: /Continuar a fondeo/i }));
     await screen.findByText(/Paso 3: Capital fuente y swaps/i);
     await userEvent.click(screen.getByRole('button', { name: /Revisar y preparar firma/i }));
-    await screen.findByText(/Paso 4: Review y firma/i);
-    await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
+    await screen.findByText(/Se ejecutará en este orden/i);
+    await userEvent.click(screen.getByRole('button', { name: /Firmar y crear/i }));
 
-    await waitFor(() => expect(onFinalized).toHaveBeenCalledWith({
-      txHashes: ['0xaaa', '0xbbb', '0xccc'],
-      finalizeResult: {
-        status: 'done',
-        txHashes: ['0xaaa', '0xbbb', '0xccc'],
-        positionChanges: {
-          newPositionIdentifier: '789',
-        },
-      },
-      partial: false,
-    }));
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'completed' })
+    ));
     expect(await screen.findByText(/Posición LP creada correctamente/i)).toBeTruthy();
   }, 20000);
 
@@ -495,12 +492,13 @@ describe('SmartCreatePoolModal', () => {
     });
 
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'], explorerUrl: 'https://arbiscan.io' }] }}
         onClose={onClose}
-        onFinalized={vi.fn()}
+        onCompleted={vi.fn()}
       />
     );
 
@@ -515,7 +513,7 @@ describe('SmartCreatePoolModal', () => {
     await screen.findByText(/Paso 3/i);
     await userEvent.click(screen.getByRole('button', { name: /Revisar y preparar firma/i }));
     await screen.findByText(/Paso 4/i);
-    await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Firmar y crear/i }));
 
     // DONE state: success message, explorer link, no auto-close
     expect(await screen.findByText(/Posición LP creada correctamente/i)).toBeTruthy();
@@ -542,13 +540,14 @@ describe('SmartCreatePoolModal', () => {
     });
 
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         sendTransaction={vi.fn()}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'] }] }}
         onClose={vi.fn()}
-        onFinalized={vi.fn()}
+        onCompleted={vi.fn()}
       />
     );
 
@@ -563,11 +562,11 @@ describe('SmartCreatePoolModal', () => {
     await screen.findByText(/Paso 3/i);
     await userEvent.click(screen.getByRole('button', { name: /Revisar y preparar firma/i }));
     await screen.findByText(/Paso 4/i);
-    await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Firmar y crear/i }));
 
     // Should show expiry error and stay on REVIEW step
     expect(await screen.findByText(/El plan expiró/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Firmar con wallet/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Firmar y crear/i })).toBeTruthy();
   }, 15000);
 
   // Regresion: `runPlan` devuelve txHashes con status no-terminal cuando el
@@ -575,7 +574,7 @@ describe('SmartCreatePoolModal', () => {
   // ese caso no llamaba a onFinalized ni mostraba error: el LP quedaba
   // huerfano (creado on-chain, invisible en la app) sin ninguna pista.
   it('avisa y entrega el resultado aunque el finalize no llegue a done', async () => {
-    const onFinalized = vi.fn();
+    const onCompleted = vi.fn();
     executionController.setConfig({
       outcome: 'done',
       txHashes: ['0xaaa', '0xbbb'],
@@ -586,12 +585,13 @@ describe('SmartCreatePoolModal', () => {
     });
 
     render(
-      <SmartCreatePoolModal
+      <UnifiedLpWizard
+        mode="standalone"
         wallet={{ address: '0x00000000000000000000000000000000000000FF' }}
         defaults={{ network: 'arbitrum', version: 'v3' }}
         meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'], explorerUrl: 'https://arbiscan.io' }] }}
         onClose={vi.fn()}
-        onFinalized={onFinalized}
+        onCompleted={onCompleted}
       />
     );
 
@@ -605,13 +605,13 @@ describe('SmartCreatePoolModal', () => {
     await userEvent.click(screen.getByRole('button', { name: /Continuar a fondeo/i }));
     await screen.findByText(/Paso 3: Capital fuente y swaps/i);
     await userEvent.click(screen.getByRole('button', { name: /Revisar y preparar firma/i }));
-    await screen.findByText(/Paso 4: Review y firma/i);
-    await userEvent.click(screen.getByRole('button', { name: /Firmar con wallet/i }));
+    await screen.findByText(/Se ejecutará en este orden/i);
+    await userEvent.click(screen.getByRole('button', { name: /Firmar y crear/i }));
 
     // Se entrega igual, marcado como parcial, para que el caller intente
     // vincular y sepa por que puede no lograrlo.
-    await waitFor(() => expect(onFinalized).toHaveBeenCalledWith(
-      expect.objectContaining({ txHashes: ['0xaaa', '0xbbb'], partial: true })
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'completed' })
     ));
     // Y el usuario tiene que enterarse de que la posicion existe.
     expect(await screen.findByText(/YA existe en tu wallet/i)).toBeTruthy();

@@ -1,5 +1,5 @@
 import { STRATEGY_FIELD_BY_KEY } from './strategy-fields';
-import styles from './CreateOrchestratorWizard.module.css';
+import styles from './StrategyFieldInput.module.css';
 
 /**
  * Label con tooltip. Vive acá (y no en el wizard) para que el modal de

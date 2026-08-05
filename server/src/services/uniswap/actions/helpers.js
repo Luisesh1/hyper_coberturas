@@ -1,5 +1,5 @@
 const { ethers } = require('ethers');
-const { ValidationError } = require('../../../errors/app-error');
+const { ValidationError, ExternalServiceError } = require('../../../errors/app-error');
 const {
   ERC20_ABI,
   V3_FACTORY_ABI,
@@ -796,15 +796,58 @@ async function loadV4PositionContext({ network, walletAddress, positionIdentifie
   };
 }
 
-async function loadWalletPoolSnapshot(userId, { network, version, walletAddress, positionIdentifier }) {
-  const result = await uniswapService.scanPoolsCreatedByWallet({
-    userId,
-    wallet: walletAddress,
-    network,
-    version,
-  });
+const DEFAULT_SNAPSHOT_ATTEMPTS = 3;
+const DEFAULT_SNAPSHOT_DELAY_MS = 4000;
 
-  return result.pools.find((pool) => String(pool.identifier) === String(positionIdentifier)) || null;
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Carga el snapshot de una posición concreta de la wallet.
+ *
+ * Reintenta porque el caller típico es el finalize de un mint: la posición
+ * acaba de existir y el escaneo puede no verla todavía. Devolver `null` en
+ * ese caso hacía que la creación de la cobertura recibiera un stub inválido
+ * y el LP quedara descubierto sin que nada lo registrara.
+ */
+async function loadWalletPoolSnapshot(userId, {
+  network,
+  version,
+  walletAddress,
+  positionIdentifier,
+  attempts = DEFAULT_SNAPSHOT_ATTEMPTS,
+  delayMs = DEFAULT_SNAPSHOT_DELAY_MS,
+  sleep = defaultSleep,
+  scanner = uniswapService,
+}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const result = await scanner.scanPoolsCreatedByWallet({
+        userId,
+        wallet: walletAddress,
+        network,
+        version,
+      });
+      const found = (result?.pools || []).find(
+        (pool) => String(pool.identifier) === String(positionIdentifier)
+      );
+      if (found) return found;
+    } catch (err) {
+      lastError = err;
+    }
+    if (attempt < attempts) await sleep(delayMs);
+  }
+
+  // `ExternalServiceError` fija `code = 'EXTERNAL_SERVICE_ERROR'`; lo
+  // sobrescribimos para que el caller pueda distinguir "la posición no
+  // aparece" de cualquier otro fallo del servicio.
+  const notFound = new ExternalServiceError(
+    `No se encontro la posicion ${positionIdentifier} en la wallet tras ${attempts} intentos`,
+    { network, version, walletAddress, positionIdentifier, lastError: lastError?.message || null }
+  );
+  notFound.code = 'SNAPSHOT_NOT_FOUND';
+  throw notFound;
 }
 
 module.exports = {

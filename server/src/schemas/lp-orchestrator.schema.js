@@ -72,6 +72,7 @@ const finalizeResultSchema = z.object({
 const attachLpSchema = z.object({
   finalizeResult: finalizeResultSchema,
   protectionConfig: protectionConfigSchema.optional(),
+  protectionFailureMode: z.enum(['strict', 'lenient']).optional(),
 });
 
 const recordTxFinalizedSchema = z.object({
@@ -116,8 +117,101 @@ const updateOrchestratorConfigSchema = z.object({
   message: 'Debe enviarse strategyConfig o protectionConfig',
 });
 
+// ── Wizard unificado ───────────────────────────────────────────────────────
+// El plan es lo que el wizard tiene en la mano antes de firmar: pool, rango,
+// capital y cobertura. `strategyConfig` no viaja completo porque el ancho de
+// rango se deriva del rango elegido (ver create-saga.buildOrchestratorPayload).
+
+const wizardProtectionSchema = z.union([
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    accountId: z.number().int().positive(),
+    leverage: z.number().int().positive(),
+    configuredNotionalUsd: z.number().positive().nullable().optional(),
+    bandMode: z.enum(['adaptive', 'fixed']).optional(),
+    baseRebalancePriceMovePct: z.number().positive().lt(100).optional(),
+    rebalanceIntervalSec: z.number().int().min(60).optional(),
+    targetHedgeRatio: z.number().positive().max(2).optional(),
+    minRebalanceNotionalUsd: z.number().positive().optional(),
+    maxSlippageBps: z.number().int().min(1).max(500).optional(),
+    twapMinNotionalUsd: z.number().positive().optional(),
+  }),
+]);
+
+// La estrategia que manda el wizard NO es strategyConfigPatchSchema: lleva
+// dos campos propios que aquel descartaría en silencio (zod strippea las
+// claves desconocidas), dejando el desacople del rango sin efecto y el
+// tickSpacing de v4 perdido.
+const wizardStrategySchema = strategyConfigPatchSchema.extend({
+  // El usuario desacopló el ancho de rebalanceo del rango inicial.
+  rangeWidthDecoupled: z.boolean().optional(),
+  // Solo v4: se persiste cuando el pool declara un tickSpacing distinto del
+  // que el backend derivaría del fee tier.
+  v4TickSpacing: z.number().int().positive().max(32767).optional(),
+});
+
+const lpPlanSchema = z.object({
+  mode: z.enum(['standalone', 'orchestrated']).default('orchestrated'),
+  name: z.string().min(1).max(255),
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().min(1),
+  token0Address: z.string().min(1),
+  token1Address: z.string().min(1),
+  token0Symbol: z.string().min(1),
+  token1Symbol: z.string().min(1),
+  feeTier: z.number().int().positive().optional(),
+  capitalUsd: z.number().positive(),
+  rangeLowerPrice: z.number().positive(),
+  rangeUpperPrice: z.number().positive(),
+  // Compatibilidad con clientes/PWA previos al fix de `currentPrice`: JSON
+  // serializa Number(undefined) como null. El plan puede reconstruir un
+  // centro seguro desde el rango; el snapshot on-chain será la fuente de
+  // verdad al crear la cobertura.
+  priceCurrent: z.number().positive().nullable().optional(),
+  strategy: wizardStrategySchema.optional(),
+  protection: wizardProtectionSchema,
+}).superRefine((plan, ctx) => {
+  if (plan.rangeUpperPrice <= plan.rangeLowerPrice) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['rangeUpperPrice'],
+      message: 'rangeUpperPrice debe ser mayor que rangeLowerPrice',
+    });
+  }
+}).transform((plan) => ({
+  ...plan,
+  priceCurrent: Number(plan.priceCurrent) > 0
+    ? Number(plan.priceCurrent)
+    : (Number(plan.rangeLowerPrice) + Number(plan.rangeUpperPrice)) / 2,
+}));
+
+// El pre-flight corre antes de que exista el rango definitivo, así que pide
+// menos que el plan completo: solo lo que condiciona la cobertura.
+const preflightProtectionSchema = z.object({
+  token0Symbol: z.string().min(1),
+  token1Symbol: z.string().min(1),
+  capitalUsd: z.number().positive(),
+  protection: wizardProtectionSchema,
+});
+
+const createIntentSchema = z.object({
+  plan: lpPlanSchema,
+});
+
+const commitIntentSchema = z.object({
+  operationKey: z.string().min(1),
+  finalizeResult: z.object({}).passthrough(),
+});
+
 module.exports = {
   strategyConfigSchema,
+  wizardStrategySchema,
+  lpPlanSchema,
+  preflightProtectionSchema,
+  createIntentSchema,
+  commitIntentSchema,
   strategyConfigPatchSchema,
   protectionConfigSchema,
   createOrchestratorSchema,

@@ -17,6 +17,7 @@ const uniswapService = require('./uniswap.service');
 const positionActionsService = require('./uniswap-position-actions.service');
 const uniswapProtectionService = require('./uniswap-protection.service');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
+const { loadWalletPoolSnapshot } = require('./uniswap/actions/helpers');
 const logger = require('./logger.service');
 const onChainManager = require('./onchain-manager.service');
 const { ValidationError } = require('../errors/app-error');
@@ -44,6 +45,7 @@ const accounting = require('./lp-orchestrator/accounting');
 const LpOrchestratorCostEstimator = require('./lp-orchestrator/cost-estimator');
 const verifier = require('./lp-orchestrator/verifier');
 const LpOrchestratorNotifier = require('./lp-orchestrator/notifier');
+const protectionRecovery = require('./lp-orchestrator/protection-recovery');
 
 const FAILED_COOLDOWN_MS = 60 * 60 * 1000; // 1 h tras drift detectado
 const POSITION_MISSING_CONFIRMATIONS = config.deltaNeutral.positionMissingConfirmations || 2;
@@ -57,6 +59,7 @@ class LpOrchestratorService {
     this.positionActionsService = deps.positionActionsService || positionActionsService;
     this.uniswapProtectionService = deps.uniswapProtectionService || uniswapProtectionService;
     this.protectedPoolRefreshService = deps.protectedPoolRefreshService || protectedPoolRefreshService;
+    this.loadWalletPoolSnapshot = deps.loadWalletPoolSnapshot || loadWalletPoolSnapshot;
     this.rangeEvaluator = deps.rangeEvaluator || rangeEvaluator;
     this.accounting = deps.accounting || accounting;
     this.costEstimator = deps.costEstimator || new LpOrchestratorCostEstimator({
@@ -64,6 +67,7 @@ class LpOrchestratorService {
       logger: deps.logger || logger,
     });
     this.verifier = deps.verifier || verifier;
+    this.protectionRecovery = deps.protectionRecovery || protectionRecovery;
     this.notifier = deps.notifier || new LpOrchestratorNotifier({ logger: deps.logger || logger });
     this.logger = deps.logger || logger;
     // Inyectable para tests: si el caller no pasa `db`, usamos el real.
@@ -155,6 +159,7 @@ class LpOrchestratorService {
       lastEvaluation: null,
       lastEvaluationAt: null,
       accounting: { ...this.accounting.DEFAULT_ACCOUNTING },
+      creationOperationId: input.creationOperationId ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -168,7 +173,38 @@ class LpOrchestratorService {
    * activo, crea la protección si está configurada y asienta el primer
    * snapshot de contabilidad.
    */
-  async attachLp({ userId, orchestratorId, finalizeResult, protectionConfig }) {
+  /**
+   * @param {'strict'|'lenient'} [params.protectionFailureMode] Default `strict`:
+   *   si la cobertura no se puede crear, el caller debe compensar y abortar —
+   *   un orquestador que se cree "protegido" sin hedge opera descubierto.
+   *   `lenient` registra el fallo de la protección y sigue: es el
+   *   comportamiento que necesita `adoptLp`, donde el LP ya existía antes y
+   *   dejarlo sin vincular sería peor que dejarlo sin cobertura.
+   */
+  /**
+   * Snapshot fiable de la posición para crear la cobertura. `finalizeResult`
+   * lo trae casi siempre, pero cuando el escaneo post-mint llegó tarde viene
+   * vacío. Antes se fabricaba un stub `{identifier, network, version}` que
+   * `normalizePoolSnapshot` rechazaba con un mensaje sobre la versión — el
+   * LP acababa adjunto y descubierto. Ahora se recarga o se falla claro.
+   */
+  async _loadProtectionSnapshot(orch, positionIdentifier) {
+    return this.loadWalletPoolSnapshot(orch.userId, {
+      network: orch.network,
+      version: orch.version,
+      walletAddress: orch.walletAddress,
+      positionIdentifier: String(positionIdentifier),
+    });
+  }
+
+  async attachLp({
+    userId,
+    orchestratorId,
+    finalizeResult,
+    protectionConfig,
+    protectionFailureMode = 'strict',
+    creationOperationId = null,
+  }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
       throw new ValidationError('Este orquestador ya tiene un LP activo. Mátalo antes de adjuntar otro.');
@@ -185,11 +221,8 @@ class LpOrchestratorService {
     let protectedPoolId = null;
     if (protectionConfig && protectionConfig.enabled !== false) {
       try {
-        const pool = refreshedSnapshot || {
-          identifier: newPositionIdentifier,
-          network: orch.network,
-          version: orch.version,
-        };
+        const pool = refreshedSnapshot
+          || await this._loadProtectionSnapshot(orch, newPositionIdentifier);
         const protectionResult = await this.uniswapProtectionService.createProtectedPool({
           userId,
           pool,
@@ -205,14 +238,30 @@ class LpOrchestratorService {
           minRebalanceNotionalUsd: protectionConfig.minRebalanceNotionalUsd,
           maxSlippageBps: protectionConfig.maxSlippageBps,
           twapMinNotionalUsd: protectionConfig.twapMinNotionalUsd,
+          creationOperationId,
         });
         protectedPoolId = protectionResult?.id || protectionResult?.protectedPoolId || null;
       } catch (err) {
         this.logger.warn('lp_orchestrator_protection_creation_failed', {
           orchestratorId,
+          protectionFailureMode,
+          code: err.code || null,
           error: err.message,
         });
-        // No abortamos: el LP quedó creado. Solo registramos el fallo.
+        if (protectionFailureMode === 'strict') {
+          // La saga de creación compensa arriba: cierra el hedge si llegó a
+          // abrirse y borra el orquestador. Seguir aquí dejaría un
+          // orquestador en `lp_active` con `activeProtectedPoolId = null`,
+          // es decir operando descubierto mientras la UI lo pinta protegido.
+          const failure = new Error(`No se pudo crear la protección: ${err.message}`);
+          failure.code = err.code === 'SNAPSHOT_NOT_FOUND'
+            ? 'PROTECTION_SNAPSHOT_UNAVAILABLE'
+            : 'PROTECTION_CREATION_FAILED';
+          failure.cause = err;
+          throw failure;
+        }
+        // `lenient`: el LP quedó creado. El loop lo reintentará (ver
+        // protection-recovery) y la UI lo marcará como descubierto.
       }
     }
 
@@ -228,11 +277,17 @@ class LpOrchestratorService {
         activeProtectedPoolId: protectedPoolId,
         phase: 'lp_active',
       }, client);
-      // Reset del baseline del hedge y del tracking de time-in-range:
-      // el próximo tick los tomará como inicio (sin computar delta) para
-      // evitar doble conteo del estado del nuevo hedge / nuevo LP.
+      // Reset del baseline del hedge, del tracking de time-in-range y del
+      // reintento de cobertura pendiente: el próximo tick los toma como
+      // inicio (sin computar delta) para evitar doble conteo del estado
+      // del nuevo hedge / nuevo LP. `protectionRetry` en null es lo que
+      // evita que un LP nuevo herede el backoff agotado del anterior — sin
+      // esto, matar y re-adjuntar un LP tras 8 fallos deja el nuevo LP
+      // igual de bloqueado que el viejo aunque ya no tenga motivo.
       await this.repo.updateStrategyState(userId, orchestratorId, {
-        strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
+        strategyState: {
+          ...orch.strategyState, hedgeBaseline: null, timeTracking: null, protectionRetry: null,
+        },
       }, client);
       await this.repo.appendActionLog({
         orchestratorId,
@@ -1239,18 +1294,217 @@ class LpOrchestratorService {
       refreshedSnapshot: null,
     };
 
+    // `lenient`: el LP ya existía on-chain antes de esta llamada (adopción
+    // manual). Si la cobertura falla, dejar el LP sin vincular sería peor
+    // que dejarlo vinculado y descubierto — el usuario está aceptando la
+    // exposición a sabiendas al adoptarlo.
     return this.attachLp({
       userId,
       orchestratorId,
       finalizeResult: syntheticFinalize,
       protectionConfig: protectionConfig || orch.protectionConfig || { enabled: false },
+      protectionFailureMode: 'lenient',
     });
+  }
+
+  /**
+   * Reintenta crear la cobertura de un LP que quedó descubierto. Devuelve
+   * `{ recovered, skipped }`. Nunca lanza por fallos de negocio (crear la
+   * protección puede fallar; se registra y se agenda el próximo intento).
+   * Un fallo de infraestructura al persistir sí se propaga — el hook en
+   * `_evaluateOne` lo captura y lo registra.
+   */
+  async _recoverMissingProtection(orch) {
+    const now = Date.now();
+    if (!this.protectionRecovery.shouldAttemptNow(orch, now)) {
+      return { recovered: false, skipped: 'backoff' };
+    }
+
+    const previous = this.protectionRecovery.readRetryState(orch);
+    let protectedPoolId = null;
+    let error = null;
+
+    try {
+      const protection = orch.protectionConfig || {};
+      // Si un intento anterior llegó a crear la protección (incluso abrió
+      // el short real en Hyperliquid) pero la transacción que la vinculaba
+      // falló después, `createProtectedPool` la rechazaría con "ya tiene
+      // una proteccion activa" — un falso fallo sobre una cobertura que sí
+      // existe. Buscarla primero por identidad y reutilizarla evita crear
+      // una segunda y evita esa alerta falsa.
+      //
+      // Pero solo cuenta si es LA MISMA cobertura que se pidió: modo
+      // `delta_neutral` y la misma cuenta de Hyperliquid. Una protección
+      // `static`/`dynamic` (o en otra cuenta) puede coincidir en identidad
+      // de posición porque el usuario la creó a mano para otro fin —
+      // vincularla dejaría el orquestador creyéndose cubierto por un motor
+      // que no lo está operando: la misma clase de fallo silencioso que
+      // este plan existe para eliminar, solo que más difícil de notar. Si
+      // no coincide, se deja caer a `createProtectedPool`, que fallará
+      // ruidosamente con la alerta de siempre — un fallo visible es mejor
+      // que una falsa sensación de cobertura.
+      const existing = await this.protectedPoolRepo.findReusableByIdentity(orch.userId, {
+        network: orch.network,
+        version: orch.version,
+        walletAddress: orch.walletAddress,
+        positionIdentifier: orch.activePositionIdentifier,
+      });
+      const reusable = existing?.status === 'active'
+        && existing.protectionMode === 'delta_neutral'
+        && Number(existing.accountId) === Number(protection.accountId);
+      if (reusable) {
+        protectedPoolId = existing.id;
+      } else {
+        const pool = await this._loadProtectionSnapshot(orch, orch.activePositionIdentifier);
+        const result = await this.uniswapProtectionService.createProtectedPool({
+          userId: orch.userId,
+          pool,
+          accountId: protection.accountId,
+          leverage: protection.leverage,
+          configuredNotionalUsd: protection.configuredNotionalUsd,
+          stopLossDifferencePct: protection.stopLossDifferencePct,
+          protectionMode: 'delta_neutral',
+          bandMode: protection.bandMode,
+          baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct,
+          rebalanceIntervalSec: protection.rebalanceIntervalSec,
+          targetHedgeRatio: protection.targetHedgeRatio,
+          minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd,
+          maxSlippageBps: protection.maxSlippageBps,
+          twapMinNotionalUsd: protection.twapMinNotionalUsd,
+        });
+        protectedPoolId = result?.id || result?.protectedPoolId || null;
+      }
+    } catch (err) {
+      error = err.message;
+    }
+
+    const retryState = this.protectionRecovery.nextRetryState(previous, {
+      ok: Boolean(protectedPoolId),
+      error,
+      now,
+    });
+
+    try {
+      await this._withTransaction(async (client) => {
+        if (protectedPoolId) {
+          await this.repo.updateActiveLp(orch.userId, orch.id, {
+            activePositionIdentifier: orch.activePositionIdentifier,
+            activePoolAddress: orch.activePoolAddress,
+            activeProtectedPoolId: protectedPoolId,
+          }, client);
+        }
+        await this.repo.updateStrategyState(orch.userId, orch.id, {
+          strategyState: { ...orch.strategyState, protectionRetry: retryState },
+        }, client);
+        await this.repo.appendActionLog({
+          orchestratorId: orch.id,
+          kind: 'recovery',
+          reason: protectedPoolId ? 'protection_recreated' : 'protection_recreate_failed',
+          positionIdentifier: orch.activePositionIdentifier,
+        }, client);
+      });
+    } catch (txErr) {
+      // La protección (posiblemente con un hedge real ya abierto) puede
+      // haberse creado igual: dejamos su id colgado del error para que el
+      // log del hook la haga trazable. El orquestador se queda sin
+      // `activeProtectedPoolId` hasta el próximo intento, que la
+      // encontrará vía `findReusableByIdentity` y la vinculará sin
+      // recrearla.
+      txErr.protectedPoolId = protectedPoolId;
+      throw txErr;
+    }
+
+    // Reflejar en memoria lo que se acaba de persistir: si no se actualiza
+    // aquí, el resto de este mismo tick de `_evaluateOne` sigue leyendo el
+    // `strategyState` viejo y su propio write (camino normal, más abajo)
+    // sobrescribe `strategy_state_json` entero — borrando el
+    // `protectionRetry` que acabamos de guardar. Ver Task 5 fix round 1.
+    orch.strategyState = { ...orch.strategyState, protectionRetry: retryState };
+
+    if (protectedPoolId) {
+      this.logger.info('lp_orchestrator_protection_recovered', {
+        orchestratorId: orch.id,
+        protectedPoolId,
+        attempts: (previous?.attempts || 0) + 1,
+      });
+      orch.activeProtectedPoolId = protectedPoolId;
+      return { recovered: true };
+    }
+
+    this.logger.warn('lp_orchestrator_protection_recovery_failed', {
+      orchestratorId: orch.id,
+      attempts: retryState.attempts,
+      exhausted: retryState.exhausted,
+      error,
+    });
+    try {
+      await this.notifier.protectionMissing(orch, {
+        attempts: retryState.attempts,
+        lastError: error,
+        exhausted: retryState.exhausted,
+      });
+    } catch (err) {
+      this.logger.warn('lp_orchestrator_notify_failed', { error: err.message });
+    }
+    return { recovered: false };
   }
 
   async _evaluateOne(orch) {
     if (orch.status !== 'active') return { skipped: 'not_active' };
     if (orch.phase === 'idle' || !orch.activePositionIdentifier) {
       return { skipped: 'no_active_lp' };
+    }
+
+    // Fail closed: un id vinculado no implica que la cobertura siga activa.
+    // Si la protección desapareció o fue desactivada, no permitimos que el
+    // orquestador continúe tomando decisiones de rango como si estuviera
+    // cubierto. El supervisor de integridad registra además la exposición HL.
+    const protectionExpected = orch.protectionConfig
+      && orch.protectionConfig.enabled !== false;
+    if (protectionExpected && orch.activeProtectedPoolId != null) {
+      const linkedProtection = await this.protectedPoolRepo.getById(
+        orch.userId,
+        orch.activeProtectedPoolId
+      ).catch((err) => {
+        this.logger.warn('lp_orchestrator_linked_protection_load_failed', {
+          orchestratorId: orch.id,
+          protectedPoolId: orch.activeProtectedPoolId,
+          error: err.message,
+        });
+        return null;
+      });
+      const protectionHealthy = linkedProtection?.status === 'active'
+        && linkedProtection?.protectionMode === 'delta_neutral';
+      if (!protectionHealthy) {
+        const reason = linkedProtection
+          ? `Protección #${linkedProtection.id} en estado ${linkedProtection.status}; requiere reconciliación.`
+          : `No se pudo confirmar la protección vinculada #${orch.activeProtectedPoolId}.`;
+        await this.repo.updatePhase(orch.userId, orch.id, {
+          phase: 'protection_reconcile_required',
+          lastError: reason,
+        });
+        this.logger.error('lp_orchestrator_protection_integrity_blocked', {
+          orchestratorId: orch.id,
+          protectedPoolId: orch.activeProtectedPoolId,
+          protectionStatus: linkedProtection?.status || 'missing',
+        });
+        return { skipped: 'protection_reconcile_required', reason };
+      }
+    }
+
+    // Antes de evaluar el rango: si el LP pidió cobertura y no la tiene,
+    // está corriendo descubierto. Recuperarla es más urgente que decidir
+    // si conviene rebalancear.
+    if (this.protectionRecovery.needsProtectionRecovery(orch)) {
+      try {
+        await this._recoverMissingProtection(orch);
+      } catch (err) {
+        this.logger.warn('lp_orchestrator_protection_recovery_unhandled', {
+          orchestratorId: orch.id,
+          protectedPoolId: err.protectedPoolId ?? null,
+          error: err.message,
+        });
+      }
     }
 
     const hasLiquidity = (p) => {

@@ -80,6 +80,34 @@ export function getOrchestratorIssue(orchestrator, now = Date.now()) {
     };
   }
 
+  const wantsProtection = orchestrator.protectionConfig
+    && orchestrator.protectionConfig.enabled !== false;
+  const isUnprotected = Boolean(orchestrator.activePositionIdentifier)
+    && orchestrator.activeProtectedPoolId == null
+    && wantsProtection;
+
+  if (isUnprotected) {
+    const retry = orchestrator.strategyState?.protectionRetry || null;
+    const exhausted = Boolean(retry?.exhausted);
+    return {
+      kind: 'unprotected',
+      tone: 'urgent',
+      icon: '!',
+      chipLabel: 'Sin cobertura',
+      title: 'LP operando sin cobertura delta-neutral',
+      summary: exhausted
+        ? 'La proteccion no se pudo crear y ya no se reintenta. El LP esta expuesto al movimiento del precio.'
+        : 'La proteccion configurada no esta vinculada. El LP esta sin cobertura mientras se reintenta.',
+      details: [
+        ...commonDetails,
+        { label: 'Posicion', value: orchestrator.activePositionIdentifier },
+        retry ? { label: 'Intentos de cobertura', value: String(retry.attempts) } : null,
+        retry?.lastError ? { label: 'Detalle tecnico', value: retry.lastError } : null,
+      ].filter(Boolean),
+      resolveLabel: 'Reintentar cobertura ahora',
+    };
+  }
+
   if (orchestrator.nextEligibleAttemptAt && Number(orchestrator.nextEligibleAttemptAt) > now) {
     return {
       kind: 'cooldown',

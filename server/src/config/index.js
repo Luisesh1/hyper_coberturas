@@ -122,6 +122,7 @@ const config = {
     uniswapOperationPollMs: parseInt(process.env.UNISWAP_OPERATION_POLL_INTERVAL_MS, 10) || 3_000,
     deltaNeutralLoopMs: parseInt(process.env.DELTA_NEUTRAL_LOOP_INTERVAL_MS, 10) || 2_000,
     deltaNeutralEvalMs: parseInt(process.env.DELTA_NEUTRAL_EVAL_INTERVAL_MS, 10) || 30_000,
+    deltaNeutralIntegrityMs: parseInt(process.env.DELTA_NEUTRAL_INTEGRITY_INTERVAL_MS, 10) || 30_000,
     lpOrchestratorEvalMs: parseInt(process.env.LP_ORCHESTRATOR_EVAL_INTERVAL_MS, 10) || 600_000,
     telegramPollMs: parseInt(process.env.TELEGRAM_POLL_INTERVAL_MS, 10) || 3_000,
     telegramConfigRefreshMs: parseInt(process.env.TELEGRAM_CONFIG_REFRESH_INTERVAL_MS, 10) || 60_000,
