@@ -19,7 +19,12 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../../pages/UniswapPools/components/smart-create/useSmartCreateFlow', () => ({
-  default: () => smartCreateFlow.current,
+  default: (args) => {
+    // Se guardan los args para poder disparar `onFinalized`, que es como el
+    // flujo base avisa de que la posición ya está on-chain.
+    smartCreateFlow.args = args;
+    return smartCreateFlow.current;
+  },
 }));
 
 import useUnifiedLpFlow from './useUnifiedLpFlow';
@@ -190,5 +195,70 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     expect(plan.priceCurrent).toBe(2200);
     expect(plan.rangeLowerPrice).toBe(2000);
     expect(plan.rangeUpperPrice).toBe(2400);
+  });
+});
+
+// El orquestador que se quedó sin LP abre el wizard en standalone y luego
+// adjunta la posición con attach-lp. Para eso necesita el finalize completo:
+// devolver sólo `{ status: 'completed' }` dejaba el LP on-chain y al caller
+// sin forma de identificar qué posición vincular.
+describe('useUnifiedLpFlow — standalone entrega el finalize al caller', () => {
+  const FINALIZE = {
+    positionChanges: { newPositionIdentifier: '98765' },
+    refreshedSnapshot: { some: 'snapshot' },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    smartCreateFlow.current = makeFlow();
+    smartCreateFlow.args = null;
+  });
+
+  function renderStandalone(onCompleted) {
+    return renderHook(() => useUnifiedLpFlow({
+      mode: 'standalone',
+      wallet: { address: '0x1111111111111111111111111111111111111111' },
+      defaults: { network: 'arbitrum', version: 'v4' },
+      onCompleted,
+    }));
+  }
+
+  it('propaga finalizeResult y txHashes', async () => {
+    const onCompleted = vi.fn();
+    renderStandalone(onCompleted);
+
+    await act(async () => {
+      await smartCreateFlow.args.onFinalized({ finalizeResult: FINALIZE, txHashes: ['0xaaa'] });
+    });
+
+    expect(onCompleted).toHaveBeenCalledTimes(1);
+    const payload = onCompleted.mock.calls[0][0];
+    expect(payload.status).toBe('completed');
+    expect(payload.finalizeResult.positionChanges.newPositionIdentifier).toBe('98765');
+    expect(payload.txHashes).toEqual(['0xaaa']);
+  });
+
+  it('acepta el finalize plano, sin envolver', async () => {
+    const onCompleted = vi.fn();
+    renderStandalone(onCompleted);
+
+    await act(async () => {
+      await smartCreateFlow.args.onFinalized({ ...FINALIZE, txHashes: ['0xbbb'] });
+    });
+
+    const payload = onCompleted.mock.calls[0][0];
+    expect(payload.finalizeResult.positionChanges.newPositionIdentifier).toBe('98765');
+    expect(payload.txHashes).toEqual(['0xbbb']);
+  });
+
+  it('no llama a la saga de creación: el orquestador ya existe', async () => {
+    renderStandalone(vi.fn());
+
+    await act(async () => {
+      await smartCreateFlow.args.onFinalized({ finalizeResult: FINALIZE, txHashes: [] });
+    });
+
+    expect(lpOrchestratorApi.createIntent).not.toHaveBeenCalled();
+    expect(lpOrchestratorApi.commitIntent).not.toHaveBeenCalled();
   });
 });

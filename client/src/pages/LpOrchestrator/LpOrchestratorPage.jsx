@@ -30,6 +30,9 @@ export default function LpOrchestratorPage() {
   const [accounts, setAccounts] = useState([]);
   const [meta, setMeta] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
+  // Orquestador que ya existe pero se quedo sin LP: el wizard crea la posicion
+  // y luego se le adjunta con attach-lp.
+  const [creatingLpFor, setCreatingLpFor] = useState(null); // orchestrator
   const [showInactive, setShowInactive] = useState(false);
   const [activeAction, setActiveAction] = useState(null); // { action, orchestrator, pool }
   const [addingLiquidityTo, setAddingLiquidityTo] = useState(null); // { orchestrator, pool }
@@ -327,6 +330,43 @@ export default function LpOrchestratorPage() {
     setCreatingLpFor(orchestrator);
   };
 
+  /**
+   * El wizard standalone ya dejo la posicion on-chain; aqui se la adjunta al
+   * orquestador que la pidio.
+   *
+   * Si algo falla, el LP YA existe: el mensaje tiene que decirlo y apuntar a
+   * "Adoptar LP existente", porque descartarlo en silencio es exactamente lo
+   * que dejaba posiciones huerfanas sin ninguna pista.
+   */
+  const handleNewLpCompleted = useCallback(async (result) => {
+    const orchestrator = creatingLpFor;
+    if (!orchestrator) {
+      setError(
+        'La posición se creó on-chain pero se perdió la referencia al orquestador '
+        + '(¿se cerró el modal?). Vinculala con "Adoptar LP existente".'
+      );
+      refresh().catch(() => {});
+      return;
+    }
+
+    const innerFinalize = result?.finalizeResult || {};
+    const txHashes = result?.txHashes || innerFinalize?.txHashes || [];
+    try {
+      await lpOrchestratorApi.attachLp(orchestrator.id, {
+        finalizeResult: { ...innerFinalize, txHashes },
+        protectionConfig: orchestrator.protectionConfig || { enabled: false },
+      });
+    } catch (err) {
+      setError(
+        `${err.message || 'No se pudo adjuntar el LP al orquestador.'} `
+        + 'El LP YA está en tu wallet — usa "Adoptar LP existente" en el orquestador para vincularlo.'
+      );
+    } finally {
+      setCreatingLpFor(null);
+      refresh().catch(() => {});
+    }
+  }, [creatingLpFor, refresh]);
+
   // Adopta un LP huérfano: escanea la wallet, busca posiciones del mismo
   // par/red/fee, y vincula la primera (o le pide al usuario que elija si
   // hay varias). Cubre el caso de un attach-lp que falló por race condition.
@@ -471,6 +511,26 @@ export default function LpOrchestratorPage() {
       walletAddress: walletConn.address || orch.walletAddress,
     };
   }, [activeAction, walletConn.address]);
+
+  const newLpDefaults = useMemo(() => {
+    if (!creatingLpFor) return null;
+    return {
+      network: creatingLpFor.network,
+      version: creatingLpFor.version,
+      walletAddress: walletConn.address || creatingLpFor.walletAddress,
+      // Se precarga par/fee/capital del orquestador para no volver a pedir lo
+      // que ya declaro cuando se creo.
+      token0Address: creatingLpFor.token0Address,
+      token1Address: creatingLpFor.token1Address,
+      fee: creatingLpFor.feeTier,
+      totalUsdTarget: creatingLpFor.initialTotalUsd,
+      // En v4 solo se reenvia el tickSpacing si el orquestador lo declaro: por
+      // defecto el backend lo deriva del fee y computa el poolId.
+      ...(creatingLpFor.version === 'v4' && creatingLpFor.strategyConfig?.v4TickSpacing != null
+        ? { tickSpacing: Number(creatingLpFor.strategyConfig.v4TickSpacing) }
+        : {}),
+    };
+  }, [creatingLpFor, walletConn.address]);
 
   return (
     <div className={styles.page}>
@@ -647,6 +707,21 @@ export default function LpOrchestratorPage() {
           }}
           onCloseLp={handleCloseSurvivingLp}
           onKeepWithoutProtection={handleKeepLpWithoutProtection}
+        />
+      )}
+
+      {/* Orquestador existente que se quedo sin LP. Va en modo standalone: la
+          cobertura ya la definio el orquestador cuando se creo, y attach-lp la
+          aplica a partir de su propio protectionConfig. */}
+      {creatingLpFor && newLpDefaults && (
+        <UnifiedLpWizard
+          mode="standalone"
+          wallet={walletState}
+          defaults={newLpDefaults}
+          meta={meta}
+          accounts={accounts}
+          onClose={() => setCreatingLpFor(null)}
+          onCompleted={handleNewLpCompleted}
         />
       )}
 

@@ -72,7 +72,11 @@ export default function useUnifiedLpFlow({
 
     if (!isOrchestrated) {
       setOutcome({ status: 'completed', orchestrator: null, survivingLp: null });
-      onCompleted?.({ status: 'completed' });
+      // Se entrega el finalize completo: quien abre el wizard en standalone
+      // puede necesitar vincular la posicion recien creada a algo (el
+      // orquestador sin LP la adjunta con attach-lp). Sin esto el LP quedaba
+      // on-chain y el caller sin forma de identificarlo.
+      onCompleted?.({ status: 'completed', finalizeResult, txHashes });
       return;
     }
 
