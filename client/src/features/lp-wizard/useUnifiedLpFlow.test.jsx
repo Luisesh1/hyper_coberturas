@@ -142,6 +142,29 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     expect(payload.token1Symbol).toBe('USDC');
   });
 
+  it('resuelve ETH nativo de v4, que es address(0) y no está en el catálogo', async () => {
+    // En v4 el ETH nativo es una currency válida con address(0); el catálogo
+    // local solo tiene WETH en su address real, así que este caso SOLO se
+    // resuelve por `suggestions`. Es la razón de que sea la fuente preferente.
+    const NATIVE = '0x0000000000000000000000000000000000000000';
+    const { result } = renderFlow({
+      token0Address: NATIVE,
+      suggestions: {
+        token0: { symbol: 'ETH', address: NATIVE, decimals: 18, isNative: true },
+        token1: { symbol: 'USDC', address: USDC, decimals: 6 },
+        pool: { priceCurrent: 2200 },
+      },
+    });
+
+    await act(async () => {
+      await result.current.runPreflight();
+    });
+
+    const payload = lpOrchestratorApi.preflightProtection.mock.calls[0][0];
+    expect(payload.token0Symbol).toBe('ETH');
+    expect(payload.token1Symbol).toBe('USDC');
+  });
+
   it('compara addresses sin distinguir mayúsculas', async () => {
     const { result } = renderFlow({ token0Address: WETH.toLowerCase() });
 
