@@ -159,6 +159,7 @@ class LpOrchestratorService {
       lastEvaluation: null,
       lastEvaluationAt: null,
       accounting: { ...this.accounting.DEFAULT_ACCOUNTING },
+      creationOperationId: input.creationOperationId ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -196,7 +197,14 @@ class LpOrchestratorService {
     });
   }
 
-  async attachLp({ userId, orchestratorId, finalizeResult, protectionConfig, protectionFailureMode = 'strict' }) {
+  async attachLp({
+    userId,
+    orchestratorId,
+    finalizeResult,
+    protectionConfig,
+    protectionFailureMode = 'strict',
+    creationOperationId = null,
+  }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
       throw new ValidationError('Este orquestador ya tiene un LP activo. Mátalo antes de adjuntar otro.');
@@ -230,6 +238,7 @@ class LpOrchestratorService {
           minRebalanceNotionalUsd: protectionConfig.minRebalanceNotionalUsd,
           maxSlippageBps: protectionConfig.maxSlippageBps,
           twapMinNotionalUsd: protectionConfig.twapMinNotionalUsd,
+          creationOperationId,
         });
         protectedPoolId = protectionResult?.id || protectionResult?.protectedPoolId || null;
       } catch (err) {
@@ -1444,6 +1453,43 @@ class LpOrchestratorService {
     if (orch.status !== 'active') return { skipped: 'not_active' };
     if (orch.phase === 'idle' || !orch.activePositionIdentifier) {
       return { skipped: 'no_active_lp' };
+    }
+
+    // Fail closed: un id vinculado no implica que la cobertura siga activa.
+    // Si la protección desapareció o fue desactivada, no permitimos que el
+    // orquestador continúe tomando decisiones de rango como si estuviera
+    // cubierto. El supervisor de integridad registra además la exposición HL.
+    const protectionExpected = orch.protectionConfig
+      && orch.protectionConfig.enabled !== false;
+    if (protectionExpected && orch.activeProtectedPoolId != null) {
+      const linkedProtection = await this.protectedPoolRepo.getById(
+        orch.userId,
+        orch.activeProtectedPoolId
+      ).catch((err) => {
+        this.logger.warn('lp_orchestrator_linked_protection_load_failed', {
+          orchestratorId: orch.id,
+          protectedPoolId: orch.activeProtectedPoolId,
+          error: err.message,
+        });
+        return null;
+      });
+      const protectionHealthy = linkedProtection?.status === 'active'
+        && linkedProtection?.protectionMode === 'delta_neutral';
+      if (!protectionHealthy) {
+        const reason = linkedProtection
+          ? `Protección #${linkedProtection.id} en estado ${linkedProtection.status}; requiere reconciliación.`
+          : `No se pudo confirmar la protección vinculada #${orch.activeProtectedPoolId}.`;
+        await this.repo.updatePhase(orch.userId, orch.id, {
+          phase: 'protection_reconcile_required',
+          lastError: reason,
+        });
+        this.logger.error('lp_orchestrator_protection_integrity_blocked', {
+          orchestratorId: orch.id,
+          protectedPoolId: orch.activeProtectedPoolId,
+          protectionStatus: linkedProtection?.status || 'missing',
+        });
+        return { skipped: 'protection_reconcile_required', reason };
+      }
     }
 
     // Antes de evaluar el rango: si el LP pidió cobertura y no la tiene,

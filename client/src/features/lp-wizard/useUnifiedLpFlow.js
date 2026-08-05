@@ -157,7 +157,12 @@ export default function useUnifiedLpFlow({
     () => deriveRangeWidthPct({
       rangeLowerPrice: flow.activeRange?.rangeLowerPrice,
       rangeUpperPrice: flow.activeRange?.rangeUpperPrice,
-      priceCurrent: flow.suggestions?.pool?.priceCurrent ?? flow.suggestions?.priceCurrent,
+      // `smart-create/suggest` devuelve el precio en `currentPrice`. Se
+      // mantienen los nombres anteriores como fallback para no romper
+      // respuestas/cache de versiones previas del endpoint.
+      priceCurrent: flow.suggestions?.currentPrice
+        ?? flow.suggestions?.pool?.priceCurrent
+        ?? flow.suggestions?.priceCurrent,
     }),
     [flow.activeRange, flow.suggestions]
   );
@@ -195,7 +200,11 @@ export default function useUnifiedLpFlow({
       capitalUsd: Number(flow.totalUsdTarget),
       rangeLowerPrice: Number(flow.activeRange?.rangeLowerPrice),
       rangeUpperPrice: Number(flow.activeRange?.rangeUpperPrice),
-      priceCurrent: Number(flow.suggestions?.pool?.priceCurrent ?? flow.suggestions?.priceCurrent),
+      priceCurrent: Number(
+        flow.suggestions?.currentPrice
+        ?? flow.suggestions?.pool?.priceCurrent
+        ?? flow.suggestions?.priceCurrent
+      ),
       strategy: {
         edgeMarginPct: Number(strategy.edgeMarginPct),
         ...(effectiveRangeWidthPct != null ? { rangeWidthPct: effectiveRangeWidthPct } : {}),

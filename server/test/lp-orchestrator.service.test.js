@@ -193,6 +193,41 @@ test('decisión hold cuando el precio está en banda central', async () => {
   assert.equal(notifier.calls.length, 0);
 });
 
+test('_evaluateOne se bloquea si la protección vinculada está inactiva', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    protectionConfig: { enabled: true, accountId: 8 },
+    activeProtectedPoolId: 20,
+  });
+  let poolScans = 0;
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    protectedPoolRepository: {
+      getById: async () => ({
+        id: 20,
+        status: 'inactive',
+        protectionMode: 'delta_neutral',
+      }),
+    },
+    uniswapService: {
+      scanPoolsCreatedByWallet: async () => {
+        poolScans += 1;
+        return { pools: [basePool()] };
+      },
+    },
+    notifier: makeFakeNotifier(),
+    logger: { warn() {}, info() {}, error() {} },
+  });
+
+  const result = await service.evaluateOne(1, id);
+  const after = await repo.getById(1, id);
+
+  assert.equal(result.skipped, 'protection_reconcile_required');
+  assert.equal(after.phase, 'protection_reconcile_required');
+  assert.match(after.lastError, /inactiva|inactive/i);
+  assert.equal(poolScans, 0, 'no debe evaluar ni rebalancear el LP descubierto');
+});
+
 test('decisión urgent_adjust cuando el precio está fuera del rango y notifica', async () => {
   const repo = makeFakeRepo();
   const id = await bootstrapOrchestrator(repo);

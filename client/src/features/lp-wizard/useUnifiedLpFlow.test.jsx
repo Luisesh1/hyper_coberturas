@@ -55,6 +55,7 @@ function makeFlow(overrides = {}) {
     },
     activeRange: { rangeLowerPrice: 2000, rangeUpperPrice: 2400 },
     prepareData: null,
+    handleExecute: vi.fn(),
     step: 'range',
     ...overrides,
   };
@@ -174,5 +175,20 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
 
     const payload = lpOrchestratorApi.preflightProtection.mock.calls[0][0];
     expect(payload.token0Symbol).toBe('WETH');
+  });
+
+  it('manda currentPrice en el plan de intención', async () => {
+    lpOrchestratorApi.createIntent.mockResolvedValue({ operationKey: 'op-1' });
+    const { result } = renderFlow();
+
+    await act(async () => {
+      await result.current.handleSignAndCreate();
+    });
+
+    expect(lpOrchestratorApi.createIntent).toHaveBeenCalledTimes(1);
+    const plan = lpOrchestratorApi.createIntent.mock.calls[0][0];
+    expect(plan.priceCurrent).toBe(2200);
+    expect(plan.rangeLowerPrice).toBe(2000);
+    expect(plan.rangeUpperPrice).toBe(2400);
   });
 });

@@ -47,6 +47,26 @@ test('plan: acepta v3 y v4, y rechaza cualquier otra versión', () => {
   assert.throws(() => lpPlanSchema.parse({ ...BASE, version: 'v2' }));
 });
 
+test('plan: recupera priceCurrent cuando un cliente anterior lo manda null', () => {
+  const parsed = lpPlanSchema.parse({
+    ...BASE,
+    rangeLowerPrice: 1800,
+    rangeUpperPrice: 2000,
+    priceCurrent: null,
+  });
+
+  assert.equal(parsed.priceCurrent, 1900);
+});
+
+test('plan: rechaza un rango invertido aunque pueda calcular un centro', () => {
+  assert.throws(() => lpPlanSchema.parse({
+    ...BASE,
+    rangeLowerPrice: 2000,
+    rangeUpperPrice: 1800,
+    priceCurrent: null,
+  }));
+});
+
 test('attachLpSchema acepta protectionFailureMode explicito', () => {
   const { attachLpSchema } = require('../src/schemas/lp-orchestrator.schema');
   const parsed = attachLpSchema.parse({

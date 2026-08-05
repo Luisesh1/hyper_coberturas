@@ -45,6 +45,7 @@ function buildRecord() {
     leverage: 5,
     marginMode: 'isolated',
     poolSnapshot: { id: 'pool-1' },
+    creationOperationId: 31,
     createdAt: 1234567890,
   };
 }
@@ -67,6 +68,8 @@ test('create usa placeholders consistentes con la cantidad de parámetros', asyn
 
   assert.ok(capturedParams.length >= maxPlaceholder(capturedSql));
   assert.match(capturedSql, /'active'/);
+  assert.match(capturedSql, /ON CONFLICT \(creation_operation_id\)/);
+  assert.equal(capturedParams.at(-1), 31);
 });
 
 test('reactivate usa placeholders consistentes con la cantidad de parámetros', async () => {

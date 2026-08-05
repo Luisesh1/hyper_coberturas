@@ -165,10 +165,27 @@ const lpPlanSchema = z.object({
   capitalUsd: z.number().positive(),
   rangeLowerPrice: z.number().positive(),
   rangeUpperPrice: z.number().positive(),
-  priceCurrent: z.number().positive(),
+  // Compatibilidad con clientes/PWA previos al fix de `currentPrice`: JSON
+  // serializa Number(undefined) como null. El plan puede reconstruir un
+  // centro seguro desde el rango; el snapshot on-chain será la fuente de
+  // verdad al crear la cobertura.
+  priceCurrent: z.number().positive().nullable().optional(),
   strategy: wizardStrategySchema.optional(),
   protection: wizardProtectionSchema,
-});
+}).superRefine((plan, ctx) => {
+  if (plan.rangeUpperPrice <= plan.rangeLowerPrice) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['rangeUpperPrice'],
+      message: 'rangeUpperPrice debe ser mayor que rangeLowerPrice',
+    });
+  }
+}).transform((plan) => ({
+  ...plan,
+  priceCurrent: Number(plan.priceCurrent) > 0
+    ? Number(plan.priceCurrent)
+    : (Number(plan.rangeLowerPrice) + Number(plan.rangeUpperPrice)) / 2,
+}));
 
 // El pre-flight corre antes de que exista el rango definitivo, así que pide
 // menos que el plan completo: solo lo que condiciona la cobertura.

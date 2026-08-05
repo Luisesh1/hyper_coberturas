@@ -14,9 +14,15 @@ const balanceCacheService = require('./balance-cache.service');
 const { formatPrice, formatSize } = require('../utils/format');
 const logger = require('./logger.service');
 const leverageMutex = require('./leverage.mutex');
+const crypto = require('node:crypto');
 
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
 const MARKET_ORDER_SLIPPAGE = config.trading.marketOrderSlippage;
+
+function deriveCloid(seed, suffix = '') {
+  if (!seed) return null;
+  return `0x${crypto.createHash('sha256').update(`${seed}:${suffix}`).digest('hex').slice(0, 32)}`;
+}
 
 class TradingService {
   /**
@@ -43,7 +49,7 @@ class TradingService {
     return isLong ? diff : -diff;
   }
 
-  async openPosition({ asset, side, size, leverage, marginMode, limitPrice }) {
+  async openPosition({ asset, side, size, leverage, marginMode, limitPrice, cloid = null }) {
     const assetName = asset.toUpperCase();
     const isBuy = side === 'long';
     const lev = leverage || config.trading.defaultLeverage;
@@ -145,6 +151,7 @@ class TradingService {
         price: orderPrice,
         reduceOnly: false,
         tif: limitPrice ? 'Gtc' : 'Ioc',
+        cloid,
       });
 
       const fillPrice = result.avgPx || parseFloat(orderPrice);
@@ -170,7 +177,7 @@ class TradingService {
     });
   }
 
-  async closePosition({ asset, size }) {
+  async closePosition({ asset, size, cloid = null }) {
     const assetName = asset.toUpperCase();
 
     const state = await this.hl.getClearinghouseState();
@@ -212,6 +219,7 @@ class TradingService {
       price: closePrice,
       reduceOnly: true,
       tif: 'Ioc',
+      cloid,
     });
 
     // Si el IOC no rellenó (book delgado), reintentamos con slippage ampliado
@@ -230,6 +238,7 @@ class TradingService {
         price: aggressivePrice,
         reduceOnly: true,
         tif: 'Ioc',
+        cloid: deriveCloid(cloid, 'wider-slippage'),
       });
     }
 

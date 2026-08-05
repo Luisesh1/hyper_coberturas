@@ -339,6 +339,126 @@ test('intención: commit sobre una clave inexistente falla en vez de crear a cie
   );
 });
 
+test('intención: HTTP y worker no pueden ejecutar el mismo commit en paralelo', async () => {
+  let unblockAttach;
+  let attachStarted;
+  const attachGate = new Promise((resolve) => { unblockAttach = resolve; });
+  const enteredAttach = new Promise((resolve) => { attachStarted = resolve; });
+  const { saga, calls } = makeSaga({
+    attachLp: async () => {
+      attachStarted();
+      await attachGate;
+      return { id: 7, phase: 'lp_active', activeProtectedPoolId: 55 };
+    },
+  });
+  const operation = {
+    id: 31,
+    userId: 1,
+    operationKey: 'lease-key',
+    kind: 'orchestrated_lp_create',
+    status: 'awaiting_signature',
+    step: 'awaiting_signature',
+    plan: BASE_PLAN,
+    result: null,
+    claimToken: null,
+    claimOwner: null,
+    claimLeaseUntil: null,
+  };
+  const updates = [];
+  saga.operationRepo = {
+    async getByOperationKey() { return { ...operation }; },
+    async claimByOperationKey(_userId, _key, claim) {
+      const now = Date.now();
+      if (operation.claimLeaseUntil > now && operation.claimToken !== claim.claimToken) return null;
+      Object.assign(operation, {
+        claimToken: claim.claimToken,
+        claimOwner: claim.claimOwner,
+        claimLeaseUntil: now + claim.leaseMs,
+      });
+      return { ...operation };
+    },
+    async renewClaim() { return { ...operation }; },
+    async releaseClaim(_id, token) {
+      if (operation.claimToken === token) {
+        operation.claimToken = null;
+        operation.claimOwner = null;
+        operation.claimLeaseUntil = null;
+      }
+      return { ...operation };
+    },
+    async updateState(_id, patch) {
+      updates.push(patch);
+      Object.assign(operation, patch);
+      return { ...operation };
+    },
+  };
+
+  const first = saga.commitIntent({
+    userId: 1,
+    operationKey: operation.operationKey,
+    finalizeResult: FINALIZE,
+  });
+  await enteredAttach;
+
+  await assert.rejects(
+    () => saga.commitIntent({
+      userId: 1,
+      operationKey: operation.operationKey,
+      finalizeResult: FINALIZE,
+    }),
+    (err) => err.code === 'OPERATION_IN_PROGRESS' && err.statusCode === 409
+  );
+  unblockAttach();
+  const result = await first;
+
+  assert.equal(result.status, 'completed');
+  assert.equal(calls.created.length, 1);
+  assert.equal(calls.attached.length, 1);
+  const committing = updates.find((patch) => patch.status === 'committing');
+  assert.deepEqual(committing.result.finalizeResult, FINALIZE);
+});
+
+test('compensación: nunca desactiva una protección perteneciente a otra operación', async () => {
+  const { saga, calls } = makeSaga();
+  saga.protectedPoolRepository.findByCreationOperationId = async () => ({
+    id: 99,
+    status: 'active',
+    creationOperationId: 30,
+  });
+
+  const steps = await saga._compensate({
+    userId: 1,
+    plan: BASE_PLAN,
+    orchestrator: null,
+    operationId: 31,
+    positionIdentifier: '48213',
+  });
+
+  assert.equal(calls.deactivated.length, 0);
+  assert.match(steps.find((step) => step.id === 'hedge').detail, /ajena preservada/i);
+});
+
+test('compensación: preserva una protección que ya referencia un orquestador activo', async () => {
+  const { saga, calls } = makeSaga();
+  saga.protectedPoolRepository.findByCreationOperationId = async () => ({
+    id: 99,
+    status: 'active',
+    creationOperationId: 31,
+  });
+  saga.repo.findActiveByProtectedPoolId = async () => ({ id: 7 });
+
+  const steps = await saga._compensate({
+    userId: 1,
+    plan: BASE_PLAN,
+    orchestrator: null,
+    operationId: 31,
+    positionIdentifier: '48213',
+  });
+
+  assert.equal(calls.deactivated.length, 0);
+  assert.match(steps.find((step) => step.id === 'hedge').detail, /orquestador #7/i);
+});
+
 // ── identidad v4 y flags de UI ────────────────────────────────────────────
 
 test('payload v4: conserva el tickSpacing como parte de la identidad del pool', () => {

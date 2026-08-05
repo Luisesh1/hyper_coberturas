@@ -74,7 +74,7 @@ const IDENTITY_COLUMNS = `
   last_onchain_action, last_tx_hash, last_tx_at, replaced_by_position_identifier,
   in_range_checks, in_range_hits, time_in_range_ms, time_tracked_ms, time_in_range_pct,
   range_last_state_in_range, range_last_state_at, range_computed_at, range_frozen_at,
-  created_at, updated_at, deactivated_at
+  created_at, updated_at, deactivated_at, creation_operation_id
 `.replace(/\n/g, ' ').trim();
 
 function mapIdentityRow(row) {
@@ -94,6 +94,7 @@ function mapIdentityRow(row) {
     token1Address: row.token1_address || null,
     rangeLowerPrice: Number(row.range_lower_price),
     rangeUpperPrice: Number(row.range_upper_price),
+    creationOperationId: row.creation_operation_id != null ? Number(row.creation_operation_id) : null,
     priceCurrent: row.price_current != null ? Number(row.price_current) : null,
     inferredAsset: row.inferred_asset,
     hedgeSize: Number(row.hedge_size),
@@ -414,9 +415,11 @@ async function create(record, executor) {
        min_order_notional_usd, twap_slices, twap_duration_sec, last_onchain_action, last_tx_hash, last_tx_at,
        replaced_by_position_identifier, pool_snapshot_json, time_in_range_ms, time_tracked_ms,
        time_in_range_pct, range_last_state_in_range, range_last_state_at, range_computed_at, range_frozen_at,
-       created_at, updated_at
+       created_at, updated_at, creation_operation_id
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70)
+     ON CONFLICT (creation_operation_id) WHERE creation_operation_id IS NOT NULL
+     DO UPDATE SET updated_at = EXCLUDED.updated_at
      RETURNING id`,
     [
       record.userId,
@@ -488,6 +491,7 @@ async function create(record, executor) {
       record.rangeFrozenAt ?? null,
       record.createdAt,
       record.updatedAt ?? record.createdAt,
+      record.creationOperationId ?? null,
     ]
   );
 
@@ -952,6 +956,29 @@ async function findByPositionIdentifier(positionIdentifier, network, version, ex
   return rows.map(mapIdentityRow);
 }
 
+async function findByCreationOperationId(userId, creationOperationId, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT ${IDENTITY_COLUMNS}
+       FROM protected_uniswap_pools
+      WHERE user_id = $1 AND creation_operation_id = $2
+      LIMIT 1`,
+    [userId, creationOperationId]
+  );
+  return rows[0] ? mapIdentityRow(rows[0]) : null;
+}
+
+async function assignCreationOperation(userId, id, creationOperationId, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET creation_operation_id = $3,
+            updated_at = $4
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [userId, id, creationOperationId ?? null, Date.now()]
+  );
+  return rows[0]?.id || null;
+}
+
 async function clearCooldown(userId, id, executor) {
   const { rows } = await exec(executor).query(
     `UPDATE protected_uniswap_pools
@@ -970,6 +997,8 @@ module.exports = {
   clearCooldown,
   deactivate,
   findByPositionIdentifier,
+  findByCreationOperationId,
+  assignCreationOperation,
   findReusableByIdentity,
   getById,
   listActiveByUser,

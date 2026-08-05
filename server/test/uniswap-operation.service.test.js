@@ -150,3 +150,60 @@ test('processOne termina en done cuando el finalize backend completa', async () 
   assert.equal(repo.state.row.status, 'done');
   assert.equal(repo.state.row.result.positionChanges.newPositionIdentifier, '456');
 });
+
+test('processPending entrega el lease persistido a la saga y lo libera al terminar', async () => {
+  const claimed = {
+    id: 31,
+    userId: 1,
+    operationKey: 'op-31',
+    kind: 'orchestrated_lp_create',
+    status: 'committing',
+    claimToken: 'claim-31',
+    claimOwner: 'worker-test',
+    result: { finalizeResult: { positionIdentifier: '48213', txHashes: ['0xaaa'] } },
+  };
+  const seen = { claim: null, saga: null, released: null, transactions: 0 };
+  const repo = {
+    async claimPending(limit, claim, executor) {
+      seen.claim = { limit, claim, executor };
+      return [claimed];
+    },
+    async expireStaleIntents() { return 0; },
+    async renewClaim() { return claimed; },
+    async releaseClaim(id, token) {
+      seen.released = { id, token };
+      return claimed;
+    },
+    async getById() { return { ...claimed, status: 'done' }; },
+    async updateState() { return claimed; },
+  };
+  const transactionClient = { query() {} };
+  const service = new UniswapOperationService({
+    db: {
+      transaction: async (fn) => {
+        seen.transactions += 1;
+        return fn(transactionClient);
+      },
+    },
+    operationRepo: repo,
+    workerId: 'worker-test',
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  service.lpCreateSaga = {
+    async commitIntent(input) {
+      seen.saga = input;
+      return { status: 'completed' };
+    },
+  };
+
+  await service.processPending();
+
+  assert.equal(seen.transactions, 1);
+  assert.equal(seen.claim.limit, 1);
+  assert.equal(seen.claim.claim.claimOwner, 'worker-test');
+  assert.equal(seen.claim.executor, transactionClient);
+  assert.equal(seen.saga.claimToken, 'claim-31');
+  assert.equal(seen.saga.claimOwner, 'worker-test');
+  assert.deepEqual(seen.saga.finalizeResult, claimed.result.finalizeResult);
+  assert.deepEqual(seen.released, { id: 31, token: 'claim-31' });
+});

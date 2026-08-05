@@ -6,6 +6,7 @@ const logger = require('../services/logger.service');
 const protectedPoolRefreshService = require('../services/protected-pool-refresh.service');
 const protectedPoolDynamicService = require('../services/protected-pool-dynamic.service');
 const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
+const deltaNeutralIntegrityService = require('../services/delta-neutral-integrity.service');
 const lpOrchestratorMonitorService = require('../services/lp-orchestrator-monitor.service');
 const orchestratorMetricsService = require('../services/orchestrator-metrics.service');
 const uniswapOperationService = require('../services/uniswap-operation.service');
@@ -64,6 +65,9 @@ async function bootstrapInfra(httpServer) {
   if (bootstrapOk) runtimeStatus.markBootstrapped();
   protectedPoolRefreshService.start();
   protectedPoolDynamicService.start();
+  // El auditor fail-closed arranca antes que cualquier loop capaz de enviar
+  // órdenes. Su primer barrido etiqueta vínculos rotos sin tocar posiciones.
+  deltaNeutralIntegrityService.start();
   protectedPoolDeltaNeutralService.start();
   lpOrchestratorMonitorService.start();
   orchestratorMetricsService.start();
@@ -79,6 +83,7 @@ async function bootstrapInfra(httpServer) {
     async shutdown() {
       protectedPoolRefreshService.stop();
       protectedPoolDynamicService.stop();
+      deltaNeutralIntegrityService.stop();
       protectedPoolDeltaNeutralService.stop();
       lpOrchestratorMonitorService.stop();
       orchestratorMetricsService.stop();
