@@ -40,7 +40,7 @@ function buildV4ModifyTx(ctx, { actionCodes, params, label, kind, meta = {}, val
  * Construye una tx que llama a `execute` en el Universal Router para
  * encadenar acciones V4 con swaps universales.
  */
-function buildV4RouterTx(ctx, { actionCodes, params, label, kind, meta = {} }) {
+function buildV4RouterTx(ctx, { actionCodes, params, label, kind, meta = {}, value }) {
   if (!ctx.universalRouterAddress) {
     throw new ValidationError(`No hay Universal Router configurado para ${ctx.networkConfig.label}`);
   }
@@ -55,6 +55,9 @@ function buildV4RouterTx(ctx, { actionCodes, params, label, kind, meta = {} }) {
       chainId: ctx.networkConfig.chainId,
       kind,
       label,
+      // Un swap que ENTREGA ETH nativo lo manda como value: address(0) no se
+      // puede aprobar ni transferir con transferFrom.
+      ...(value != null && BigInt(value) > 0n ? { value: ethers.toQuantity(BigInt(value)) } : {}),
       meta,
     }
   );

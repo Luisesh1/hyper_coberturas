@@ -94,21 +94,38 @@ function applyMintSlippageCeiling(amountRaw, slippageBps) {
 }
 
 /**
- * Acciones, params y `value` del mint v4, compartidos por las dos ramas de
- * `prepareCreatePositionV4` (con y sin smart funding). Estaban duplicados y la
- * rama de smart funding — la que usa el wizard — se quedo sin el tratamiento
- * del lado nativo: aprobaba address(0) como si fuera un ERC-20 y minteaba con
- * value 0, asi que un pool con ETH nativo no se podia crear.
+ * El lado nativo de un pool v4 es address(0): no se aprueba ni se mueve con
+ * transferFrom. Se paga con el `value` de la tx cubriendo el techo con
+ * slippage, y hace falta SWEEP para recuperar el sobrante — sin SWEEP queda
+ * atrapado en el PositionManager.
  *
- * El nativo no se aprueba ni se mueve con transferFrom: se paga con el `value`
- * de la tx cubriendo el techo con slippage, y se agrega SWEEP para recuperar
- * el sobrante — sin SWEEP queda atrapado en el PositionManager.
+ * Lo necesita TODA accion que aporte liquidez: el mint de create-position, el
+ * increase, y los redespliegues de modify-range y rebalance. Las tres ultimas
+ * se quedaron sin el tratamiento cuando se arreglo create-position, asi que
+ * sobre un pool con ETH nativo aprobaban address(0) —  la wallet lo anuncia
+ * como "envio a la direccion de quema" — y minteaban con value 0.
+ *
+ * Muta `actionCodes`/`params`/`v4Actions` agregando el SWEEP y devuelve el
+ * `value` que la tx debe mandar.
  */
-function buildV4MintActions({ poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, owner }) {
+function appendNativeSettlement({ poolKey, actionCodes, params, v4Actions, amount0Max, amount1Max, owner }) {
   const nativeIsCurrency0 = isZeroAddress(poolKey.currency0);
   const nativeIsCurrency1 = isZeroAddress(poolKey.currency1);
-  const usaNativo = nativeIsCurrency0 || nativeIsCurrency1;
+  if (!nativeIsCurrency0 && !nativeIsCurrency1) return 0n;
 
+  actionCodes.push(V4_ACTIONS.SWEEP);
+  params.push(encodeV4SweepParams(ZERO_ADDRESS_V4, owner));
+  v4Actions.push('SWEEP');
+
+  return nativeIsCurrency0 ? amount0Max : amount1Max;
+}
+
+/**
+ * Acciones, params y `value` del mint v4, compartidos por las dos ramas de
+ * `prepareCreatePositionV4` (con y sin smart funding) y por el redespliegue de
+ * modify-range/rebalance.
+ */
+function buildV4MintActions({ poolKey, tickLower, tickUpper, liquidity, amount0Max, amount1Max, owner }) {
   const actionCodes = [
     V4_ACTIONS.MINT_POSITION,
     V4_ACTIONS.CLOSE_CURRENCY,
@@ -120,14 +137,36 @@ function buildV4MintActions({ poolKey, tickLower, tickUpper, liquidity, amount0M
     encodeV4CloseCurrencyParams(poolKey.currency1),
   ];
   const v4Actions = ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'];
+  const value = appendNativeSettlement({
+    poolKey, actionCodes, params, v4Actions, amount0Max, amount1Max, owner,
+  });
+  return { actionCodes, params, v4Actions, value };
+}
 
-  if (usaNativo) {
-    actionCodes.push(V4_ACTIONS.SWEEP);
-    params.push(encodeV4SweepParams(ZERO_ADDRESS_V4, owner));
-    v4Actions.push('SWEEP');
-  }
-
-  const value = nativeIsCurrency0 ? amount0Max : (nativeIsCurrency1 ? amount1Max : 0n);
+/**
+ * Mismo tratamiento que el mint, pero agregando liquidez a un tokenId que ya
+ * existe.
+ */
+function buildV4IncreaseActions({ poolKey, tokenId, liquidity, amount0Max, amount1Max, owner }) {
+  const actionCodes = [
+    V4_ACTIONS.INCREASE_LIQUIDITY,
+    V4_ACTIONS.CLOSE_CURRENCY,
+    V4_ACTIONS.CLOSE_CURRENCY,
+  ];
+  const params = [
+    encodeV4ModifyLiquidityParams({
+      tokenId,
+      liquidity,
+      amount0Limit: amount0Max,
+      amount1Limit: amount1Max,
+    }),
+    encodeV4CloseCurrencyParams(poolKey.currency0),
+    encodeV4CloseCurrencyParams(poolKey.currency1),
+  ];
+  const v4Actions = ['INCREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'];
+  const value = appendNativeSettlement({
+    poolKey, actionCodes, params, v4Actions, amount0Max, amount1Max, owner,
+  });
   return { actionCodes, params, v4Actions, value };
 }
 
@@ -157,52 +196,50 @@ async function prepareIncreaseLiquidityV4(payload) {
 
   const requiresApproval = [];
   const txPlan = [];
+  const amount0Max = applyMintSlippageCeiling(amount0Desired, mintSlippageBps);
+  const amount1Max = applyMintSlippageCeiling(amount1Desired, mintSlippageBps);
   // Estos fondos SI salen de la wallet, asi que el saldo se exige de verdad.
   // Pero contra lo pedido, no contra el techo con slippage: ese margen es solo
   // cupo de allowance y exigirlo rechazaria a quien aporta su saldo exacto.
-  await appendPermit2Approvals({
+  await appendMintApprovalIfErc20({
     provider: ctx.provider,
     token: ctx.token0,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
+    amount: amount0Max,
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
     balanceRequirementRaw: amount0Desired,
   });
-  await appendPermit2Approvals({
+  await appendMintApprovalIfErc20({
     provider: ctx.provider,
     token: ctx.token1,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
+    amount: amount1Max,
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
     balanceRequirementRaw: amount1Desired,
   });
 
+  const increase = buildV4IncreaseActions({
+    poolKey: ctx.poolKey,
+    tokenId: ctx.tokenId,
+    liquidity: liquidityDelta,
+    amount0Max,
+    amount1Max,
+    owner: ctx.normalizedWallet,
+  });
   txPlan.push(buildV4ModifyTx(ctx, {
-    actionCodes: [
-      V4_ACTIONS.INCREASE_LIQUIDITY,
-      V4_ACTIONS.CLOSE_CURRENCY,
-      V4_ACTIONS.CLOSE_CURRENCY,
-    ],
-    params: [
-      encodeV4ModifyLiquidityParams({
-        tokenId: ctx.tokenId,
-        liquidity: liquidityDelta,
-        amount0Limit: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
-        amount1Limit: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
-      }),
-      encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
-      encodeV4CloseCurrencyParams(ctx.poolKey.currency1),
-    ],
+    actionCodes: increase.actionCodes,
+    params: increase.params,
+    value: increase.value,
     label: 'Increase liquidity (v4)',
     kind: 'increase_liquidity_v4',
     meta: {
-      v4Actions: ['INCREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+      v4Actions: increase.v4Actions,
       poolId: ctx.poolId,
       tickSpacing: ctx.tickSpacing,
       hooks: ctx.poolKey.hooks,
@@ -224,7 +261,7 @@ async function prepareIncreaseLiquidityV4(payload) {
       poolId: ctx.poolId,
       tickSpacing: ctx.tickSpacing,
       hooks: ctx.poolKey.hooks,
-      v4ActionPlan: ['INCREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+      v4ActionPlan: increase.v4Actions,
     },
     requiresApproval,
     txPlan: txPlan.filter(Boolean),
@@ -462,7 +499,7 @@ async function prepareModifyRangeV4(payload) {
   let amount0Desired = redeployAmount0;
   let amount1Desired = redeployAmount1;
   if (swap?.amountIn > 0n) {
-    await appendPermit2Approvals({
+    await appendMintApprovalIfErc20({
       provider: ctx.provider,
       token: swap.tokenIn,
       walletAddress: ctx.normalizedWallet,
@@ -477,6 +514,7 @@ async function prepareModifyRangeV4(payload) {
         : amount1Available,
     });
     txPlan.push(buildV4RouterTx(ctx, {
+      value: isZeroAddress(swap.tokenIn.address) ? swap.amountIn : 0n,
       actionCodes: [
         V4_ACTIONS.SWAP_EXACT_IN_SINGLE,
         V4_ACTIONS.SETTLE_ALL,
@@ -505,24 +543,26 @@ async function prepareModifyRangeV4(payload) {
   // `amount{0,1}Desired` ya es el saldo proyectado tras decrease + swap (el
   // planificador descuenta el amountIn y suma el amountOutMinimum), asi que el
   // chequeo valida coherencia del plan en vez del saldo suelto de ahora.
-  await appendPermit2Approvals({
+  const amount0Max = applyMintSlippageCeiling(amount0Desired, mintSlippageBps);
+  const amount1Max = applyMintSlippageCeiling(amount1Desired, mintSlippageBps);
+  await appendMintApprovalIfErc20({
     provider: ctx.provider,
     token: ctx.token0,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
+    amount: amount0Max,
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
     pendingCreditRaw: amount0Desired,
     balanceRequirementRaw: amount0Desired,
   });
-  await appendPermit2Approvals({
+  await appendMintApprovalIfErc20({
     provider: ctx.provider,
     token: ctx.token1,
     walletAddress: ctx.normalizedWallet,
     spender: ctx.positionManagerAddress,
-    amount: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
+    amount: amount1Max,
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
@@ -538,29 +578,23 @@ async function prepareModifyRangeV4(payload) {
     tickUpper,
   });
 
+  const redeploy = buildV4MintActions({
+    poolKey: ctx.poolKey,
+    tickLower,
+    tickUpper,
+    liquidity: liquidityDelta,
+    amount0Max,
+    amount1Max,
+    owner: ctx.normalizedWallet,
+  });
   txPlan.push(buildV4ModifyTx(ctx, {
-    actionCodes: [
-      V4_ACTIONS.MINT_POSITION,
-      V4_ACTIONS.CLOSE_CURRENCY,
-      V4_ACTIONS.CLOSE_CURRENCY,
-    ],
-    params: [
-      encodeV4MintParams({
-        poolKey: ctx.poolKey,
-        tickLower,
-        tickUpper,
-        liquidity: liquidityDelta,
-        amount0Max: applyMintSlippageCeiling(amount0Desired, mintSlippageBps),
-        amount1Max: applyMintSlippageCeiling(amount1Desired, mintSlippageBps),
-        owner: ctx.normalizedWallet,
-      }),
-      encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
-      encodeV4CloseCurrencyParams(ctx.poolKey.currency1),
-    ],
+    actionCodes: redeploy.actionCodes,
+    params: redeploy.params,
+    value: redeploy.value,
     label: 'Mint rebalanced v4 position',
     kind: 'mint_position_v4',
     meta: {
-      v4Actions: ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+      v4Actions: redeploy.v4Actions,
       poolId: ctx.poolId,
       tickSpacing: ctx.tickSpacing,
       hooks: ctx.poolKey.hooks,
@@ -606,9 +640,11 @@ async function prepareModifyRangeV4(payload) {
       poolId: ctx.poolId,
       tickSpacing: ctx.tickSpacing,
       hooks: ctx.poolKey.hooks,
+      // El redespliegue agrega SWEEP cuando el pool tiene un lado nativo: el
+      // resumen tiene que reflejar lo que realmente se firma.
       v4ActionPlan: swap
-        ? ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL', 'MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY']
-        : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+        ? ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL', ...redeploy.v4Actions]
+        : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', ...redeploy.v4Actions],
     },
     requiresApproval,
     txPlan: txPlan.filter(Boolean),
@@ -1055,7 +1091,7 @@ async function prepareRebalanceV4(payload) {
   let finalAmount0 = amount0Available;
   let finalAmount1 = amount1Available;
   if (swap?.amountIn > 0n) {
-    await appendPermit2Approvals({
+    await appendMintApprovalIfErc20({
       provider: ctx.provider,
       token: swap.tokenIn,
       walletAddress: ctx.normalizedWallet,
@@ -1070,6 +1106,7 @@ async function prepareRebalanceV4(payload) {
         : amount1Available,
     });
     txPlan.push(buildV4RouterTx(ctx, {
+      value: isZeroAddress(swap.tokenIn.address) ? swap.amountIn : 0n,
       actionCodes: [
         V4_ACTIONS.SWAP_EXACT_IN_SINGLE,
         V4_ACTIONS.SETTLE_ALL,
@@ -1099,7 +1136,7 @@ async function prepareRebalanceV4(payload) {
 
   // `finalAmount{0,1}` es el saldo proyectado tras decrease + swap: el mint
   // gasta exactamente lo que el propio plan deja en la wallet.
-  await appendPermit2Approvals({
+  await appendMintApprovalIfErc20({
     provider: ctx.provider,
     token: ctx.token0,
     walletAddress: ctx.normalizedWallet,
@@ -1110,7 +1147,7 @@ async function prepareRebalanceV4(payload) {
     txPlan,
     pendingCreditRaw: finalAmount0,
   });
-  await appendPermit2Approvals({
+  await appendMintApprovalIfErc20({
     provider: ctx.provider,
     token: ctx.token1,
     walletAddress: ctx.normalizedWallet,
@@ -1129,29 +1166,23 @@ async function prepareRebalanceV4(payload) {
     tickLower,
     tickUpper,
   });
+  const redeploy = buildV4MintActions({
+    poolKey: ctx.poolKey,
+    tickLower,
+    tickUpper,
+    liquidity: liquidityDelta,
+    amount0Max: finalAmount0,
+    amount1Max: finalAmount1,
+    owner: ctx.normalizedWallet,
+  });
   txPlan.push(buildV4ModifyTx(ctx, {
-    actionCodes: [
-      V4_ACTIONS.MINT_POSITION,
-      V4_ACTIONS.CLOSE_CURRENCY,
-      V4_ACTIONS.CLOSE_CURRENCY,
-    ],
-    params: [
-      encodeV4MintParams({
-        poolKey: ctx.poolKey,
-        tickLower,
-        tickUpper,
-        liquidity: liquidityDelta,
-        amount0Max: finalAmount0,
-        amount1Max: finalAmount1,
-        owner: ctx.normalizedWallet,
-      }),
-      encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
-      encodeV4CloseCurrencyParams(ctx.poolKey.currency1),
-    ],
+    actionCodes: redeploy.actionCodes,
+    params: redeploy.params,
+    value: redeploy.value,
     label: 'Mint rebalanced v4 position',
     kind: 'mint_position_v4',
     meta: {
-      v4Actions: ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+      v4Actions: redeploy.v4Actions,
       poolId: ctx.poolId,
       tickSpacing: ctx.tickSpacing,
       hooks: ctx.poolKey.hooks,
@@ -1185,9 +1216,11 @@ async function prepareRebalanceV4(payload) {
       poolId: ctx.poolId,
       tickSpacing: ctx.tickSpacing,
       hooks: ctx.poolKey.hooks,
+      // El redespliegue agrega SWEEP cuando el pool tiene un lado nativo: el
+      // resumen tiene que reflejar lo que realmente se firma.
       v4ActionPlan: swap
-        ? ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL', 'MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY']
-        : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+        ? ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL', ...redeploy.v4Actions]
+        : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', ...redeploy.v4Actions],
     },
     requiresApproval,
     txPlan: txPlan.filter(Boolean),
