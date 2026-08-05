@@ -108,9 +108,27 @@ const FALLBACK_MULTIPLIERS = {
   aggressive: { multiplier: 0.015, label: 'Agresivo (±1.5%)' },
 };
 
-function getKnownTokens(network) {
+/**
+ * Catalogo de tokens seleccionables para una red.
+ *
+ * Con `version: 'v4'` el envuelto nativo se sustituye por el nativo: en v4 el
+ * ETH es una currency de primera clase (address(0)) y el pool canonico es el
+ * nativo, asi que ofrecer WETH parte la liquidez y obliga a un wrap que el
+ * pool no necesita. En v3 no existe esa opcion y el catalogo va tal cual.
+ *
+ * Solo afecta a lo que se OFRECE en el selector: el resto del servicio sigue
+ * llamando sin `version` porque el fondeo si necesita conocer el WETH (envuelve
+ * y desenvuelve para pagar el lado nativo).
+ */
+function getKnownTokens(network, { version } = {}) {
   const normalized = String(network || '').toLowerCase();
-  return KNOWN_TOKENS[normalized] || KNOWN_TOKENS.ethereum;
+  const tokens = KNOWN_TOKENS[normalized] || KNOWN_TOKENS.ethereum;
+  if (String(version || '').toLowerCase() !== 'v4') return tokens;
+
+  const nativeSymbol = SUPPORTED_NETWORKS[normalized]?.nativeSymbol || 'ETH';
+  return tokens.map((token) => (token.isWrappedNative
+    ? { symbol: nativeSymbol, address: ethers.ZeroAddress, decimals: 18, isNative: true }
+    : token));
 }
 
 function getNetworkConfig(network) {

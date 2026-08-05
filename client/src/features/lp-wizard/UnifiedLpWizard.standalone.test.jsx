@@ -313,7 +313,7 @@ describe('UnifiedLpWizard · modo standalone', () => {
       />
     );
 
-    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum'));
+    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum', expect.any(String)));
 
     await userEvent.selectOptions(screen.getByLabelText(/Token 0/i), '0x00000000000000000000000000000000000000AA');
     await userEvent.selectOptions(screen.getByLabelText(/Token 1/i), '0x00000000000000000000000000000000000000BB');
@@ -363,7 +363,7 @@ describe('UnifiedLpWizard · modo standalone', () => {
       />
     );
 
-    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum'));
+    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum', expect.any(String)));
 
     await userEvent.selectOptions(screen.getByLabelText(/Token 0/i), '0x00000000000000000000000000000000000000AA');
     await userEvent.selectOptions(screen.getByLabelText(/Token 1/i), '0x00000000000000000000000000000000000000BB');
@@ -406,7 +406,7 @@ describe('UnifiedLpWizard · modo standalone', () => {
       />
     );
 
-    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum'));
+    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum', expect.any(String)));
     await userEvent.selectOptions(screen.getByLabelText(/Token 0/i), '0x00000000000000000000000000000000000000AA');
     await userEvent.selectOptions(screen.getByLabelText(/Token 1/i), '0x00000000000000000000000000000000000000BB');
     await userEvent.clear(screen.getByLabelText(/Valor total objetivo/i));
@@ -454,7 +454,7 @@ describe('UnifiedLpWizard · modo standalone', () => {
       />
     );
 
-    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum'));
+    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum', expect.any(String)));
     await userEvent.selectOptions(screen.getByLabelText(/Token 0/i), '0x00000000000000000000000000000000000000AA');
     await userEvent.selectOptions(screen.getByLabelText(/Token 1/i), '0x00000000000000000000000000000000000000BB');
     await userEvent.clear(screen.getByLabelText(/Valor total objetivo/i));
@@ -595,7 +595,7 @@ describe('UnifiedLpWizard · modo standalone', () => {
       />
     );
 
-    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum'));
+    await waitFor(() => expect(uniswapApi.getSmartCreateTokenList).toHaveBeenCalledWith('arbitrum', expect.any(String)));
     await userEvent.selectOptions(screen.getByLabelText(/Token 0/i), '0x00000000000000000000000000000000000000AA');
     await userEvent.selectOptions(screen.getByLabelText(/Token 1/i), '0x00000000000000000000000000000000000000BB');
     await userEvent.clear(screen.getByLabelText(/Valor total objetivo/i));

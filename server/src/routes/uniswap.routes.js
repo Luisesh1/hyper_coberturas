@@ -129,7 +129,9 @@ router.post('/smart-create/suggest', validate(smartCreateSuggestSchema), asyncHa
 
 router.get('/smart-create/token-list', asyncHandler(async (req, res) => {
   const network = req.query.network || 'ethereum';
-  const list = smartPoolCreatorService.getKnownTokens(network);
+  // `version` cambia el catalogo: v4 ofrece el nativo en vez del envuelto.
+  const version = req.query.version || 'v3';
+  const list = smartPoolCreatorService.getKnownTokens(network, { version });
   res.json({ success: true, data: list });
 }));
 

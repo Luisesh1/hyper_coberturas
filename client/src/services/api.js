@@ -263,8 +263,9 @@ export const uniswapApi = {
       ...(totalUsdHint != null ? { totalUsdHint } : {}),
       ...(totalUsdTarget != null ? { totalUsdTarget } : {}),
     }),
-  getSmartCreateTokenList: (network) =>
-    request('GET', `/uniswap/smart-create/token-list?network=${encodeURIComponent(network)}`),
+  // `version` importa: en v4 el catalogo ofrece ETH nativo en vez de WETH.
+  getSmartCreateTokenList: (network, version = 'v3') =>
+    request('GET', `/uniswap/smart-create/token-list?network=${encodeURIComponent(network)}&version=${encodeURIComponent(version)}`),
   // Pools que existen on-chain para esa red + version.
   getSmartCreatePools: ({ network, version }) =>
     request('GET', `/uniswap/smart-create/pools?network=${encodeURIComponent(network)}&version=${encodeURIComponent(version)}`),

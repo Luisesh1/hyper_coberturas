@@ -68,10 +68,13 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
 
   // ── effects ───────────────────────────────────────────────────────
 
+  // Depende de `version` porque el catalogo cambia: v4 ofrece ETH nativo donde
+  // v3 ofrece WETH. Sin recargar al cambiar de version quedaba el token que no
+  // corresponde ya elegido.
   useEffect(() => {
     async function loadTokenList() {
       try {
-        const data = await uniswapApi.getSmartCreateTokenList(network);
+        const data = await uniswapApi.getSmartCreateTokenList(network, version);
         setTokenList(Array.isArray(data) ? data : []);
       } catch (err) {
         setTokenList([]);
@@ -79,7 +82,7 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
       }
     }
     loadTokenList().catch(() => {});
-  }, [network]);
+  }, [network, version]);
 
   useEffect(() => {
     setStep(STEP.POOL);
@@ -95,6 +98,24 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
     setError('');
     setHasFundingEdits(false);
     autoAnalyzedRef.current = false;
+  }, [network, version]);
+
+  // El par elegido pertenece al catalogo de una red + version concretas: al
+  // cambiar cualquiera de las dos deja de ser valido. En v3 -> v4 el caso vivo
+  // es WETH, que desaparece del catalogo en favor de ETH nativo; sin soltarlo,
+  // el <select> se veia vacio pero el analisis seguia recibiendo la address de
+  // WETH. Se salta el montaje para no pisar el par que llega en `defaults`.
+  const pairScopeRef = useRef(null);
+  useEffect(() => {
+    const scope = `${network}:${version}`;
+    if (pairScopeRef.current === null) {
+      pairScopeRef.current = scope;
+      return;
+    }
+    if (pairScopeRef.current === scope) return;
+    pairScopeRef.current = scope;
+    setToken0Address('');
+    setToken1Address('');
   }, [network, version]);
 
   useEffect(() => {
@@ -161,7 +182,11 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
 
   const tokenOptions = useMemo(() => (
     tokenList.map((token) => ({
-      label: `${token.symbol} (${token.address.slice(0, 6)}…${token.address.slice(-4)})`,
+      // El nativo de v4 es address(0): mostrar "0x0000…0000" parece la
+      // direccion de quema y no aporta nada, asi que se etiqueta como tal.
+      label: token.isNative
+        ? `${token.symbol} (nativo)`
+        : `${token.symbol} (${token.address.slice(0, 6)}…${token.address.slice(-4)})`,
       value: token.address,
     }))
   ), [tokenList]);
