@@ -24,7 +24,7 @@ const SUPPORTED_NETWORKS = {
     deployments: {
       v1: {
         kind: 'factory',
-        eventSource: '0xc0a47dFe034B400B47bDaD5FecDa2621De6c4d95',
+        eventSource: '0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95',
       },
       v2: {
         kind: 'factory',
