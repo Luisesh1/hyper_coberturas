@@ -461,11 +461,28 @@ async function appendPermit2Approvals({
   requiresApproval,
   txPlan,
   enforceBalance = true,
+  // Fondos que una tx anterior del MISMO plan deja en la wallet antes de que
+  // esta aprobacion se use: el DECREASE_LIQUIDITY que abre un ajuste de rango,
+  // o el swap que lo sigue. Sin esto el chequeo mira solo el saldo suelto de
+  // ahora y rechaza planes validos cuyo capital sigue dentro del LP.
+  pendingCreditRaw = 0n,
+  // Monto realmente necesario. Por defecto `amount`, pero cuando `amount` es
+  // un techo con slippage (applyMintSlippageCeiling) el requisito real es el
+  // monto planeado: ese margen extra es solo cupo de allowance y lo que el
+  // mint no consuma vuelve por SWEEP.
+  balanceRequirementRaw = null,
 }) {
   if (amount <= 0n) return;
   const state = await getPermit2State(provider, token, walletAddress, spender, permit2Address);
-  if (enforceBalance && state.balance < amount) {
-    throw new ValidationError(`La wallet no tiene balance suficiente de ${token.symbol}`);
+  const required = balanceRequirementRaw === null ? amount : BigInt(balanceRequirementRaw);
+  const projected = state.balance + BigInt(pendingCreditRaw || 0n);
+  if (enforceBalance && projected < required) {
+    const fmt = (raw) => ethers.formatUnits(raw, token.decimals);
+    throw new ValidationError(
+      `La wallet no tiene balance suficiente de ${token.symbol}: `
+      + `se necesitan ${fmt(required)} y el plan solo dispone de ${fmt(projected)} `
+      + `(${fmt(state.balance)} en la wallet + ${fmt(pendingCreditRaw || 0n)} que liberan las txs previas)`
+    );
   }
 
   if (state.tokenAllowanceToPermit2 < amount) {

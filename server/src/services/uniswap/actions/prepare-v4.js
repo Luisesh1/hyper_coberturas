@@ -157,6 +157,9 @@ async function prepareIncreaseLiquidityV4(payload) {
 
   const requiresApproval = [];
   const txPlan = [];
+  // Estos fondos SI salen de la wallet, asi que el saldo se exige de verdad.
+  // Pero contra lo pedido, no contra el techo con slippage: ese margen es solo
+  // cupo de allowance y exigirlo rechazaria a quien aporta su saldo exacto.
   await appendPermit2Approvals({
     provider: ctx.provider,
     token: ctx.token0,
@@ -166,6 +169,7 @@ async function prepareIncreaseLiquidityV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
+    balanceRequirementRaw: amount0Desired,
   });
   await appendPermit2Approvals({
     provider: ctx.provider,
@@ -176,6 +180,7 @@ async function prepareIncreaseLiquidityV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
+    balanceRequirementRaw: amount1Desired,
   });
 
   txPlan.push(buildV4ModifyTx(ctx, {
@@ -403,6 +408,12 @@ async function prepareModifyRangeV4(payload) {
   const amount1Current = toBigIntAmount(ctx.currentAmounts.amount1 || 0, ctx.token1.decimals, 'amount1Current');
   const amount0Available = amount0Current + BigInt(ctx.unclaimedFeesRaw.fees0 || 0n);
   const amount1Available = amount1Current + BigInt(ctx.unclaimedFeesRaw.fees1 || 0n);
+  // El capital del rango nuevo sale integramente del DECREASE_LIQUIDITY que va
+  // primero en el plan. Si la posicion no tiene nada que liberar el problema no
+  // es el saldo de la wallet, y decirlo asi evita el diagnostico equivocado.
+  if (amount0Available === 0n && amount1Available === 0n) {
+    throw new ValidationError('La posicion no tiene liquidez ni fees que redesplegar en un rango nuevo.');
+  }
   const tickLower = priceToNearestTick(lowerPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'down');
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
   validateTickRange(tickLower, tickUpper);
@@ -460,6 +471,10 @@ async function prepareModifyRangeV4(payload) {
       chainId: ctx.networkConfig.chainId,
       requiresApproval,
       txPlan,
+      // El swap gasta lo que acaba de devolver el decrease, no saldo previo.
+      pendingCreditRaw: swap.direction === 'token0_to_token1'
+        ? amount0Available
+        : amount1Available,
     });
     txPlan.push(buildV4RouterTx(ctx, {
       actionCodes: [
@@ -487,6 +502,9 @@ async function prepareModifyRangeV4(payload) {
     }));
   }
 
+  // `amount{0,1}Desired` ya es el saldo proyectado tras decrease + swap (el
+  // planificador descuenta el amountIn y suma el amountOutMinimum), asi que el
+  // chequeo valida coherencia del plan en vez del saldo suelto de ahora.
   await appendPermit2Approvals({
     provider: ctx.provider,
     token: ctx.token0,
@@ -496,6 +514,8 @@ async function prepareModifyRangeV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
+    pendingCreditRaw: amount0Desired,
+    balanceRequirementRaw: amount0Desired,
   });
   await appendPermit2Approvals({
     provider: ctx.provider,
@@ -506,6 +526,8 @@ async function prepareModifyRangeV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
+    pendingCreditRaw: amount1Desired,
+    balanceRequirementRaw: amount1Desired,
   });
 
   const liquidityDelta = estimateLiquidityForAmounts({
@@ -888,6 +910,7 @@ async function prepareCreatePositionV4(payload) {
       chainId: networkConfig.chainId,
       requiresApproval,
       txPlan,
+      balanceRequirementRaw: amount0Desired,
     });
   }
   if (!isZeroAddress(canonicalToken1.address)) {
@@ -900,6 +923,7 @@ async function prepareCreatePositionV4(payload) {
       chainId: networkConfig.chainId,
       requiresApproval,
       txPlan,
+      balanceRequirementRaw: amount1Desired,
     });
   }
 
@@ -987,6 +1011,11 @@ async function prepareRebalanceV4(payload) {
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
   const amount0Available = toBigIntAmount(ctx.currentAmounts.amount0 || 0, ctx.token0.decimals, 'amount0Current') + BigInt(ctx.unclaimedFeesRaw.fees0 || 0n);
   const amount1Available = toBigIntAmount(ctx.currentAmounts.amount1 || 0, ctx.token1.decimals, 'amount1Current') + BigInt(ctx.unclaimedFeesRaw.fees1 || 0n);
+  // Igual que en modify-range: todo el capital llega del decrease que abre el
+  // plan, asi que sin nada que liberar el fallo no es de saldo de wallet.
+  if (amount0Available === 0n && amount1Available === 0n) {
+    throw new ValidationError('La posicion no tiene liquidez ni fees que rebalancear.');
+  }
   const swap = buildRebalanceSwap(ctx, {
     amount0Available,
     amount1Available,
@@ -1035,6 +1064,10 @@ async function prepareRebalanceV4(payload) {
       chainId: ctx.networkConfig.chainId,
       requiresApproval,
       txPlan,
+      // El swap gasta lo que acaba de devolver el decrease, no saldo previo.
+      pendingCreditRaw: swap.direction === 'token0_to_token1'
+        ? amount0Available
+        : amount1Available,
     });
     txPlan.push(buildV4RouterTx(ctx, {
       actionCodes: [
@@ -1064,6 +1097,8 @@ async function prepareRebalanceV4(payload) {
     finalAmount1 = swap.postAmount1;
   }
 
+  // `finalAmount{0,1}` es el saldo proyectado tras decrease + swap: el mint
+  // gasta exactamente lo que el propio plan deja en la wallet.
   await appendPermit2Approvals({
     provider: ctx.provider,
     token: ctx.token0,
@@ -1073,6 +1108,7 @@ async function prepareRebalanceV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
+    pendingCreditRaw: finalAmount0,
   });
   await appendPermit2Approvals({
     provider: ctx.provider,
@@ -1083,6 +1119,7 @@ async function prepareRebalanceV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
+    pendingCreditRaw: finalAmount1,
   });
 
   const liquidityDelta = estimateLiquidityForAmounts({
