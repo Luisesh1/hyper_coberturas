@@ -1,0 +1,178 @@
+/* Cáscara compartida de los diálogos del orquestador.
+   Calcada de UnifiedLpWizard.module.css, que es la referencia del lenguaje.
+   Ver docs/superpowers/specs/2026-08-05-modales-orquestador-design.md */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(5, 7, 12, 0.72);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+
+/* Para diálogos abiertos DESDE otro diálogo. */
+.overlayStacked {
+  z-index: var(--z-modal-stacked);
+}
+
+.overlayDrawer {
+  z-index: var(--z-drawer);
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ── Superficie ─────────────────────────────────────────────────────────── */
+
+.modal,
+.drawer {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-dropdown);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+.modal {
+  width: 100%;
+  border-radius: var(--radius-xl);
+}
+
+.modal:focus,
+.drawer:focus {
+  outline: none;
+}
+
+.size_sm { max-width: 560px; }
+.size_md { max-width: 780px; }
+.size_lg { max-width: 920px; }
+
+.drawer {
+  width: min(560px, 100%);
+  height: 100vh;
+  border: none;
+  border-left: 1px solid var(--border);
+  animation: slideIn 0.22s ease-out;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer { animation: none; }
+}
+
+/* ── Cabecera ───────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 24px 28px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex: none;
+}
+
+.headerText {
+  min-width: 0;
+}
+
+.eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--teal);
+  margin-bottom: var(--sp-2);
+}
+
+.title {
+  margin: 0 0 6px;
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  line-height: var(--lh-tight);
+}
+
+.desc {
+  margin: 0;
+  max-width: 520px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+.closeBtn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  line-height: 1;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.closeBtn:hover:not(:disabled) {
+  color: var(--text-bright);
+  border-color: var(--border-strong);
+}
+
+.closeBtn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.closeBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ── Cuerpo y pie ───────────────────────────────────────────────────────── */
+
+.body {
+  padding: 22px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 16px 28px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-deep);
+  flex: none;
+}
+
+@media (max-width: 640px) {
+  .overlay { padding: 16px 8px; }
+  .header { padding: 18px 18px 14px; }
+  .body { padding: 18px; }
+  .footer { padding: 14px 18px 16px; }
+}

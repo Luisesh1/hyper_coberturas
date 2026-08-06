@@ -1,4 +1,5 @@
 import { STRATEGY_FIELD_BY_KEY } from './strategy-fields';
+import ui from '../../../styles/modal-controls.module.css';
 import styles from './StrategyFieldInput.module.css';
 
 /**
@@ -8,7 +9,7 @@ import styles from './StrategyFieldInput.module.css';
  */
 export function FieldLabel({ text, tooltip }) {
   return (
-    <label className={styles.fieldLabel}>
+    <label className={`${ui.fieldLabel} ${styles.labelWithTooltip}`}>
       {text}
       {tooltip && (
         <span className={styles.tooltipIcon} title={tooltip} aria-label={tooltip}>
@@ -30,7 +31,7 @@ export default function StrategyFieldInput({ fieldKey, value, onChange, hint }) 
   if (!field) return null;
 
   return (
-    <div className={styles.field}>
+    <div className={ui.field}>
       <FieldLabel text={field.label} tooltip={field.tooltip} />
       <input
         type="number"
@@ -41,7 +42,7 @@ export default function StrategyFieldInput({ fieldKey, value, onChange, hint }) 
         value={value ?? ''}
         onChange={(e) => onChange(fieldKey, e.target.value)}
       />
-      {hint && <span className={styles.hint}>{hint}</span>}
+      {hint && <span className={ui.fieldHint}>{hint}</span>}
     </div>
   );
 }

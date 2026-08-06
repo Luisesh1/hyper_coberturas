@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { lpOrchestratorApi } from '../../../services/api';
 import { formatRelativeTimestamp, formatUsd } from '../../UniswapPools/utils/pool-formatters';
+import ModalShell from '../../../components/shared/ModalShell/ModalShell';
+import ui from '../../../styles/modal-controls.module.css';
 import styles from './ActionLogDrawer.module.css';
 
 const KIND_LABELS = {
@@ -49,40 +51,31 @@ export default function ActionLogDrawer({ orchestrator, onClose }) {
   if (!orchestrator) return null;
 
   return (
-    <div className={styles.overlay} onClick={onClose}>
-      <aside className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <header className={styles.header}>
-          <div>
-            <span className={styles.eyebrow}>Bitácora</span>
-            <h2 className={styles.title}>{orchestrator.name}</h2>
-            <p className={styles.subtitle}>
-              {entries.length} eventos · más reciente arriba
-            </p>
-          </div>
-          <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Cerrar">
-            ✕
-          </button>
-        </header>
-
-        <div className={styles.body}>
-          {isLoading && entries.length === 0 && (
-            <div className={styles.loading}>Cargando bitácora…</div>
-          )}
-          {error && <div className={styles.error}>{error}</div>}
-          {!isLoading && entries.length === 0 && !error && (
-            <div className={styles.empty}>
-              Aún no hay eventos registrados.
-              <br />
-              <span className={styles.muted}>Las decisiones del motor aparecerán aquí cada 30 s.</span>
-            </div>
-          )}
-
-          {entries.map((entry) => (
-            <LogEntry key={entry.id} entry={entry} />
-          ))}
+    <ModalShell
+      variant="drawer"
+      eyebrow="Bitácora"
+      title={orchestrator.name}
+      desc={`${entries.length} eventos · más reciente arriba`}
+      ariaLabel={`Bitácora de ${orchestrator.name}`}
+      onClose={onClose}
+      bodyClassName={styles.logBody}
+    >
+      {isLoading && entries.length === 0 && (
+        <div className={ui.sectionHint}>Cargando bitácora…</div>
+      )}
+      {error && <div className={ui.errorBox}>{error}</div>}
+      {!isLoading && entries.length === 0 && !error && (
+        <div className={ui.notice}>
+          Aún no hay eventos registrados.
+          <br />
+          Las decisiones del motor aparecerán aquí cada 30 s.
         </div>
-      </aside>
-    </div>
+      )}
+
+      {entries.map((entry) => (
+        <LogEntry key={entry.id} entry={entry} />
+      ))}
+    </ModalShell>
   );
 }
 

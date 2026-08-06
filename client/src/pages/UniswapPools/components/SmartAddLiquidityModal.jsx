@@ -4,7 +4,9 @@ import { formatNumber } from '../../../utils/formatters';
 import { getExplorerLink } from '../utils/pool-helpers';
 import { uniswapApi } from '../../../services/api';
 import { useWalletExecution, WALLET_EXECUTION_STATE } from '../../../hooks/useWalletExecution';
-import styles from './SmartCreatePoolModal.module.css';
+import ModalShell from '../../../components/shared/ModalShell/ModalShell';
+import ui from '../../../styles/modal-controls.module.css';
+import styles from './SmartAddLiquidityModal.module.css';
 import { STEP, FEE_TIERS } from './smart-create/constants';
 import {
   buildSelectionMap,
@@ -275,31 +277,16 @@ export default function SmartAddLiquidityModal({
     : `Posición #${positionIdentifier}`;
 
   return (
-    <div className={styles.overlay} onClick={onClose}>
-      <div
-        className={styles.modal}
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Agregar liquidez con USD"
-      >
-        <div className={styles.header}>
-          <div>
-            <span className={styles.eyebrow}>Agregar liquidez (smart)</span>
-            <h2 className={styles.title}>{positionLabel}</h2>
-            <p className={styles.desc}>
-              Define cuántos USD agregar; el sistema arma los swaps necesarios desde tu wallet y aumenta la liquidez del LP.
-            </p>
-          </div>
-          <button
-            type="button"
-            className={styles.closeBtn}
-            onClick={onClose}
-            aria-label="Cerrar"
-          >
-            ✕
-          </button>
-        </div>
+    <ModalShell
+      eyebrow="Uniswap Actions"
+      title="Agregar liquidez"
+      desc={`${positionLabel} — define cuántos USD agregar; el sistema arma los swaps necesarios desde tu wallet y aumenta la liquidez del LP.`}
+      ariaLabel="Agregar liquidez con USD"
+      size="md"
+      stacked
+      onClose={onClose}
+      closeDisabled={isBusy}
+    >
 
         <div className={styles.stepper}>
           <StepPill label="1. Monto" active={step === 'amount'} done={['funding', 'review', 'signing', 'done'].includes(step)} />
@@ -308,7 +295,7 @@ export default function SmartAddLiquidityModal({
         </div>
 
         {isBusy && (
-          <section className={styles.section}>
+          <section className={ui.section}>
             <div className={styles.loading}>
               <div className={styles.spinner} />
               <p>{loadingMessage || 'Trabajando...'}</p>
@@ -317,13 +304,11 @@ export default function SmartAddLiquidityModal({
         )}
 
         {!isBusy && step === 'amount' && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Paso 1: ¿Cuánto querés agregar?</span>
-            </div>
+          <section className={ui.section}>
+            <h3 className={ui.sectionTitle}>Paso 1: ¿Cuánto querés agregar?</h3>
 
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Monto en USD</span>
+            <label className={ui.field}>
+              <span className={ui.fieldLabel}>Monto en USD</span>
               <input
                 type="number"
                 min="1"
@@ -332,8 +317,8 @@ export default function SmartAddLiquidityModal({
               />
             </label>
 
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Slippage máximo (bps)</span>
+            <label className={ui.field}>
+              <span className={ui.fieldLabel}>Slippage máximo (bps)</span>
               <input
                 type="number"
                 min="1"
@@ -343,18 +328,18 @@ export default function SmartAddLiquidityModal({
               />
             </label>
 
-            <div className={styles.noticeCard}>
+            <div className={ui.notice}>
               <strong>El rango y los tokens ya están fijos por la posición.</strong>
               <p>El sistema calculará automáticamente el ratio óptimo de token0/token1 según el rango actual del LP, y armará los swaps que hagan falta.</p>
             </div>
 
-            {error && <div className={styles.error}>{error}</div>}
+            {error && <div className={ui.errorBox}>{error}</div>}
 
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.secondaryBtn} onClick={onClose}>
+            <div className={ui.footerGroup}>
+              <button type="button" className={ui.btnSecondary} onClick={onClose}>
                 Cancelar
               </button>
-              <button type="button" className={styles.primaryBtn} onClick={handleContinueToFunding}>
+              <button type="button" className={ui.btnPrimary} onClick={handleContinueToFunding}>
                 Continuar a fondeo →
               </button>
             </div>
@@ -362,18 +347,16 @@ export default function SmartAddLiquidityModal({
         )}
 
         {!isBusy && step === 'funding' && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Paso 2: Capital fuente y swaps</span>
-            </div>
+          <section className={ui.section}>
+            <h3 className={ui.sectionTitle}>Paso 2: Capital fuente y swaps</h3>
 
-            <div className={styles.noticeCard}>
+            <div className={ui.notice}>
               <strong>Fondeo en {network}</strong>
               <p>Solo se usan activos disponibles en la red de la posición. Fondos en otras redes no se consideran automáticamente.</p>
             </div>
 
             {fundingDiagnostics?.gasReserve && (
-              <div className={styles.noticeCard}>
+              <div className={ui.notice}>
                 <strong>Reserva de gas</strong>
                 <p>
                   Se reservarán {fundingDiagnostics.gasReserve.reservedAmount} {fundingDiagnostics.gasReserve.symbol} para comisiones.
@@ -382,7 +365,7 @@ export default function SmartAddLiquidityModal({
             )}
 
             {fundingIssue && (
-              <div className={styles.error}>
+              <div className={ui.errorBox}>
                 <strong>{formatFundingIssueTitle(fundingIssue)}</strong>
                 <div>{fundingIssue.message}</div>
                 {fundingIssue.details?.missingUsd > 0 && (
@@ -390,10 +373,10 @@ export default function SmartAddLiquidityModal({
                 )}
                 {(fundingIssue.details?.warnings || []).length > 0 && (
                   <div style={{ marginTop: '8px' }}>
-                    <div style={{ fontSize: '0.78rem', color: '#f5a623', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '0.78rem', color: "var(--status-warn)", marginBottom: '4px' }}>
                       Diagnóstico por activo:
                     </div>
-                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '0.78rem', color: '#97a9bd' }}>
+                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '0.78rem', color: "var(--text-secondary)" }}>
                       {fundingIssue.details.warnings.map((warning, index) => (
                         <li key={index}>{warning}</li>
                       ))}
@@ -401,10 +384,10 @@ export default function SmartAddLiquidityModal({
                   </div>
                 )}
                 <div className={styles.inlineActions}>
-                  <button type="button" className={styles.secondaryBtn} onClick={() => setStep('amount')}>
+                  <button type="button" className={ui.btnSecondary} onClick={() => setStep('amount')}>
                     Reducir monto
                   </button>
-                  <button type="button" className={styles.secondaryBtn} onClick={() => refreshFundingPlan({ preserveSelections: true })}>
+                  <button type="button" className={ui.btnSecondary} onClick={() => refreshFundingPlan({ preserveSelections: true })}>
                     Reintentar
                   </button>
                 </div>
@@ -418,13 +401,13 @@ export default function SmartAddLiquidityModal({
                 value={importTokenAddress}
                 onChange={(event) => setImportTokenAddress(event.target.value)}
               />
-              <button type="button" className={styles.secondaryBtn} onClick={handleAddFundingImport}>
+              <button type="button" className={ui.btnSecondary} onClick={handleAddFundingImport}>
                 Añadir token
               </button>
             </div>
 
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Slippage máximo (bps)</span>
+            <label className={ui.field}>
+              <span className={ui.fieldLabel}>Slippage máximo (bps)</span>
               <input
                 type="number"
                 value={maxSlippageBps}
@@ -483,22 +466,22 @@ export default function SmartAddLiquidityModal({
 
             {fundingPlan && (
               <>
-                <div className={styles.summaryGrid}>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Pool estimado</span>
-                    <strong className={styles.tileValue}>{formatUsd(fundingPlan.fundingPlan?.estimatedPoolValueUsd || 0)}</strong>
+                <div className={ui.grid3}>
+                  <div className={ui.metricCard}>
+                    <span className={ui.metricLabel}>Pool estimado</span>
+                    <strong className={ui.metricValue}>{formatUsd(fundingPlan.fundingPlan?.estimatedPoolValueUsd || 0)}</strong>
                   </div>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Directo</span>
-                    <strong className={styles.tileValue}>{formatUsd(fundingPlan.fundingPlan?.directValueUsd || 0)}</strong>
+                  <div className={ui.metricCard}>
+                    <span className={ui.metricLabel}>Directo</span>
+                    <strong className={ui.metricValue}>{formatUsd(fundingPlan.fundingPlan?.directValueUsd || 0)}</strong>
                   </div>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Por swaps</span>
-                    <strong className={styles.tileValue}>{formatUsd(fundingPlan.fundingPlan?.swapValueUsd || 0)}</strong>
+                  <div className={ui.metricCard}>
+                    <span className={ui.metricLabel}>Por swaps</span>
+                    <strong className={ui.metricValue}>{formatUsd(fundingPlan.fundingPlan?.swapValueUsd || 0)}</strong>
                   </div>
-                  <div className={styles.summaryTile}>
-                    <span className={styles.tileLabel}>Swaps</span>
-                    <strong className={styles.tileValue}>{fundingPlan.swapPlan?.length || 0}</strong>
+                  <div className={ui.metricCard}>
+                    <span className={ui.metricLabel}>Swaps</span>
+                    <strong className={ui.metricValue}>{fundingPlan.swapPlan?.length || 0}</strong>
                   </div>
                 </div>
 
@@ -521,16 +504,16 @@ export default function SmartAddLiquidityModal({
               </>
             )}
 
-            {error && <div className={styles.error}>{error}</div>}
+            {error && <div className={ui.errorBox}>{error}</div>}
 
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.secondaryBtn} onClick={() => setStep('amount')}>
+            <div className={ui.footerGroup}>
+              <button type="button" className={ui.btnSecondary} onClick={() => setStep('amount')}>
                 ← Cambiar monto
               </button>
-              <button type="button" className={styles.secondaryBtn} onClick={() => refreshFundingPlan({ preserveSelections: true })}>
+              <button type="button" className={ui.btnSecondary} onClick={() => refreshFundingPlan({ preserveSelections: true })}>
                 Recalcular plan
               </button>
-              <button type="button" className={styles.primaryBtn} onClick={handlePrepareReview} disabled={!fundingPlan}>
+              <button type="button" className={ui.btnPrimary} onClick={handlePrepareReview} disabled={!fundingPlan}>
                 Revisar y preparar firma
               </button>
             </div>
@@ -538,41 +521,39 @@ export default function SmartAddLiquidityModal({
         )}
 
         {!isBusy && step === 'review' && prepareData && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>Paso 3: Review y firma</span>
-            </div>
+          <section className={ui.section}>
+            <h3 className={ui.sectionTitle}>Paso 3: Review y firma</h3>
 
-            <div className={styles.summaryGrid}>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Red / versión</span>
-                <strong className={styles.tileValue}>{network} · {String(version).toUpperCase()}</strong>
+            <div className={ui.grid3}>
+              <div className={ui.metricCard}>
+                <span className={ui.metricLabel}>Red / versión</span>
+                <strong className={ui.metricValue}>{network} · {String(version).toUpperCase()}</strong>
               </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Wallet</span>
-                <strong className={styles.tileValue}>{wallet?.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'No conectada'}</strong>
+              <div className={ui.metricCard}>
+                <span className={ui.metricLabel}>Wallet</span>
+                <strong className={ui.metricValue}>{wallet?.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'No conectada'}</strong>
               </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Posición</span>
-                <strong className={styles.tileValue}>#{positionIdentifier}</strong>
+              <div className={ui.metricCard}>
+                <span className={ui.metricLabel}>Posición</span>
+                <strong className={ui.metricValue}>#{positionIdentifier}</strong>
               </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Tokens objetivo</span>
-                <strong className={styles.tileValue}>
+              <div className={ui.metricCard}>
+                <span className={ui.metricLabel}>Tokens objetivo</span>
+                <strong className={ui.metricValue}>
                   {prepareData.quoteSummary?.amount0Desired} {prepareData.quoteSummary?.token0?.symbol}
                   {' + '}
                   {prepareData.quoteSummary?.amount1Desired} {prepareData.quoteSummary?.token1?.symbol}
                 </strong>
               </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Gas reservado</span>
-                <strong className={styles.tileValue}>
+              <div className={ui.metricCard}>
+                <span className={ui.metricLabel}>Gas reservado</span>
+                <strong className={ui.metricValue}>
                   {prepareData.fundingPlan?.gasReserve?.reservedAmount} {prepareData.fundingPlan?.gasReserve?.symbol}
                 </strong>
               </div>
-              <div className={styles.summaryTile}>
-                <span className={styles.tileLabel}>Pool estimado</span>
-                <strong className={styles.tileValue}>
+              <div className={ui.metricCard}>
+                <span className={ui.metricLabel}>Pool estimado</span>
+                <strong className={ui.metricValue}>
                   {formatUsd(prepareData.fundingPlan?.estimatedPoolValueUsd || 0)}
                 </strong>
               </div>
@@ -612,7 +593,7 @@ export default function SmartAddLiquidityModal({
             )}
 
             {(prepareData.warnings || []).length > 0 && (
-              <div className={styles.noticeCard}>
+              <div className={ui.notice}>
                 <strong>Advertencias</strong>
                 {(prepareData.warnings || []).map((warning) => (
                   <p key={warning}>{warning}</p>
@@ -620,13 +601,13 @@ export default function SmartAddLiquidityModal({
               </div>
             )}
 
-            {error && <div className={styles.error}>{error}</div>}
+            {error && <div className={ui.errorBox}>{error}</div>}
 
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.secondaryBtn} onClick={() => setStep('funding')}>
+            <div className={ui.footerGroup}>
+              <button type="button" className={ui.btnSecondary} onClick={() => setStep('funding')}>
                 ← Volver a fondeo
               </button>
-              <button type="button" className={styles.primaryBtn} onClick={handleExecute}>
+              <button type="button" className={ui.btnPrimary} onClick={handleExecute}>
                 Firmar con wallet
               </button>
             </div>
@@ -634,12 +615,10 @@ export default function SmartAddLiquidityModal({
         )}
 
         {step === 'signing' && (
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.kicker}>
+          <section className={ui.section}>
+            <h3 className={ui.sectionTitle}>
                 Transacción {Math.min(currentTxIndex + 1, prepareData?.txPlan?.length || 0)} de {prepareData?.txPlan?.length || 0}
-              </span>
-            </div>
+              </h3>
             <div className={styles.txProgressList}>
               {(prepareData?.txPlan || []).map((tx, index) => {
                 const label = tx?.label || `Transacción ${index + 1}`;
@@ -676,8 +655,8 @@ export default function SmartAddLiquidityModal({
         )}
 
         {step === 'done' && (
-          <section className={styles.section}>
-            <div className={styles.success}>
+          <section className={ui.section}>
+            <div className={ui.badgeOk}>
               <div className={styles.checkmark}>✓</div>
               <p>Liquidez agregada correctamente al LP.</p>
             </div>
@@ -694,7 +673,7 @@ export default function SmartAddLiquidityModal({
                         {' — '}
                         {txLink
                           ? <a href={txLink} target="_blank" rel="noopener noreferrer" className={styles.txLink}>{hash.slice(0, 14)}…{hash.slice(-6)}</a>
-                          : <span className={styles.hint}>{hash.slice(0, 14)}…{hash.slice(-6)}</span>
+                          : <span className={ui.fieldHint}>{hash.slice(0, 14)}…{hash.slice(-6)}</span>
                         }
                       </span>
                     </div>
@@ -702,8 +681,8 @@ export default function SmartAddLiquidityModal({
                 })}
               </div>
             )}
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.primaryBtn} onClick={onClose}>
+            <div className={ui.footerGroup}>
+              <button type="button" className={ui.btnPrimary} onClick={onClose}>
                 Cerrar
               </button>
             </div>
@@ -711,8 +690,8 @@ export default function SmartAddLiquidityModal({
         )}
 
         {step === 'error' && (
-          <section className={styles.section}>
-            <div className={styles.errorBox}>
+          <section className={ui.section}>
+            <div className={ui.errorBox}>
               <p>{error || 'Ocurrió un error agregando liquidez.'}</p>
               {failedTxLabel && <p>Tx con problema: {failedTxLabel}</p>}
               {completedTxIndex >= 0 && txHashes.length > 0 && (
@@ -734,20 +713,19 @@ export default function SmartAddLiquidityModal({
                       </div>
                     );
                   })}
-                  <p className={styles.hint}>
+                  <p className={ui.fieldHint}>
                     El aumento quedó parcialmente ejecutado on-chain. Revisa estas transacciones y prepara un plan nuevo antes de volver a firmar.
                   </p>
                 </div>
               )}
             </div>
-            <div className={styles.buttonGroup}>
-              <button type="button" className={styles.secondaryBtn} onClick={onClose}>
+            <div className={ui.footerGroup}>
+              <button type="button" className={ui.btnSecondary} onClick={onClose}>
                 Cerrar
               </button>
             </div>
           </section>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }

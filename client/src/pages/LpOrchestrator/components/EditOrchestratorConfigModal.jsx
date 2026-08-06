@@ -6,7 +6,9 @@ import ProtectionFormFields, {
 } from '../../../features/lp-wizard/ProtectionFormFields';
 import StrategyFieldInput from './StrategyFieldInput';
 import { validateStrategyFields } from './strategy-fields';
-import styles from './StrategyFieldInput.module.css';
+import ModalShell from '../../../components/shared/ModalShell/ModalShell';
+import ui from '../../../styles/modal-controls.module.css';
+import styles from './EditOrchestratorConfigModal.module.css';
 
 // Convierte el `protectionConfig` persistido (forma payload/backend) al shape
 // del form (strings para inputs). Si viene null/undefined, muestra la UI
@@ -126,128 +128,78 @@ export default function EditOrchestratorConfigModal({
     }
   }
 
+  const STRATEGY_FIELDS = [
+    'rangeWidthPct', 'edgeMarginPct',
+    'costToRewardThreshold', 'reinvestThresholdUsd',
+    'urgentAlertRepeatMinutes', 'minRebalanceCooldownSec',
+    'minNetLpEarningsForRebalanceUsd', 'maxSlippageBps',
+  ];
+
   return (
-    <div className={styles.overlay} onClick={onClose}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <header className={styles.header}>
-          <div>
-            <span className={styles.eyebrow}>LP Orchestrator</span>
-            <h2 className={styles.title}>Editar configuración</h2>
-            <p className={styles.stepLabel}>{orchestrator?.name || `#${orchestrator?.id}`}</p>
-          </div>
-          <button type="button" className={styles.closeBtn} onClick={onClose}>✕</button>
-        </header>
-
-        <div className={styles.body}>
-          <section className={styles.section}>
-            <h3 className={styles.sectionTitle || ''} style={{ margin: '0 0 8px 0' }}>Estrategia</h3>
-
-            <div className={styles.strategyPreview}>
-              <div className={styles.previewBox}>
-                <span className={styles.previewLabel}>Resumen</span>
-                <div className={styles.previewBars}>
-                  <div className={styles.previewBar}>
-                    <div className={styles.previewEdge} style={{ flex: em || 0 }}>borde</div>
-                    <div className={styles.previewCentral} style={{ flex: centralPct || 0 }}>
-                      {centralPct != null ? `${centralPct}% central` : '—'}
-                    </div>
-                    <div className={styles.previewEdge} style={{ flex: em || 0 }}>borde</div>
-                  </div>
-                </div>
-                <span className={styles.previewHint}>
-                  ±{Number.isFinite(rw) ? rw : '?'}% del precio · {Number.isFinite(em) ? em : '?'}% margen a cada borde
-                </span>
-              </div>
-            </div>
-
-            <div className={styles.fields}>
-              <div className={styles.row}>
-                <StrategyFieldInput
-                    fieldKey="rangeWidthPct"
-                    value={strategy.rangeWidthPct}
-                    onChange={handleStrategyField}
-                  />
-                <StrategyFieldInput
-                    fieldKey="edgeMarginPct"
-                    value={strategy.edgeMarginPct}
-                    onChange={handleStrategyField}
-                  />
-              </div>
-
-              <div className={styles.row}>
-                <StrategyFieldInput
-                    fieldKey="costToRewardThreshold"
-                    value={strategy.costToRewardThreshold}
-                    onChange={handleStrategyField}
-                  />
-                <StrategyFieldInput
-                    fieldKey="reinvestThresholdUsd"
-                    value={strategy.reinvestThresholdUsd}
-                    onChange={handleStrategyField}
-                  />
-              </div>
-
-              <div className={styles.row}>
-                <StrategyFieldInput
-                    fieldKey="urgentAlertRepeatMinutes"
-                    value={strategy.urgentAlertRepeatMinutes}
-                    onChange={handleStrategyField}
-                  />
-                <StrategyFieldInput
-                    fieldKey="minRebalanceCooldownSec"
-                    value={strategy.minRebalanceCooldownSec}
-                    onChange={handleStrategyField}
-                  />
-              </div>
-
-              <div className={styles.row}>
-                <StrategyFieldInput
-                    fieldKey="minNetLpEarningsForRebalanceUsd"
-                    value={strategy.minNetLpEarningsForRebalanceUsd}
-                    onChange={handleStrategyField}
-                  />
-                <StrategyFieldInput
-                    fieldKey="maxSlippageBps"
-                    value={strategy.maxSlippageBps}
-                    onChange={handleStrategyField}
-                  />
-              </div>
-            </div>
-          </section>
-
-          <section className={styles.section}>
-            <h3 style={{ margin: '16px 0 8px 0' }}>Protección delta-neutral</h3>
-            {hasActiveProtectedPool && (
-              <p className={styles.hint} style={{ marginBottom: 12 }}>
-                Este orquestador tiene una protección activa. Los cambios aquí <strong>sólo afectan al próximo LP</strong>; la protección actual mantiene su configuración hasta que se cierre.
-              </p>
-            )}
-            <ProtectionFormFields
-              value={protection}
-              onChange={setProtection}
-              accounts={accounts}
-              initialUsd={initialUsd}
-              rangeWidthPct={Number(strategy.rangeWidthPct) || null}
-            />
-          </section>
-
-          {error && <p className={styles.error}>{error}</p>}
-        </div>
-
-        <footer className={styles.footer}>
-          <button type="button" className={styles.btn} onClick={onClose} disabled={isBusy}>
+    <ModalShell
+      eyebrow="LP Orchestrator"
+      title="Editar configuración"
+      desc={orchestrator?.name || `#${orchestrator?.id}`}
+      size="md"
+      onClose={onClose}
+      closeDisabled={isBusy}
+      footer={(
+        <>
+          <button type="button" className={ui.btnSecondary} onClick={onClose} disabled={isBusy}>
             Cancelar
           </button>
-          <button
-            type="button"
-            className={`${styles.btn} ${styles.primary}`}
-            onClick={handleSave}
-            disabled={isBusy}
-          >
+          <button type="button" className={ui.btnPrimary} onClick={handleSave} disabled={isBusy}>
             {isBusy ? 'Guardando…' : 'Guardar cambios'}
           </button>
-        </footer>
-      </div>
-    </div>
+        </>
+      )}
+    >
+      <section className={ui.section}>
+        <h3 className={ui.sectionTitle}>Estrategia</h3>
+
+        <div className={styles.previewBox}>
+          <span className={ui.metricLabel}>Resumen</span>
+          <div className={styles.previewBar}>
+            <div className={styles.previewEdge} style={{ flex: em || 0 }}>borde</div>
+            <div className={styles.previewCentral} style={{ flex: centralPct || 0 }}>
+              {centralPct != null ? `${centralPct}% central` : '—'}
+            </div>
+            <div className={styles.previewEdge} style={{ flex: em || 0 }}>borde</div>
+          </div>
+          <span className={ui.fieldHint}>
+            ±{Number.isFinite(rw) ? rw : '?'}% del precio · {Number.isFinite(em) ? em : '?'}% margen a cada borde
+          </span>
+        </div>
+
+        <div className={ui.grid2}>
+          {STRATEGY_FIELDS.map((fieldKey) => (
+            <StrategyFieldInput
+              key={fieldKey}
+              fieldKey={fieldKey}
+              value={strategy[fieldKey]}
+              onChange={handleStrategyField}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className={ui.section}>
+        <h3 className={ui.sectionTitle}>Protección delta-neutral</h3>
+        {hasActiveProtectedPool && (
+          <div className={ui.noticeWarn}>
+            Este orquestador tiene una protección activa. Los cambios aquí <strong>sólo afectan al próximo LP</strong>; la protección actual mantiene su configuración hasta que se cierre.
+          </div>
+        )}
+        <ProtectionFormFields
+          value={protection}
+          onChange={setProtection}
+          accounts={accounts}
+          initialUsd={initialUsd}
+          rangeWidthPct={Number(strategy.rangeWidthPct) || null}
+        />
+      </section>
+
+      {error && <div className={ui.errorBox}>{error}</div>}
+    </ModalShell>
   );
 }

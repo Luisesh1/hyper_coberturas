@@ -1,0 +1,371 @@
+/**
+ * modal-controls.module.css — Controles internos compartidos por los diálogos
+ * que usan ModalShell.
+ *
+ * El lenguaje es el de UnifiedLpWizard (la referencia aprobada), no el de
+ * components.css: el `.btn-primary` global es un degradado teal→azul y el
+ * wizard usa --teal plano. Unificar ambos sistemas es una segunda pasada que
+ * toca toda la app; ver el spec.
+ *
+ * Ver docs/superpowers/specs/2026-08-05-modales-orquestador-design.md
+ *
+ * ESPECIFICIDAD: las reglas de campo usan doble clase (`.field.field input`) a
+ * propósito. Un `.field input` suelto (0-1-1) empata con los `input[type='…']`
+ * globales y pierde por orden — de ahí salió el bug del prefijo `$`. Y casan el
+ * elemento, no el atributo, porque hay inputs escritos sin `type`.
+ */
+
+/* ── Secciones ──────────────────────────────────────────────────────────── */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sectionTitle {
+  margin: 0 0 4px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.sectionHint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--text-secondary);
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+
+.grid3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sp-3);
+}
+
+/* ── Campos ─────────────────────────────────────────────────────────────── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.fieldHint {
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-normal);
+  color: var(--text-hint);
+}
+
+.fieldHintError {
+  color: var(--status-error);
+}
+
+/* `.field.field` (clase duplicada, especificidad 0-2-1) a propósito, por dos
+   razones:
+   1. Un `input` sin atributo `type` NO casa con `input[type='text']` — y varios
+      modales los escriben así (`<input name="…" value=… />`). Hay que casar el
+      elemento, no el atributo.
+   2. CSS Modules solo renombra las clases: los selectores de elemento siguen
+      siendo globales. `SmartCreatePoolModal.module.css` declara
+      `input[type='text'], input[type='number']` con su propio padding y fondo,
+      y eso afecta a toda la app. Con 0-2-1 ganamos sin depender del orden de
+      importación. */
+.field.field input,
+.field.field select,
+.field.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.field.field textarea {
+  padding: 10px 12px;
+  min-height: 76px;
+  resize: vertical;
+}
+
+.field.field input:hover:not(:disabled),
+.field.field select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.field.field input:focus,
+.field.field select:focus,
+.field.field textarea:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: var(--focus-ring);
+}
+
+.field.field input:disabled,
+.field.field select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.field.field input::placeholder {
+  color: var(--text-hint);
+  font-family: var(--font-sans);
+}
+
+/* Prefijo de moneda. Doble clase para ganar al padding base, igual que arriba. */
+.inputWithPrefix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.inputPrefix {
+  position: absolute;
+  left: 12px;
+  z-index: 1;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  pointer-events: none;
+}
+
+.inputWithPrefix.inputWithPrefix input {
+  padding-left: 30px;
+}
+
+/* ── Chips de selección ─────────────────────────────────────────────────── */
+
+.chipRow {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.chip {
+  padding: 7px 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.chipOn {
+  border-color: var(--teal-border);
+  background: var(--teal-bg);
+  color: var(--teal);
+}
+
+/* ── Badges de estado ───────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.badgeWarn {
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-border);
+  color: var(--status-warn);
+}
+
+.badgeDanger {
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  color: var(--status-error);
+}
+
+.badgeOk {
+  background: var(--green-bg);
+  border: 1px solid var(--green-border);
+  color: var(--status-ok);
+}
+
+.badgeInfo {
+  background: var(--cyan-bg);
+  border: 1px solid var(--cyan-border);
+  color: var(--status-info);
+}
+
+/* ── Tarjetas de dato ───────────────────────────────────────────────────── */
+
+.metricCard {
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.metricLabel {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.metricValue {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-bright);
+  overflow-wrap: anywhere;
+}
+
+/* ── Avisos y errores ───────────────────────────────────────────────────── */
+
+.notice {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.noticeWarn {
+  border-color: var(--amber-border);
+  background: var(--amber-bg);
+  color: var(--amber-pastel);
+}
+
+.errorBox {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--red-border);
+  background: var(--red-bg);
+  color: var(--red-pastel);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+/* ── Botones (lenguaje del wizard) ──────────────────────────────────────── */
+
+.btn,
+.btnPrimary,
+.btnSecondary,
+.btnGhost,
+.btnDanger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 38px;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.btn:hover:not(:disabled),
+.btnSecondary:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.btnPrimary {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #08211e;
+  font-weight: 700;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--teal-hover);
+  border-color: var(--teal-hover);
+}
+
+.btnGhost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-tertiary);
+}
+
+.btnGhost:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.btnDanger {
+  background: var(--red-bg);
+  border-color: var(--red-border);
+  color: var(--red-pastel);
+}
+
+.btnDanger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: var(--red);
+}
+
+.btnDanger:focus-visible {
+  box-shadow: var(--focus-ring-danger);
+}
+
+.btn:disabled,
+.btnPrimary:disabled,
+.btnSecondary:disabled,
+.btnGhost:disabled,
+.btnDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Pie con navegación a la izquierda y confirmación a la derecha. */
+.footerSplit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  width: 100%;
+}
+
+.footerGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}

@@ -1,0 +1,208 @@
+/**
+ * Solo lo propio de SmartAddLiquidityModal: stepper, lista de activos de
+ * fondeo y progreso de transacciones. La cáscara la pone ModalShell y los
+ * controles genéricos modal-controls.
+ *
+ * Antes compartía SmartCreatePoolModal.module.css entero (hex crudos: #1a1a2e,
+ * #00d4ff, #3d3d54). Ese archivo sigue intacto para SmartCreatePoolModal, que
+ * está fuera del alcance de esta unificación.
+ * Ver docs/superpowers/specs/2026-08-05-modales-orquestador-design.md
+ */
+
+.stepper {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+/* ── Carga ──────────────────────────────────────────────────────────────── */
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-7) var(--sp-5);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--border);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
+
+.checkmark {
+  font-size: 2.4rem;
+  color: var(--status-ok);
+  text-align: center;
+}
+
+/* ── Activos de fondeo ──────────────────────────────────────────────────── */
+
+.assetList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.assetRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) repeat(3, minmax(110px, 1fr));
+  gap: var(--sp-3);
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+
+.assetCheckbox {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-bright);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+
+.assetMeta {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.inlineActions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+}
+
+/* ── Transacciones ──────────────────────────────────────────────────────── */
+
+.txList {
+  padding: var(--sp-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+
+.txList h4 {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.txItem {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.txLabel {
+  color: var(--text-primary);
+}
+
+.txLink {
+  color: var(--teal);
+  text-decoration: underline;
+  word-break: break-all;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  transition: color var(--transition-fast);
+}
+
+.txLink:hover {
+  color: var(--teal-hover);
+}
+
+.txProgressList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.txStepItem {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  font-size: var(--fs-sm);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.txStepIcon {
+  min-width: 1.2rem;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.txStepLabel {
+  flex: 1;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.txStepHash {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-tertiary);
+}
+
+.txStepActive {
+  border-color: var(--teal-border);
+  background: var(--teal-bg);
+}
+
+.txStepActive .txStepIcon { color: var(--teal); }
+.txStepActive .txStepLabel { color: var(--text-bright); }
+
+.txStepDone {
+  border-color: var(--green-border);
+  background: var(--green-bg);
+}
+
+.txStepDone .txStepIcon { color: var(--green); }
+.txStepDone .txStepLabel { color: var(--status-ok); }
+
+.txStepPending {
+  opacity: 0.45;
+}
+
+.txStepSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .txStepSpinner { animation: none; }
+}

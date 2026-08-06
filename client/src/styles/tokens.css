@@ -79,6 +79,7 @@
 
   /* ── Teal ─────────────────────────────────────────────── */
   --teal: #2dd4bf;
+  --teal-hover: #26b8a6;
   --teal-bg: rgba(45, 212, 191, 0.12);
   --teal-border: rgba(45, 212, 191, 0.25);
 
@@ -136,6 +137,16 @@
   /* ── Focus ring (a11y) ────────────────────────────────── */
   --focus-ring: 0 0 0 3px rgba(102, 225, 219, 0.35);
   --focus-ring-danger: 0 0 0 3px rgba(239, 68, 68, 0.35);
+
+  /* ── Capas (z-index) ──────────────────────────────────── */
+  /* Sustituye a los valores sueltos (60, 130, 140, 1000, 1200) que cada
+     modal traía por su cuenta. --z-modal-stacked es para los diálogos que
+     se abren DESDE otro diálogo, como PositionActionModal desde la página
+     del orquestador. */
+  --z-modal: 1000;
+  --z-drawer: 1000;
+  --z-modal-stacked: 1100;
+  --z-toast: 1300;
 
   /* ── Uniswap/LP accent palette (antes scoped por página) ── */
   --uni-bg-0: #081018;

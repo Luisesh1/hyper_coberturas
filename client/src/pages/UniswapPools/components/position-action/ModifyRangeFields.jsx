@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { formatUsd } from '../../utils/pool-formatters';
 import { formatNumber } from '../../../../utils/formatters';
 import { pctToPrice, priceToPct } from './form-state';
-import styles from '../PositionActionModal.module.css';
+import ui from '../../../../styles/modal-controls.module.css';
 
 /**
  * Sub-formulario del modal PositionActionModal específico para modificar el
@@ -86,29 +86,29 @@ export default function ModifyRangeFields({ pool, formState, setFormState }) {
 
   return (
     <>
-      <div className={styles.field} style={{ gridColumn: '1 / -1' }}>
-        <span>Precio actual</span>
+      <div className={ui.field} style={{ gridColumn: '1 / -1' }}>
+        <span className={ui.fieldLabel}>Precio actual</span>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <strong style={{ color: '#66e1db', fontSize: '1.1rem' }}>
+          <strong className={ui.metricValue}>
             {formatNumber(priceCurrent, 4)} {token1Symbol}/{token0Symbol}
           </strong>
-          <span style={{ color: '#97a9bd', fontSize: '0.82rem' }}>
+          <span className={ui.fieldHint}>
             LP: {formatNumber(amount0, 6)} {token0Symbol} + {formatNumber(amount1, 4)} {token1Symbol}
             {totalLpValue > 0 ? ` (${formatUsd(totalLpValue)})` : ''}
           </span>
         </div>
       </div>
 
-      <div className={styles.field} style={{ gridColumn: '1 / -1' }}>
+      <div className={ui.field} style={{ gridColumn: '1 / -1' }}>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             type="button"
             onClick={() => setMode('absolute')}
             style={{
               padding: '6px 14px', borderRadius: '8px', border: '1px solid',
-              borderColor: mode === 'absolute' ? '#66e1db' : 'rgba(133,157,181,0.2)',
-              background: mode === 'absolute' ? 'rgba(102,225,219,0.12)' : 'transparent',
-              color: mode === 'absolute' ? '#66e1db' : '#97a9bd', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem',
+              borderColor: mode === 'absolute' ? 'var(--teal)' : 'var(--border)',
+              background: mode === 'absolute' ? 'var(--teal-bg)' : 'transparent',
+              color: mode === 'absolute' ? 'var(--teal)' : 'var(--text-secondary)', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem',
             }}
           >
             Precio absoluto
@@ -118,9 +118,9 @@ export default function ModifyRangeFields({ pool, formState, setFormState }) {
             onClick={() => setMode('percent')}
             style={{
               padding: '6px 14px', borderRadius: '8px', border: '1px solid',
-              borderColor: mode === 'percent' ? '#66e1db' : 'rgba(133,157,181,0.2)',
-              background: mode === 'percent' ? 'rgba(102,225,219,0.12)' : 'transparent',
-              color: mode === 'percent' ? '#66e1db' : '#97a9bd', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem',
+              borderColor: mode === 'percent' ? 'var(--teal)' : 'var(--border)',
+              background: mode === 'percent' ? 'var(--teal-bg)' : 'transparent',
+              color: mode === 'percent' ? 'var(--teal)' : 'var(--text-secondary)', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem',
             }}
           >
             % desde precio actual
@@ -130,34 +130,34 @@ export default function ModifyRangeFields({ pool, formState, setFormState }) {
 
       {mode === 'absolute' ? (
         <>
-          <label className={styles.field}>
-            <span>Precio inferior</span>
+          <label className={ui.field}>
+            <span className={ui.fieldLabel}>Precio inferior</span>
             <input name="rangeLowerPrice" value={formState.rangeLowerPrice} onChange={handleAbsoluteChange} />
-            <span style={{ color: '#97a9bd', fontSize: '0.75rem' }}>
+            <span className={ui.fieldHint}>
               {lowerPctDisplay >= 0 ? '+' : ''}{formatNumber(lowerPctDisplay, 2)}% desde actual
             </span>
           </label>
-          <label className={styles.field}>
-            <span>Precio superior</span>
+          <label className={ui.field}>
+            <span className={ui.fieldLabel}>Precio superior</span>
             <input name="rangeUpperPrice" value={formState.rangeUpperPrice} onChange={handleAbsoluteChange} />
-            <span style={{ color: '#97a9bd', fontSize: '0.75rem' }}>
+            <span className={ui.fieldHint}>
               {upperPctDisplay >= 0 ? '+' : ''}{formatNumber(upperPctDisplay, 2)}% desde actual
             </span>
           </label>
         </>
       ) : (
         <>
-          <label className={styles.field}>
-            <span>Límite inferior (%)</span>
+          <label className={ui.field}>
+            <span className={ui.fieldLabel}>Límite inferior (%)</span>
             <input type="number" step="0.1" value={lowerPct} onChange={handleLowerPctChange} />
-            <span style={{ color: '#97a9bd', fontSize: '0.75rem' }}>
+            <span className={ui.fieldHint}>
               = {formatNumber(Number(formState.rangeLowerPrice || 0), 4)} {token1Symbol}/{token0Symbol}
             </span>
           </label>
-          <label className={styles.field}>
-            <span>Límite superior (%)</span>
+          <label className={ui.field}>
+            <span className={ui.fieldLabel}>Límite superior (%)</span>
             <input type="number" step="0.1" value={upperPct} onChange={handleUpperPctChange} />
-            <span style={{ color: '#97a9bd', fontSize: '0.75rem' }}>
+            <span className={ui.fieldHint}>
               = {formatNumber(Number(formState.rangeUpperPrice || 0), 4)} {token1Symbol}/{token0Symbol}
             </span>
           </label>
@@ -165,27 +165,27 @@ export default function ModifyRangeFields({ pool, formState, setFormState }) {
       )}
 
       {lowerPrice > 0 && upperPrice > 0 && priceCurrent > 0 && (
-        <div className={styles.field} style={{ gridColumn: '1 / -1' }}>
-          <span>Resumen del nuevo rango</span>
+        <div className={ui.field} style={{ gridColumn: '1 / -1' }}>
+          <span className={ui.fieldLabel}>Resumen del nuevo rango</span>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px' }}>
             <div style={{ background: 'rgba(102,225,219,0.06)', padding: '8px 12px', borderRadius: '10px' }}>
-              <div style={{ color: '#97a9bd', fontSize: '0.72rem', textTransform: 'uppercase' }}>Ancho total</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase' }}>Ancho total</div>
               <strong style={{ color: '#f5f7fb' }}>{formatNumber(rangeWidth, 2)}%</strong>
             </div>
             <div style={{ background: 'rgba(102,225,219,0.06)', padding: '8px 12px', borderRadius: '10px' }}>
-              <div style={{ color: '#97a9bd', fontSize: '0.72rem', textTransform: 'uppercase' }}>Inferior</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase' }}>Inferior</div>
               <strong style={{ color: lowerPctDisplay < 0 ? '#ff7d7d' : '#3dd991' }}>
                 {lowerPctDisplay >= 0 ? '+' : ''}{formatNumber(lowerPctDisplay, 2)}%
               </strong>
             </div>
             <div style={{ background: 'rgba(102,225,219,0.06)', padding: '8px 12px', borderRadius: '10px' }}>
-              <div style={{ color: '#97a9bd', fontSize: '0.72rem', textTransform: 'uppercase' }}>Superior</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase' }}>Superior</div>
               <strong style={{ color: upperPctDisplay > 0 ? '#3dd991' : '#ff7d7d' }}>
                 {upperPctDisplay >= 0 ? '+' : ''}{formatNumber(upperPctDisplay, 2)}%
               </strong>
             </div>
             <div style={{ background: 'rgba(102,225,219,0.06)', padding: '8px 12px', borderRadius: '10px' }}>
-              <div style={{ color: '#97a9bd', fontSize: '0.72rem', textTransform: 'uppercase' }}>Centrado</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase' }}>Centrado</div>
               <strong style={{ color: '#f5f7fb' }}>
                 {priceCurrent >= lowerPrice && priceCurrent <= upperPrice ? 'Dentro' : 'Fuera'}
               </strong>
