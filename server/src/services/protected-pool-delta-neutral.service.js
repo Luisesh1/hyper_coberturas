@@ -38,7 +38,8 @@ const {
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
   DEFAULT_REBALANCE_INTERVAL_SEC,
   DEFAULT_TARGET_HEDGE_RATIO,
-  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
+  resolveMinRebalanceNotionalUsd,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,
@@ -1354,7 +1355,10 @@ class ProtectedPoolDeltaNeutralService {
     const zoneState = this._deriveZoneState(protection, currentPrice);
     const nearBoundary = zoneState === 'edge' || zoneState === 'outside';
     const evalDue = (now - (this.lastEvalAt.get(protection.id) || 0)) >= this.fullEvalMs
-      || normalizeStrategyState(protection.strategyState).truthPending === true;
+      || strategyState.truthPending === true
+      // Una senal forzada esperando a que venza el min-dwell no puede quedarse
+      // a merced de la cadencia larga: es capital descubierto.
+      || strategyState.pendingForceReason != null;
 
     if (!evalDue && !crossedBoundary && !nearBoundary) return;
 
@@ -1414,13 +1418,24 @@ class ProtectedPoolDeltaNeutralService {
     }
   }
 
-  async _evaluateProtectionUnlocked(protection, { marketContext = null, forceReason = null, forceRebalance = false } = {}) {
+  async _evaluateProtectionUnlocked(protection, options = {}) {
+    const { marketContext = null } = options;
+    let { forceReason = null, forceRebalance = false } = options;
     const current = await this.repo.getById(protection.userId, protection.id);
     if (!current || current.status !== 'active' || current.protectionMode !== 'delta_neutral') {
       return null;
     }
 
     const strategyState = normalizeStrategyState(current.strategyState);
+
+    // Rehidrata una senal forzada que el min-dwell bloqueo en un tick anterior.
+    // Quien las emite —el orquestador tras un cambio de liquidez— lo hace una
+    // sola vez y sin reintento, asi que sin esto la cobertura se queda colgada
+    // hasta que venza el temporizador (hasta 12 h) o el precio salga de banda.
+    if (!forceRebalance && strategyState.pendingForceReason) {
+      forceReason = forceReason || strategyState.pendingForceReason;
+      forceRebalance = true;
+    }
     let activeProtection = current;
     if ((current.snapshotStatus && current.snapshotStatus !== 'ready') || !current.poolSnapshot) {
       const refreshed = await this._refreshProtectionTruth(current, {
@@ -1973,11 +1988,14 @@ class ProtectedPoolDeltaNeutralService {
     const confidenceBlocksIncrease = nextState.modelConfidence === 'low' && driftQty > 0;
     const timerDue = !nextState.lastRebalanceAt
       || ((Date.now() - Number(nextState.lastRebalanceAt || 0)) >= (band.intervalSec * 1000));
+    // Porcentaje del valor VIVO del LP, no un absoluto congelado al crear la
+    // proteccion: si el LP crece o mengua, el umbral lo sigue.
+    const minRebalanceNotionalUsd = resolveMinRebalanceNotionalUsd(activeProtection, metrics.poolValueUsd);
     const shouldRebalance = forceRebalance
       || forceReduceNearZero
       || forceReason === 'boundary_cross'
       || priceMovePct >= band.effectiveBandPct
-      || (timerDue && driftUsd >= (activeProtection.minRebalanceNotionalUsd ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD))
+      || (timerDue && driftUsd >= minRebalanceNotionalUsd)
       || (!position && metrics.targetQty > 0.0000001);
 
     if (!position && metrics.targetQty > 0.0000001) {
@@ -2031,6 +2049,15 @@ class ProtectedPoolDeltaNeutralService {
       preflightOk: preflight.ok,
       preflightReason: preflight.reason,
       executionSkippedBecause: preflight.executionSkippedBecause,
+      // Por que NO se ejecuta pese a `preflightOk`. Sin esto, una cobertura
+      // congelada por umbral/dwell/temporizador es indistinguible en los logs
+      // de una sana: todos los campos de arriba salen en verde.
+      shouldRebalance: effectiveShouldRebalance,
+      poolValueUsd: metrics.poolValueUsd ?? null,
+      minRebalanceNotionalUsd: Number.isFinite(minRebalanceNotionalUsd) ? minRebalanceNotionalUsd : null,
+      driftUsd,
+      timerDue,
+      minDwellActive,
     });
     if (preflight.reason === 'insufficient_margin') {
       this.logger.warn?.('delta_neutral_insufficient_margin_blocked', {
@@ -2068,6 +2095,13 @@ class ProtectedPoolDeltaNeutralService {
     } else if (minDwellActive && shouldRebalance) {
       nextState.lastDecision = 'hold';
       nextState.lastDecisionReason = 'min_dwell_active';
+      // Solo las senales forzadas se guardan: un trigger por deriva o por
+      // precio se vuelve a evaluar solo en el tick siguiente, y marcarlo como
+      // pendiente lo convertiria en un forzado permanente que se salta las
+      // bandas de coste.
+      if (forceRebalance || forceReason === 'boundary_cross') {
+        nextState.pendingForceReason = forceReason || 'forced';
+      }
     }
     if (forcedStatus === 'margin_pending') {
       nextState.nextEligibleAttemptAt = Date.now() + MARGIN_COOLDOWN_MS;
@@ -2080,6 +2114,13 @@ class ProtectedPoolDeltaNeutralService {
         ? Date.now() + MARGIN_COOLDOWN_MS
         : strategyState.nextEligibleAttemptAt;
       nextState.cooldownReason = preflight.executionSkippedBecause;
+    }
+    // Manda sobre el "sin cooldown" de arriba: con una senal pendiente hay una
+    // fecha concreta en la que vuelve a ser elegible, y el monitor la necesita
+    // para no quedarse esperando al temporizador largo.
+    if (nextState.pendingForceReason && minDwellActive) {
+      nextState.nextEligibleAttemptAt = Number(nextState.minDwellUntil) || null;
+      nextState.cooldownReason = 'min_dwell_active';
     }
     if (forcedStatus) {
       if ((forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath) {
@@ -2190,6 +2231,9 @@ class ProtectedPoolDeltaNeutralService {
 
     const reason = forceReason
       || (!position && metrics.targetQty > 0.0000001 ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
+    // La senal pendiente se cobra aqui: se ejecuta con su motivo original y no
+    // debe sobrevivir a su propia ejecucion.
+    nextState.pendingForceReason = null;
     return this._executeRebalance({
       protection: activeProtection,
       tradingService,
@@ -3110,7 +3154,8 @@ module.exports.DEFAULT_BAND_MODE = DEFAULT_BAND_MODE;
 module.exports.DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT = DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT;
 module.exports.DEFAULT_REBALANCE_INTERVAL_SEC = DEFAULT_REBALANCE_INTERVAL_SEC;
 module.exports.DEFAULT_TARGET_HEDGE_RATIO = DEFAULT_TARGET_HEDGE_RATIO;
-module.exports.DEFAULT_MIN_REBALANCE_NOTIONAL_USD = DEFAULT_MIN_REBALANCE_NOTIONAL_USD;
+module.exports.DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = DEFAULT_MIN_REBALANCE_NOTIONAL_PCT;
+module.exports.resolveMinRebalanceNotionalUsd = resolveMinRebalanceNotionalUsd;
 module.exports.DEFAULT_MAX_SLIPPAGE_BPS = DEFAULT_MAX_SLIPPAGE_BPS;
 module.exports.DEFAULT_TWAP_MIN_NOTIONAL_USD = DEFAULT_TWAP_MIN_NOTIONAL_USD;
 module.exports.DEFAULT_MAX_AUTO_TOPUPS_PER_24H = DEFAULT_MAX_AUTO_TOPUPS_PER_24H;

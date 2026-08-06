@@ -3,6 +3,10 @@ import { formatAccountIdentity } from '../../utils/hyperliquidAccounts';
 import { formatUsd } from '../../pages/UniswapPools/utils/pool-formatters';
 import styles from './ProtectionFormFields.module.css';
 
+// Espeja DEFAULT_MIN_REBALANCE_NOTIONAL_PCT del servidor
+// (protected-pool-delta-neutral.helpers.js).
+export const DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12;
+
 const DELTA_NEUTRAL_PRESETS = [
   { id: 'adaptive', label: 'Adaptive', bandMode: 'adaptive', baseRebalancePriceMovePct: 3, rebalanceIntervalSec: 21600, hint: 'Bandas adaptativas por volatilidad. Coste intermedio.' },
   { id: 'balanced', label: 'Balanced', bandMode: 'fixed', baseRebalancePriceMovePct: 3, rebalanceIntervalSec: 21600, hint: 'Perfil medio de seguimiento.' },
@@ -19,7 +23,7 @@ const DEFAULT_PROTECTION = Object.freeze({
   baseRebalancePriceMovePct: '3',
   rebalanceIntervalSec: '21600',
   targetHedgeRatio: '1',
-  minRebalanceNotionalUsd: '50',
+  minRebalanceNotionalPct: '12',
   maxSlippageBps: '20',
   twapMinNotionalUsd: '10000',
   preset: 'adaptive',
@@ -42,9 +46,9 @@ const DEFAULT_PROTECTION = Object.freeze({
  *  - `baseRebalancePriceMovePct ≈ 30% del ancho del rango`, con suelo en 0.5%
  *    y techo en 5%. Esto hace que un movimiento moderado dentro del rango
  *    no dispare un rebalanceo, pero un movimiento sustancial sí.
- *  - `minRebalanceNotionalUsd ≈ 12% del notional inicial del hedge`, con
- *    mínimo absoluto de 2 USD. Sigue cubriendo la regla "drift > 3× costo
- *    de ejecución" del motor.
+ *  - `minRebalanceNotionalPct` no depende del ancho: es un % del valor del LP
+ *    que el motor resuelve en cada tick, así que ya escala solo con el tamaño
+ *    de la posición. Se deja en el default y el usuario puede afinarlo.
  */
 export function computeAutoTunedProtection(rangeWidthPct, initialUsd) {
   const rw = Number(rangeWidthPct);
@@ -85,7 +89,6 @@ export function computeAutoTunedProtection(rangeWidthPct, initialUsd) {
 
   // Hedge inicial = mitad del LP (heurística estable + volátil at-the-money).
   const initialHedge = initial / 2;
-  const minRebalanceNotionalUsd = Math.max(2, Math.round(initialHedge * 0.12));
 
   return {
     baseRebalancePriceMovePct: Number(baseRebalancePriceMovePct.toFixed(2)),
@@ -94,7 +97,7 @@ export function computeAutoTunedProtection(rangeWidthPct, initialUsd) {
     bandMode,
     maxSlippageBps,
     configuredNotionalUsd: Math.round(initialHedge),
-    minRebalanceNotionalUsd,
+    minRebalanceNotionalPct: DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
   };
 }
 
@@ -112,7 +115,7 @@ export function buildDefaultProtection(initialUsd, rangeWidthPct = null, options
       bandMode: tuned.bandMode,
       baseRebalancePriceMovePct: String(tuned.baseRebalancePriceMovePct),
       rebalanceIntervalSec: String(tuned.rebalanceIntervalSec),
-      minRebalanceNotionalUsd: String(tuned.minRebalanceNotionalUsd),
+      minRebalanceNotionalPct: String(tuned.minRebalanceNotionalPct),
       maxSlippageBps: String(tuned.maxSlippageBps),
       preset: tuned.preset,
       autoTunedFor: rangeWidthPct,
@@ -342,13 +345,14 @@ export default function ProtectionFormFields({
             </div>
             <div className={styles.row}>
               <div className={styles.field}>
-                <label>Min rebalance notional (USD)</label>
+                <label>Min drift para rebalancear (% del LP)</label>
                 <input
                   type="number"
-                  min="1"
-                  step="1"
-                  value={v.minRebalanceNotionalUsd}
-                  onChange={(e) => handleField('minRebalanceNotionalUsd', e.target.value)}
+                  min="0.1"
+                  max="100"
+                  step="any"
+                  value={v.minRebalanceNotionalPct}
+                  onChange={(e) => handleField('minRebalanceNotionalPct', e.target.value)}
                 />
               </div>
               <div className={styles.field}>
@@ -382,7 +386,7 @@ export function buildProtectionPayload(formValue) {
     baseRebalancePriceMovePct: Number(formValue.baseRebalancePriceMovePct),
     rebalanceIntervalSec: Number(formValue.rebalanceIntervalSec),
     targetHedgeRatio: Number(formValue.targetHedgeRatio),
-    minRebalanceNotionalUsd: Number(formValue.minRebalanceNotionalUsd),
+    minRebalanceNotionalPct: Number(formValue.minRebalanceNotionalPct),
     maxSlippageBps: Number(formValue.maxSlippageBps),
     twapMinNotionalUsd: Number(formValue.twapMinNotionalUsd),
   };

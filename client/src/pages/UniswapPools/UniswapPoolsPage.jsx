@@ -292,7 +292,7 @@ export default function UniswapPoolsPage() {
     baseRebalancePriceMovePct,
     rebalanceIntervalSec,
     targetHedgeRatio,
-    minRebalanceNotionalUsd,
+    minRebalanceNotionalPct,
     maxSlippageBps,
     twapMinNotionalUsd,
   }) => {
@@ -316,7 +316,7 @@ export default function UniswapPoolsPage() {
         baseRebalancePriceMovePct,
         rebalanceIntervalSec,
         targetHedgeRatio,
-        minRebalanceNotionalUsd,
+        minRebalanceNotionalPct,
         maxSlippageBps,
         twapMinNotionalUsd,
       });

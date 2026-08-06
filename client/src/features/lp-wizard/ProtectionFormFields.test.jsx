@@ -59,13 +59,14 @@ describe('computeAutoTunedProtection', () => {
     expect(computeAutoTunedProtection(5, 81).configuredNotionalUsd).toBe(41); // 40.5 → 41
   });
 
-  it('minRebalanceNotionalUsd es ~12% del notional inicial con suelo en 2', () => {
-    // capital 1000 → notional 500 → 12% = 60
-    expect(computeAutoTunedProtection(5, 1000).minRebalanceNotionalUsd).toBe(60);
-    // capital 80 → notional 40 → 12% = 4.8 → redondeo a 5
-    expect(computeAutoTunedProtection(5, 80).minRebalanceNotionalUsd).toBe(5);
-    // capital muy bajo → suelo de 2
-    expect(computeAutoTunedProtection(5, 5).minRebalanceNotionalUsd).toBe(2);
+  // Antes era un absoluto en USD derivado del capital, y se congelaba: un LP
+  // que crecia se quedaba con el umbral del primer dia. Ahora es un % que el
+  // motor aplica sobre el valor vivo del LP, asi que ya no depende del capital
+  // inicial ni del ancho del rango.
+  it('minRebalanceNotionalPct es un % fijo, independiente del capital', () => {
+    expect(computeAutoTunedProtection(5, 1000).minRebalanceNotionalPct).toBe(12);
+    expect(computeAutoTunedProtection(5, 80).minRebalanceNotionalPct).toBe(12);
+    expect(computeAutoTunedProtection(1, 5).minRebalanceNotionalPct).toBe(12);
   });
 });
 

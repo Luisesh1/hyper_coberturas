@@ -13,7 +13,7 @@ const DYNAMIC_MAX_SEQUENTIAL_FLIPS_DEFAULT = 6;
 const DYNAMIC_BREAKOUT_CONFIRM_DISTANCE_DEFAULT_PCT = 0.5;
 const DYNAMIC_BREAKOUT_CONFIRM_DURATION_DEFAULT_SEC = 600;
 const DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO = 1;
-const DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD = 50;
+const DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12;
 const DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS = 20;
 const DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD = 10000;
 const DELTA_NEUTRAL_PRESETS = [
@@ -55,7 +55,7 @@ function buildInitialFormState(candidate, defaultAccount) {
     baseRebalancePriceMovePct: String(candidate?.baseRebalancePriceMovePct ?? 3),
     rebalanceIntervalSec: String(candidate?.rebalanceIntervalSec ?? 21600),
     targetHedgeRatio: String(candidate?.targetHedgeRatio ?? DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO),
-    minRebalanceNotionalUsd: String(candidate?.minRebalanceNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD),
+    minRebalanceNotionalPct: String(candidate?.minRebalanceNotionalPct ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_PCT),
     maxSlippageBps: String(candidate?.maxSlippageBps ?? DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS),
     twapMinNotionalUsd: String(candidate?.twapMinNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD),
     selectedDeltaPreset: 'adaptive',
@@ -80,7 +80,7 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
   const [baseRebalancePriceMovePct, setBaseRebalancePriceMovePct] = useState(String(candidate?.baseRebalancePriceMovePct ?? 3));
   const [rebalanceIntervalSec, setRebalanceIntervalSec] = useState(String(candidate?.rebalanceIntervalSec ?? 21600));
   const [targetHedgeRatio, setTargetHedgeRatio] = useState(String(candidate?.targetHedgeRatio ?? DELTA_NEUTRAL_DEFAULT_TARGET_HEDGE_RATIO));
-  const [minRebalanceNotionalUsd, setMinRebalanceNotionalUsd] = useState(String(candidate?.minRebalanceNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_USD));
+  const [minRebalanceNotionalPct, setMinRebalanceNotionalPct] = useState(String(candidate?.minRebalanceNotionalPct ?? DELTA_NEUTRAL_DEFAULT_MIN_REBALANCE_NOTIONAL_PCT));
   const [maxSlippageBps, setMaxSlippageBps] = useState(String(candidate?.maxSlippageBps ?? DELTA_NEUTRAL_DEFAULT_MAX_SLIPPAGE_BPS));
   const [twapMinNotionalUsd, setTwapMinNotionalUsd] = useState(String(candidate?.twapMinNotionalUsd ?? DELTA_NEUTRAL_DEFAULT_TWAP_MIN_NOTIONAL_USD));
   const [selectedDeltaPreset, setSelectedDeltaPreset] = useState('adaptive');
@@ -105,7 +105,7 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
     setBaseRebalancePriceMovePct(initial.baseRebalancePriceMovePct);
     setRebalanceIntervalSec(initial.rebalanceIntervalSec);
     setTargetHedgeRatio(initial.targetHedgeRatio);
-    setMinRebalanceNotionalUsd(initial.minRebalanceNotionalUsd);
+    setMinRebalanceNotionalPct(initial.minRebalanceNotionalPct);
     setMaxSlippageBps(initial.maxSlippageBps);
     setTwapMinNotionalUsd(initial.twapMinNotionalUsd);
     setSelectedDeltaPreset(initial.selectedDeltaPreset);
@@ -130,7 +130,7 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
   const parsedBaseRebalancePriceMovePct = Number(baseRebalancePriceMovePct);
   const parsedRebalanceIntervalSec = Number(rebalanceIntervalSec);
   const parsedTargetHedgeRatio = Number(targetHedgeRatio);
-  const parsedMinRebalanceNotionalUsd = Number(minRebalanceNotionalUsd);
+  const parsedMinRebalanceNotionalPct = Number(minRebalanceNotionalPct);
   const parsedMaxSlippageBps = Number(maxSlippageBps);
   const parsedTwapMinNotionalUsd = Number(twapMinNotionalUsd);
   const estimatedSize = getEstimatedSize(candidate, protectionMode, parsedNotionalUsd);
@@ -221,8 +221,8 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       setError('El hedge ratio debe estar entre 0 y 2.');
       return;
     }
-    if (isDeltaNeutral && (!Number.isFinite(parsedMinRebalanceNotionalUsd) || parsedMinRebalanceNotionalUsd <= 0)) {
-      setError('El drift minimo debe ser un USD positivo.');
+    if (isDeltaNeutral && (!Number.isFinite(parsedMinRebalanceNotionalPct) || parsedMinRebalanceNotionalPct <= 0 || parsedMinRebalanceNotionalPct > 100)) {
+      setError('El drift minimo debe ser un porcentaje entre 0 y 100.');
       return;
     }
     if (isDeltaNeutral && (!Number.isInteger(parsedMaxSlippageBps) || parsedMaxSlippageBps < 1 || parsedMaxSlippageBps > 500)) {
@@ -252,7 +252,7 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
       baseRebalancePriceMovePct: isDeltaNeutral ? parsedBaseRebalancePriceMovePct : undefined,
       rebalanceIntervalSec: isDeltaNeutral ? parsedRebalanceIntervalSec : undefined,
       targetHedgeRatio: isDeltaNeutral ? parsedTargetHedgeRatio : undefined,
-      minRebalanceNotionalUsd: isDeltaNeutral ? parsedMinRebalanceNotionalUsd : undefined,
+      minRebalanceNotionalPct: isDeltaNeutral ? parsedMinRebalanceNotionalPct : undefined,
       maxSlippageBps: isDeltaNeutral ? parsedMaxSlippageBps : undefined,
       twapMinNotionalUsd: isDeltaNeutral ? parsedTwapMinNotionalUsd : undefined,
     });
@@ -418,7 +418,7 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
                   <label className={styles.field}>
                     <span className={styles.fieldLabel}>Intervalo rebalance</span>
                     <input className={styles.input} type="number" min="60" step="60" value={rebalanceIntervalSec} onChange={(e) => setRebalanceIntervalSec(e.target.value)} />
-                    <span className={styles.hint}>El timer solo actua si ademas el drift supera el minimo USD.</span>
+                    <span className={styles.hint}>El timer solo actua si ademas el drift supera el minimo.</span>
                   </label>
 
                   <label className={styles.field}>
@@ -428,8 +428,8 @@ export default function ApplyProtectionModal({ pool, accounts, isSubmitting, onC
                   </label>
 
                   <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Drift minimo USD</span>
-                    <input className={styles.input} type="number" min="1" step="1" value={minRebalanceNotionalUsd} onChange={(e) => setMinRebalanceNotionalUsd(e.target.value)} />
+                    <span className={styles.fieldLabel}>Drift minimo (% del LP)</span>
+                    <input className={styles.input} type="number" min="0.1" max="100" step="any" value={minRebalanceNotionalPct} onChange={(e) => setMinRebalanceNotionalPct(e.target.value)} />
                     <span className={styles.hint}>Evita rebalances triviales cuando vence el timer.</span>
                   </label>
 

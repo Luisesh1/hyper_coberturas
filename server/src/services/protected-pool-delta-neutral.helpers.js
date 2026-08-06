@@ -7,7 +7,16 @@ const DEFAULT_BAND_MODE = 'adaptive';
 const DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT = 3;
 const DEFAULT_REBALANCE_INTERVAL_SEC = 6 * 60 * 60;
 const DEFAULT_TARGET_HEDGE_RATIO = 1;
-const DEFAULT_MIN_REBALANCE_NOTIONAL_USD = 50;
+// Umbral de drift que habilita el brazo por temporizador de `shouldRebalance`,
+// expresado como % del valor VIVO del LP protegido. Antes era un absoluto en
+// USD congelado al crear la proteccion: en un LP de ~$50 el default de $50
+// exigia que el hedge estuviera equivocado al 100% para disparar, asi que ese
+// brazo no saltaba nunca y la cobertura se quedaba colgada tras cambiar la
+// liquidez. El 12% viene del auto-tune que el wizard ya aplicaba en el cliente.
+const DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12;
+// Por debajo de esto el ajuste no paga ni sus propias comisiones.
+const MIN_REBALANCE_NOTIONAL_FLOOR_USD = 2;
+const DEFAULT_DECISION_BAND_FLOOR_USD = 50;
 const DEFAULT_MAX_SLIPPAGE_BPS = 20;
 const DEFAULT_TWAP_MIN_NOTIONAL_USD = 10_000;
 const DEFAULT_EXECUTION_MODE = 'auto';
@@ -175,6 +184,10 @@ function buildInitialStrategyState({
     rpcBudgetState: null,
     zoneState: 'center',
     minDwellUntil: null,
+    // Senal forzada (cambio de liquidez del LP, cruce de frontera) que llego
+    // mientras el min-dwell estaba activo. Quien la emite lo hace una sola vez
+    // y sin cola, asi que se guarda aqui para que el tick siguiente la cobre.
+    pendingForceReason: null,
     lastTruthReason: null,
     truthPending: false,
     lastSyntheticInRange: null,
@@ -240,11 +253,37 @@ function buildTrackingMetrics(metrics, actualQty, currentPrice) {
   };
 }
 
+/**
+ * Umbral de drift (USD) por debajo del cual no vale la pena rebalancear por
+ * temporizador. Se deriva del valor vivo del LP para que siga al tamano de la
+ * posicion en vez de quedarse congelado en el que se configuro al crearla.
+ *
+ * Sin valor de LP utilizable devuelve Infinity: el brazo por temporizador se
+ * apaga y solo actuan los caminos forzados (cambio de liquidez, cruce de
+ * frontera). Es la lectura segura — con datos rotos, `targetQty` puede irse a
+ * cero y un umbral bajo desharia el hedge entero.
+ */
+function resolveMinRebalanceNotionalUsd(protection, poolValueUsd) {
+  const value = asFiniteNumber(poolValueUsd);
+  if (!Number.isFinite(value) || value <= 0) return Infinity;
+  // Ojo con `asFiniteNumber` aqui: convierte null en 0, y como la columna nace
+  // NULL en toda proteccion migrada, un `?? DEFAULT` no llegaria a dispararse
+  // nunca y el umbral se hundiria hasta el suelo.
+  const configuredPct = Number(protection?.minRebalanceNotionalPct);
+  const pct = Number.isFinite(configuredPct) && configuredPct > 0
+    ? configuredPct
+    : DEFAULT_MIN_REBALANCE_NOTIONAL_PCT;
+  return Math.max(MIN_REBALANCE_NOTIONAL_FLOOR_USD, (pct / 100) * value);
+}
+
 function deriveDecisionBandUsd(protection, metrics, currentPrice) {
+  // Suelo de la banda cost-aware. Antes caia en el absoluto configurable que
+  // ahora es porcentual, pero son cosas distintas —esta banda decide entre
+  // hold/parcial/full, no si toca mirar el reloj— y bajarla cambiaria cuando
+  // se considera un ajuste "parcial". Se mantiene el valor historico.
   const minRebalanceUsd = Number(
     protection?.minOrderNotionalUsd
-    ?? protection?.minRebalanceNotionalUsd
-    ?? DEFAULT_MIN_REBALANCE_NOTIONAL_USD
+    ?? DEFAULT_DECISION_BAND_FLOOR_USD
   );
   const targetQty = Number(metrics?.targetQty || 0);
   const estimatedCost = estimateExecutionCostUsd(targetQty, currentPrice);
@@ -403,7 +442,9 @@ module.exports = {
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
   DEFAULT_REBALANCE_INTERVAL_SEC,
   DEFAULT_TARGET_HEDGE_RATIO,
-  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
+  MIN_REBALANCE_NOTIONAL_FLOOR_USD,
+  resolveMinRebalanceNotionalUsd,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,

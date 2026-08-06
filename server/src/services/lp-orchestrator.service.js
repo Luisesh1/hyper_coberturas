@@ -237,7 +237,7 @@ class LpOrchestratorService {
           baseRebalancePriceMovePct: protectionConfig.baseRebalancePriceMovePct,
           rebalanceIntervalSec: protectionConfig.rebalanceIntervalSec,
           targetHedgeRatio: protectionConfig.targetHedgeRatio,
-          minRebalanceNotionalUsd: protectionConfig.minRebalanceNotionalUsd,
+          minRebalanceNotionalPct: protectionConfig.minRebalanceNotionalPct,
           maxSlippageBps: protectionConfig.maxSlippageBps,
           twapMinNotionalUsd: protectionConfig.twapMinNotionalUsd,
           creationOperationId,
@@ -1390,7 +1390,7 @@ class LpOrchestratorService {
           baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct,
           rebalanceIntervalSec: protection.rebalanceIntervalSec,
           targetHedgeRatio: protection.targetHedgeRatio,
-          minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd,
+          minRebalanceNotionalPct: protection.minRebalanceNotionalPct,
           maxSlippageBps: protection.maxSlippageBps,
           twapMinNotionalUsd: protection.twapMinNotionalUsd,
         });

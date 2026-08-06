@@ -26,7 +26,7 @@ function protectionConfigToFormValue(cfg) {
     baseRebalancePriceMovePct: cfg.baseRebalancePriceMovePct != null ? String(cfg.baseRebalancePriceMovePct) : '3',
     rebalanceIntervalSec: cfg.rebalanceIntervalSec != null ? String(cfg.rebalanceIntervalSec) : '21600',
     targetHedgeRatio: cfg.targetHedgeRatio != null ? String(cfg.targetHedgeRatio) : '1',
-    minRebalanceNotionalUsd: cfg.minRebalanceNotionalUsd != null ? String(cfg.minRebalanceNotionalUsd) : '50',
+    minRebalanceNotionalPct: cfg.minRebalanceNotionalPct != null ? String(cfg.minRebalanceNotionalPct) : '12',
     maxSlippageBps: cfg.maxSlippageBps != null ? String(cfg.maxSlippageBps) : '20',
     twapMinNotionalUsd: cfg.twapMinNotionalUsd != null ? String(cfg.twapMinNotionalUsd) : '10000',
     preset: 'adaptive',

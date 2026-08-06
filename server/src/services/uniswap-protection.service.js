@@ -25,7 +25,7 @@ const {
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
   DEFAULT_REBALANCE_INTERVAL_SEC,
   DEFAULT_TARGET_HEDGE_RATIO,
-  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   buildInitialStrategyState,
@@ -213,7 +213,7 @@ function buildCandidateFromMarket(pool, availableAssets, mids) {
     baseRebalancePriceMovePct: DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
     rebalanceIntervalSec: DEFAULT_REBALANCE_INTERVAL_SEC,
     targetHedgeRatio: DEFAULT_TARGET_HEDGE_RATIO,
-    minRebalanceNotionalUsd: DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+    minRebalanceNotionalPct: DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
     maxSlippageBps: DEFAULT_MAX_SLIPPAGE_BPS,
     twapMinNotionalUsd: DEFAULT_TWAP_MIN_NOTIONAL_USD,
   };
@@ -435,7 +435,7 @@ async function annotatePoolsWithProtection({ userId, pools }, deps = {}) {
             baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct ?? null,
             rebalanceIntervalSec: protection.rebalanceIntervalSec ?? null,
             targetHedgeRatio: protection.targetHedgeRatio ?? null,
-            minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd ?? null,
+            minRebalanceNotionalPct: protection.minRebalanceNotionalPct ?? null,
             maxSlippageBps: protection.maxSlippageBps ?? null,
             twapMinNotionalUsd: protection.twapMinNotionalUsd ?? null,
             strategyState: protection.strategyState ?? null,
@@ -617,7 +617,7 @@ function buildStoredPoolSnapshot({
   baseRebalancePriceMovePct,
   rebalanceIntervalSec,
   targetHedgeRatio,
-  minRebalanceNotionalUsd,
+  minRebalanceNotionalPct,
   maxSlippageBps,
   twapMinNotionalUsd,
   strategyState,
@@ -647,7 +647,7 @@ function buildStoredPoolSnapshot({
       baseRebalancePriceMovePct,
       rebalanceIntervalSec,
       targetHedgeRatio,
-      minRebalanceNotionalUsd,
+      minRebalanceNotionalPct,
       maxSlippageBps,
       twapMinNotionalUsd,
       strategyState,
@@ -671,7 +671,7 @@ function buildStoredPoolSnapshot({
       baseRebalancePriceMovePct,
       rebalanceIntervalSec,
       targetHedgeRatio,
-      minRebalanceNotionalUsd,
+      minRebalanceNotionalPct,
       maxSlippageBps,
       twapMinNotionalUsd,
       defaultLeverage: Math.min(10, candidate.maxLeverage),
@@ -794,11 +794,13 @@ function normalizeTargetHedgeRatio(value) {
   return parsed;
 }
 
-function normalizeMinRebalanceNotionalUsd(value) {
-  if (value == null) return DEFAULT_MIN_REBALANCE_NOTIONAL_USD;
+// Porcentaje del valor del LP protegido, no un absoluto en USD: el umbral
+// tiene que seguir al tamano de la posicion. Ver `resolveMinRebalanceNotionalUsd`.
+function normalizeMinRebalanceNotionalPct(value) {
+  if (value == null) return DEFAULT_MIN_REBALANCE_NOTIONAL_PCT;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new ValidationError('minRebalanceNotionalUsd debe ser un numero positivo.');
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) {
+    throw new ValidationError('minRebalanceNotionalPct debe ser un porcentaje entre 0 y 100.');
   }
   return parsed;
 }
@@ -834,7 +836,7 @@ async function createDeltaNeutralProtectedPool({
   baseRebalancePriceMovePct,
   rebalanceIntervalSec,
   targetHedgeRatio,
-  minRebalanceNotionalUsd,
+  minRebalanceNotionalPct,
   maxSlippageBps,
   twapMinNotionalUsd,
   creationOperationId,
@@ -860,7 +862,7 @@ async function createDeltaNeutralProtectedPool({
   const normalizedBaseBandPct = normalizeBaseRebalancePriceMovePct(baseRebalancePriceMovePct);
   const normalizedRebalanceIntervalSec = normalizeRebalanceIntervalSec(rebalanceIntervalSec);
   const normalizedTargetHedgeRatio = normalizeTargetHedgeRatio(targetHedgeRatio);
-  const normalizedMinRebalanceNotionalUsd = normalizeMinRebalanceNotionalUsd(minRebalanceNotionalUsd);
+  const normalizedMinRebalanceNotionalPct = normalizeMinRebalanceNotionalPct(minRebalanceNotionalPct);
   const normalizedMaxSlippageBps = normalizeMaxSlippageBps(maxSlippageBps);
   const normalizedTwapMinNotionalUsd = normalizeTwapMinNotionalUsd(twapMinNotionalUsd);
 
@@ -953,7 +955,7 @@ async function createDeltaNeutralProtectedPool({
     baseRebalancePriceMovePct: normalizedBaseBandPct,
     rebalanceIntervalSec: normalizedRebalanceIntervalSec,
     targetHedgeRatio: normalizedTargetHedgeRatio,
-    minRebalanceNotionalUsd: normalizedMinRebalanceNotionalUsd,
+    minRebalanceNotionalPct: normalizedMinRebalanceNotionalPct,
     maxSlippageBps: normalizedMaxSlippageBps,
     twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
     strategyEngineVersion: 'v2',
@@ -1000,7 +1002,7 @@ async function createDeltaNeutralProtectedPool({
     baseRebalancePriceMovePct: normalizedBaseBandPct,
     rebalanceIntervalSec: normalizedRebalanceIntervalSec,
     targetHedgeRatio: normalizedTargetHedgeRatio,
-    minRebalanceNotionalUsd: normalizedMinRebalanceNotionalUsd,
+    minRebalanceNotionalPct: normalizedMinRebalanceNotionalPct,
     maxSlippageBps: normalizedMaxSlippageBps,
     twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
     strategyState,
@@ -1085,7 +1087,7 @@ async function createProtectedPool({
   baseRebalancePriceMovePct,
   rebalanceIntervalSec,
   targetHedgeRatio,
-  minRebalanceNotionalUsd,
+  minRebalanceNotionalPct,
   maxSlippageBps,
   twapMinNotionalUsd,
   creationOperationId,
@@ -1124,7 +1126,7 @@ async function createProtectedPool({
       baseRebalancePriceMovePct,
       rebalanceIntervalSec,
       targetHedgeRatio,
-      minRebalanceNotionalUsd,
+      minRebalanceNotionalPct,
       maxSlippageBps,
       twapMinNotionalUsd,
       creationOperationId,
@@ -1467,7 +1469,7 @@ async function diagnoseDeltaNeutral(userId, protectionId, deps = {}) {
       baseRebalancePriceMovePct: protection.baseRebalancePriceMovePct,
       rebalanceIntervalSec: protection.rebalanceIntervalSec,
       targetHedgeRatio: protection.targetHedgeRatio,
-      minRebalanceNotionalUsd: protection.minRebalanceNotionalUsd,
+      minRebalanceNotionalPct: protection.minRebalanceNotionalPct,
       maxSlippageBps: protection.maxSlippageBps,
       twapMinNotionalUsd: protection.twapMinNotionalUsd,
       configuredNotionalUsd: protection.configuredHedgeNotionalUsd,
@@ -1670,7 +1672,7 @@ module.exports = {
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
   DEFAULT_REBALANCE_INTERVAL_SEC,
   DEFAULT_TARGET_HEDGE_RATIO,
-  DEFAULT_MIN_REBALANCE_NOTIONAL_USD,
+  DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,

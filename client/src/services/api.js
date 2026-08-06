@@ -194,7 +194,7 @@ export const uniswapApi = {
     baseRebalancePriceMovePct,
     rebalanceIntervalSec,
     targetHedgeRatio,
-    minRebalanceNotionalUsd,
+    minRebalanceNotionalPct,
     maxSlippageBps,
     twapMinNotionalUsd,
   }) =>
@@ -215,7 +215,7 @@ export const uniswapApi = {
       baseRebalancePriceMovePct,
       rebalanceIntervalSec,
       targetHedgeRatio,
-      minRebalanceNotionalUsd,
+      minRebalanceNotionalPct,
       maxSlippageBps,
       twapMinNotionalUsd,
     }),

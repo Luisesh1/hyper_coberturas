@@ -99,7 +99,7 @@ function buildPool(overrides = {}) {
       baseRebalancePriceMovePct: 3,
       rebalanceIntervalSec: 21600,
       targetHedgeRatio: 1,
-      minRebalanceNotionalUsd: 50,
+      minRebalanceNotionalPct: 12,
       maxSlippageBps: 20,
       twapMinNotionalUsd: 10000,
     },
@@ -462,8 +462,8 @@ describe('UniswapPoolsPage', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Aggressive' }));
     await userEvent.clear(within(dialog).getByRole('spinbutton', { name: /Hedge ratio/i }));
     await userEvent.type(within(dialog).getByRole('spinbutton', { name: /Hedge ratio/i }), '0.9');
-    await userEvent.clear(within(dialog).getByRole('spinbutton', { name: /Drift minimo USD/i }));
-    await userEvent.type(within(dialog).getByRole('spinbutton', { name: /Drift minimo USD/i }), '75');
+    await userEvent.clear(within(dialog).getByRole('spinbutton', { name: /Drift minimo/i }));
+    await userEvent.type(within(dialog).getByRole('spinbutton', { name: /Drift minimo/i }), '15');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Activar overlay delta-neutral' }));
 
     await waitFor(() => expect(uniswapApi.createProtectedPool).toHaveBeenCalled());
@@ -473,7 +473,7 @@ describe('UniswapPoolsPage', () => {
       baseRebalancePriceMovePct: 1,
       rebalanceIntervalSec: 3600,
       targetHedgeRatio: 0.9,
-      minRebalanceNotionalUsd: 75,
+      minRebalanceNotionalPct: 15,
       maxSlippageBps: 20,
       twapMinNotionalUsd: 10000,
     }));

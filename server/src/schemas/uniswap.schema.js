@@ -57,7 +57,7 @@ const createProtectedPoolSchema = z.object({
   baseRebalancePriceMovePct: z.number().positive().lt(100).optional(),
   rebalanceIntervalSec: z.number().int().min(60).optional(),
   targetHedgeRatio: z.number().positive().max(2).optional(),
-  minRebalanceNotionalUsd: z.number().positive().optional(),
+  minRebalanceNotionalPct: z.number().positive().max(100).optional(),
   maxSlippageBps: z.number().int().min(1).max(500).optional(),
   twapMinNotionalUsd: z.number().positive().optional(),
   valueMultiplier: z.union([
