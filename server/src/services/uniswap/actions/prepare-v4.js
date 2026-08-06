@@ -248,11 +248,230 @@ async function appendMintApprovalIfErc20(options) {
   await appendPermit2Approvals(options);
 }
 
+/**
+ * Fondeo inteligente para el increase v4: el wizard "Agregar liquidez" manda
+ * un objetivo en USD mas una seleccion de activos de la wallet, nunca montos
+ * crudos. Se arma el mismo plan que el paso FONDEO ya previsualiza (wrap del
+ * ETH directo -> swaps -> unwrap del lado nativo -> approvals) y recien
+ * despues se aporta a la posicion.
+ *
+ * v3 y el mint v4 ya tenian esta rama; el increase v4 no. Como los amounts
+ * crudos llegaban vacios, `toBigIntAmount` los volvia 0 y el prepare moria
+ * estimando liquidez cero: "Los montos elegidos no generan liquidez util para
+ * este rango", justo despues de que el paso FONDEO mostrara un plan valido.
+ */
+async function prepareIncreaseLiquiditySmartV4(ctx, payload, mintSlippageBps) {
+  const rangeLowerPrice = uniswapService.tickToPrice(ctx.tickLower, ctx.token0.decimals, ctx.token1.decimals);
+  const rangeUpperPrice = uniswapService.tickToPrice(ctx.tickUpper, ctx.token0.decimals, ctx.token1.decimals);
+
+  const plan = await smartPoolCreatorService.buildIncreaseLiquidityFundingPlan({
+    network: payload.network,
+    version: 'v4',
+    walletAddress: payload.walletAddress,
+    token0Address: ctx.token0.address,
+    token1Address: ctx.token1.address,
+    fee: Number(ctx.poolKey.fee),
+    tickSpacing: Number(ctx.poolKey.tickSpacing),
+    hooks: ctx.poolKey.hooks,
+    poolId: ctx.poolId,
+    rangeLowerPrice,
+    rangeUpperPrice,
+    currentPrice: ctx.priceCurrent,
+    totalUsdTarget: Number(payload.totalUsdTarget),
+    fundingSelections: payload.fundingSelections,
+    importTokenAddresses: payload.importTokenAddresses || [],
+    maxSlippageBps: mintSlippageBps,
+  });
+
+  // A diferencia de create-position, aca los tokens salen de la poolKey de la
+  // posicion: ya vienen en el orden canonico del pool y no hay que reorientar
+  // el par ni el rango.
+  const { amount0: amount0Desired, amount1: amount1Desired } = await fitDesiredAmountsToBalance({
+    provider: ctx.provider,
+    networkConfig: ctx.networkConfig,
+    walletAddress: ctx.normalizedWallet,
+    token0: ctx.token0,
+    token1: ctx.token1,
+    amount0Desired: BigInt(plan.expectedPostSwapBalances.amount0Raw),
+    amount1Desired: BigInt(plan.expectedPostSwapBalances.amount1Raw),
+    slippageBps: mintSlippageBps,
+    swapPlan: plan.swapPlan,
+  });
+  const liquidityDelta = estimateLiquidityForAmounts({
+    amount0Raw: amount0Desired,
+    amount1Raw: amount1Desired,
+    tickCurrent: ctx.currentTick,
+    tickLower: ctx.tickLower,
+    tickUpper: ctx.tickUpper,
+  });
+
+  const requiresApproval = [];
+  const txPlan = [];
+
+  // Los aportes nativos directos se envuelven en una sola tx: el planner
+  // contabiliza el lado nativo como wrapped. Los wraps que necesitan los swaps
+  // ya los agrega appendFundingSwapTransactions.
+  let totalNativeWrapRaw = 0n;
+  for (const asset of (plan.selectedFundingAssets || [])) {
+    if (asset.isNative && (asset.fundingRole === 'direct_token0' || asset.fundingRole === 'direct_token1')) {
+      totalNativeWrapRaw += BigInt(asset.useAmountRaw || 0);
+    }
+  }
+
+  // Si el pool tiene ETH nativo como currency, el fondeo dejo todo en wrapped
+  // (el router nunca entrega nativo) y hay que desenvolverlo antes del
+  // increase, que paga ese lado con el `value` de la tx.
+  //
+  // Un aporte nativo directo iria a ese mismo lado, asi que envolverlo para
+  // desenvolverlo dos pasos despues son dos firmas y dos gas para nada: se
+  // netean y se firma solo la diferencia. El saldo final es identico.
+  // (create-position todavia hace el viaje de ida y vuelta completo.)
+  //
+  // Se desenvuelve el monto planeado, no el techo con slippage: ese margen
+  // sale del nativo libre que la reserva de gas deja en la wallet, y lo que el
+  // increase no consuma vuelve por SWEEP.
+  const plannedUnwrapRaw = BigInt(plan.nativeSettlement?.unwrapRaw || 0);
+  const netWrapRaw = totalNativeWrapRaw > plannedUnwrapRaw ? totalNativeWrapRaw - plannedUnwrapRaw : 0n;
+  const netUnwrapRaw = plannedUnwrapRaw > totalNativeWrapRaw ? plannedUnwrapRaw - totalNativeWrapRaw : 0n;
+
+  if (netWrapRaw > 0n && plan.wrappedNativeAddress) {
+    txPlan.push(buildWrapNativeTx(
+      { address: plan.wrappedNativeAddress, symbol: plan.nativeSettlement?.wrappedSymbol || 'WETH' },
+      netWrapRaw,
+      ctx.networkConfig.chainId
+    ));
+  }
+
+  await appendFundingSwapTransactions({
+    provider: ctx.provider,
+    networkConfig: ctx.networkConfig,
+    normalizedWallet: ctx.normalizedWallet,
+    swapPlan: plan.swapPlan,
+    requiresApproval,
+    txPlan,
+  });
+
+  if (netUnwrapRaw > 0n && plan.nativeSettlement) {
+    txPlan.push(buildUnwrapNativeTx(
+      { address: plan.nativeSettlement.wrappedAddress, symbol: plan.nativeSettlement.wrappedSymbol },
+      netUnwrapRaw,
+      ctx.networkConfig.chainId
+    ));
+  }
+
+  const amount0Max = applyMintSlippageCeiling(amount0Desired, mintSlippageBps);
+  const amount1Max = applyMintSlippageCeiling(amount1Desired, mintSlippageBps);
+  // Sin chequeo de saldo: parte del capital todavia esta en los tokens fuente
+  // y solo aterriza cuando se firmen los swaps de este mismo plan.
+  await appendMintApprovalIfErc20({
+    provider: ctx.provider,
+    token: ctx.token0,
+    walletAddress: ctx.normalizedWallet,
+    spender: ctx.positionManagerAddress,
+    amount: amount0Max,
+    chainId: ctx.networkConfig.chainId,
+    requiresApproval,
+    txPlan,
+    enforceBalance: false,
+  });
+  await appendMintApprovalIfErc20({
+    provider: ctx.provider,
+    token: ctx.token1,
+    walletAddress: ctx.normalizedWallet,
+    spender: ctx.positionManagerAddress,
+    amount: amount1Max,
+    chainId: ctx.networkConfig.chainId,
+    requiresApproval,
+    txPlan,
+    enforceBalance: false,
+  });
+
+  const increase = buildV4IncreaseActions({
+    poolKey: ctx.poolKey,
+    tokenId: ctx.tokenId,
+    liquidity: liquidityDelta,
+    amount0Max,
+    amount1Max,
+    owner: ctx.normalizedWallet,
+  });
+  txPlan.push(buildV4ModifyTx(ctx, {
+    actionCodes: increase.actionCodes,
+    params: increase.params,
+    value: increase.value,
+    label: 'Increase liquidity (v4)',
+    kind: 'increase_liquidity_v4',
+    meta: {
+      v4Actions: increase.v4Actions,
+      poolId: ctx.poolId,
+      tickSpacing: ctx.tickSpacing,
+      hooks: ctx.poolKey.hooks,
+      nativeValue: increase.value ? increase.value.toString() : null,
+    },
+  }));
+
+  return {
+    action: 'increase-liquidity',
+    network: ctx.networkConfig.id,
+    version: 'v4',
+    positionIdentifier: ctx.tokenId,
+    walletAddress: ctx.normalizedWallet,
+    quoteSummary: {
+      token0: ctx.token0,
+      token1: ctx.token1,
+      amount0Desired: ethers.formatUnits(amount0Desired, ctx.token0.decimals),
+      amount1Desired: ethers.formatUnits(amount1Desired, ctx.token1.decimals),
+      liquidityDelta: liquidityDelta.toString(),
+      currentAmounts: ctx.currentAmounts,
+      currentPrice: plan.currentPrice,
+      rangeLowerPrice,
+      rangeUpperPrice,
+      poolId: ctx.poolId,
+      tickSpacing: ctx.tickSpacing,
+      hooks: ctx.poolKey.hooks,
+      gasReserve: plan.gasReserve,
+      fundingPlan: plan.fundingPlan,
+      swapCount: plan.swapPlan.length,
+      v4ActionPlan: increase.v4Actions,
+    },
+    requiresApproval,
+    txPlan: txPlan.filter(Boolean),
+    fundingPlan: {
+      ...plan.fundingPlan,
+      gasReserve: plan.gasReserve,
+      selectedFundingAssets: plan.selectedFundingAssets,
+    },
+    swapPlan: plan.swapPlan,
+    availableFundingAssets: plan.availableFundingAssets,
+    warnings: plan.warnings,
+    postActionPositionPreview: buildPostPreview({
+      network: ctx.networkConfig.id,
+      version: 'v4',
+      positionIdentifier: ctx.tokenId,
+      tickLower: ctx.tickLower,
+      tickUpper: ctx.tickUpper,
+      amount0Desired,
+      amount1Desired,
+      token0: ctx.token0,
+      token1: ctx.token1,
+      priceCurrent: ctx.priceCurrent,
+    }),
+    protectionImpact: buildProtectionImpact(ctx.tokenId),
+  };
+}
+
 async function prepareIncreaseLiquidityV4(payload) {
   // Mismo margen que el mint: INCREASE_LIQUIDITY tambien revierte con
   // MaximumAmountExceeded si el limite no cubre lo que el pool requiere.
   const mintSlippageBps = payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const ctx = await loadV4PositionContext(payload);
+
+  const usingSmartFunding = payload.totalUsdTarget != null
+    || Array.isArray(payload.fundingSelections)
+    || Array.isArray(payload.importTokenAddresses);
+  if (usingSmartFunding) {
+    return prepareIncreaseLiquiditySmartV4(ctx, payload, mintSlippageBps);
+  }
+
   const { amount0: amount0Desired, amount1: amount1Desired } = await fitDesiredAmountsToBalance({
     provider: ctx.provider,
     networkConfig: ctx.networkConfig,

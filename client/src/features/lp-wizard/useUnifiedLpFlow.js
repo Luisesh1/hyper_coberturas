@@ -1,8 +1,12 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { lpOrchestratorApi } from '../../services/api';
 import useSmartCreateFlow from '../../pages/UniswapPools/components/smart-create/useSmartCreateFlow';
 import { STEP } from '../../pages/UniswapPools/components/smart-create/constants';
-import { buildDefaultProtection, buildProtectionPayload } from './ProtectionFormFields';
+import {
+  buildDefaultProtection,
+  buildProtectionPayload,
+  validateProtectionForm,
+} from './ProtectionFormFields';
 
 /**
  * Pasos propios del wizard unificado. Los cuatro primeros y los tres
@@ -35,6 +39,20 @@ export function deriveRangeWidthPct(range) {
  * del fee: si coincide, no hace falta persistirlo.
  */
 const DEFAULT_V4_TICK_SPACING_BY_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
+const PROTECTION_CONFIG_KEYS = [
+  'enabled',
+  'leverage',
+  'configuredNotionalUsd',
+  'bandMode',
+  'baseRebalancePriceMovePct',
+  'rebalanceIntervalSec',
+  'targetHedgeRatio',
+  'minRebalanceNotionalUsd',
+  'maxSlippageBps',
+  'twapMinNotionalUsd',
+  'preset',
+  'autoTunedFor',
+];
 
 export default function useUnifiedLpFlow({
   mode = 'orchestrated',
@@ -53,7 +71,12 @@ export default function useUnifiedLpFlow({
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [strategy, setStrategy] = useState({ edgeMarginPct: '40', rangeWidthDecoupled: false, rangeWidthPct: '' });
-  const [protection, setProtection] = useState(() => buildDefaultProtection(Number(defaults?.totalUsdTarget) || 1000));
+  const initialProtectionTarget = Number(defaults?.totalUsdTarget) || (isOrchestrated ? 0 : 1000);
+  const [protection, setProtectionState] = useState(() => buildDefaultProtection(
+    initialProtectionTarget,
+    null,
+    { enabled: isOrchestrated, leverage: isOrchestrated ? '10' : '5' }
+  ));
 
   const [preflight, setPreflight] = useState(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
@@ -62,6 +85,9 @@ export default function useUnifiedLpFlow({
   const [commitBusy, setCommitBusy] = useState(false);
   const [outcome, setOutcome] = useState(null);
   const intentRef = useRef(null);
+  const protectionDirtyRef = useRef(false);
+  const walletAddressRef = useRef(null);
+  const flowResetRef = useRef(null);
 
   // El commit corre dentro de `handleExecute` del flujo base, así que la
   // saga se cierra en el mismo gesto en el que el usuario firma.
@@ -120,6 +146,65 @@ export default function useUnifiedLpFlow({
   );
 
   const flow = useSmartCreateFlow({ wallet, defaults: flowDefaults, onFinalized: handleFinalized });
+  flowResetRef.current = flow.handleReset;
+
+  const resetProtection = useCallback((targetUsd = 0) => {
+    protectionDirtyRef.current = false;
+    setProtectionState(buildDefaultProtection(
+      Number(targetUsd) || 0,
+      null,
+      { enabled: isOrchestrated, leverage: isOrchestrated ? '10' : '5' }
+    ));
+  }, [isOrchestrated]);
+
+  // La sugerencia de notional sigue al objetivo calculado desde la wallet,
+  // pero solo hasta que el usuario haya modificado la configuración de
+  // cobertura manualmente.
+  useEffect(() => {
+    if (!isOrchestrated || protectionDirtyRef.current) return;
+    const targetUsd = Number(flow.totalUsdTarget);
+    if (!Number.isFinite(targetUsd) || targetUsd <= 0) return;
+    const suggested = buildDefaultProtection(targetUsd, null, { enabled: true, leverage: '10' });
+    setProtectionState((current) => {
+      if (
+        current.configuredNotionalUsd === suggested.configuredNotionalUsd
+        && current.enabled === suggested.enabled
+        && current.leverage === suggested.leverage
+      ) return current;
+      return {
+        ...current,
+        enabled: true,
+        leverage: '10',
+        configuredNotionalUsd: suggested.configuredNotionalUsd,
+      };
+    });
+  }, [flow.totalUsdTarget, isOrchestrated]);
+
+  // Cambiar de wallet invalida la intención, el pre-flight y cualquier dato
+  // preparado para la dirección anterior. El hook base también limpia sus
+  // análisis, fondeo y transacciones mediante handleReset.
+  useEffect(() => {
+    const nextAddress = String(wallet?.address || '').toLowerCase();
+    if (walletAddressRef.current === null) {
+      walletAddressRef.current = nextAddress;
+      return;
+    }
+    if (walletAddressRef.current === nextAddress) return;
+    walletAddressRef.current = nextAddress;
+    setOutcome(null);
+    setProtectionDone(false);
+    setPreflight(null);
+    setCommitBusy(false);
+    intentRef.current = null;
+    resetProtection(flow.totalUsdTarget);
+    flowResetRef.current?.();
+  }, [flow.totalUsdTarget, resetProtection, wallet?.address]);
+
+  const handleProtectionChange = useCallback((next) => {
+    const changedManually = PROTECTION_CONFIG_KEYS.some((key) => protection?.[key] !== next?.[key]);
+    if (changedManually) protectionDirtyRef.current = true;
+    setProtectionState(next);
+  }, [protection]);
 
   /**
    * Símbolo de un token del par a partir de su address.
@@ -230,6 +315,12 @@ export default function useUnifiedLpFlow({
   /** Dry-run de la cobertura. Bloquea el avance a Revisión si no pasa. */
   const runPreflight = useCallback(async () => {
     if (!isOrchestrated) return { ok: true, skipped: true };
+    const validationError = validateProtectionForm(protection);
+    if (validationError) {
+      const failed = { ok: false, checks: [], blockingReason: validationError };
+      setPreflight(failed);
+      return failed;
+    }
     setPreflightBusy(true);
     try {
       const plan = buildPlan();
@@ -248,7 +339,7 @@ export default function useUnifiedLpFlow({
     } finally {
       setPreflightBusy(false);
     }
-  }, [isOrchestrated, buildPlan]);
+  }, [isOrchestrated, buildPlan, protection]);
 
   const handleContinueFromProtection = useCallback(async () => {
     const result = await runPreflight();
@@ -262,8 +353,22 @@ export default function useUnifiedLpFlow({
    */
   const handleSignAndCreate = useCallback(async () => {
     if (isOrchestrated) {
+      const protectionError = validateProtectionForm(protection);
+      if (protectionError) {
+        setPreflight({ ok: false, checks: [], blockingReason: protectionError });
+        setProtectionDone(false);
+        return;
+      }
+      const plan = buildPlan();
+      if (!Number.isFinite(plan.priceCurrent) || plan.priceCurrent <= 0) {
+        setOutcome({
+          status: 'blocked',
+          reason: 'El análisis del pool no devolvió un precio actual válido. Vuelve a analizar el pool antes de firmar.',
+        });
+        return;
+      }
       try {
-        const { operationKey } = await lpOrchestratorApi.createIntent(buildPlan());
+        const { operationKey } = await lpOrchestratorApi.createIntent(plan);
         intentRef.current = operationKey;
       } catch (err) {
         setOutcome({
@@ -274,7 +379,7 @@ export default function useUnifiedLpFlow({
       }
     }
     await flow.handleExecute();
-  }, [isOrchestrated, buildPlan, flow]);
+  }, [isOrchestrated, buildPlan, flow, protection]);
 
   // El paso PROTECTION se intercala justo antes de REVIEW, sin bifurcar la
   // máquina de estados del flujo base.
@@ -330,8 +435,9 @@ export default function useUnifiedLpFlow({
     setProtectionDone(false);
     setPreflight(null);
     intentRef.current = null;
+    resetProtection(flow.totalUsdTarget);
     flow.handleReset();
-  }, [flow]);
+  }, [flow, resetProtection]);
 
   return {
     flow,
@@ -350,7 +456,7 @@ export default function useUnifiedLpFlow({
     strategy,
     setStrategy,
     protection,
-    setProtection,
+    setProtection: handleProtectionChange,
 
     derivedRangeWidthPct,
     effectiveRangeWidthPct,

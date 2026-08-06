@@ -129,6 +129,156 @@
   align-items: center;
 }
 
+/* Layout específico del primer paso del wizard. Mantiene los estilos
+   compartidos del modal intactos para los pasos restantes. */
+.poolSelection {
+  padding-top: 1.5rem;
+}
+
+.poolContext {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1.5rem;
+}
+
+.poolWalletTile {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+  background: linear-gradient(110deg, rgba(0, 212, 255, 0.08), #242438 42%);
+}
+
+.poolIntro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.poolSectionTitle {
+  margin: 0;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.poolSectionHint,
+.requiredHint {
+  color: #858aa8;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.poolSectionHint {
+  margin: 0.25rem 0 0;
+}
+
+.requiredHint {
+  white-space: nowrap;
+}
+
+.poolMainGrid,
+.tokenPair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  gap: 1rem;
+}
+
+.poolMainGrid {
+  margin-bottom: 1rem;
+}
+
+.tokenPair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1.25rem;
+}
+
+.poolField {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #34364f;
+  border-radius: 10px;
+  background: rgba(36, 36, 56, 0.62);
+}
+
+.poolField .fieldLabel {
+  color: #e1e3f2;
+}
+
+.inputWithPrefix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.inputPrefix {
+  position: absolute;
+  left: 0.8rem;
+  z-index: 1;
+  color: #8c92b4;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* El selector lleva [type] para ganar en especificidad a la regla base
+   `input[type='number']`, que va despues en el archivo y con el shorthand
+   `padding` reventaba este padding-left dejando el `$` sobre el numero. */
+.inputWithPrefix input[type='text'],
+.inputWithPrefix input[type='number'] {
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: 1.8rem;
+  font-size: 1rem;
+}
+
+.fieldHint {
+  min-height: 1.1em;
+  color: #858aa8;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.fieldHintError {
+  color: #ff8e8e;
+}
+
+.feeOptions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+}
+
+.feeOptions .tierBtn {
+  min-height: 42px;
+  padding: 0.5rem 0.35rem;
+  border-width: 1px;
+  font-size: 0.78rem;
+}
+
+.tokenField .select,
+.tokenField input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tokenField input[type='text'] {
+  margin-top: 0.05rem;
+}
+
+.poolActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
+}
+
+.poolActions .primaryBtn {
+  min-width: 220px;
+}
+
 .kicker {
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -667,6 +817,36 @@ input[type='number']:focus {
 
   .summaryGrid {
     grid-template-columns: 1fr;
+  }
+
+  .poolMainGrid,
+  .tokenPair {
+    grid-template-columns: 1fr;
+  }
+
+  .poolIntro {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .requiredHint {
+    white-space: normal;
+  }
+
+  .feeOptions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .poolActions,
+  .poolActions .primaryBtn {
+    width: 100%;
+  }
+
+  .poolWalletTile {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.35rem;
   }
 
   .assetRow {

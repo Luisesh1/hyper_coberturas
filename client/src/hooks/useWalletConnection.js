@@ -206,6 +206,66 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
     }
   }, [disconnectAsync]);
 
+  /**
+   * Solicita al proveedor que permita elegir otra cuenta sin cerrar el
+   * contexto de la aplicación. MetaMask implementa `wallet_requestPermissions`
+   * como el selector de cuentas; otros proveedores pueden no soportarlo, así
+   * que en ese caso usamos `eth_requestAccounts` como fallback.
+   */
+  const changeWallet = useCallback(async () => {
+    setError(null);
+
+    if (isWalletConnectConnector(connector)) {
+      await disconnectAsync().catch(() => {});
+      return connectWalletConnect();
+    }
+
+    const injected = getInjectedProvider();
+    if (!injected) {
+      setError('MetaMask u otro proveedor inyectado no está disponible.');
+      return null;
+    }
+
+    setIsConnecting(true);
+    try {
+      let selectorUnsupported = false;
+      try {
+        await injected.request({
+          method: 'wallet_requestPermissions',
+          params: [{ eth_accounts: {} }],
+        });
+      } catch (permissionError) {
+        // 4001 es rechazo explícito del usuario: no debemos abrir otro
+        // diálogo. Los códigos restantes indican que el método no existe o
+        // no está soportado y activan el fallback de desconectar/reconectar.
+        if (Number(permissionError?.code) === 4001) throw permissionError;
+        selectorUnsupported = true;
+      }
+
+      if (selectorUnsupported) {
+        // Algunos proveedores inyectados no muestran un selector si ya hay
+        // una cuenta conectada. Desconectar y volver a conectar fuerza el
+        // flujo estándar del proveedor como fallback.
+        await disconnectAsync().catch(() => {});
+        return connectInjected();
+      }
+
+      const accounts = await injected.request({ method: 'eth_requestAccounts' });
+      if (reconnectAsync) await reconnectAsync().catch(() => {});
+      setNeedsWalletConnectSetup(false);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(CONNECTOR_STORAGE_KEY, 'metamask');
+      }
+      return accounts?.[0] || null;
+    } catch (err) {
+      const normalized = normalizeWalletError(err);
+      setError(normalized.message);
+      return null;
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [connectInjected, connectWalletConnect, connector, disconnectAsync, reconnectAsync, setNeedsWalletConnectSetup]);
+
   const switchChain = useCallback(async (targetChainId) => {
     setError(null);
     if (!switchChainAsync) return false;
@@ -356,6 +416,7 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
     dismissWalletConnectSetup: () => setNeedsWalletConnectSetup(false),
     connect: connectInjected,
     connectInjected,
+    changeWallet,
     connectWalletConnect,
     disconnect,
     switchChain,
@@ -371,6 +432,7 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
     chainId,
     clearError,
     connectInjected,
+    changeWallet,
     connectWalletConnect,
     connector?.id,
     connector?.name,

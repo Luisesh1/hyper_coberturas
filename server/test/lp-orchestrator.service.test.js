@@ -547,6 +547,58 @@ test('recordTxFinalized éxito en modify-range con protección refresca el hedge
   assert.equal(refreshCalls[0].protectedPoolId, 42);
 });
 
+test('recordTxFinalized en cambios de liquidez refresca y reevalúa la protección delta-neutral', async () => {
+  for (const action of ['increase-liquidity', 'decrease-liquidity']) {
+    const repo = makeFakeRepo();
+    const id = await bootstrapOrchestrator(repo, {
+      activeProtectedPoolId: 42,
+      lastEvaluation: {
+        poolSnapshot: { currentValueUsd: action === 'increase-liquidity' ? 1000 : 1200 },
+      },
+    });
+    const refreshCalls = [];
+    const evaluationCalls = [];
+    const service = new LpOrchestratorService({
+      lpOrchestratorRepository: repo,
+      protectedPoolRefreshService: {
+        refreshProtection: async (userId, protectedPoolId) => {
+          refreshCalls.push({ userId, protectedPoolId });
+          return { id: protectedPoolId, status: 'active' };
+        },
+      },
+      protectedPoolDeltaNeutralService: {
+        evaluateProtection: async (protection, options) => {
+          evaluationCalls.push({ protection, options });
+        },
+      },
+      notifier: makeFakeNotifier(),
+      logger: { warn: () => {}, info: () => {}, error: () => {} },
+    });
+
+    await service.recordTxFinalized({
+      userId: 1,
+      orchestratorId: id,
+      action,
+      finalizeResult: {
+        txHashes: [`0x-${action}`],
+        refreshedSnapshot: {
+          currentValueUsd: action === 'increase-liquidity' ? 1200 : 900,
+          liquidity: action === 'increase-liquidity' ? '1200000' : '900000',
+        },
+      },
+      expected: { gasCostUsd: 1, slippageCostUsd: 0 },
+    });
+
+    assert.deepEqual(refreshCalls, [{ userId: 1, protectedPoolId: 42 }]);
+    assert.equal(evaluationCalls.length, 1);
+    assert.equal(evaluationCalls[0].protection.id, 42);
+    assert.deepEqual(evaluationCalls[0].options, {
+      forceReason: 'lp_liquidity_changed',
+      forceRebalance: true,
+    });
+  }
+});
+
 // ──────────────── Time-in-range tracking ────────────────
 
 test('time-in-range: primer tick siembra el tracker sin acumular tiempo', async () => {

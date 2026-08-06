@@ -10,6 +10,37 @@ import {
   deriveFundingIssue,
 } from './helpers';
 
+const WALLET_TARGET_MARGIN = 0.05;
+
+/**
+ * Calcula el valor USD que realmente puede utilizarse para fondear el LP.
+ * `usableBalance` ya descuenta la reserva de gas del activo nativo; los
+ * activos sin precio no se convierten en un objetivo implícito.
+ */
+export function computeUsableWalletUsd(assets = []) {
+  return assets.reduce((sum, asset) => {
+    const amount = Number(asset?.usableBalance ?? asset?.balance);
+    const price = Number(asset?.usdPrice);
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(price) || price <= 0) return sum;
+    return sum + (amount * price);
+  }, 0);
+}
+
+export function computeDefaultTargetUsd(assets = [], margin = WALLET_TARGET_MARGIN) {
+  const usableUsd = computeUsableWalletUsd(assets);
+  if (!Number.isFinite(usableUsd) || usableUsd <= 0) return '';
+  const targetUsd = Math.round(usableUsd * (1 - margin) * 100) / 100;
+  return targetUsd > 0 ? String(targetUsd) : '';
+}
+
+export function resolveDefaultTokenAddress(tokenList = [], preferredSymbols = []) {
+  for (const symbol of preferredSymbols) {
+    const match = tokenList.find((token) => String(token?.symbol || '').toUpperCase() === String(symbol).toUpperCase());
+    if (match?.address) return match.address;
+  }
+  return '';
+}
+
 /**
  * Custom hook que encapsula todo el estado y la lógica del wizard
  * SmartCreatePoolModal. La UI sólo consume los valores y callbacks
@@ -26,13 +57,15 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
   // ── state ─────────────────────────────────────────────────────────
   const [step, setStep] = useState(STEP.POOL);
   const [fee, setFee] = useState(() => Number(defaults?.fee) || 3000);
-  const [token0Address, setToken0Address] = useState(() => defaults?.token0Address || '');
-  const [token1Address, setToken1Address] = useState(() => defaults?.token1Address || '');
+  const [token0Address, setToken0AddressState] = useState(() => defaults?.token0Address || '');
+  const [token1Address, setToken1AddressState] = useState(() => defaults?.token1Address || '');
   const [customToken0, setCustomToken0] = useState('');
   const [customToken1, setCustomToken1] = useState('');
   const [totalUsdTarget, setTotalUsdTarget] = useState(() => (
-    defaults?.totalUsdTarget != null ? String(defaults.totalUsdTarget) : '1000'
+    defaults?.totalUsdTarget != null ? String(defaults.totalUsdTarget) : ''
   ));
+  const [walletAssetsDefaultLoading, setWalletAssetsDefaultLoading] = useState(false);
+  const [walletAssetsDefaultError, setWalletAssetsDefaultError] = useState('');
   const [rangeMode, setRangeMode] = useState('auto');
   const [selectedPreset, setSelectedPreset] = useState('balanced');
   const [customLowerPrice, setCustomLowerPrice] = useState('');
@@ -60,6 +93,11 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
   const execution = useWalletExecution();
   const autoAnalyzedRef = useRef(false);
   const isMountedRef = useRef(true);
+  const totalUsdTargetTouchedRef = useRef(defaults?.totalUsdTarget != null);
+  const walletAddressRef = useRef(null);
+  const targetWalletAddressRef = useRef(null);
+  const token0TouchedRef = useRef(defaults?.token0Address != null);
+  const token1TouchedRef = useRef(defaults?.token1Address != null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -84,6 +122,123 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
     loadTokenList().catch(() => {});
   }, [network, version]);
 
+  // Defaults de UX: ETH nativo en v4, WETH en v3 y USDC como stablecoin.
+  // Solo se aplican cuando no hay defaults explícitos ni una selección manual.
+  useEffect(() => {
+    if (!tokenList.length) return;
+    if (!defaults?.token0Address && !token0TouchedRef.current && !customToken0.trim() && !token0Address) {
+      const preferredToken0 = resolveDefaultTokenAddress(tokenList, ['ETH', 'WETH']);
+      if (preferredToken0) setToken0AddressState(preferredToken0);
+    }
+    if (!defaults?.token1Address && !token1TouchedRef.current && !customToken1.trim() && !token1Address) {
+      const preferredToken1 = resolveDefaultTokenAddress(tokenList, ['USDC']);
+      if (preferredToken1) setToken1AddressState(preferredToken1);
+    }
+  }, [customToken0, customToken1, defaults?.token0Address, defaults?.token1Address, token0Address, token1Address, tokenList]);
+
+  // Si cambia la red o la versión, conserva las selecciones que siguen en el
+  // catálogo y solo suelta las addresses que ya no son válidas. Los defaults
+  // automáticos se pueden volver a resolver después; una selección manual no
+  // se reemplaza silenciosamente por otra.
+  useEffect(() => {
+    if (!tokenList.length) return;
+    if (
+      token0Address
+      && !customToken0.trim()
+      && !tokenList.some((token) => String(token?.address || '').toLowerCase() === token0Address.toLowerCase())
+    ) {
+      setToken0AddressState('');
+    }
+    if (
+      token1Address
+      && !customToken1.trim()
+      && !tokenList.some((token) => String(token?.address || '').toLowerCase() === token1Address.toLowerCase())
+    ) {
+      setToken1AddressState('');
+    }
+  }, [customToken0, customToken1, defaults?.token0Address, defaults?.token1Address, token0Address, token1Address, tokenList]);
+
+  // El objetivo inicial se calcula desde el saldo utilizable de la wallet
+  // actual. Si el usuario cambia de wallet, el valor anterior deja de ser
+  // válido y se vuelve a solicitar para la nueva dirección.
+  useEffect(() => {
+    if (defaults?.totalUsdTarget != null) {
+      totalUsdTargetTouchedRef.current = true;
+      setWalletAssetsDefaultLoading(false);
+      setWalletAssetsDefaultError('');
+      return undefined;
+    }
+
+    const nextWalletAddress = String(wallet?.address || '').toLowerCase();
+    const walletChanged = targetWalletAddressRef.current !== null
+      && targetWalletAddressRef.current !== nextWalletAddress;
+    targetWalletAddressRef.current = nextWalletAddress;
+    if (walletChanged) totalUsdTargetTouchedRef.current = false;
+    if (totalUsdTargetTouchedRef.current) {
+      setWalletAssetsDefaultLoading(false);
+      return undefined;
+    }
+    setTotalUsdTarget('');
+    setWalletAssetsDefaultError('');
+
+    if (!wallet?.address || typeof uniswapApi.getSmartCreateAssets !== 'function') {
+      setWalletAssetsDefaultLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setWalletAssetsDefaultLoading(true);
+    uniswapApi.getSmartCreateAssets({ network, walletAddress: wallet.address })
+      .then((data) => {
+        if (cancelled || totalUsdTargetTouchedRef.current) return;
+        const target = computeDefaultTargetUsd(data?.assets || []);
+        if (target) {
+          setTotalUsdTarget(target);
+        } else {
+          setWalletAssetsDefaultError('No se encontró saldo utilizable con precio. Introduce el objetivo manualmente.');
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setWalletAssetsDefaultError(err.message || 'No se pudo calcular el objetivo desde la wallet. Introdúcelo manualmente.');
+      })
+      .finally(() => {
+        if (!cancelled) setWalletAssetsDefaultLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [defaults?.totalUsdTarget, network, wallet?.address]);
+
+  // Un cambio de wallet invalida cualquier análisis o plan generado para la
+  // dirección anterior, pero conserva el par para que el usuario no tenga
+  // que volver a elegir ETH/WETH y USDC.
+  useEffect(() => {
+    const nextAddress = String(wallet?.address || '').toLowerCase();
+    if (walletAddressRef.current === null) {
+      walletAddressRef.current = nextAddress;
+      return;
+    }
+    if (walletAddressRef.current === nextAddress) return;
+    walletAddressRef.current = nextAddress;
+    setStep(STEP.POOL);
+    setSuggestions(null);
+    setAvailableAssets([]);
+    setFundingPlan(null);
+    setFundingIssue(null);
+    setPrepareData(null);
+    setTxHashes([]);
+    setCompletedTxIndex(-1);
+    setCurrentTxIndex(-1);
+    setFailedTxLabel('');
+    setAssetSelections({});
+    setImportedFundingTokens([]);
+    setImportTokenAddress('');
+    setError('');
+    setHasFundingEdits(false);
+    autoAnalyzedRef.current = false;
+    execution.reset();
+  }, [execution, wallet?.address]);
+
   useEffect(() => {
     setStep(STEP.POOL);
     setSuggestions(null);
@@ -98,24 +253,6 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
     setError('');
     setHasFundingEdits(false);
     autoAnalyzedRef.current = false;
-  }, [network, version]);
-
-  // El par elegido pertenece al catalogo de una red + version concretas: al
-  // cambiar cualquiera de las dos deja de ser valido. En v3 -> v4 el caso vivo
-  // es WETH, que desaparece del catalogo en favor de ETH nativo; sin soltarlo,
-  // el <select> se veia vacio pero el analisis seguia recibiendo la address de
-  // WETH. Se salta el montaje para no pisar el par que llega en `defaults`.
-  const pairScopeRef = useRef(null);
-  useEffect(() => {
-    const scope = `${network}:${version}`;
-    if (pairScopeRef.current === null) {
-      pairScopeRef.current = scope;
-      return;
-    }
-    if (pairScopeRef.current === scope) return;
-    pairScopeRef.current = scope;
-    setToken0Address('');
-    setToken1Address('');
   }, [network, version]);
 
   useEffect(() => {
@@ -221,6 +358,22 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
 
   // ── handlers ──────────────────────────────────────────────────────
 
+  function handleTotalUsdTargetChange(value) {
+    totalUsdTargetTouchedRef.current = true;
+    setTotalUsdTarget(value);
+    setWalletAssetsDefaultError('');
+  }
+
+  function handleToken0AddressChange(value) {
+    token0TouchedRef.current = true;
+    setToken0AddressState(value);
+  }
+
+  function handleToken1AddressChange(value) {
+    token1TouchedRef.current = true;
+    setToken1AddressState(value);
+  }
+
   handleAnalyzePoolRef.current = handleAnalyzePool;
   async function handleAnalyzePool() {
     if (!wallet?.address) {
@@ -258,8 +411,8 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
         ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
         ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
       });
-      setToken0Address(resolvedToken0);
-      setToken1Address(resolvedToken1);
+      setToken0AddressState(resolvedToken0);
+      setToken1AddressState(resolvedToken1);
       setSuggestions(data);
       setFundingIssue(null);
       setSelectedPreset(data?.suggestions?.[1]?.preset || data?.suggestions?.[0]?.preset || 'balanced');
@@ -512,15 +665,17 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
     fee,
     setFee,
     token0Address,
-    setToken0Address,
+    setToken0Address: handleToken0AddressChange,
     token1Address,
-    setToken1Address,
+    setToken1Address: handleToken1AddressChange,
     customToken0,
     setCustomToken0,
     customToken1,
     setCustomToken1,
     totalUsdTarget,
-    setTotalUsdTarget,
+    setTotalUsdTarget: handleTotalUsdTargetChange,
+    walletAssetsDefaultLoading,
+    walletAssetsDefaultError,
     rangeMode,
     setRangeMode,
     selectedPreset,

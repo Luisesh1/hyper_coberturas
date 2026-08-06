@@ -98,11 +98,16 @@ export function computeAutoTunedProtection(rangeWidthPct, initialUsd) {
   };
 }
 
-export function buildDefaultProtection(initialUsd, rangeWidthPct = null) {
+export function buildDefaultProtection(initialUsd, rangeWidthPct = null, options = {}) {
+  const defaults = {
+    ...DEFAULT_PROTECTION,
+    ...(options.enabled != null ? { enabled: !!options.enabled } : {}),
+    ...(options.leverage != null ? { leverage: String(options.leverage) } : {}),
+  };
   const tuned = computeAutoTunedProtection(rangeWidthPct, initialUsd);
   if (tuned) {
     return {
-      ...DEFAULT_PROTECTION,
+      ...defaults,
       configuredNotionalUsd: String(tuned.configuredNotionalUsd || ''),
       bandMode: tuned.bandMode,
       baseRebalancePriceMovePct: String(tuned.baseRebalancePriceMovePct),
@@ -114,26 +119,33 @@ export function buildDefaultProtection(initialUsd, rangeWidthPct = null) {
     };
   }
   const notional = initialUsd ? String(Math.round(initialUsd / 2)) : '';
-  return { ...DEFAULT_PROTECTION, configuredNotionalUsd: notional };
+  return { ...defaults, configuredNotionalUsd: notional };
 }
 
 export default function ProtectionFormFields({
   value,
   onChange,
   accounts = [],
+  lpWalletAddress = '',
+  defaultLeverage = '5',
   initialUsd = 0,
   rangeWidthPct = null,
 }) {
   const v = { ...DEFAULT_PROTECTION, ...(value || {}) };
+  const matchingAccount = accounts.find((account) => (
+    lpWalletAddress
+    && account?.address
+    && String(account.address).toLowerCase() === String(lpWalletAddress).toLowerCase()
+  ));
 
-  // Si está habilitado pero el accountId está vacío, sugerir el primero por defecto
+  // Solo se autoselecciona una cuenta que sea exactamente la wallet propietaria
+  // del LP. Elegir la cuenta default o la primera cuenta podía abrir el hedge
+  // en una wallet distinta a la que realmente aporta la liquidez.
   useEffect(() => {
-    if (v.enabled && !v.accountId && accounts.length > 0) {
-      const def = accounts.find((a) => a.isDefault) || accounts[0];
-      onChange({ ...v, accountId: def.id });
+    if (v.enabled && !v.accountId && matchingAccount) {
+      onChange({ ...v, accountId: matchingAccount.id });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v.enabled, accounts.length]);
+  }, [matchingAccount, onChange, v]);
 
   const handleField = (key, val) => {
     onChange({ ...v, [key]: val });
@@ -141,7 +153,10 @@ export default function ProtectionFormFields({
 
   const handleToggle = (enabled) => {
     if (enabled) {
-      onChange({ ...buildDefaultProtection(initialUsd, rangeWidthPct), enabled: true });
+      onChange({
+        ...buildDefaultProtection(initialUsd, rangeWidthPct, { enabled: true, leverage: defaultLeverage }),
+        enabled: true,
+      });
     } else {
       onChange({ ...DEFAULT_PROTECTION, enabled: false });
     }
@@ -149,7 +164,7 @@ export default function ProtectionFormFields({
 
   const handleReTune = () => {
     if (!rangeWidthPct) return;
-    const tuned = buildDefaultProtection(initialUsd, rangeWidthPct);
+    const tuned = buildDefaultProtection(initialUsd, rangeWidthPct, { enabled: true, leverage: defaultLeverage });
     // Conserva la cuenta y leverage que el usuario ya eligió
     onChange({
       ...tuned,
@@ -226,6 +241,11 @@ export default function ProtectionFormFields({
             {accounts.length === 0 && (
               <p className={styles.error}>
                 No hay cuentas de Hyperliquid. Configura una en Ajustes antes de activar la protección.
+              </p>
+            )}
+            {accounts.length > 0 && !v.accountId && lpWalletAddress && !matchingAccount && (
+              <p className={styles.hint}>
+                Ninguna cuenta coincide con la wallet del LP. Selecciona una cuenta manualmente.
               </p>
             )}
           </div>

@@ -14,6 +14,14 @@ const { uniswapApi } = vi.hoisted(() => ({
   },
 }));
 
+const { walletConnection } = vi.hoisted(() => ({
+  walletConnection: {
+    address: '0x00000000000000000000000000000000000000FF',
+    isConnecting: false,
+    changeWallet: vi.fn(),
+  },
+}));
+
 const { executionController } = vi.hoisted(() => {
   const createSnapshot = (overrides = {}) => ({
     state: 'idle',
@@ -67,6 +75,10 @@ const { executionController } = vi.hoisted(() => {
 
 vi.mock('../../services/api', () => ({
   uniswapApi,
+}));
+
+vi.mock('../../hooks/useWalletConnection', () => ({
+  useWalletConnection: () => walletConnection,
 }));
 
 vi.mock('../../hooks/useWalletExecution', async () => {
@@ -151,6 +163,8 @@ vi.mock('../../hooks/useWalletExecution', async () => {
 describe('UnifiedLpWizard · modo standalone', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    walletConnection.changeWallet.mockReset();
+    walletConnection.isConnecting = false;
     executionController.resetAll();
     uniswapApi.getSmartCreateTokenList.mockResolvedValue([
       { symbol: 'WETH', address: '0x00000000000000000000000000000000000000AA' },
@@ -233,6 +247,23 @@ describe('UnifiedLpWizard · modo standalone', () => {
       ],
       warnings: [],
     });
+  });
+
+  it('permite cambiar de wallet desde el encabezado sin cerrar el wizard', async () => {
+    const onClose = vi.fn();
+    render(
+      <UnifiedLpWizard
+        mode="standalone"
+        wallet={{ address: walletConnection.address }}
+        defaults={{ network: 'ethereum', version: 'v3' }}
+        meta={{ networks: [{ id: 'ethereum', label: 'Ethereum', versions: ['v3'] }] }}
+        onClose={onClose}
+      />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /Cambiar wallet/i }));
+    expect(walletConnection.changeWallet).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('recorre el wizard completo hasta review mostrando swaps, approvals y mint', async () => {

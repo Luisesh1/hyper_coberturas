@@ -16,6 +16,8 @@ export default function StepProtection({
   protection,
   setProtection,
   accounts,
+  lpWalletAddress,
+  defaultLeverage = '5',
   capitalUsd,
   rangeWidthPct,
   preflight,
@@ -30,6 +32,8 @@ export default function StepProtection({
         value={protection}
         onChange={(next) => setProtection(next)}
         accounts={accounts}
+        lpWalletAddress={lpWalletAddress}
+        defaultLeverage={defaultLeverage}
         initialUsd={capitalUsd}
         rangeWidthPct={rangeWidthPct}
       />

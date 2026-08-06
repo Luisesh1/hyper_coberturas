@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { render, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
 import {
   computeAutoTunedProtection,
   buildDefaultProtection,
   buildProtectionPayload,
 } from './ProtectionFormFields';
+import ProtectionFormFields from './ProtectionFormFields';
 
 describe('computeAutoTunedProtection', () => {
   it('devuelve null si rangeWidthPct es inválido o nulo', () => {
@@ -82,6 +84,47 @@ describe('buildDefaultProtection', () => {
     expect(result.autoTunedFor).toBeNull();
     // Notional sigue siendo mitad del LP
     expect(result.configuredNotionalUsd).toBe('500');
+  });
+
+  it('permite defaults del wizard orquestado sin alterar los de edición', () => {
+    const result = buildDefaultProtection(1000, null, { enabled: true, leverage: '10' });
+    expect(result.enabled).toBe(true);
+    expect(result.leverage).toBe('10');
+    expect(result.preset).toBe('adaptive');
+    expect(result.bandMode).toBe('adaptive');
+  });
+});
+
+describe('selección de cuenta Hyperliquid', () => {
+  it('selecciona únicamente la cuenta cuya address coincide con la wallet del LP', async () => {
+    const onChange = vi.fn();
+    render(
+      <ProtectionFormFields
+        value={buildDefaultProtection(1000, null, { enabled: true, leverage: '10' })}
+        onChange={onChange}
+        lpWalletAddress="0xaBcd000000000000000000000000000000000001"
+        accounts={[
+          { id: 1, address: '0x9999000000000000000000000000000000000009', isDefault: true },
+          { id: 2, address: '0xaBcd000000000000000000000000000000000001' },
+        ]}
+      />
+    );
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ accountId: 2 })));
+  });
+
+  it('mantiene la cuenta vacía cuando no hay coincidencia', async () => {
+    const onChange = vi.fn();
+    render(
+      <ProtectionFormFields
+        value={buildDefaultProtection(1000, null, { enabled: true, leverage: '10' })}
+        onChange={onChange}
+        lpWalletAddress="0xaBcd000000000000000000000000000000000001"
+        accounts={[{ id: 1, address: '0x9999000000000000000000000000000000000009', isDefault: true }]}
+      />
+    );
+
+    await waitFor(() => expect(onChange).not.toHaveBeenCalled());
   });
 });
 

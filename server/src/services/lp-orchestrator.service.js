@@ -17,6 +17,7 @@ const uniswapService = require('./uniswap.service');
 const positionActionsService = require('./uniswap-position-actions.service');
 const uniswapProtectionService = require('./uniswap-protection.service');
 const protectedPoolRefreshService = require('./protected-pool-refresh.service');
+const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
 const { loadWalletPoolSnapshot } = require('./uniswap/actions/helpers');
 const logger = require('./logger.service');
 const onChainManager = require('./onchain-manager.service');
@@ -59,6 +60,7 @@ class LpOrchestratorService {
     this.positionActionsService = deps.positionActionsService || positionActionsService;
     this.uniswapProtectionService = deps.uniswapProtectionService || uniswapProtectionService;
     this.protectedPoolRefreshService = deps.protectedPoolRefreshService || protectedPoolRefreshService;
+    this.protectedPoolDeltaNeutralService = deps.protectedPoolDeltaNeutralService || protectedPoolDeltaNeutralService;
     this.loadWalletPoolSnapshot = deps.loadWalletPoolSnapshot || loadWalletPoolSnapshot;
     this.rangeEvaluator = deps.rangeEvaluator || rangeEvaluator;
     this.accounting = deps.accounting || accounting;
@@ -992,14 +994,34 @@ class LpOrchestratorService {
       createdAt: Date.now(),
     });
 
-    // Si hubo cambio de rango y hay protección activa, refrescar protección
-    if ((action === 'modify-range' || action === 'rebalance')
-        && orch.activeProtectedPoolId) {
+    // Si cambió el rango o el capital del LP, refrescar el snapshot de la
+    // protección. En un cambio de liquidez además forzamos la evaluación del
+    // hedge: el delta del LP depende directamente de su liquidez y esperar al
+    // siguiente tick dejaría temporalmente una cobertura desfasada.
+    const shouldRefreshProtection = [
+      'modify-range',
+      'rebalance',
+      'increase-liquidity',
+      'decrease-liquidity',
+    ].includes(action);
+    if (shouldRefreshProtection && orch.activeProtectedPoolId) {
       try {
-        await this.protectedPoolRefreshService.refreshProtection(userId, orch.activeProtectedPoolId);
+        const refreshedProtection = await this.protectedPoolRefreshService.refreshProtection(
+          userId,
+          orch.activeProtectedPoolId
+        );
+        if (isCapitalAction
+            && refreshedProtection?.status === 'active'
+            && typeof this.protectedPoolDeltaNeutralService?.evaluateProtection === 'function') {
+          await this.protectedPoolDeltaNeutralService.evaluateProtection(refreshedProtection, {
+            forceReason: 'lp_liquidity_changed',
+            forceRebalance: true,
+          });
+        }
       } catch (err) {
         this.logger.warn('lp_orchestrator_protection_refresh_failed', {
           orchestratorId,
+          action,
           error: err.message,
         });
       }

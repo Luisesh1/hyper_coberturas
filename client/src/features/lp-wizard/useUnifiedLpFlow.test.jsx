@@ -68,11 +68,18 @@ function makeFlow(overrides = {}) {
 
 function renderFlow(flowOverrides = {}) {
   smartCreateFlow.current = makeFlow(flowOverrides);
-  return renderHook(() => useUnifiedLpFlow({
+  const view = renderHook(() => useUnifiedLpFlow({
     wallet: { address: '0x1111111111111111111111111111111111111111' },
     defaults: { network: 'arbitrum', version: 'v4' },
     initialMode: 'orchestrated',
   }));
+  act(() => {
+    view.result.current.setProtection({
+      ...view.result.current.protection,
+      accountId: 1,
+    });
+  });
+  return view;
 }
 
 describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
@@ -282,6 +289,12 @@ describe('useUnifiedLpFlow — reintento tras un fallo de firma', () => {
       wallet: { address: '0x1111111111111111111111111111111111111111' },
       defaults: { network: 'arbitrum', version: 'v4' },
     }));
+    act(() => {
+      view.result.current.setProtection({
+        ...view.result.current.protection,
+        accountId: 1,
+      });
+    });
     // Con el paso de cobertura sin superar, REVIEW se intercepta con PROTECTION.
     expect(view.result.current.step).toBe('protection');
     await act(async () => {
@@ -322,6 +335,12 @@ describe('useUnifiedLpFlow — reintento tras un fallo de firma', () => {
     expect(lpOrchestratorApi.createIntent).toHaveBeenCalledTimes(1);
 
     act(() => { view.result.current.handleReset(); });
+    act(() => {
+      view.result.current.setProtection({
+        ...view.result.current.protection,
+        accountId: 1,
+      });
+    });
     await act(async () => {
       await view.result.current.handleContinueFromProtection();
     });
@@ -331,5 +350,64 @@ describe('useUnifiedLpFlow — reintento tras un fallo de firma', () => {
     // Dos intenciones distintas: la abandonada caduca sola por TTL en el
     // servidor, pero jamás se firma contra ella.
     expect(lpOrchestratorApi.createIntent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('useUnifiedLpFlow — defaults y validación de cobertura', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    smartCreateFlow.current = makeFlow();
+    lpOrchestratorApi.preflightProtection.mockResolvedValue({ ok: true, checks: [] });
+  });
+
+  it('activa adaptive con leverage 10 en un wizard orquestado', () => {
+    const { result } = renderHook(() => useUnifiedLpFlow({
+      mode: 'orchestrated',
+      wallet: { address: '0x1111111111111111111111111111111111111111' },
+      defaults: { network: 'arbitrum', version: 'v4', totalUsdTarget: 1000 },
+    }));
+
+    expect(result.current.protection.enabled).toBe(true);
+    expect(result.current.protection.preset).toBe('adaptive');
+    expect(result.current.protection.bandMode).toBe('adaptive');
+    expect(result.current.protection.leverage).toBe('10');
+  });
+
+  it('no llama al backend si la cuenta Hyperliquid está vacía', async () => {
+    const { result } = renderHook(() => useUnifiedLpFlow({
+      mode: 'orchestrated',
+      wallet: { address: '0x1111111111111111111111111111111111111111' },
+      defaults: { network: 'arbitrum', version: 'v4', totalUsdTarget: 1000 },
+    }));
+
+    let response;
+    await act(async () => {
+      response = await result.current.handleContinueFromProtection();
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.blockingReason).toMatch(/cuenta de Hyperliquid/i);
+    expect(lpOrchestratorApi.preflightProtection).not.toHaveBeenCalled();
+  });
+
+  it('al cambiar la wallet limpia la intención y reinicia el flujo base', () => {
+    const flowReset = vi.fn();
+    smartCreateFlow.current = makeFlow({ step: 'review', handleReset: flowReset });
+    const view = renderHook(
+      ({ address }) => useUnifiedLpFlow({
+        mode: 'orchestrated',
+        wallet: { address },
+        defaults: { network: 'arbitrum', version: 'v4', totalUsdTarget: 1000 },
+      }),
+      { initialProps: { address: '0x1111111111111111111111111111111111111111' } }
+    );
+
+    act(() => {
+      view.rerender({ address: '0x2222222222222222222222222222222222222222' });
+    });
+
+    expect(flowReset).toHaveBeenCalledTimes(1);
+    expect(view.result.current.preflight).toBe(null);
+    expect(view.result.current.protection.enabled).toBe(true);
   });
 });

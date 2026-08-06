@@ -8,6 +8,7 @@ import StepError from '../../pages/UniswapPools/components/smart-create/StepErro
 import StepProtection from './steps/StepProtection';
 import StepPlanReview from './steps/StepPlanReview';
 import StepOutcome from './steps/StepOutcome';
+import { useWalletConnection } from '../../hooks/useWalletConnection';
 import styles from './UnifiedLpWizard.module.css';
 
 const { POOL, RANGE, FUNDING, REVIEW, SIGNING, ERROR, PROTECTION, OUTCOME } = UNIFIED_STEP;
@@ -60,7 +61,11 @@ export default function UnifiedLpWizard({
   onCloseLp,
   onKeepWithoutProtection,
 }) {
-  const unified = useUnifiedLpFlow({ mode, wallet, defaults, onCompleted });
+  const walletConnection = useWalletConnection();
+  const effectiveWallet = wallet?.address
+    ? wallet
+    : { ...(wallet || {}), address: walletConnection?.address || '' };
+  const unified = useUnifiedLpFlow({ mode, wallet: effectiveWallet, defaults, onCompleted });
   const { flow, step, isOrchestrated } = unified;
 
   const networkOptions = Array.isArray(meta?.networks) && meta.networks.length
@@ -80,6 +85,17 @@ export default function UnifiedLpWizard({
   const items = stepperItems(isOrchestrated);
   const currentIndex = Math.max(0, items.findIndex((item) => item.id === step));
   const isTerminal = step === OUTCOME || step === SIGNING || step === ERROR;
+  const ownerWalletAddress = effectiveWallet.address || walletConnection?.address || '';
+  const canChangeWallet = !!walletConnection?.changeWallet;
+  const walletChangeDisabled = isTerminal
+    || flow.isBusy
+    || unified.preflightBusy
+    || unified.commitBusy
+    || walletConnection?.isConnecting;
+
+  const handleChangeWallet = () => {
+    if (!walletChangeDisabled) walletConnection?.changeWallet?.();
+  };
 
   return (
     <div className={styles.overlay} onClick={onClose}>
@@ -100,7 +116,24 @@ export default function UnifiedLpWizard({
                 : 'Define el pool, ajusta el rango, selecciona el capital y revisa el plan antes de firmar.'}
             </p>
           </div>
-          <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Cerrar">✕</button>
+          <div className={styles.headerActions}>
+            {ownerWalletAddress && (
+              <div className={styles.headerWallet} title={ownerWalletAddress}>
+                <span className={styles.headerWalletLabel}>Wallet LP</span>
+                <strong>{`${ownerWalletAddress.slice(0, 6)}…${ownerWalletAddress.slice(-4)}`}</strong>
+              </div>
+            )}
+            <button
+              type="button"
+              className={styles.walletChangeBtn}
+              onClick={handleChangeWallet}
+              disabled={!canChangeWallet || walletChangeDisabled}
+              title={canChangeWallet ? 'Elegir otra cuenta del proveedor conectado' : 'Conecta una wallet para cambiar de cuenta'}
+            >
+              {walletConnection?.isConnecting ? 'Cambiando…' : 'Cambiar wallet'}
+            </button>
+            <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Cerrar">✕</button>
+          </div>
         </header>
 
         {!isTerminal && <Stepper items={items} currentIndex={currentIndex} />}
@@ -172,7 +205,7 @@ export default function UnifiedLpWizard({
               </div>
             )}
             <StepPoolSelection
-              wallet={wallet}
+              wallet={effectiveWallet}
               selectedNetwork={selectedNetwork}
               network={flow.network}
               version={flow.version}
@@ -190,6 +223,8 @@ export default function UnifiedLpWizard({
               setCustomToken1={flow.setCustomToken1}
               tokenOptions={flow.tokenOptions}
               error={flow.error}
+              walletAssetsDefaultLoading={flow.walletAssetsDefaultLoading}
+              walletAssetsDefaultError={flow.walletAssetsDefaultError}
               handleAnalyzePool={flow.handleAnalyzePool}
               hideContextTiles={isOrchestrated}
             />
@@ -293,6 +328,8 @@ export default function UnifiedLpWizard({
               protection={unified.protection}
               setProtection={unified.setProtection}
               accounts={accounts}
+              lpWalletAddress={ownerWalletAddress}
+              defaultLeverage={isOrchestrated ? '10' : '5'}
               capitalUsd={Number(flow.totalUsdTarget) || 0}
               rangeWidthPct={unified.effectiveRangeWidthPct}
               preflight={unified.preflight}

@@ -56,6 +56,54 @@
   color: var(--text-secondary);
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+}
+
+.headerWallet {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.headerWalletLabel {
+  color: var(--text-tertiary);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.walletChangeBtn {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--teal-border);
+  border-radius: var(--radius-md);
+  background: var(--teal-bg);
+  color: var(--teal);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.walletChangeBtn:hover:not(:disabled) {
+  border-color: var(--teal);
+  background: rgba(72, 221, 208, 0.16);
+}
+
+.walletChangeBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .closeBtn {
   flex: none;
   width: 30px;
@@ -483,6 +531,8 @@
   .stepper,
   .stepBody,
   .footer { padding-left: 16px; padding-right: 16px; }
+  .headerActions { flex-wrap: wrap; }
+  .headerWallet { display: none; }
   .stepText { display: none; }
 }
 
