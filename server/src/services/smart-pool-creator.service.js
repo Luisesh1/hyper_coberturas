@@ -21,6 +21,7 @@ const {
   ERC20_ABI,
   V3_FACTORY_ABI,
   V3_POOL_ABI,
+  V3_QUOTER_V2_ABI,
   V4_STATE_VIEW_ABI,
 } = require('./uniswap/abis');
 
@@ -1124,6 +1125,69 @@ function buildAutoFundingSelection({
   });
 }
 
+/**
+ * Precio spot del pool orientado tokenOut/tokenIn, leyendo slot0.
+ * Solo sirve para diagnósticos y como fallback: es el precio marginal de un
+ * swap infinitesimal, así que ignora el price impact del tamaño real.
+ */
+async function readPoolSpotPrice({ provider, poolAddress, tokenIn, tokenOut }) {
+  const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
+  const [slot0, poolToken0, poolToken1] = await Promise.all([
+    pool.slot0(),
+    pool.token0(),
+    pool.token1(),
+  ]);
+  const zeroForOne = String(poolToken0).toLowerCase() === String(tokenIn.address).toLowerCase();
+  const poolPrice = uniswapService.tickToPrice(
+    Number(slot0.tick),
+    zeroForOne ? tokenIn.decimals : tokenOut.decimals,
+    String(poolToken1).toLowerCase() === String(tokenOut.address).toLowerCase() ? tokenOut.decimals : tokenIn.decimals
+  );
+  if (!Number.isFinite(poolPrice) || poolPrice <= 0) return null;
+  return { poolPrice, zeroForOne };
+}
+
+/**
+ * Evalúa un fee tier concreto y devuelve la salida esperada del swap.
+ *
+ * Prioriza la cotización real del QuoterV2 (`quoteExactInputSingle`), que
+ * simula el swap completo e incorpora fee del pool + price impact del tamaño.
+ * Si la red no tiene quoter configurado o la cotización falla, cae al precio
+ * spot de slot0 — una estimación optimista que ignora el impact, marcada como
+ * tal en `quoteSource` para que el consumidor sepa que el margen es frágil.
+ */
+async function quoteFeeTier({ provider, quoter, poolAddress, tokenIn, tokenOut, fee, amountInRaw }) {
+  if (quoter) {
+    const quoted = await quoter.quoteExactInputSingle.staticCall({
+      tokenIn: tokenIn.address,
+      tokenOut: tokenOut.address,
+      amountIn: BigInt(amountInRaw),
+      fee,
+      sqrtPriceLimitX96: 0n,
+    });
+    const expectedOutRaw = BigInt(quoted?.amountOut ?? quoted?.[0] ?? 0n);
+    if (expectedOutRaw > 0n) return { expectedOutRaw, quoteSource: 'quoter' };
+  }
+
+  const spot = await readPoolSpotPrice({ provider, poolAddress, tokenIn, tokenOut });
+  if (!spot) return null;
+  const amountIn = rawToAmount(amountInRaw, tokenIn.decimals);
+  const feeRate = 1 - (fee / 1_000_000);
+  const expectedOutValue = spot.zeroForOne
+    ? amountIn * spot.poolPrice * feeRate
+    : (amountIn / spot.poolPrice) * feeRate;
+  if (!Number.isFinite(expectedOutValue) || expectedOutValue <= 0) return null;
+  return { expectedOutRaw: toRawAmount(expectedOutValue, tokenOut.decimals), quoteSource: 'spot' };
+}
+
+/**
+ * Elige el mejor pool V3 directo para un swap tokenIn → tokenOut.
+ *
+ * El tier se elige por la salida *cotizada*, no por el precio spot: como el
+ * spot es prácticamente idéntico entre tiers, ordenar por spot equivalía a
+ * elegir siempre el fee más bajo, que a menudo es el pool sin liquidez. Con la
+ * cotización real gana el pool con profundidad suficiente para el tamaño.
+ */
 async function resolveBestDirectRoute({
   provider,
   networkConfig,
@@ -1139,44 +1203,33 @@ async function resolveBestDirectRoute({
     address: ethers.getAddress(networkConfig.deployments.v3.eventSource),
     abi: V3_FACTORY_ABI,
   });
+  const quoterAddress = networkConfig.deployments?.v3?.quoter;
+  const quoter = quoterAddress
+    ? onChainManager.getContract({
+      runner: provider,
+      address: ethers.getAddress(quoterAddress),
+      abi: V3_QUOTER_V2_ABI,
+    })
+    : null;
 
-  let bestRoute = null;
-  for (const fee of DEFAULT_FEE_TIERS) {
+  const candidates = await Promise.all(DEFAULT_FEE_TIERS.map(async (fee) => {
     try {
       const poolAddress = await factory.getPool(tokenIn.address, tokenOut.address, fee);
-      if (!poolAddress || poolAddress === ethers.ZeroAddress) continue;
-      const pool = onChainManager.getContract({ runner: provider, address: poolAddress, abi: V3_POOL_ABI });
-      const [slot0, poolToken0, poolToken1] = await Promise.all([
-        pool.slot0(),
-        pool.token0(),
-        pool.token1(),
-      ]);
-      const poolPrice = uniswapService.tickToPrice(
-        Number(slot0.tick),
-        String(poolToken0).toLowerCase() === String(tokenIn.address).toLowerCase() ? tokenIn.decimals : tokenOut.decimals,
-        String(poolToken1).toLowerCase() === String(tokenOut.address).toLowerCase() ? tokenOut.decimals : tokenIn.decimals
-      );
-      if (!Number.isFinite(poolPrice) || poolPrice <= 0) continue;
-
-      const amountIn = rawToAmount(amountInRaw, tokenIn.decimals);
-      const feeRate = 1 - (fee / 1_000_000);
-      const zeroForOne = String(poolToken0).toLowerCase() === String(tokenIn.address).toLowerCase();
-      const expectedOutValue = zeroForOne
-        ? amountIn * poolPrice * feeRate
-        : (amountIn / poolPrice) * feeRate;
-      if (!Number.isFinite(expectedOutValue) || expectedOutValue <= 0) continue;
-
-      const expectedOutRaw = toRawAmount(expectedOutValue, tokenOut.decimals);
-      if (!bestRoute || expectedOutRaw > bestRoute.expectedOutRaw) {
-        bestRoute = {
-          fee,
-          poolAddress: ethers.getAddress(poolAddress),
-          expectedOutRaw,
-          expectedOut: ethers.formatUnits(expectedOutRaw, tokenOut.decimals),
-          currentPrice: Number(poolPrice.toFixed(6)),
-        };
-      }
+      if (!poolAddress || poolAddress === ethers.ZeroAddress) return null;
+      const quote = await quoteFeeTier({
+        provider,
+        quoter,
+        poolAddress,
+        tokenIn,
+        tokenOut,
+        fee,
+        amountInRaw,
+      });
+      if (!quote) return null;
+      return { fee, poolAddress: ethers.getAddress(poolAddress), ...quote };
     } catch (err) {
+      // Un tier que revierte (sin liquidez para el tamaño, pool sin
+      // inicializar) no invalida la ruta: se descarta y se sigue con el resto.
       logger.debug?.('smart_pool_creator_direct_route_failed', {
         network: networkConfig.id,
         fee,
@@ -1184,10 +1237,32 @@ async function resolveBestDirectRoute({
         tokenOut: tokenOut.symbol,
         error: err.message,
       });
+      return null;
     }
-  }
+  }));
 
-  return bestRoute;
+  let bestRoute = null;
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (!bestRoute || candidate.expectedOutRaw > bestRoute.expectedOutRaw) bestRoute = candidate;
+  }
+  if (!bestRoute) return null;
+
+  const spot = await readPoolSpotPrice({
+    provider,
+    poolAddress: bestRoute.poolAddress,
+    tokenIn,
+    tokenOut,
+  }).catch(() => null);
+
+  return {
+    fee: bestRoute.fee,
+    poolAddress: bestRoute.poolAddress,
+    expectedOutRaw: bestRoute.expectedOutRaw,
+    expectedOut: ethers.formatUnits(bestRoute.expectedOutRaw, tokenOut.decimals),
+    currentPrice: spot ? Number(spot.poolPrice.toFixed(6)) : null,
+    quoteSource: bestRoute.quoteSource,
+  };
 }
 
 /**
@@ -1238,11 +1313,13 @@ async function resolveBestRoute({
         expectedOut: direct.expectedOut,
         amountOutMinimumRaw,
         currentPrice: direct.currentPrice,
+        quoteSource: direct.quoteSource,
       }],
       expectedOutRaw: direct.expectedOutRaw,
       expectedOut: direct.expectedOut,
       amountOutMinimumRaw,
       currentPrice: direct.currentPrice,
+      quoteSource: direct.quoteSource,
     };
   }
 

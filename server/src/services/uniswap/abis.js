@@ -51,6 +51,14 @@ const V3_SWAP_ROUTER_ABI = [
   'function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) payable returns (uint256 amountOut)',
 ];
 
+// QuoterV2. `quoteExactInputSingle` no es `view` (simula el swap y revierte
+// internamente para recuperar el resultado), así que siempre hay que llamarlo
+// con `.staticCall`. A diferencia del precio spot de slot0, la cifra que
+// devuelve ya incluye el fee del pool y el price impact real del tamaño.
+const V3_QUOTER_V2_ABI = [
+  'function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96) params) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+];
+
 const V4_STATE_VIEW_ABI = [
   'function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)',
   'function getLiquidity(bytes32) view returns (uint128)',
@@ -76,6 +84,7 @@ module.exports = {
   V3_POOL_ABI,
   V3_POSITION_MANAGER_ABI,
   V3_SWAP_ROUTER_ABI,
+  V3_QUOTER_V2_ABI,
   V4_STATE_VIEW_ABI,
   V4_POSITION_MANAGER_ABI,
   TRANSFER_EVENT_ABI,
