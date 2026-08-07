@@ -43,6 +43,7 @@ const {
   normalizeHooksAddress,
 } = require('../../uniswap-v4-helpers.service');
 const {
+  applyQuotedSwapOut,
   buildModifyRangeRedeployPlan,
   buildRebalanceSwap,
   estimateSwapValueUsd,
@@ -68,7 +69,23 @@ const {
   appendFundingSwapTransactions,
   loadV4PositionContext,
   getBalancesAndAllowancesBatch,
+  quoteV4SwapOutRaw,
 } = require('./helpers');
+
+/**
+ * El rebalanceo v4 swapea dentro del propio pool de la posicion (via
+ * UniversalRouter), asi que se cotiza contra ese mismo poolKey. Sin quoter
+ * disponible el plan conserva la estimacion spot previa.
+ */
+async function withQuotedRebalanceSwapV4(ctx, swap, slippageBps) {
+  const quotedOutRaw = await quoteV4SwapOutRaw({
+    provider: ctx.provider,
+    networkConfig: ctx.networkConfig,
+    poolKey: ctx.poolKey,
+    swap,
+  });
+  return applyQuotedSwapOut(swap, { quotedOutRaw, slippageBps });
+}
 
 /**
  * Tope de gasto para un MINT_POSITION de v4.
@@ -751,18 +768,19 @@ async function prepareModifyRangeV4(payload) {
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
   validateTickRange(tickLower, tickUpper);
 
-  const {
-    optimalWeight,
-    swap,
-    amount0Desired: redeployAmount0,
-    amount1Desired: redeployAmount1,
-  } = buildModifyRangeRedeployPlan(ctx, {
+  const redeployPlan = buildModifyRangeRedeployPlan(ctx, {
     amount0Available,
     amount1Available,
     lowerPrice,
     upperPrice,
     slippageBps: payload.slippageBps,
   });
+  const { optimalWeight } = redeployPlan;
+  const swap = await withQuotedRebalanceSwapV4(ctx, redeployPlan.swap, payload.slippageBps);
+  // Los importes a mintear salen del post-swap, que la cotizacion acaba de
+  // corregir: recalcularlos aqui evita mintear contra un saldo que no llega.
+  const redeployAmount0 = swap?.postAmount0 ?? redeployPlan.amount0Desired;
+  const redeployAmount1 = swap?.postAmount1 ?? redeployPlan.amount1Desired;
   const txPlan = [
     buildV4ModifyTx(ctx, {
       actionCodes: [
@@ -1365,12 +1383,12 @@ async function prepareRebalanceV4(payload) {
   if (amount0Available === 0n && amount1Available === 0n) {
     throw new ValidationError('La posicion no tiene liquidez ni fees que rebalancear.');
   }
-  const swap = buildRebalanceSwap(ctx, {
+  const swap = await withQuotedRebalanceSwapV4(ctx, buildRebalanceSwap(ctx, {
     amount0Available,
     amount1Available,
     targetWeightToken0Pct: payload.targetWeightToken0Pct,
     slippageBps: payload.slippageBps,
-  });
+  }), payload.slippageBps);
 
   const txPlan = [
     buildV4ModifyTx(ctx, {

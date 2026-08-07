@@ -5,6 +5,8 @@ const {
   V3_FACTORY_ABI,
   V3_POOL_ABI,
   V3_POSITION_MANAGER_ABI,
+  V3_QUOTER_V2_ABI,
+  V4_QUOTER_ABI,
 } = require('../abis');
 const {
   MAX_UINT256,
@@ -446,6 +448,86 @@ async function appendV3SwapToToken({
     expectedOutRaw: route.expectedOutRaw,
     currentPrice: route.currentPrice,
   };
+}
+
+// ─── Cotizacion de swaps ─────────────────────────────────────────────
+
+/**
+ * Cotiza el swap de rebalanceo contra el pool v3 donde se va a ejecutar.
+ *
+ * Devuelve null (y el caller se queda con la estimacion spot) si la red no
+ * tiene quoter configurado o si la cotizacion revierte: preferimos el
+ * comportamiento anterior a romper el plan entero.
+ */
+async function quoteV3SwapOutRaw({ provider, networkConfig, swap, fee }) {
+  if (!swap || swap.amountIn <= 0n) return null;
+  const quoterAddress = networkConfig?.deployments?.v3?.quoter;
+  if (!quoterAddress) return null;
+  try {
+    const quoter = onChainManager.getContract({
+      runner: provider,
+      address: ethers.getAddress(quoterAddress),
+      abi: V3_QUOTER_V2_ABI,
+    });
+    const quoted = await quoter.quoteExactInputSingle.staticCall({
+      tokenIn: swap.tokenIn.address,
+      tokenOut: swap.tokenOut.address,
+      amountIn: swap.amountIn,
+      fee: Number(fee),
+      sqrtPriceLimitX96: 0n,
+    });
+    const amountOut = BigInt(quoted?.amountOut ?? quoted?.[0] ?? 0n);
+    return amountOut > 0n ? amountOut : null;
+  } catch (err) {
+    logger.debug?.('v3_rebalance_quote_failed', {
+      network: networkConfig?.id,
+      fee: Number(fee),
+      tokenIn: swap.tokenIn.symbol,
+      tokenOut: swap.tokenOut.symbol,
+      error: err.message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Cotiza el swap de rebalanceo v4 contra el poolKey de la propia posicion, que
+ * es donde el UniversalRouter lo va a ejecutar (SWAP_EXACT_IN_SINGLE).
+ */
+async function quoteV4SwapOutRaw({ provider, networkConfig, poolKey, swap }) {
+  if (!swap || swap.amountIn <= 0n) return null;
+  const quoterAddress = networkConfig?.deployments?.v4?.quoter;
+  if (!quoterAddress || !poolKey) return null;
+  try {
+    const quoter = onChainManager.getContract({
+      runner: provider,
+      address: ethers.getAddress(quoterAddress),
+      abi: V4_QUOTER_ABI,
+    });
+    const quoted = await quoter.quoteExactInputSingle.staticCall({
+      poolKey: {
+        currency0: poolKey.currency0,
+        currency1: poolKey.currency1,
+        fee: Number(poolKey.fee),
+        tickSpacing: Number(poolKey.tickSpacing),
+        hooks: poolKey.hooks,
+      },
+      zeroForOne: swap.direction === 'token0_to_token1',
+      exactAmount: swap.amountIn,
+      hookData: '0x',
+    });
+    const amountOut = BigInt(quoted?.amountOut ?? quoted?.[0] ?? 0n);
+    return amountOut > 0n ? amountOut : null;
+  } catch (err) {
+    logger.debug?.('v4_rebalance_quote_failed', {
+      network: networkConfig?.id,
+      fee: Number(poolKey?.fee),
+      tokenIn: swap.tokenIn.symbol,
+      tokenOut: swap.tokenOut.symbol,
+      error: err.message,
+    });
+    return null;
+  }
 }
 
 // ─── Approval ────────────────────────────────────────────────────────
@@ -893,6 +975,9 @@ module.exports = {
   getGasReserveRaw,
   buildClosedPositionPreview,
   appendV3SwapToToken,
+  // Cotizacion de swaps
+  quoteV3SwapOutRaw,
+  quoteV4SwapOutRaw,
   // Approval
   appendPermit2Approvals,
   appendFundingSwapTransactions,

@@ -40,6 +40,7 @@ const smartPoolCreatorService = require('../../smart-pool-creator.service');
 const logger = require('../../logger.service');
 const onChainManager = require('../../onchain-manager.service');
 const {
+  applyQuotedSwapOut,
   buildModifyRangeRedeployPlan,
   buildRebalanceSwap,
   estimateSwapValueUsd,
@@ -61,9 +62,25 @@ const {
   buildClosedPositionPreview,
   appendV3SwapToToken,
   appendFundingSwapTransactions,
+  quoteV3SwapOutRaw,
   loadV3PositionContext,
   loadV3DecreaseLiquidityContext,
 } = require('./helpers');
+
+/**
+ * El swap de rebalanceo se ejecuta en el pool de la propia posicion, asi que
+ * se cotiza contra ese fee tier. Si la cotizacion no esta disponible el plan
+ * conserva la estimacion spot previa.
+ */
+async function withQuotedRebalanceSwap(ctx, swap, slippageBps) {
+  const quotedOutRaw = await quoteV3SwapOutRaw({
+    provider: ctx.provider,
+    networkConfig: ctx.networkConfig,
+    swap,
+    fee: Number(ctx.position.fee),
+  });
+  return applyQuotedSwapOut(swap, { quotedOutRaw, slippageBps });
+}
 
 async function prepareIncreaseLiquidity(payload) {
   const ctx = await loadV3PositionContext(payload);
@@ -468,18 +485,19 @@ async function prepareModifyRange(payload) {
     txPlan.push(...(await prepareCollectFees(payload)).txPlan);
   }
 
-  const {
-    optimalWeight,
-    swap,
-    amount0Desired,
-    amount1Desired,
-  } = buildModifyRangeRedeployPlan(ctx, {
+  const redeployPlan = buildModifyRangeRedeployPlan(ctx, {
     amount0Available,
     amount1Available,
     lowerPrice,
     upperPrice,
     slippageBps: payload.slippageBps,
   });
+  const { optimalWeight } = redeployPlan;
+  const swap = await withQuotedRebalanceSwap(ctx, redeployPlan.swap, payload.slippageBps);
+  // Los importes a mintear salen del post-swap, que la cotizacion acaba de
+  // corregir: recalcularlos aqui evita mintear contra un saldo que no llega.
+  const amount0Desired = swap?.postAmount0 ?? redeployPlan.amount0Desired;
+  const amount1Desired = swap?.postAmount1 ?? redeployPlan.amount1Desired;
 
   if (swap?.amountIn > 0n) {
     requiresApproval.push(buildApprovalRequirement(swap.tokenIn, V3_SWAP_ROUTER_ADDRESS, swap.amountIn));
@@ -568,12 +586,12 @@ async function prepareRebalance(payload) {
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
   const amount0Available = toBigIntAmount(ctx.currentAmounts.amount0 || 0, ctx.token0.decimals, 'amount0Current') + BigInt(ctx.position.tokensOwed0);
   const amount1Available = toBigIntAmount(ctx.currentAmounts.amount1 || 0, ctx.token1.decimals, 'amount1Current') + BigInt(ctx.position.tokensOwed1);
-  const swap = buildRebalanceSwap(ctx, {
+  const swap = await withQuotedRebalanceSwap(ctx, buildRebalanceSwap(ctx, {
     amount0Available,
     amount1Available,
     targetWeightToken0Pct: payload.targetWeightToken0Pct,
     slippageBps: payload.slippageBps,
-  });
+  }), payload.slippageBps);
 
   // decrease+collect combinado en una sola tx via PositionManager.multicall()
   const txPlan = [

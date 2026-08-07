@@ -71,6 +71,37 @@ function buildRebalanceSwap(ctx, {
   };
 }
 
+/**
+ * Reescribe el minimo garantizado de un swap con una cotizacion real del pool.
+ *
+ * `buildRebalanceSwap` estima la salida valorando el input al precio spot: no
+ * descuenta el fee del pool ni el price impact, asi que su minimo puede quedar
+ * por encima de lo que el pool entrega y el swap revierte con "Too little
+ * received" — en un pool de fee 10000 el fee solo ya se come los 100 bps de
+ * slippage por defecto. Cuando el caller consigue cotizar (QuoterV2 en v3,
+ * V4Quoter en v4) sustituye aqui esa estimacion por la cifra real.
+ *
+ * Los importes post-swap se mueven con el minimo, que es lo unico garantizado:
+ * son los que alimentan el mint posterior.
+ */
+function applyQuotedSwapOut(swap, { quotedOutRaw, slippageBps }) {
+  if (!swap || quotedOutRaw == null) return swap;
+  const quoted = BigInt(quotedOutRaw);
+  if (quoted <= 0n) return swap;
+
+  const minimumOut = amountOutMin(quoted, slippageBps);
+  const delta = minimumOut - swap.amountOutMinimum;
+  const receivesToken0 = swap.direction === 'token1_to_token0';
+  return {
+    ...swap,
+    amountOutMinimum: minimumOut,
+    expectedOutRaw: quoted,
+    postAmount0: receivesToken0 ? swap.postAmount0 + delta : swap.postAmount0,
+    postAmount1: receivesToken0 ? swap.postAmount1 : swap.postAmount1 + delta,
+    quoteSource: 'quoter',
+  };
+}
+
 function estimateSwapValueUsd(ctx, swap) {
   if (!swap || swap.amountIn <= 0n) return 0;
   if (swap.tokenIn.address.toLowerCase() === ctx.token0.address.toLowerCase()) {
@@ -106,6 +137,7 @@ function buildModifyRangeRedeployPlan(ctx, {
 
 module.exports = {
   amountOutMin,
+  applyQuotedSwapOut,
   buildModifyRangeRedeployPlan,
   buildRebalanceSwap,
   computeOptimalWeightToken0Pct,

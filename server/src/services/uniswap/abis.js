@@ -66,6 +66,14 @@ const V4_STATE_VIEW_ABI = [
   'function getFeeGrowthInside(bytes32 poolId, int24 tickLower, int24 tickUpper) view returns (uint256 feeGrowthInside0X128, uint256 feeGrowthInside1X128)',
 ];
 
+// Quoter de v4. Mismo contrato que el V4Quoter oficial: tampoco es `view`, asi
+// que va siempre con `.staticCall`. Cotiza contra el poolKey exacto, que es lo
+// que necesitan los rebalanceos v4 (el swap ocurre dentro del propio pool de la
+// posicion, via UniversalRouter, no en un pool v3).
+const V4_QUOTER_ABI = [
+  'function quoteExactInputSingle(tuple(tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks) poolKey, bool zeroForOne, uint128 exactAmount, bytes hookData) params) returns (uint256 amountOut, uint256 gasEstimate)',
+];
+
 const V4_POSITION_MANAGER_ABI = [
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks), uint256)',
@@ -86,6 +94,7 @@ module.exports = {
   V3_SWAP_ROUTER_ABI,
   V3_QUOTER_V2_ABI,
   V4_STATE_VIEW_ABI,
+  V4_QUOTER_ABI,
   V4_POSITION_MANAGER_ABI,
   TRANSFER_EVENT_ABI,
 };
