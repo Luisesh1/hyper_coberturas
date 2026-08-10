@@ -1804,6 +1804,14 @@ class LpOrchestratorService {
       volMultiplier: Number(orch.strategyConfig?.rangeVolMultiplier ?? 0.15),
       minWidthPct: Number(orch.strategyConfig?.minRangeWidthPct ?? 1),
       maxWidthPct: Number(orch.strategyConfig?.maxRangeWidthPct ?? 30),
+      // Coste de cobertura acumulado vs fees brutas: bloquea el angostamiento
+      // cuando cubrir el LP ya se come mas de un tercio de lo que rinde. Solo
+      // fees de ejecucion + slippage del hedge — el PnL realizado se deja fuera
+      // a proposito, porque un hedge sano lo tiene distinto de cero por diseno
+      // y meterlo confundiria cobertura con coste.
+      hedgeCostUsd: newAccounting.hedgeExecutionFeesUsd + newAccounting.hedgeSlippageUsd,
+      lpFeesUsd: newAccounting.lpFeesUsd,
+      maxHedgeCostRatio: Number(orch.strategyConfig?.maxHedgeCostRatio ?? 0.3333),
     });
 
     // 4) Decisión

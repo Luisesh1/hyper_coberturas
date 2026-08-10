@@ -60,3 +60,76 @@ test('caso histórico: ETH ±5% con 34% TIR recomienda ensanchar de forma accion
   assert.equal(r.recommendedWidthPct, 6.25); // 5 * 1.25
   assert.equal(r.source, 'tir');
 });
+
+// --- Termino de coste de cobertura (plan 2026-08-10) ---
+// Angostar sube gamma (~1/ancho^2) y con ella la frecuencia de re-cobertura.
+// Sin este termino el lazo se realimenta: TIR alto -> angostar -> mas gamma ->
+// mas coste de hedge -> el TIR sigue alto -> angostar otra vez.
+
+test('coste de cobertura alto bloquea el angostamiento pese a TIR alto', () => {
+  // Cifras reales del orquestador #37 (2026-08-10): execFees 1.00 + slippage
+  // 2.02 = 3.02 sobre 7.78 de fees brutas -> ratio 0.388 > 1/3.
+  const r = recommendRangeWidthPct({
+    rvPct: 40, timeInRangePct: 93, currentWidthPct: 2.5, volMultiplier: 0.15,
+    hedgeCostUsd: 3.02, lpFeesUsd: 7.78,
+  });
+  assert.equal(r.feedback, 'narrow_blocked_by_hedge_cost');
+  assert.equal(r.recommendedWidthPct, 2.5, 'debe mantener el ancho, no angostarlo');
+  assert.equal(r.hedgeCostRatio, 0.39);
+});
+
+test('coste de cobertura bajo permite angostar normalmente', () => {
+  // Cifras reales del #35 (fee tier 0.3%): 0.05 + 0.05 sobre 0.90 -> 0.111.
+  const r = recommendRangeWidthPct({
+    rvPct: 40, timeInRangePct: 95, currentWidthPct: 8, volMultiplier: 0.15,
+    hedgeCostUsd: 0.10, lpFeesUsd: 0.90,
+  });
+  assert.equal(r.feedback, 'narrow_high_time_in_range');
+  assert.equal(r.recommendedWidthPct, 5.1);
+});
+
+test('el coste NUNCA impide ensanchar (TIR bajo manda: es riesgo, no coste)', () => {
+  const r = recommendRangeWidthPct({
+    rvPct: 60, timeInRangePct: 34, currentWidthPct: 5, volMultiplier: 0.15,
+    hedgeCostUsd: 99, lpFeesUsd: 1,
+  });
+  assert.equal(r.feedback, 'widen_low_time_in_range');
+  assert.equal(r.recommendedWidthPct, 11.25);
+});
+
+test('sin senal de coste el comportamiento es identico al previo', () => {
+  const sin = recommendRangeWidthPct({
+    rvPct: 40, timeInRangePct: 95, currentWidthPct: 8, volMultiplier: 0.15,
+  });
+  assert.equal(sin.feedback, 'narrow_high_time_in_range');
+  assert.equal(sin.hedgeCostRatio, null);
+  // lpFees 0 no debe producir division por cero ni bloquear
+  const cero = recommendRangeWidthPct({
+    rvPct: 40, timeInRangePct: 95, currentWidthPct: 8, volMultiplier: 0.15,
+    hedgeCostUsd: 5, lpFeesUsd: 0,
+  });
+  assert.equal(cero.feedback, 'narrow_high_time_in_range');
+  assert.equal(cero.hedgeCostRatio, null);
+});
+
+test('un maxHedgeCostRatio basura cae al default en vez de desactivar el gate', () => {
+  // Number(strategyConfig.maxHedgeCostRatio) sobre un valor no numerico da NaN.
+  // Comparar contra NaN es siempre false, asi que el gate se apagaria en
+  // silencio justo cuando deberia proteger.
+  for (const basura of [NaN, undefined, null, 0, -1]) {
+    const r = recommendRangeWidthPct({
+      rvPct: 40, timeInRangePct: 93, currentWidthPct: 2.5, volMultiplier: 0.15,
+      hedgeCostUsd: 3.02, lpFeesUsd: 7.78, maxHedgeCostRatio: basura,
+    });
+    assert.equal(r.feedback, 'narrow_blocked_by_hedge_cost', `umbral: ${String(basura)}`);
+  }
+});
+
+test('un maxHedgeCostRatio valido si manda sobre el default', () => {
+  // 0.39 queda por debajo de 0.5 -> permite angostar.
+  const r = recommendRangeWidthPct({
+    rvPct: 40, timeInRangePct: 93, currentWidthPct: 2.5, volMultiplier: 0.15,
+    hedgeCostUsd: 3.02, lpFeesUsd: 7.78, maxHedgeCostRatio: 0.5,
+  });
+  assert.equal(r.feedback, 'narrow_high_time_in_range');
+});

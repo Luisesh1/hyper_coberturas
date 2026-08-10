@@ -44,7 +44,16 @@ function clamp(value, min, max) {
  * @param {number} [args.tirHighPct]      - sobre este TIR se considera angostar.
  * @param {number} [args.widenFactor]
  * @param {number} [args.narrowFactor]
- * @returns {{ recommendedWidthPct, baseWidthPct, feedback, source, rvPct, timeInRangePct }}
+ * @param {number} [args.hedgeCostUsd]    - coste de EJECUCION de la cobertura: execFees + slippage
+ *   del hedge. NO incluye el PnL realizado — un hedge sano lo tiene distinto de
+ *   cero por diseno y meterlo confundiria cobertura con coste.
+ * @param {number} [args.lpFeesUsd]       - fees brutas del LP, en la misma base que `hedgeCostUsd`.
+ *   Hoy el llamador pasa ambos ACUMULADOS DE POR VIDA (ver accounting.js), no
+ *   ventaneados: da una media de largo plazo, mas estable que una ventana corta
+ *   pero que diluye un encarecimiento reciente. Si algun dia se quiere reactivo,
+ *   hay que ventanear los DOS a la vez o el ratio queda sin sentido.
+ * @param {number} [args.maxHedgeCostRatio] - si hedgeCost/lpFees supera esto, no se angosta.
+ * @returns {{ recommendedWidthPct, baseWidthPct, feedback, source, rvPct, timeInRangePct, hedgeCostRatio }}
  */
 function recommendRangeWidthPct({
   rvPct,
@@ -57,6 +66,12 @@ function recommendRangeWidthPct({
   tirHighPct = 90,
   widenFactor = 1.25,
   narrowFactor = 0.85,
+  hedgeCostUsd,
+  lpFeesUsd,
+  // Mismo umbral coste/beneficio que ya usa `costToRewardThreshold` en
+  // lp-orchestrator.service para decidir un modify-range: si cubrir se come mas
+  // de un tercio de las fees brutas, concentrar mas liquidez no compensa.
+  maxHedgeCostRatio = 0.3333,
 } = {}) {
   const fallbackWidth = isFiniteNumber(currentWidthPct) && currentWidthPct > 0
     ? currentWidthPct
@@ -68,7 +83,28 @@ function recommendRangeWidthPct({
   let width = baseWidthPct;
   let source = hasRv ? 'volatility' : 'current_width';
 
-  // 2) Feedback por time-in-range. Anclamos al mayor entre el ancho del modelo
+  // 2) Coste de cobertura. Angostar el rango concentra liquidez y sube las
+  //   fees, pero tambien sube gamma (~1/ancho^2) y con ella la frecuencia de
+  //   re-cobertura: mas taker fees, mas slippage y mas PnL realizado en cada
+  //   reversion. Sin este termino la funcion objetivo esta incompleta y el lazo
+  //   se realimenta solo — medido el 2026-08-10: los pools 0.05% con rango ~2.5%
+  //   rebalanceaban 4.5x mas que el 0.3% con rango ~4.2%, y el orquestador #37
+  //   quemaba ~34% anualizado solo en ejecucion con el TIR en 93%.
+  //   Nota: solo BLOQUEA el angostamiento; nunca fuerza ensanchar, porque eso
+  //   es decision de riesgo (time-in-range), no de coste.
+  const hasCostSignal = isFiniteNumber(hedgeCostUsd)
+    && isFiniteNumber(lpFeesUsd)
+    && lpFeesUsd > 0;
+  const hedgeCostRatio = hasCostSignal ? hedgeCostUsd / lpFeesUsd : null;
+  // Un umbral no-finito (p.ej. `Number(strategyConfig.maxHedgeCostRatio)` sobre
+  // un valor basura da NaN) desactivaria el gate en silencio, porque cualquier
+  // comparacion contra NaN es false. Se cae al default en vez de no proteger.
+  const costLimit = isFiniteNumber(maxHedgeCostRatio) && maxHedgeCostRatio > 0
+    ? maxHedgeCostRatio
+    : 0.3333;
+  const costBlocksNarrowing = hasCostSignal && hedgeCostRatio > costLimit;
+
+  // 3) Feedback por time-in-range. Anclamos al mayor entre el ancho del modelo
   //    y el actual antes de ensanchar (para garantizar que ensanchar suba),
   //    y al menor antes de angostar (para garantizar que angostar baje).
   let feedback = null;
@@ -78,9 +114,17 @@ function recommendRangeWidthPct({
       feedback = 'widen_low_time_in_range';
       source = hasRv ? 'volatility+tir' : 'tir';
     } else if (timeInRangePct > tirHighPct) {
-      width = Math.min(baseWidthPct, fallbackWidth) * narrowFactor;
-      feedback = 'narrow_high_time_in_range';
-      source = hasRv ? 'volatility+tir' : 'tir';
+      if (costBlocksNarrowing) {
+        // El LP vive en rango, pero cubrirlo ya cuesta mas de lo que rinde.
+        // Angostar empeoraria justo el termino dominante.
+        width = fallbackWidth;
+        feedback = 'narrow_blocked_by_hedge_cost';
+        source = hasRv ? 'volatility+tir+cost' : 'tir+cost';
+      } else {
+        width = Math.min(baseWidthPct, fallbackWidth) * narrowFactor;
+        feedback = 'narrow_high_time_in_range';
+        source = hasRv ? 'volatility+tir' : 'tir';
+      }
     }
   }
 
@@ -93,6 +137,7 @@ function recommendRangeWidthPct({
     source,
     rvPct: hasRv ? round2(rvPct) : null,
     timeInRangePct: isFiniteNumber(timeInRangePct) ? round2(timeInRangePct) : null,
+    hedgeCostRatio: hedgeCostRatio != null ? round2(hedgeCostRatio) : null,
   };
 }
 
