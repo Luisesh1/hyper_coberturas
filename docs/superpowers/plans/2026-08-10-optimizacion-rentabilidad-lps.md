@@ -91,7 +91,9 @@ En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8
   Opción a evaluar: bajar el 12% del timer, o dejar que la rama urgente cubra también el caso "drift persistente sin trigger de borde". Ojo con la interacción — bajarlo sube la frecuencia de rebalanceo, que es justo el sumidero (B).
 - [x] **Tarea 2: ~~Revisar margen de #35~~ → SIN PROBLEMA.** El 8.4% que reportaba el dashboard era el *mínimo histórico* de la ventana de 7d, de un rebalanceo pasado. La distancia real medida en vivo es **14.9%**. Margen holgado.
 
-- [ ] **Tarea 2c (NUEVA, URGENTE): #37 está a 8.4% de liquidación y el sistema reporta 13.7%.** Contraste medido contra Hyperliquid en vivo (ETH ~$1876):
+- [x] **Tarea 2c: ~~#37 a 8.4% mientras el sistema reporta 13.7%~~ → ARREGLADO** (`c44056f`, desplegado). El monitoreo ya lee la distancia en vivo; verificado en prod: #35 15.1%, #36 17.3%, #37 **8.5%** 🟠, coincidiendo con la medición on-chain. La gestión de la posición de #37 la lleva el usuario.
+
+  Detalle del diagnóstico original: Contraste medido contra Hyperliquid en vivo (ETH ~$1876):
 
   | orq | reporta | **real** |
   |---|---|---|
@@ -101,7 +103,7 @@ En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8
 
   **Causa: `distance_to_liq_pct` solo se escribe cuando ocurre un rebalanceo.** El reporte hace `min()` sobre los rebalanceos de la ventana, así que si no hay rebalanceos el número se congela. El último fue a las 15:26 UTC; desde entonces el precio se movió y la distancia real de #37 se deterioró sin que nada lo reflejara. **La métrica de riesgo se queda obsoleta justo cuando no hay actividad** — y #37 concentra el 78% del capital.
 
-  Arreglo propuesto (código, no requiere decisión del usuario): leer la distancia a liquidación en vivo de `clearinghouseState` en vez de depender del último rebalanceo registrado.
+  **Arreglo aplicado:** `OrchestratorMetricsService.computeLiveDistanceToLiqPct(positions, asset, px)` — helper puro sin IO (`snap.positions` ya venía de `balanceCacheService`, no hay llamada de red nueva). Se persiste como `hedgeTracking.distanceToLiqPct` en cada snapshot, así que además queda histórico. Dashboard y reporte muestran el valor en vivo como el que manda y el mínimo de la ventana al lado, para que la divergencia sea visible. 6 tests, incluido dato-ausente → `null` y nunca `0` (un cero pintaría 🔴 de liquidación inminente sobre una posición sana).
 - [ ] **Tarea 3: Decidir exposición de #37.** Concentra el 78% del capital, tiene la mayor quema (~34% anualizado en ejecución). Opciones: (a) reducir tamaño hasta cerrar Fases 2–3, (b) ensanchar rango ya (Tarea 9), (c) dejarlo y aceptar la quema mientras dura el diagnóstico. **Decisión del usuario** — es la que más mueve la aguja del portafolio.
 
 ## Fase 1 — Instrumentación (no se puede optimizar lo que no se mide bien)
