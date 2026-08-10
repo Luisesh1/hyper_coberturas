@@ -97,18 +97,32 @@ async function collect() {
        GROUP BY s.oid ORDER BY s.oid`,
       [since],
     ),
-    // Se agrega por ORQUESTADOR, no por pool. Antes salia `protected_pool_id` y
-    // el render lo buscaba con `d.risk.get(oid)`, asi que no cruzaba nunca y la
-    // distancia a liquidacion —la linea mas critica del reporte— salia siempre
-    // 'N/A' en silencio. Mismo fallo que tenia la fila de cobertura.
+    // Riesgo de liquidacion. Dos numeros distintos a proposito:
+    //  - `dist_liq_now`: EN VIVO, del ultimo snapshot (se calcula desde la
+    //    posicion real de Hyperliquid en cada captura). Es el que manda.
+    //  - `min_dist_liq`: minimo de la ventana sobre el log de rebalanceos, util
+    //    como historico pero SOLO se escribe al rebalancear, asi que se congela.
+    // El 2026-08-10, con el ultimo rebalanceo 6h atras, el historico decia #37
+    // 13.7% cuando el real era 8.4% — pegado al umbral, y con el 78% del capital.
+    // Se agrega por ORQUESTADOR: antes salia `protected_pool_id` y el render lo
+    // buscaba con `d.risk.get(oid)`, asi que no cruzaba nunca y esta linea —la
+    // mas critica del reporte— salia 'N/A' en silencio.
     db.query(
-      `SELECT o.id oid,
+      `WITH ultimo AS (
+         SELECT DISTINCT ON (orchestrator_id) orchestrator_id oid,
+           (breakdown_json->'hedgeTracking'->>'distanceToLiqPct')::numeric dist_now
+         FROM orchestrator_metrics_snapshots
+         ORDER BY orchestrator_id, captured_at DESC)
+       SELECT o.id oid,
+         round(u.dist_now,1) dist_liq_now,
          round(min(l.distance_to_liq_pct)::numeric,1) min_dist_liq,
-         count(*) rebalances
-       FROM protected_pool_delta_rebalance_log l
-       JOIN lp_orchestrators o ON o.active_protected_pool_id = l.protected_pool_id
-       WHERE l.created_at >= $1
-       GROUP BY o.id ORDER BY o.id`,
+         count(l.id) rebalances
+       FROM lp_orchestrators o
+       LEFT JOIN ultimo u ON u.oid = o.id
+       LEFT JOIN protected_pool_delta_rebalance_log l
+         ON l.protected_pool_id = o.active_protected_pool_id AND l.created_at >= $1
+       WHERE o.stopped_at IS NULL
+       GROUP BY o.id, u.dist_now ORDER BY o.id`,
       [since],
     ),
     // COBERTURA REAL: actualQty/deltaQty leido del strategy_state, o sea las dos
@@ -211,14 +225,17 @@ function buildMessage(d) {
     const a = d.acc.get(oid) || {};
     anomaliasTot += Number(q.anomalias || 0);
 
-    const dist = r.min_dist_liq != null ? Number(r.min_dist_liq) : null;
+    // El que manda es el EN VIVO; el minimo de la ventana va como contexto.
+    const dist = r.dist_liq_now != null ? Number(r.dist_liq_now) : null;
+    const distMin = r.min_dist_liq != null ? Number(r.min_dist_liq) : null;
     const corr = e.corr_lp_hl != null ? Number(e.corr_lp_hl) : null;
 
     lines.push(
       '',
       `<b>▎Orquestador #${oid}</b>`,
-      `${liqEmoji(dist)} Dist. liquidación mín: <b>${dist != null ? dist + '%' : 'N/A'}</b>`
-        + `  (umbral 8%)`,
+      `${liqEmoji(dist)} Dist. liquidación: <b>${dist != null ? dist + '%' : 'N/A'}</b>`
+        + ` (umbral 8%)`
+        + `${distMin != null ? ` · mín ${WIN_DAYS}d ${distMin}%` : ''}`,
       `${cobEmoji(cb.cobertura)} Cobertura real (actual/delta): `
         + `<b>${cb.cobertura != null ? Math.round(Number(cb.cobertura) * 100) + '%' : 'N/A'}</b>`,
       // `hedge_beta` se conserva SOLO como diagnostico y marcado como no fiable:

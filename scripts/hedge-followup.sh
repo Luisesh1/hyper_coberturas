@@ -149,17 +149,32 @@ WHERE o.id IN (SELECT orchestrator_id FROM act) OR o.stopped_at IS NULL
 ORDER BY o.id;"
 
 echo ""
-echo "── 1. RIESGO DE LIQUIDACIÓN (short) — vigilar que no caiga de ~8% ──"
+echo "── 1. RIESGO DE LIQUIDACIÓN — EN VIVO, del último snapshot ──"
+# Lee `breakdown_json->hedgeTracking->distanceToLiqPct`, que se calcula en cada
+# snapshot desde la posicion real de Hyperliquid. La columna del log de
+# rebalanceos solo se escribe AL REBALANCEAR, asi que se congelaba durante horas:
+# el 2026-08-10, con el ultimo rebalanceo 6h atras, reportaba #35 al 8.4%
+# (real 14.9%) y #37 al 13.7% (real 8.4%, pegado al umbral). Se muestran las dos
+# para que la divergencia sea visible.
 q "
-SELECT protected_pool_id AS pp,
-  round(distance_to_liq_pct::numeric,1) AS dist_liq_pct,
-  round(effective_band_pct::numeric,2) AS band,
-  to_timestamp(created_at/1000) AS ultimo_rebal
-FROM protected_pool_delta_rebalance_log l
-WHERE created_at = (
-  SELECT MAX(created_at) FROM protected_pool_delta_rebalance_log
-  WHERE protected_pool_id = l.protected_pool_id)
-ORDER BY protected_pool_id;"
+WITH ultimo AS (
+  SELECT DISTINCT ON (orchestrator_id) orchestrator_id, captured_at,
+    (breakdown_json->'hedgeTracking'->>'distanceToLiqPct')::numeric AS dist_vivo
+  FROM orchestrator_metrics_snapshots
+  ORDER BY orchestrator_id, captured_at DESC),
+rebal AS (
+  SELECT DISTINCT ON (protected_pool_id) protected_pool_id, distance_to_liq_pct, created_at
+  FROM protected_pool_delta_rebalance_log ORDER BY protected_pool_id, created_at DESC)
+SELECT o.id AS orch, o.active_protected_pool_id AS pp,
+  round(u.dist_vivo,1) AS dist_liq_VIVO,
+  round(r.distance_to_liq_pct::numeric,1) AS dist_del_ultimo_rebal,
+  to_timestamp(r.created_at/1000) AS ese_rebal_fue,
+  CASE WHEN u.dist_vivo < 8 THEN '<<< BAJO 8%' ELSE '' END AS alerta
+FROM lp_orchestrators o
+LEFT JOIN ultimo u ON u.orchestrator_id = o.id
+LEFT JOIN rebal r ON r.protected_pool_id = o.active_protected_pool_id
+WHERE o.stopped_at IS NULL AND o.active_protected_pool_id IS NOT NULL
+ORDER BY o.id;"
 
 echo "── mínimo de distancia a liquidación en la ventana ──"
 q "

@@ -244,6 +244,7 @@ class OrchestratorMetricsService {
     let hlAccountSource = null;
     let hlStatus = 'not_linked';
     let hlError = null;
+    let hlPositions = null;
     if (resolvedAccountId != null) {
       try {
         const snap = await balanceCacheService.getSnapshot(
@@ -251,6 +252,7 @@ class OrchestratorMetricsService {
           resolvedAccountId
         );
         hlAccountUsd = Number(snap.accountValue || 0);
+        hlPositions = Array.isArray(snap.positions) ? snap.positions : null;
         hlStatus = 'ok';
         hlAccountSource = {
           accountId: resolvedAccountId,
@@ -277,7 +279,9 @@ class OrchestratorMetricsService {
     // componente que el análisis histórico identificó como mayor leak.
     //   trackingErrorUsd = |deltaQty − actualQty| × precio
     //   residualUsd      = (deltaQty − targetQty) × precio  (sub-hedge por zona)
-    const hedgeTracking = await this._computeHedgeTracking(orchestrator, poolSnapshot, lastEval);
+    const hedgeTracking = await this._computeHedgeTracking(
+      orchestrator, poolSnapshot, lastEval, hlPositions
+    );
 
     // --- PnL neto acumulado (contabilidad del orquestador) ---
     // A diferencia de `totalUsd` (valor de mercado, contaminado por depositos
@@ -313,7 +317,48 @@ class OrchestratorMetricsService {
    * tracking del hedge para el snapshot horario. Devuelve null si el
    * orquestador no tiene protección activa o no hay datos suficientes.
    */
-  async _computeHedgeTracking(orchestrator, poolSnapshot, lastEval) {
+  /**
+   * Distancia a liquidacion calculada EN VIVO desde la posicion de Hyperliquid.
+   *
+   * Antes este numero solo existia en `protected_pool_delta_rebalance_log`, que
+   * se escribe UNICAMENTE cuando ocurre un rebalanceo. El dashboard y el reporte
+   * semanal hacian `min()` sobre esa tabla, asi que sin rebalanceos el valor se
+   * congelaba y podia desviarse en los DOS sentidos. Medido el 2026-08-10 con el
+   * ultimo rebalanceo 6h atras: se reportaba #35 al 8.4% (real 14.9%) y #37 al
+   * 13.7% (**real 8.4%**, pegado al umbral de alarma) — y #37 concentra el 78%
+   * del capital. La metrica de riesgo se quedaba obsoleta justo cuando no hay
+   * actividad, que es cuando una deriva lenta puede acercarte a liquidacion sin
+   * que nadie lo vea.
+   *
+   * Es puro a proposito: recibe las posiciones ya normalizadas y el precio, sin
+   * IO, para poder fijarlo con tests.
+   *
+   * @param {Array|null} positions - `snap.positions` de balanceCacheService.
+   * @param {string|null} asset    - activo del orquestador (p.ej. 'ETH').
+   * @param {number|null} price    - precio actual del activo.
+   * @returns {number|null} % de distancia, o null si no se puede derivar.
+   */
+  static computeLiveDistanceToLiqPct(positions, asset, price) {
+    const px = Number(price);
+    if (!Array.isArray(positions) || !asset || !Number.isFinite(px) || px <= 0) {
+      return null;
+    }
+    const pos = positions.find(
+      (p) => String(p?.asset || '').toUpperCase() === String(asset).toUpperCase()
+    );
+    if (!pos) return null;
+    const liq = Number(pos.liquidationPrice);
+    // Hyperliquid devuelve `liquidationPx` null en posiciones sin riesgo de
+    // liquidacion (p.ej. cross-margin muy sobrecolateralizado). No es un error.
+    if (!Number.isFinite(liq) || liq <= 0) return null;
+    const size = Number(pos.size);
+    if (!Number.isFinite(size) || size === 0) return null;
+    // Un short se liquida si el precio SUBE hasta liq; un long si BAJA.
+    const pct = size < 0 ? ((liq - px) / px) * 100 : ((px - liq) / px) * 100;
+    return Number.isFinite(pct) ? pct : null;
+  }
+
+  async _computeHedgeTracking(orchestrator, poolSnapshot, lastEval, hlPositions = null) {
     const timeInRangePct = Number.isFinite(Number(lastEval?.timeInRangePct))
       ? Number(lastEval.timeInRangePct)
       : null;
@@ -367,6 +412,12 @@ class OrchestratorMetricsService {
           ? (deltaQty - targetQty) * px : null,
         zoneState: parsed.zoneState || null,
         modelConfidence: parsed.modelConfidence || null,
+        // Riesgo de liquidacion EN VIVO (ver computeLiveDistanceToLiqPct). Se
+        // persiste en cada snapshot para que el dashboard y el reporte dejen de
+        // depender del ultimo rebalanceo registrado, que puede tener horas.
+        distanceToLiqPct: OrchestratorMetricsService.computeLiveDistanceToLiqPct(
+          hlPositions, asset, px
+        ),
         fundingRateHourly: finite(fundingRateHourly),
         projectedDailyFundingUsd: finite(projectedDailyFundingUsd),
         fundingHeadwind: Number.isFinite(projectedDailyFundingUsd) ? projectedDailyFundingUsd < 0 : null,
