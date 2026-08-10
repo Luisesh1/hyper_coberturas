@@ -16,6 +16,15 @@ const DEFAULT_TARGET_HEDGE_RATIO = 1;
 const DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12;
 // Por debajo de esto el ajuste no paga ni sus propias comisiones.
 const MIN_REBALANCE_NOTIONAL_FLOOR_USD = 2;
+// Banda de no-trade para las rutas NO temporizadas (`boundary_cross` y
+// `price_band`), que hasta ahora disparaban orden sin ningun piso economico.
+// Ese es el origen del churn medido el 2026-08-10: pp10 rebalanceo 3 veces en 4
+// minutos con correcciones de delta de ~0.005-0.016 ETH, y el PnL realizado del
+// hedge (-8.58) perdia a la vez que la deriva de precio (-10.71) — sintoma de
+// re-cubrir contra ruido. Es deliberadamente MAS BAJO que el 12% del brazo por
+// temporizador: un cruce de borde es mas urgente que un tick de reloj, asi que
+// se frena solo lo economicamente irrelevante sin abrir hueco de cobertura.
+const DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT = 3;
 const DEFAULT_DECISION_BAND_FLOOR_USD = 50;
 const DEFAULT_MAX_SLIPPAGE_BPS = 20;
 const DEFAULT_TWAP_MIN_NOTIONAL_USD = 10_000;
@@ -276,6 +285,26 @@ function resolveMinRebalanceNotionalUsd(protection, poolValueUsd) {
   return Math.max(MIN_REBALANCE_NOTIONAL_FLOOR_USD, (pct / 100) * value);
 }
 
+/**
+ * Piso economico para las rutas urgentes (`boundary_cross` / `price_band`).
+ * Mismo patron que `resolveMinRebalanceNotionalUsd` —porcentaje del valor VIVO
+ * del LP con suelo absoluto— pero con su propio porcentaje configurable, mas
+ * bajo, porque frena churn sin retrasar una re-cobertura genuina.
+ */
+function resolveUrgentMinRebalanceNotionalUsd(protection, poolValueUsd, urgentPct) {
+  const value = asFiniteNumber(poolValueUsd);
+  if (!Number.isFinite(value) || value <= 0) return Infinity;
+  // Mismo cuidado que en resolveMinRebalanceNotionalUsd: `asFiniteNumber`
+  // convertiria null en 0 y hundiria el umbral hasta el suelo.
+  const configured = Number(
+    protection?.urgentMinRebalanceNotionalPct ?? urgentPct
+  );
+  const pct = Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT;
+  return Math.max(MIN_REBALANCE_NOTIONAL_FLOOR_USD, (pct / 100) * value);
+}
+
 function deriveDecisionBandUsd(protection, metrics, currentPrice) {
   // Suelo de la banda cost-aware. Antes caia en el absoluto configurable que
   // ahora es porcentual, pero son cosas distintas —esta banda decide entre
@@ -445,6 +474,8 @@ module.exports = {
   DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
   MIN_REBALANCE_NOTIONAL_FLOOR_USD,
   resolveMinRebalanceNotionalUsd,
+  resolveUrgentMinRebalanceNotionalUsd,
+  DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,

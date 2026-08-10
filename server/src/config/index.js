@@ -159,6 +159,12 @@ const config = {
     basisGuardBps: parseInt(process.env.DELTA_NEUTRAL_BASIS_GUARD_BPS, 10) || 40,
     lowConfidenceBasisBps: parseInt(process.env.DELTA_NEUTRAL_LOW_CONF_BASIS_BPS, 10) || 75,
     minDwellMs: parseInt(process.env.DELTA_NEUTRAL_MIN_DWELL_MS, 10) || 60_000,
+    // Banda de no-trade (% del valor vivo del LP) para las rutas urgentes
+    // `boundary_cross` / `price_band`, que antes disparaban sin piso economico.
+    // Subirlo frena mas churn pero deja mas delta sin cubrir: es el dial que
+    // arbitra entre costo de ejecucion y residual de cobertura.
+    urgentMinRebalanceNotionalPct:
+      parseFloat(process.env.DELTA_NEUTRAL_URGENT_MIN_NOTIONAL_PCT) || 3,
     // Multiplicadores del hedge ratio por zona del precio respecto al rango LP.
     // `center` < 1 sub-cubre deliberadamente cuando el precio está profundo en
     // rango (apuesta a reversión a la media). El análisis histórico mostró que

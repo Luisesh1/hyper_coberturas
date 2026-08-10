@@ -47,3 +47,55 @@ test('sin valor de LP el umbral es inalcanzable en vez de cero', () => {
     assert.equal(resolveMinRebalanceNotionalUsd({}, valor), Infinity, `valor: ${String(valor)}`);
   }
 });
+
+// --- Banda de no-trade de las rutas urgentes (plan 2026-08-10) ---
+// `boundary_cross` y `price_band` disparaban orden sin ningun piso economico.
+// Medido en prod: pp10 rebalanceo 3 veces en 4 minutos con correcciones de
+// ~0.005-0.016 ETH; el hedge realizo -8.58 mientras la deriva perdia -10.71,
+// o sea re-cubriendo contra ruido y pagando taker fee + slippage cada vez.
+const {
+  resolveUrgentMinRebalanceNotionalUsd,
+  DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT,
+} = require('../src/services/protected-pool-delta-neutral.helpers');
+
+test('el umbral urgente es un % del valor vivo del LP', () => {
+  assert.equal(resolveUrgentMinRebalanceNotionalUsd({}, 1000, 3), 30);
+  assert.equal(resolveUrgentMinRebalanceNotionalUsd({}, 997, 3), 997 * 0.03);
+});
+
+// Es la propiedad que evita abrir hueco de cobertura: un cruce de borde es mas
+// urgente que un tick de reloj, asi que su piso debe ser estrictamente menor.
+test('el umbral urgente es MAS BAJO que el del temporizador', () => {
+  const urgente = resolveUrgentMinRebalanceNotionalUsd({}, 1000, DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT);
+  const timer = resolveMinRebalanceNotionalUsd({}, 1000);
+  assert.ok(urgente < timer, `urgente ${urgente} deberia ser < timer ${timer}`);
+});
+
+test('el churn real de pp10 queda por debajo del umbral y se frena', () => {
+  // #37: LP ~$997 -> umbral urgente $29.91. Los drifts observados el 2026-08-10
+  // en los rebalanceos encadenados fueron 20.69, 20.66, 11.44 y 17.29 USD.
+  const umbral = resolveUrgentMinRebalanceNotionalUsd({}, 997, 3);
+  for (const drift of [20.69, 20.66, 11.44, 17.29]) {
+    assert.ok(drift < umbral, `drift ${drift} deberia quedar bajo el umbral ${umbral}`);
+  }
+  // ...pero los movimientos genuinos siguen pasando.
+  for (const drift of [119.78, 839.92]) {
+    assert.ok(drift >= umbral, `drift ${drift} deberia superar el umbral ${umbral}`);
+  }
+});
+
+test('la proteccion puede sobrescribir el porcentaje urgente', () => {
+  assert.equal(resolveUrgentMinRebalanceNotionalUsd({ urgentMinRebalanceNotionalPct: 10 }, 1000, 3), 100);
+  // null en la columna cae al valor inyectado, no a 0
+  assert.equal(resolveUrgentMinRebalanceNotionalUsd({ urgentMinRebalanceNotionalPct: null }, 1000, 4), 40);
+});
+
+test('sin valor de LP el umbral urgente tambien es inalcanzable', () => {
+  for (const valor of [null, undefined, 0, -1, NaN, 'x']) {
+    assert.equal(resolveUrgentMinRebalanceNotionalUsd({}, valor, 3), Infinity, `valor: ${String(valor)}`);
+  }
+});
+
+test('el umbral urgente respeta el suelo en USD', () => {
+  assert.equal(resolveUrgentMinRebalanceNotionalUsd({}, 10, 3), MIN_REBALANCE_NOTIONAL_FLOOR_USD);
+});

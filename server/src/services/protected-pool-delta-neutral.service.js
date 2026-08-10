@@ -40,6 +40,7 @@ const {
   DEFAULT_TARGET_HEDGE_RATIO,
   DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
   resolveMinRebalanceNotionalUsd,
+  resolveUrgentMinRebalanceNotionalUsd,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,
@@ -98,6 +99,11 @@ class ProtectedPoolDeltaNeutralService {
     this.basisGuardBps = deps.basisGuardBps || config.deltaNeutral.basisGuardBps;
     this.lowConfidenceBasisBps = deps.lowConfidenceBasisBps || config.deltaNeutral.lowConfidenceBasisBps;
     this.minDwellMs = deps.minDwellMs || config.deltaNeutral.minDwellMs;
+    // Inyectable a proposito (no leer `config` en el punto de uso): un test que
+    // afirme sobre este umbral leyendo el .env real pasa en CI limpio y falla en
+    // la maquina de prod. Ya paso con los multiplicadores de zona (619cfd4).
+    this.urgentMinRebalanceNotionalPct = deps.urgentMinRebalanceNotionalPct
+      ?? config.deltaNeutral.urgentMinRebalanceNotionalPct;
     // Multiplicadores del hedge ratio por zona (configurables). El "vigente" es
     // el que se ejecuta; el "shadow" es el propuesto que se loguea sin ejecutar
     // cuando `shadowMode` está activo. Ver config.deltaNeutral.zoneHedge*.
@@ -1961,6 +1967,53 @@ class ProtectedPoolDeltaNeutralService {
     const driftUsd = Math.abs(driftQty) * currentPrice;
     const isReduceOnlyPath = driftQty < -1e-8;
 
+    // Diagnostico de cobertura (Tarea 6 del plan 2026-08-10). El `hedge_beta`
+    // medido sobre snapshots da 0.29-0.50 en los v4 vivos contra 0.87-0.92 que
+    // daban los v3, pero `ratio_tgt_delta` sale 1.00 en el log de rebalanceos
+    // porque delta/target/actual se escriben del mismo valor: el log no puede
+    // detectar un delta mal calculado.
+    //
+    // La comparacion decisiva es el valor del LP segun el MODELO
+    // (`calculatePoolValueAtPrice`, que reconstruye los amounts desde
+    // `snapshot.liquidity` + ticks) contra el valor que ya conocemos por otra
+    // via. Si divergen, la liquidez de entrada esta mal y el delta hereda el
+    // error. `inRange` va incluido porque fuera de rango el delta cae a ~0 de
+    // forma legitima y confundiria la lectura.
+    const rawSnapshot = activeProtection.poolSnapshot || {};
+    const snapshotPoolValueUsd = Number(rawSnapshot.currentValueUsd);
+    const modelPoolValueUsd = Number(metrics.poolValueUsd);
+    this.logger.info?.('delta_neutral_delta_diagnostic', {
+      protectionId: activeProtection.id,
+      accountId: activeProtection.accountId,
+      asset: activeProtection.inferredAsset,
+      version: activeProtection.version || snapshot.version || null,
+      inRange: snapshot.inRange === true,
+      zoneState: metrics.zoneState || null,
+      currentPrice,
+      modelPoolValueUsd: Number.isFinite(modelPoolValueUsd) ? modelPoolValueUsd : null,
+      snapshotPoolValueUsd: Number.isFinite(snapshotPoolValueUsd) ? snapshotPoolValueUsd : null,
+      // ~1.0 esperado. Desviarse es la firma de una liquidez mal leida.
+      modelValueRatio: (Number.isFinite(modelPoolValueUsd) && snapshotPoolValueUsd > 0)
+        ? modelPoolValueUsd / snapshotPoolValueUsd
+        : null,
+      deltaQty: Number(metrics.deltaQty),
+      targetQty: Number(metrics.targetQty),
+      actualQty,
+      volatileAmount: Number(metrics.volatileAmount),
+      stableAmount: Number(metrics.stableAmount),
+      normalizedGamma: Number(metrics.normalizedGamma),
+      // OJO: hay que loguear la liquidez CRUDA, que es la que consume
+      // `_buildDigitalTwin` (clona `protection.poolSnapshot` sin normalizar).
+      // La normalizada pasa por `toPositiveNumber` (delta-neutral-snapshot
+      // .service.js:71) y puede diferir o volverse null; loguear esa en vez de
+      // la cruda haria que el diagnostico mintiera justo sobre el campo que
+      // investiga. Se exponen las dos: divergencia entre ambas ya es la senal.
+      liquidity: rawSnapshot.liquidity != null ? String(rawSnapshot.liquidity) : null,
+      liquidityNormalized: snapshot.liquidity != null ? String(snapshot.liquidity) : null,
+      tickLower: rawSnapshot.tickLower ?? null,
+      tickUpper: rawSnapshot.tickUpper ?? null,
+    });
+
     // Shadow mode: registra el residual sin cubrir hoy (deltaQty − targetQty)
     // vs el que dejaría el target propuesto (deltaQty − shadowTargetQty), sin
     // ejecutar. Permite cuantificar la mejora de cobertura sobre plata real
@@ -1991,12 +2044,36 @@ class ProtectedPoolDeltaNeutralService {
     // Porcentaje del valor VIVO del LP, no un absoluto congelado al crear la
     // proteccion: si el LP crece o mengua, el umbral lo sigue.
     const minRebalanceNotionalUsd = resolveMinRebalanceNotionalUsd(activeProtection, metrics.poolValueUsd);
+    // Banda de no-trade de las rutas urgentes. `boundary_cross` y `price_band`
+    // disparaban sin ningun piso: cualquier cruce de borde mandaba orden aunque
+    // la correccion valiera centavos, y cada orden paga taker fee + slippage y
+    // realiza PnL del hedge. Las rutas que SI son de riesgo (reducir a cero,
+    // hedge huerfano sin posicion, force manual) siguen sin gate.
+    const urgentMinNotionalUsd = resolveUrgentMinRebalanceNotionalUsd(
+      activeProtection,
+      metrics.poolValueUsd,
+      this.urgentMinRebalanceNotionalPct
+    );
+    const urgentTrigger = forceReason === 'boundary_cross'
+      || priceMovePct >= band.effectiveBandPct;
     const shouldRebalance = forceRebalance
       || forceReduceNearZero
-      || forceReason === 'boundary_cross'
-      || priceMovePct >= band.effectiveBandPct
+      || (urgentTrigger && driftUsd >= urgentMinNotionalUsd)
       || (timerDue && driftUsd >= minRebalanceNotionalUsd)
       || (!position && metrics.targetQty > 0.0000001);
+
+    if (urgentTrigger && driftUsd < urgentMinNotionalUsd) {
+      this.logger.info?.('delta_neutral_urgent_rebalance_skipped_below_band', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        forceReason: forceReason || null,
+        priceMovePct,
+        effectiveBandPct: band.effectiveBandPct,
+        driftUsd,
+        urgentMinNotionalUsd,
+      });
+    }
 
     if (!position && metrics.targetQty > 0.0000001) {
       this.logger.info?.('delta_neutral_restart_reconcile_candidate', {
