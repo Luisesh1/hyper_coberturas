@@ -52,9 +52,10 @@ En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8
 
 ## Riesgos abiertos detectados
 
-- **pp8** rozó 8.4% de distancia a liquidación esta semana (umbral de alarma: 8%).
+- ~~**pp8** rozó 8.4% de distancia a liquidación~~ → era el **mínimo histórico** de la ventana, no el estado actual. Medido en vivo: 14.9%. Sin problema.
 - **#36 y #37** están en fase `urgent_adjust`; time-in-range cayó de 93% a 78.5% en 24h.
-- **pp6 y pp7** (del archivado #33) se rebalancearon por última vez el 5 ago y `dist_liq` de pp7 viene NULL: posibles shorts abiertos sin orquestador gestionándolos.
+- ~~**pp6 y pp7**: posibles shorts abiertos sin orquestador~~ → **DESCARTADO**, verificado contra Hyperliquid: la cuenta tiene una sola posición y es el hedge vivo de #35.
+- ⚠️ **#37 a 8.4% de liquidación** (real, medido en vivo) mientras el sistema reporta 13.7%. Ver Tarea 2c.
 
 ## File Structure
 
@@ -72,8 +73,10 @@ En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8
 
 ## Fase 0 — Contención de riesgo (inmediato, sin código)
 
-- [ ] **Tarea 1: Verificar los shorts huérfanos de pp6/pp7.** Confirmar en Hyperliquid si el orquestador archivado #33 dejó posiciones cortas abiertas. Un short sin orquestador no se rebalancea ni se vigila: es riesgo de liquidación no monitoreado. Si están abiertos, cerrarlos manualmente (lo firma el usuario).
-- [ ] **Tarea 1b (NUEVA): pp7 está SIN cobertura y pp6 tiene un short colgado.** Confirmado con datos, no es sospecha: `strategy_state_json` da para **pp7** `lastDeltaQty` 0.020477 con `lastActualQty` **0.000000** → cobertura **0.0000**, un LP con ~$38 de delta ETH totalmente expuesto. Y **pp6** tiene `lastActualQty` 0.0004 con delta 0 → short residual sin LP que lo respalde. Ambos cuelgan del archivado #33. Concreta la Tarea 1.
+- [x] **Tarea 1: ~~Verificar los shorts huérfanos de pp6/pp7~~ → NO EXISTEN.** ✅ Resuelta consultando la API pública de Hyperliquid (`clearinghouseState`, solo lectura, solo requiere la dirección — **no hacía falta intervención manual**). La cuenta que comparten pp6/pp7/pp8 (`0x1ecC…`) tiene **exactamente una posición**: ETH −0.0451, que es el hedge vivo de #35. No hay nada colgando.
+- [x] **Tarea 1b: ~~pp7 está SIN cobertura~~ → FALSA ALARMA MÍA.** ❌ Afirmé que pp7 tenía ~$38 de delta ETH sin cubrir leyendo `lastDeltaQty` 0.020477 / `lastActualQty` 0.000000 de `strategy_state_json`. **Eran filas congeladas**: un orquestador archivado (#33, el 5 ago) deja de escribir su estado, así que esos valores quedaron como estaban y los leí como si fuesen actuales. La verdad on-chain dice que no hay exposición descubierta.
+
+  **Lección para el playbook:** `strategy_state_json` de un orquestador archivado es histórico, no estado. Antes de declarar un riesgo a partir de esa tabla, contrastar con `clearinghouseState` de Hyperliquid.
 - [ ] **Tarea 2b (NUEVA): #35 está sobre-cubierto y la desviación CRECE.** Cobertura 1.0564 → 1.0715 en ~1h: el delta del LP baja (0.042933 → 0.042091) mientras el hedge se queda clavado en 0.045100. Estar net-short cuesta igual que estar expuesto, y las dos métricas viejas lo ocultaban.
 
   **Mecanismo identificado** (`delta_neutral_preflight_result`, protección 8): `poolValueUsd` $89.28, `driftUsd` $5.99.
@@ -86,7 +89,19 @@ En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8
   No se corrige porque (a) ningún `boundary_cross`/`price_band` ha disparado, así que la rama urgente no se evalúa, y (b) el brazo del temporizador exige $10.71, casi el doble del drift actual. **La banda de no-trade nueva NO es la culpable** — el drift la supera holgadamente. El cuello de botella es `DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12`, demasiado grueso para un LP de $89: obliga a acumular un 12% de desviación antes de mover un dedo.
 
   Opción a evaluar: bajar el 12% del timer, o dejar que la rama urgente cubra también el caso "drift persistente sin trigger de borde". Ojo con la interacción — bajarlo sube la frecuencia de rebalanceo, que es justo el sumidero (B).
-- [ ] **Tarea 2: Revisar margen de #35.** pp8 tocó 8.4%. Confirmar el leverage efectivo y decidir si bajarlo. Criterio del playbook: `dist_liq_pct > 8%` en todo momento.
+- [x] **Tarea 2: ~~Revisar margen de #35~~ → SIN PROBLEMA.** El 8.4% que reportaba el dashboard era el *mínimo histórico* de la ventana de 7d, de un rebalanceo pasado. La distancia real medida en vivo es **14.9%**. Margen holgado.
+
+- [ ] **Tarea 2c (NUEVA, URGENTE): #37 está a 8.4% de liquidación y el sistema reporta 13.7%.** Contraste medido contra Hyperliquid en vivo (ETH ~$1876):
+
+  | orq | reporta | **real** |
+  |---|---|---|
+  | 35 | 8.4% | 14.9% |
+  | 36 | 12.2% | 17.2% |
+  | **37** | 13.7% | **8.4%** ⚠️ |
+
+  **Causa: `distance_to_liq_pct` solo se escribe cuando ocurre un rebalanceo.** El reporte hace `min()` sobre los rebalanceos de la ventana, así que si no hay rebalanceos el número se congela. El último fue a las 15:26 UTC; desde entonces el precio se movió y la distancia real de #37 se deterioró sin que nada lo reflejara. **La métrica de riesgo se queda obsoleta justo cuando no hay actividad** — y #37 concentra el 78% del capital.
+
+  Arreglo propuesto (código, no requiere decisión del usuario): leer la distancia a liquidación en vivo de `clearinghouseState` en vez de depender del último rebalanceo registrado.
 - [ ] **Tarea 3: Decidir exposición de #37.** Concentra el 78% del capital, tiene la mayor quema (~34% anualizado en ejecución). Opciones: (a) reducir tamaño hasta cerrar Fases 2–3, (b) ensanchar rango ya (Tarea 9), (c) dejarlo y aceptar la quema mientras dura el diagnóstico. **Decisión del usuario** — es la que más mueve la aguja del portafolio.
 
 ## Fase 1 — Instrumentación (no se puede optimizar lo que no se mide bien)
