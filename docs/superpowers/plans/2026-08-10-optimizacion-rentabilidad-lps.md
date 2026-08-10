@@ -2,9 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Que los orquestadores LP vivos pasen de PnL neto negativo a positivo, atacando los dos sumideros medidos —sub-cobertura del hedge y costo de ejecución por exceso de rebalanceos— sin aumentar el riesgo de liquidación del short.
+**Goal:** Que los orquestadores LP vivos pasen de PnL neto negativo a positivo, atacando el sumidero real —el costo de ejecución por exceso de rebalanceos— sin aumentar el riesgo de liquidación del short.
 
-**Architecture:** El plan se ordena por dependencia, no por tamaño del hallazgo. Primero se contiene riesgo abierto (Fase 0), luego se instrumenta (Fase 1) porque hoy el KPI principal es tautológico y el PnL no cuadra; recién entonces se diagnostica el gap de cobertura v4 (Fase 2) y se mueve la palanca maestra —gamma vía ancho de rango— que es la única que mejora los dos sumideros a la vez (Fase 3). La eficiencia de ejecución (Fase 4) viene después porque su beneficio solo es atribuible con la instrumentación puesta. Cierra con validación y actualización del reporte semanal (Fase 5).
+> ⚠️ **REVISADO 2026-08-10 (post-deploy).** El plan nació apuntando a **dos** sumideros. El primero, la sub-cobertura del hedge, **resultó no existir**: era un artefacto de `hedge_beta`, un estimador roto. La cobertura real es 0.99–1.10. Toda la Fase 2 quedó eliminada. Lo que sigue vivo es el costo de ejecución, ya atacado en `f719f06`. El histórico se conserva a propósito: explica por qué existen tareas que hoy están tachadas.
+
+**Architecture:** El plan se ordena por dependencia, no por tamaño del hallazgo. Primero se contiene riesgo abierto (Fase 0), luego se instrumenta (Fase 1) — y esa instrumentación fue justo la que demostró que el sumidero de cobertura no existía, matando la Fase 2 entera. Queda la palanca maestra, gamma vía ancho de rango (Fase 3), y la eficiencia de ejecución (Fase 4), que viene después porque su beneficio solo es atribuible con la instrumentación puesta. Cierra con validación y reporte semanal (Fase 5).
+
+**Lección de método:** instrumentar ANTES de diagnosticar evitó gastar la Fase 2 entera persiguiendo un problema inexistente. El orden fue lo que salvó el trabajo.
 
 **Tech Stack:** Node 20 (CommonJS), `node --test` + `node:assert/strict` en servidor, Vitest en cliente, PostgreSQL vía `pg`, dashboard `scripts/hedge-followup.sh` (solo lectura).
 
@@ -22,17 +26,15 @@
 
 Flota viva: **#35** (pp8, $138), **#36** (pp9, $143), **#37** (pp10, $997) — todos v4 ETH/USDC en Arbitrum. **El 78% del capital está en #37.** Los del baseline anterior (#4/#5, v3) están archivados desde el 30 jul.
 
-Los tres pierden dinero:
+Los tres pierden dinero (descomposición completa, `check` = 0.0000):
 
-| orch | fees | residual | net PnL | fees+residual | **gap sin explicar** |
-|---|---|---|---|---|---|
-| 35 | +0.90 | −1.54 | −0.33 | −0.64 | **+0.31** |
-| 36 | +0.95 | −2.32 | −1.03 | −1.37 | **+0.34** |
-| 37 | +7.78 | −19.39 | −13.69 | −11.61 | **−2.08** |
+| orch | fees | h_real | exec_fees | h_slip | drift | net PnL |
+|---|---|---|---|---|---|---|
+| 35 | +0.90 | −0.27 | 0.05 | 0.05 | −1.24 | **−0.36** |
+| 36 | +0.95 | −1.01 | 0.13 | 0.04 | −1.29 | **−1.08** |
+| 37 | +7.78 | −8.58 | 1.00 | 2.02 | −10.71 | **−14.11** |
 
-Dos sumideros independientes, ambos confirmados con datos:
-
-**(A) Sub-cobertura.** `hedge_beta` medido sobre primeras diferencias de snapshots: 0.495 / 0.476 / **0.293**. Los v3 llegaban a 0.87–0.92. Corte v3/v4 limpio, causa raíz sin confirmar.
+~~**(A) Sub-cobertura.**~~ **DESCARTADO.** `hedge_beta` daba 0.29–0.50, pero es un estimador roto (patas asíncronas, ver Tarea 7b). La cobertura real `actualQty/deltaQty` es **0.99–1.10**. No hay sub-cobertura. Sí hay, en cambio, **sobre**-cobertura en #35 (1.06), que también cuesta dinero.
 
 **(B) Costo de ejecución por frecuencia.** Los pools 0.05% usan rangos ~40% más angostos y rebalancean 2.5–4.5× más:
 
@@ -44,7 +46,9 @@ Dos sumideros independientes, ambos confirmados con datos:
 
 El costo *por rebalanceo* normalizado por capital es idéntico (0.0096–0.0139%): todo el diferencial es frecuencia, causada por gamma ≈ 1/ancho².
 
-**La tensión central del plan:** subir cobertura (arregla A) aumenta el turnover (empeora B); bajar turnover (arregla B) aumenta el residual (empeora A). **La única palanca que mejora ambos es reducir gamma ensanchando el rango**, porque un delta que se mueve más lento necesita menos re-cobertura *y* deriva menos entre rebalanceos. Por eso la Fase 3 es la palanca maestra y no un "nice to have".
+**La tensión central del plan** (escrita cuando se creían dos sumideros): subir cobertura aumentaba el turnover, bajar turnover aumentaba el residual. Al caer (A), la tensión se disuelve: **solo hay que bajar el turnover**, sin nada que lo contrapese. Eso hace la Fase 3 —ensanchar el rango para bajar gamma— más atractiva aún, no menos: ya no cede nada a cambio.
+
+En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8.58) **pierden a la vez**. Con la cobertura al 99%, eso solo se explica por re-cubrir contra ruido: whipsaw, no exposición descubierta.
 
 ## Riesgos abiertos detectados
 
@@ -59,18 +63,20 @@ El costo *por rebalanceo* normalizado por capital es idéntico (0.0096–0.0139%
 | `scripts/hedge-followup.sh` | Dashboard read-only; ya trae secciones 0/2b/3b/6 nuevas | 4, 14 |
 | `server/src/services/orchestrator-metrics.service.js` (~L278-367) | Atribución de PnL; exponer `hedgeBeta` y conciliar términos | 5 |
 | `server/src/services/protected-pool-delta-neutral.service.js` (~L2335) | Loguear delta modelado vs realizado por ciclo | 6 |
-| `server/src/services/delta-neutral-math.service.js` (`computeDeltaNeutralMetrics`, L239) | Cálculo de delta/gamma; foco del diagnóstico v4 | 7, 8 |
+| ~~`delta-neutral-math.service.js`~~ | ~~foco del diagnóstico v4~~ — descartado, el delta está sano | ~~7, 8~~ |
 | `server/src/services/lp-orchestrator/range-recommender.js` (L80-84) | Añadir término de costo de cobertura al lazo de angostamiento | 10 |
 | `server/src/services/protected-pool-delta-neutral.helpers.js` (`deriveBandSettings`, L378-413) | Banda de no-trade + intervalo mínimo | 11, 12 |
-| `server/weekly-hedge-report.js` (L83) | Reemplazar el ratio tautológico por `hedge_beta` | 14 |
+| `server/weekly-hedge-report.js` | Cobertura real como KPI; `hedge_beta` degradado a diagnóstico marcado no fiable | 14 |
 
 ---
 
 ## Fase 0 — Contención de riesgo (inmediato, sin código)
 
 - [ ] **Tarea 1: Verificar los shorts huérfanos de pp6/pp7.** Confirmar en Hyperliquid si el orquestador archivado #33 dejó posiciones cortas abiertas. Un short sin orquestador no se rebalancea ni se vigila: es riesgo de liquidación no monitoreado. Si están abiertos, cerrarlos manualmente (lo firma el usuario).
+- [ ] **Tarea 1b (NUEVA): pp7 está SIN cobertura y pp6 tiene un short colgado.** Confirmado con datos, no es sospecha: `strategy_state_json` da para **pp7** `lastDeltaQty` 0.020477 con `lastActualQty` **0.000000** → cobertura **0.0000**, un LP con ~$38 de delta ETH totalmente expuesto. Y **pp6** tiene `lastActualQty` 0.0004 con delta 0 → short residual sin LP que lo respalde. Ambos cuelgan del archivado #33. Concreta la Tarea 1.
+- [ ] **Tarea 2b (NUEVA): #35 está sobre-cubierto un 6%** (cobertura 1.0564, fuera del ±3%). Estar net-short cuesta dinero igual que estar expuesto, y las dos métricas viejas del dashboard lo ocultaban. Investigar por qué el hedge excede su target justo en el único orquestador con fee tier 0.3%.
 - [ ] **Tarea 2: Revisar margen de #35.** pp8 tocó 8.4%. Confirmar el leverage efectivo y decidir si bajarlo. Criterio del playbook: `dist_liq_pct > 8%` en todo momento.
-- [ ] **Tarea 3: Decidir exposición de #37.** Concentra el 78% del capital, tiene el peor `hedge_beta` (0.293) y la mayor quema (~34% anualizado en ejecución). Opciones: (a) reducir tamaño hasta cerrar Fases 2–3, (b) ensanchar rango ya (Tarea 9), (c) dejarlo y aceptar la quema mientras dura el diagnóstico. **Decisión del usuario** — es la que más mueve la aguja del portafolio.
+- [ ] **Tarea 3: Decidir exposición de #37.** Concentra el 78% del capital, tiene la mayor quema (~34% anualizado en ejecución). Opciones: (a) reducir tamaño hasta cerrar Fases 2–3, (b) ensanchar rango ya (Tarea 9), (c) dejarlo y aceptar la quema mientras dura el diagnóstico. **Decisión del usuario** — es la que más mueve la aguja del portafolio.
 
 ## Fase 1 — Instrumentación (no se puede optimizar lo que no se mide bien)
 
@@ -80,8 +86,55 @@ El costo *por rebalanceo* normalizado por capital es idéntico (0.0096–0.0139%
 
 ## Fase 2 — Diagnóstico del gap de cobertura v4
 
-- [ ] **Tarea 7: Comparación controlada v3 vs v4 del cálculo de delta.** Hipótesis: `computeDeltaNeutralMetrics` subestima el delta en posiciones v4. Evidencia a favor: corte limpio (v3 beta 0.87–0.92 vs v4 0.29–0.50) y toda la flota viva es v4. **Confusor a descartar primero:** la serie cruda de delta se mueve mucho por cruces de banda legítimos (un LP ETH/USDC fuera de rango por arriba queda todo en USDC con delta≈0), así que la comparación debe hacerse **solo en momentos dentro de rango**, usando los datos de la Tarea 6. Validar contra un fork local de Arbitrum (memoria `e2e-fork-validation`).
-- [ ] **Tarea 8: Corregir la causa encontrada en la Tarea 7.** Alcance dependiente del diagnóstico. Test de regresión que fije el delta esperado para una posición v4 conocida, con los multiplicadores **inyectados**, no leídos de `config` (ver memoria `orchestrator-hedge-residual-rootcause`: ese error hizo que un test pasara en CI y fallara en prod).
+> ### ⚠️ Evidencia post-deploy (2026-08-10 21:2x) — la hipótesis de abajo está DESCARTADA
+>
+> Con `delta_neutral_delta_diagnostic` ya en producción, **250 muestras** dicen:
+>
+> | métrica | `modelValueRatio` |
+> |---|---|
+> | mín / mediana / máx | 1.0082 / 1.0086 / 1.0123 |
+> | media | 1.0092 |
+>
+> Sesgo constante de +0.9% y dispersión de 0.4 pp, igual de estrecho dentro de rango (48 muestras) que fuera (202). **La reconstrucción de liquidez y el cálculo de delta v4 están sanos** — un error del 0.9% no explica una cobertura que cae a la mitad. Además, en los ciclos observados `deltaQty == volatileAmount` exactamente y el hedge cubre el 99.1% de su target (0.4622 sobre 0.4663).
+>
+> **CONFIRMADO — el sumidero (A) no existe.** La cobertura medida directamente como `actualQty / deltaQty`, dentro del mismo ciclo de evaluación y sin pasar por `hl_account_usd`:
+>
+> | protección | orq | cobertura |
+> |---|---|---|
+> | 9 | #36 | 0.9996 |
+> | 10 | #37 | 0.9912 |
+> | 8 | #35 | 1.0564 – 1.0967 (**sobre**-cubierto) |
+>
+> El hedge cubre 99–110% del delta, no el 29–50% que reportaba `hedge_beta`. **`hedge_beta` sobre `hl_account_usd` es un estimador roto**: mide valor de cuenta (margen + PnL no realizado) con apalancamiento aislado 10x, no el notional del short.
+>
+> ⚠️ *Fuerza de la evidencia:* para las protecciones 9 y 10 las ~190 lecturas son idénticas (mín = mediana = máx), o sea posición estática — es **una** observación repetida, no 190 independientes. Concluyente contra "30–50%", pero hace falta una ventana con movimiento de precio para cuantificar la cobertura media en el tiempo.
+>
+> **Consecuencias:**
+> - Las Tareas 7 y 8 pierden su objeto: no hay gap de cobertura v4 que diagnosticar.
+> - El criterio de aceptación `hedge_beta ≥ 0.85` de la Tarea 15 **no es válido** y hay que sustituirlo por `actualQty/deltaQty`.
+> - El plan se reduce al sumidero (B), el coste de ejecución, ya atacado en `f719f06`.
+> - **Nuevo hallazgo:** #35 está sobre-cubierto un 6–10%. Estar net-short cuesta dinero igual que estar sub-cubierto; merece tarea propia.
+>
+> Se deja todo tal cual **a la espera de tu decisión** sobre cómo re-enfocar la Fase 2. No borrar esta nota al reescribirla: es la razón del cambio.
+
+
+- [x] **Tarea 7: ~~Comparación controlada v3 vs v4 del cálculo de delta~~ → ELIMINADA.** No hay gap de cobertura que diagnosticar. `modelValueRatio` (250 muestras) sale 1.0082–1.0123, así que el delta v4 está sano, y la cobertura real es 0.99–1.10.
+- [x] **Tarea 8: ~~Corregir la causa encontrada en la Tarea 7~~ → ELIMINADA.** Sin objeto.
+- [x] **Tarea 7b (NUEVA, hecha): Por qué miente `hedge_beta`.** ✅ **Causa raíz: las dos patas no se muestrean sincronizadas.** Medido sobre 7d:
+
+  | orq | intervalos | `Δlp = 0` | `Δhl = 0` | LP congelado con HL moviéndose |
+  |---|---|---|---|---|
+  | 35 | 124 | **66 (53%)** | 0 | 66 |
+  | 36 | 87 | 17 | 1 | 17 |
+  | 37 | 87 | 7 | 1 | 7 |
+
+  `lp_usd` se queda congelado en hasta el 53% de los intervalos (snapshots cada ~58 min) mientras `hl_account_usd` se actualiza siempre. Eso mete puntos con regresor 0 cuando el valor real sí cambió — error en la variable independiente, que hunde la pendiente hacia 0. En #35 la fracción congelada (53%) explica casi exactamente el déficit del beta (0.50).
+
+  Descartado por el camino: **no** es atenuación por el filtro. Un barrido de umbrales (0.5%/1%/3%/10%/sin filtro) da el beta **constante**, y casi todos los incrementos ya pasaban el filtro del 1%.
+
+  La aritmética cuadra como `beta = |corr| × (sd_dhl/sd_dlp)`: #35 → 0.486 × 1.02 = 0.50 ✓, #37 → 0.508 × 0.58 = 0.30 ✓. En #37 queda un segundo defecto sin explicar (la pata HL se mueve el 58% de la LP con solo 8% de intervalos congelados); **no atribuido por falta de evidencia**.
+
+  Herramienta reutilizable: `FOLLOWUP_BETA_SWEEP=1 scripts/hedge-followup.sh`.
 
 ## Fase 3 — Palanca maestra: gamma / ancho de rango
 
@@ -104,8 +157,7 @@ El costo *por rebalanceo* normalizado por capital es idéntico (0.0096–0.0139%
   - No hizo falta añadir `hedge_beta`: la query `eff` **ya lo calculaba** sobre primeras diferencias. El problema real era otro — usaba un filtro **absoluto** `abs(Δ) < 1.5 USD` para descartar saltos de rebalanceo, que en un orquestador de ~$1000 como #37 filtra sus movimientos normales y sesga el beta. Cambiado a relativo (1% del total).
   - Se eliminó el ratio tautológico y, de paso, un **bug latente**: la query devolvía `protected_pool_id` pero se indexaba con `idx(cov.rows, 'pp')` y se consultaba por `orchestrator_id`, así que la línea "Cobertura efectiva" salía `N/A` casi siempre. Su lugar lo ocupa ahora el costo de cobertura como % de las fees, con semáforo al mismo umbral de 1/3 que usa el recomendador.
 - [ ] **Tarea 15: Criterios de aceptación.** Medir a 7 y 14 días contra la línea base de este documento:
-  - `hedge_beta` ≥ 0.85 en los tres (hoy 0.29–0.50)
-  - `d_corr` ≤ −0.75 (hoy −0.49 a −0.72)
+  - **cobertura real `actualQty/deltaQty` dentro de 1.00 ± 0.03** (hoy: #36 1.00 ✅, #37 0.99 ✅, #35 **1.06 ❌ sobre-cubierto**). ⚠️ NO usar `hedge_beta`: es un estimador roto, ver Tarea 7b.
   - costo de ejecución ≤ 0.10% del capital / semana (hoy 0.31% en #37)
   - `dist_liq_pct` > 8% en todo momento — **no negociable**, ninguna mejora de rentabilidad justifica cruzarlo
   - PnL neto por orquestador en tendencia positiva, con la atribución de la Tarea 5 cuadrando

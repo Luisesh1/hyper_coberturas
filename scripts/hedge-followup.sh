@@ -11,12 +11,16 @@
 #   scripts/hedge-followup.sh [VENTANA_DIAS]
 #   VENTANA_DIAS: ventana de análisis en días (default 7).
 #
-# Qué vigila (en orden de importancia post-cambio):
-#   1. Riesgo de liquidación del short  ← el riesgo que introdujo subir el hedge
-#   2. Cobertura efectiva (target/delta) ← debe pasar de ~0.60 a ~1.0 en center
-#   3. Convergencia del residual         ← corr(total,lp)→0, netPnl→positivo
-#   4. Time-in-range y funding
-#   5. Calidad de datos (anomalías hl=0)  ← debe quedarse en 0 tras el fix
+# Qué vigila:
+#   0. Inventario de la flota viva (se detecta, no se hardcodea: rota seguido)
+#   1. Riesgo de liquidación del short   ← el riesgo que introdujo subir el hedge
+#   2. Diagnóstico del rebalanceo        ← target/delta NO prueba cobertura
+#   3a. COBERTURA REAL (actual/delta)    ← la métrica buena
+#   3b. hedge_beta                       ← ⚠️ NO FIABLE, solo diagnóstico
+#   4. Time-in-range · 5. Calidad de datos · 6. Coste de cobertura
+#
+# Modos extra (read-only): FOLLOWUP_VERIFY_WEEKLY=1 valida el SQL del reporte
+# semanal; FOLLOWUP_BETA_SWEEP=1 diagnostica el sesgo de hedge_beta.
 
 set -euo pipefail
 
@@ -45,6 +49,52 @@ WIN_MS="${WIN_DAYS}::bigint*86400000"
 echo "════════════════════════════════════════════════════════════════"
 echo " Seguimiento hedge · db=${DB} · ventana=${WIN_DAYS}d · $(date -u '+%Y-%m-%d %H:%MZ')"
 echo "════════════════════════════════════════════════════════════════"
+
+# Diagnostico de por que `hedge_beta` miente. La cobertura real medida como
+# actualQty/deltaQty da 0.99-1.10, pero la regresion sobre snapshots daba
+# 0.29-0.50. Si la causa es sesgo de atenuacion (ruido de medicion en la
+# variable independiente empuja la pendiente hacia 0), el beta debe SUBIR al
+# ensanchar el filtro y dejar entrar movimientos con mas senal que ruido.
+if [ "${FOLLOWUP_BETA_SWEEP:-0}" = "1" ]; then
+  echo "── beta vs. umbral del filtro (atenuacion si crece con el umbral) ──"
+  q "
+  WITH c AS (SELECT (EXTRACT(EPOCH FROM NOW())::bigint*1000 - ${WIN_MS}) AS t),
+  d AS (
+    SELECT orchestrator_id oid, total_usd tot,
+      lp_usd - lag(lp_usd) OVER w AS dlp,
+      hl_account_usd - lag(hl_account_usd) OVER w AS dhl
+    FROM orchestrator_metrics_snapshots, c
+    WHERE captured_at >= c.t AND hl_account_usd > 0 AND total_usd > 100
+    WINDOW w AS (PARTITION BY orchestrator_id ORDER BY captured_at))
+  SELECT oid,
+    round((-regr_slope(dhl,dlp) FILTER (WHERE abs(dlp)<0.005*tot AND abs(dhl)<0.005*tot))::numeric,2) AS b_0_5pct,
+    round((-regr_slope(dhl,dlp) FILTER (WHERE abs(dlp)<0.01*tot  AND abs(dhl)<0.01*tot ))::numeric,2) AS b_1pct,
+    round((-regr_slope(dhl,dlp) FILTER (WHERE abs(dlp)<0.03*tot  AND abs(dhl)<0.03*tot ))::numeric,2) AS b_3pct,
+    round((-regr_slope(dhl,dlp) FILTER (WHERE abs(dlp)<0.10*tot  AND abs(dhl)<0.10*tot ))::numeric,2) AS b_10pct,
+    round((-regr_slope(dhl,dlp))::numeric,2) AS b_sin_filtro,
+    count(*) FILTER (WHERE abs(dlp)<0.01*tot) AS n_1pct,
+    count(*) AS n_total
+  FROM d WHERE dlp IS NOT NULL GROUP BY oid ORDER BY oid;"
+
+  echo "── magnitud tipica de los incrementos (senal vs ruido) ──"
+  q "
+  WITH c AS (SELECT (EXTRACT(EPOCH FROM NOW())::bigint*1000 - ${WIN_MS}) AS t),
+  d AS (
+    SELECT orchestrator_id oid, total_usd tot,
+      lp_usd - lag(lp_usd) OVER w AS dlp,
+      hl_account_usd - lag(hl_account_usd) OVER w AS dhl
+    FROM orchestrator_metrics_snapshots, c
+    WHERE captured_at >= c.t AND hl_account_usd > 0 AND total_usd > 100
+    WINDOW w AS (PARTITION BY orchestrator_id ORDER BY captured_at))
+  SELECT oid, count(*) n,
+    round(avg(abs(dlp))::numeric,4) AS abs_dlp_medio,
+    round(avg(abs(dhl))::numeric,4) AS abs_dhl_medio,
+    round(stddev(dlp)::numeric,4) AS sd_dlp,
+    round(stddev(dhl)::numeric,4) AS sd_dhl,
+    round(corr(dlp,dhl)::numeric,3) AS corr_sin_filtro
+  FROM d WHERE dlp IS NOT NULL GROUP BY oid ORDER BY oid;"
+  exit 0
+fi
 
 # Valida que las queries de `server/weekly-hedge-report.js` ejecutan contra el
 # esquema real. Ese fichero no lo cubren ni los tests ni el lint (que solo mira
@@ -202,7 +252,28 @@ SELECT orch,
 FROM a ORDER BY orch;"
 
 echo ""
-echo "── 3b. EFECTIVIDAD DEL HEDGE (primeras diferencias) ──"
+echo "── 3a. COBERTURA REAL (actual/delta) — ESTA es la métrica buena ──"
+# actualQty y deltaQty tal como las vio el MISMO ciclo de evaluacion, sin pasar
+# por snapshots ni por hl_account_usd. 1.0 es lo ideal; desviarse cuesta dinero
+# en las dos direcciones (por debajo queda delta expuesto, por encima net-short).
+q "
+SELECT p.id AS pp, o.id AS orch,
+  round((p.strategy_state_json::json->>'lastDeltaQty')::numeric,6) AS delta,
+  round((p.strategy_state_json::json->>'lastActualQty')::numeric,6) AS actual,
+  round(((p.strategy_state_json::json->>'lastActualQty')::numeric
+       / nullif((p.strategy_state_json::json->>'lastDeltaQty')::numeric,0)),4) AS cobertura
+FROM protected_uniswap_pools p
+JOIN lp_orchestrators o ON o.active_protected_pool_id = p.id
+WHERE p.strategy_state_json IS NOT NULL
+ORDER BY o.id;"
+
+echo ""
+echo "── 3b. hedge_beta — ⚠️ NO FIABLE, solo diagnóstico ──"
+# Se calcula sobre `hl_account_usd` y las dos patas NO se muestrean
+# sincronizadas: `lp_usd` se queda congelado en hasta el 53% de los intervalos
+# mientras el lado HL si se actualiza. Eso es error en la variable independiente
+# y hunde la pendiente hacia 0. Daba 0.29-0.50 cuando la cobertura real (3a) era
+# 0.99-1.10. Se conserva para vigilar el sesgo, NO para decidir.
 # En ventanas >~2d los NIVELES se lavan (rebalanceos mueven el tamaño de ambas
 # patas → serie no estacionaria) y dan falso negativo. Lo correcto es correlacionar
 # los INCREMENTOS entre snapshots consecutivos, descartando los saltos de
@@ -313,6 +384,6 @@ echo "  · dist_liq_pct < 8%  → margen apretado, considerar bajar leverage / r
 echo "  · ratio_tgt_delta ~1.0 → SOLO dice que el mult. de zona es 1.0, NO que se cubra"
 echo "  · corr_total_lp → 0 y net_pnl → positivo → el residual está convergiendo"
 echo "  · anomalias_hl0 > 0 → el fix de métricas no está corriendo / regresión"
-echo "  · d_corr ~ -0.8 y hedge_beta ~ 1.0 → el hedge trackea y cubre entero"
-echo "  · d_corr ~ 0 con snaps suficientes → LP efectivamente SIN cobertura"
+echo "  · cobertura (3a) ~1.0 → el delta esta cubierto; <1 expuesto, >1 net-short"
+echo "  · hedge_beta (3b) NO sirve para decidir: subestima por patas asincronas"
 echo "════════════════════════════════════════════════════════════════"

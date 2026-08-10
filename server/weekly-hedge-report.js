@@ -7,9 +7,14 @@
  *
  *   docker exec testbot-server-prod node /app/weekly-hedge-report.js [dias]
  *
- * - Métricas: efectividad del hedge (corr LP/HL, beta), riesgo de liquidación,
- *   cobertura efectiva, time-in-range, calidad de datos y accounting acumulado.
+ * - Métricas: cobertura real (actualQty/deltaQty), riesgo de liquidación, coste
+ *   de ejecución del hedge, time-in-range, calidad de datos y accounting.
  *   Marco documentado en la memoria `hedge-periodic-analysis`.
+ * - OJO: `hedge_beta` y `corr LP/HL` se imprimen solo como diagnóstico y van
+ *   marcados como NO FIABLES. Se calculan sobre `hl_account_usd` y las dos patas
+ *   no se muestrean sincronizadas (`lp_usd` se queda congelado en hasta el 53%
+ *   de los intervalos), lo que hunde la pendiente hacia 0: daban 0.29-0.50
+ *   cuando la cobertura real era 0.99-1.10. No decidir nada con ellas.
  * - Envío: a todos los chats de Telegram configurados y habilitados (creds
  *   descifradas vía settingsService). Override opcional: TELEGRAM_REPORT_CHAT_ID.
  * - Flags: `--dry-run` imprime el mensaje y NO envía (para validar).
@@ -43,6 +48,13 @@ function corrEmoji(c) {
   if (c == null) return '⚪';
   return c <= -0.6 ? '🟢' : c <= -0.3 ? '🟠' : '🔴';
 }
+// La cobertura ideal es 1.0. Desviarse cuesta dinero en AMBAS direcciones:
+// por debajo queda delta sin cubrir, por encima quedas net-short.
+function cobEmoji(c) {
+  if (c == null) return '⚪';
+  const d = Math.abs(Number(c) - 1);
+  return d <= 0.03 ? '🟢' : d <= 0.10 ? '🟠' : '🔴';
+}
 // Mismo umbral de 1/3 que usa el recomendador de rango para bloquear el
 // angostamiento: por encima, cubrir se come mas de un tercio de lo que rinde.
 function costEmoji(ratio) {
@@ -53,7 +65,7 @@ function costEmoji(ratio) {
 async function collect() {
   const since = Date.now() - WIN_MS;
 
-  const [eff, risk, cov, dq, tir, acc] = await Promise.all([
+  const [eff, risk, cobertura, cov, dq, tir, acc] = await Promise.all([
     // Efectividad sobre PRIMERAS DIFERENCIAS (Δlp vs Δhl entre snapshots
     // consecutivos): en ventana semanal los niveles no son estacionarios
     // (rebalanceos y cambios de rango mueven el tamaño de ambas patas y lavan
@@ -87,6 +99,18 @@ async function collect() {
        WHERE created_at >= $1
        GROUP BY protected_pool_id ORDER BY protected_pool_id`,
       [since],
+    ),
+    // COBERTURA REAL: actualQty/deltaQty leido del strategy_state, o sea las dos
+    // cantidades tal como las vio el MISMO ciclo de evaluacion. Es la unica
+    // medida fiable — ver el bloque de `hedge_beta` mas abajo.
+    db.query(
+      `SELECT p.id pp, o.id oid,
+         round(((p.strategy_state_json::json->>'lastActualQty')::numeric
+              / nullif((p.strategy_state_json::json->>'lastDeltaQty')::numeric,0)),4) cobertura
+       FROM protected_uniswap_pools p
+       JOIN lp_orchestrators o ON o.active_protected_pool_id = p.id
+       WHERE p.strategy_state_json IS NOT NULL`,
+      [],
     ),
     // Costo de ejecucion de la cobertura: es el segundo sumidero medido el
     // 2026-08-10 y no se reportaba. Sustituye a la vieja query de "cobertura
@@ -145,6 +169,7 @@ async function collect() {
     active: eff.rows.map((r) => Number(r.oid)),
     eff: idx(eff.rows, 'oid'),
     risk: idx(risk.rows, 'pp'),
+    cobertura: idx(cobertura.rows, 'oid'),
     cov: idx(cov.rows, 'oid'),
     dq: idx(dq.rows, 'oid'),
     tir: idx(tir.rows, 'oid'),
@@ -169,6 +194,7 @@ function buildMessage(d) {
     const e = d.eff.get(oid) || {};
     const r = d.risk.get(oid) || {};
     const c = d.cov.get(oid) || {};
+    const cb = d.cobertura.get(oid) || {};
     const q = d.dq.get(oid) || {};
     const t = d.tir.get(oid) || {};
     const a = d.acc.get(oid) || {};
@@ -182,8 +208,16 @@ function buildMessage(d) {
       `<b>▎Orquestador #${oid}</b>`,
       `${liqEmoji(dist)} Dist. liquidación mín: <b>${dist != null ? dist + '%' : 'N/A'}</b>`
         + `  (umbral 8%)`,
-      `${corrEmoji(corr)} Hedge tracking (Δcorr LP/HL): <b>${corr != null ? corr : 'N/A'}</b>`
-        + ` · cobertura β <b>${e.hedge_beta ?? 'N/A'}</b>`,
+      `${cobEmoji(cb.cobertura)} Cobertura real (actual/delta): `
+        + `<b>${cb.cobertura != null ? Math.round(Number(cb.cobertura) * 100) + '%' : 'N/A'}</b>`,
+      // `hedge_beta` se conserva SOLO como diagnostico y marcado como no fiable:
+      // se calcula sobre `hl_account_usd`, y las dos patas no se muestrean
+      // sincronizadas — `lp_usd` se queda congelado en hasta el 53% de los
+      // intervalos mientras el lado HL si se actualiza. Eso es error en la
+      // variable independiente y hunde la pendiente hacia 0. Daba 0.29-0.50
+      // cuando la cobertura real era 0.99-1.10. No usarlo para decidir nada.
+      `<i>· diag. no fiable: Δcorr ${corr != null ? corr : 'N/A'}`
+        + ` · β ${e.hedge_beta ?? 'N/A'} (subestima, patas asíncronas)</i>`,
       // Ojo: `accounting_json` es acumulado de por vida, NO de la ventana del
       // reporte. Se etiqueta explicito para no leerlo como coste semanal.
       `${costEmoji(c.cost_ratio)} Costo cobertura (acum.): <b>${fmtSigned(c.exec_cost)}</b>`
@@ -200,8 +234,8 @@ function buildMessage(d) {
     `${anomaliasTot === 0 ? '🟢' : '🔴'} Calidad de datos: `
       + `<b>${anomaliasTot}</b> anomalías hl=0 (debe ser 0)`,
     '',
-    `<i>Lectura: dist&lt;8% = margen apretado · Δcorr≤−0.6 = short trackea el delta · `
-      + `β = fracción cubierta (objetivo ~0.9; los v4 medían 0.29–0.50 el 10 ago) · `
+    `<i>Lectura: dist&lt;8% = margen apretado · cobertura 100% = delta cubierto `
+      + `(por debajo queda expuesto, por encima quedas net-short) · `
       + `costo&gt;33% de las fees = angostar el rango ya no compensa.</i>`,
   );
   return lines.join('\n');
