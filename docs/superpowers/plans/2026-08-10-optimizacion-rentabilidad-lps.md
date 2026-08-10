@@ -74,7 +74,18 @@ En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8
 
 - [ ] **Tarea 1: Verificar los shorts huérfanos de pp6/pp7.** Confirmar en Hyperliquid si el orquestador archivado #33 dejó posiciones cortas abiertas. Un short sin orquestador no se rebalancea ni se vigila: es riesgo de liquidación no monitoreado. Si están abiertos, cerrarlos manualmente (lo firma el usuario).
 - [ ] **Tarea 1b (NUEVA): pp7 está SIN cobertura y pp6 tiene un short colgado.** Confirmado con datos, no es sospecha: `strategy_state_json` da para **pp7** `lastDeltaQty` 0.020477 con `lastActualQty` **0.000000** → cobertura **0.0000**, un LP con ~$38 de delta ETH totalmente expuesto. Y **pp6** tiene `lastActualQty` 0.0004 con delta 0 → short residual sin LP que lo respalde. Ambos cuelgan del archivado #33. Concreta la Tarea 1.
-- [ ] **Tarea 2b (NUEVA): #35 está sobre-cubierto un 6%** (cobertura 1.0564, fuera del ±3%). Estar net-short cuesta dinero igual que estar expuesto, y las dos métricas viejas del dashboard lo ocultaban. Investigar por qué el hedge excede su target justo en el único orquestador con fee tier 0.3%.
+- [ ] **Tarea 2b (NUEVA): #35 está sobre-cubierto y la desviación CRECE.** Cobertura 1.0564 → 1.0715 en ~1h: el delta del LP baja (0.042933 → 0.042091) mientras el hedge se queda clavado en 0.045100. Estar net-short cuesta igual que estar expuesto, y las dos métricas viejas lo ocultaban.
+
+  **Mecanismo identificado** (`delta_neutral_preflight_result`, protección 8): `poolValueUsd` $89.28, `driftUsd` $5.99.
+
+  | umbral | valor | ¿lo supera el drift? |
+  |---|---|---|
+  | urgente 3% (`f719f06`) | $2.68 | **sí** |
+  | timer 12% (preexistente) | $10.71 | no |
+
+  No se corrige porque (a) ningún `boundary_cross`/`price_band` ha disparado, así que la rama urgente no se evalúa, y (b) el brazo del temporizador exige $10.71, casi el doble del drift actual. **La banda de no-trade nueva NO es la culpable** — el drift la supera holgadamente. El cuello de botella es `DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12`, demasiado grueso para un LP de $89: obliga a acumular un 12% de desviación antes de mover un dedo.
+
+  Opción a evaluar: bajar el 12% del timer, o dejar que la rama urgente cubra también el caso "drift persistente sin trigger de borde". Ojo con la interacción — bajarlo sube la frecuencia de rebalanceo, que es justo el sumidero (B).
 - [ ] **Tarea 2: Revisar margen de #35.** pp8 tocó 8.4%. Confirmar el leverage efectivo y decidir si bajarlo. Criterio del playbook: `dist_liq_pct > 8%` en todo momento.
 - [ ] **Tarea 3: Decidir exposición de #37.** Concentra el 78% del capital, tiene la mayor quema (~34% anualizado en ejecución). Opciones: (a) reducir tamaño hasta cerrar Fases 2–3, (b) ensanchar rango ya (Tarea 9), (c) dejarlo y aceptar la quema mientras dura el diagnóstico. **Decisión del usuario** — es la que más mueve la aguja del portafolio.
 
