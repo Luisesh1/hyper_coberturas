@@ -3,9 +3,47 @@ const assert = require('node:assert/strict');
 
 const {
   resolveMinRebalanceNotionalUsd,
+  resolveMinOrderNotionalUsd,
+  resolveRebalanceDecision,
   DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
   MIN_REBALANCE_NOTIONAL_FLOOR_USD,
 } = require('../src/services/protected-pool-delta-neutral.helpers');
+
+test('protecciones migradas con minimo null usan el mismo $11 que preflight y ejecucion', () => {
+  assert.equal(resolveMinOrderNotionalUsd({ minOrderNotionalUsd: null }), 11);
+  assert.equal(resolveMinOrderNotionalUsd({}), 11);
+  assert.equal(resolveMinOrderNotionalUsd({ minOrderNotionalUsd: 25 }), 25);
+});
+
+test('la banda de decision no restaura el fallback legacy de $50', () => {
+  const below = resolveRebalanceDecision({
+    protection: { minOrderNotionalUsd: null },
+    metrics: { targetQty: 0.05 },
+    actualQty: 0.03901,
+    currentPrice: 1000,
+  });
+  const executable = resolveRebalanceDecision({
+    protection: { minOrderNotionalUsd: null },
+    metrics: { targetQty: 0.05 },
+    actualQty: 0.039,
+    currentPrice: 1000,
+  });
+
+  assert.equal(below.decision, 'hold');
+  assert.equal(executable.bands.holdBandUsd, 11);
+  assert.equal(executable.decision, 'rebalance_full');
+});
+
+test('una correccion ejecutable nunca se etiqueta como parcial si se envia completa', () => {
+  const result = resolveRebalanceDecision({
+    protection: { minOrderNotionalUsd: null },
+    metrics: { targetQty: 0.05 },
+    actualQty: 0.035,
+    currentPrice: 1000,
+  });
+
+  assert.equal(result.decision, 'rebalance_full');
+});
 
 // Regresion del caso real: proteccion 22 (LP ETH/USDC de ~$51) con el default
 // historico de $50 absolutos. Tras un increase de liquidez la cobertura quedo

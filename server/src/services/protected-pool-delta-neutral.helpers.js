@@ -25,7 +25,6 @@ const MIN_REBALANCE_NOTIONAL_FLOOR_USD = 2;
 // temporizador: un cruce de borde es mas urgente que un tick de reloj, asi que
 // se frena solo lo economicamente irrelevante sin abrir hueco de cobertura.
 const DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT = 3;
-const DEFAULT_DECISION_BAND_FLOOR_USD = 50;
 const DEFAULT_MAX_SLIPPAGE_BPS = 20;
 const DEFAULT_TWAP_MIN_NOTIONAL_USD = 10_000;
 const DEFAULT_EXECUTION_MODE = 'auto';
@@ -249,6 +248,14 @@ function estimateExecutionCostUsd(qty, currentPrice) {
   return size * price * ESTIMATED_TAKER_FEE_RATE;
 }
 
+function resolveMinOrderNotionalUsd(protection) {
+  const configured = Number(protection?.minOrderNotionalUsd);
+  const minimum = Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_MIN_ORDER_NOTIONAL_USD;
+  return Math.max(minimum, EXCHANGE_MIN_NOTIONAL_USD);
+}
+
 function buildTrackingMetrics(metrics, actualQty, currentPrice) {
   const targetQty = Number(metrics?.targetQty || 0);
   const actual = Number(actualQty || 0);
@@ -306,20 +313,15 @@ function resolveUrgentMinRebalanceNotionalUsd(protection, poolValueUsd, urgentPc
 }
 
 function deriveDecisionBandUsd(protection, metrics, currentPrice) {
-  // Suelo de la banda cost-aware. Antes caia en el absoluto configurable que
-  // ahora es porcentual, pero son cosas distintas —esta banda decide entre
-  // hold/parcial/full, no si toca mirar el reloj— y bajarla cambiaria cuando
-  // se considera un ajuste "parcial". Se mantiene el valor historico.
-  const minRebalanceUsd = Number(
-    protection?.minOrderNotionalUsd
-    ?? DEFAULT_DECISION_BAND_FLOOR_USD
-  );
+  // Esta banda debe compartir el mismo minimo que preflight y ejecucion. Las
+  // protecciones migradas conservan `minOrderNotionalUsd = null`; usar aqui el
+  // viejo fallback de $50 anulaba los umbrales porcentuales de rebalanceo.
+  const minRebalanceUsd = resolveMinOrderNotionalUsd(protection);
   const targetQty = Number(metrics?.targetQty || 0);
   const estimatedCost = estimateExecutionCostUsd(targetQty, currentPrice);
   const floor = Math.max(minRebalanceUsd, estimatedCost * 3);
   return {
     holdBandUsd: floor,
-    fullBandUsd: floor * 2,
     estimatedCostUsd: estimatedCost,
   };
 }
@@ -334,9 +336,6 @@ function resolveRebalanceDecision({ protection, metrics, actualQty, currentPrice
   }
   if (absoluteDriftUsd < bands.holdBandUsd) {
     return { decision: 'hold', tracking, bands };
-  }
-  if (absoluteDriftUsd < bands.fullBandUsd) {
-    return { decision: 'rebalance_partial', tracking, bands };
   }
   return { decision: 'rebalance_full', tracking, bands };
 }
@@ -498,6 +497,7 @@ module.exports = {
   BELOW_NOTIONAL_COOLDOWN_MS,
   clampNonNegative,
   estimateExecutionCostUsd,
+  resolveMinOrderNotionalUsd,
   safeJsonClone,
   getCurrentBoundarySide,
   distanceToRangePct,

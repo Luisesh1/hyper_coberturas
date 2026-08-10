@@ -254,7 +254,12 @@ test('evaluateProtection con decision hold nunca persiste rebalance_pending', as
     },
     hlRegistry: {
       getOrCreate: async () => ({
-        getPosition: async () => null,
+        // Target ~$25; este short deja un drift de ~$5, bajo el minimo de $11.
+        getPosition: async () => ({
+          coin: 'ETH',
+          szi: '-0.008',
+          leverage: { type: 'isolated', value: 7 },
+        }),
         getClearinghouseState: async () => ({ withdrawable: '1000' }),
         getCandleSnapshot: async () => [],
       }),
@@ -305,7 +310,7 @@ test('_buildPreflight permite ejecutar con drift entre 11 y 25 USD', async () =>
     bands: {
       estimatedCostUsd: 0.01,
     },
-    decision: 'rebalance_partial',
+    decision: 'rebalance_full',
   });
 
   assert.equal(preflight.ok, true);
@@ -337,7 +342,7 @@ test('_buildPreflight sigue bloqueando drift por debajo de 11 USD', async () => 
     bands: {
       estimatedCostUsd: 0.01,
     },
-    decision: 'rebalance_partial',
+    decision: 'rebalance_full',
   });
 
   assert.equal(preflight.ok, false);
@@ -369,7 +374,7 @@ test('_buildPreflight aplica floor de exchange aunque minOrderNotionalUsd sea me
     bands: {
       estimatedCostUsd: 0.01,
     },
-    decision: 'rebalance_partial',
+    decision: 'rebalance_full',
   });
 
   assert.equal(preflight.ok, false);
@@ -410,7 +415,7 @@ test('_buildPreflight refresca withdrawable por HTTP si el estado cacheado llega
     bands: {
       estimatedCostUsd: 0.01,
     },
-    decision: 'rebalance_partial',
+    decision: 'rebalance_full',
   });
 
   assert.equal(preflight.ok, true);
@@ -488,7 +493,7 @@ test('_buildPreflight usa cooldownReason persistido y no hereda uno obsoleto del
     bands: {
       estimatedCostUsd: 0.01,
     },
-    decision: 'rebalance_partial',
+    decision: 'rebalance_full',
   });
 
   assert.equal(preflight.ok, false);

@@ -46,7 +46,6 @@ const {
   DEFAULT_EXECUTION_MODE,
   DEFAULT_MAX_SPREAD_BPS,
   DEFAULT_MAX_EXECUTION_FEE_USD,
-  DEFAULT_MIN_ORDER_NOTIONAL_USD,
   DEFAULT_TWAP_SLICES,
   DEFAULT_TWAP_DURATION_SEC,
   DEFAULT_EMERGENCY_IOC_NOTIONAL_USD,
@@ -56,11 +55,11 @@ const {
   DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
   DEFAULT_RISK_PAUSE_LIQ_DISTANCE_PCT,
   DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
-  EXCHANGE_MIN_NOTIONAL_USD,
   ESTIMATED_TAKER_FEE_RATE,
   MARGIN_COOLDOWN_MS,
   clampNonNegative,
   estimateExecutionCostUsd,
+  resolveMinOrderNotionalUsd,
   safeJsonClone,
   getCurrentBoundarySide,
   distanceToRangePct,
@@ -1104,10 +1103,7 @@ class ProtectedPoolDeltaNeutralService {
         positionMissingUnconfirmed,
       };
     }
-    const effectiveMinOrderNotionalUsd = Math.max(
-      Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
-      EXCHANGE_MIN_NOTIONAL_USD,
-    );
+    const effectiveMinOrderNotionalUsd = resolveMinOrderNotionalUsd(protection);
     // Bypass del mínimo notional cuando es un reduce-only que cierra la
     // posición por completo: Hyperliquid acepta reduceOnly sub-mínimo si
     // deja la posición en 0. Sin este bypass, residuos entre $0 y $11
@@ -2287,10 +2283,7 @@ class ProtectedPoolDeltaNeutralService {
       }
       if (preflight.reason === 'below_min_order_notional') {
         preflightExtra.driftUsd = tracking.trackingErrorUsd;
-        preflightExtra.minNotionalUsd = Math.max(
-          Number(activeProtection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
-          EXCHANGE_MIN_NOTIONAL_USD,
-        );
+        preflightExtra.minNotionalUsd = resolveMinOrderNotionalUsd(activeProtection);
       }
       this._notifyBlock(activeProtection, {
         blockType: preflight.reason === 'estimated_execution_fee_too_high' ? 'execution_fee_too_high' : preflight.reason,
@@ -2371,10 +2364,7 @@ class ProtectedPoolDeltaNeutralService {
     if (strategyState.status === 'risk_paused' && driftQty > 0) {
       return strategyState;
     }
-    const minNotionalUsd = Math.max(
-      Number(protection.minOrderNotionalUsd || DEFAULT_MIN_ORDER_NOTIONAL_USD),
-      EXCHANGE_MIN_NOTIONAL_USD,
-    );
+    const minNotionalUsd = resolveMinOrderNotionalUsd(protection);
     // Bypass del mínimo cuando el drift es un reduce-only que cierra la
     // posición completa (targetQty≈0 y actualQty>0). Permite desmontar
     // residuos que de otro modo se acumularían indefinidamente.

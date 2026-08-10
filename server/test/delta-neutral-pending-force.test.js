@@ -70,7 +70,7 @@ function buildProtection(overrides = {}) {
   };
 }
 
-function buildService(protection, { onExecute } = {}) {
+function buildService(protection, { onExecute, actualQty = 0.25 } = {}) {
   const service = new ProtectedPoolDeltaNeutralService({
     protectedPoolRepository: {
       getById: async () => protection,
@@ -83,8 +83,7 @@ function buildService(protection, { onExecute } = {}) {
     protectionDecisionLogRepository: { create: async () => {} },
     hlRegistry: {
       getOrCreate: async () => ({
-        // Short a la mitad de lo que pide el LP: hay drift de sobra.
-        getPosition: async () => ({ coin: 'ETH', szi: '-0.25', leverage: { type: 'isolated', value: 7 } }),
+        getPosition: async () => ({ coin: 'ETH', szi: String(-actualQty), leverage: { type: 'isolated', value: 7 } }),
         getClearinghouseState: async () => ({ withdrawable: '1000' }),
         getCandleSnapshot: async () => [],
       }),
@@ -188,4 +187,27 @@ test('un trigger no forzado bloqueado por el dwell no deja nada pendiente', asyn
   const state = await service.evaluateProtection(protection);
 
   assert.equal(state.pendingForceReason ?? null, null);
+});
+
+test('una proteccion migrada con minimo null ejecuta drift entre $11 y el viejo piso de $50', async () => {
+  const protection = buildProtection({
+    minOrderNotionalUsd: null,
+    strategyState: {
+      lastRebalanceAt: Date.now() - (13 * 60 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+    },
+  });
+  let ejecutado = null;
+  // El target del snapshot es ~$25 y el short observado vale $5: drift ~$20.
+  const service = buildService(protection, {
+    actualQty: 0.002,
+    onExecute: (reason) => { ejecutado = reason; },
+  });
+
+  const state = await service.evaluateProtection(protection);
+
+  assert.equal(ejecutado, 'timer_and_drift');
+  assert.equal(state.lastDecision, 'rebalance_full');
+  assert.equal(state.executed, true);
 });
