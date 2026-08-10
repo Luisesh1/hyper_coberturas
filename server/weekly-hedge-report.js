@@ -83,21 +83,32 @@ async function collect() {
          FROM orchestrator_metrics_snapshots
          WHERE captured_at >= $1 AND hl_account_usd > 0 AND total_usd > 50
          WINDOW w AS (PARTITION BY orchestrator_id ORDER BY captured_at))
-       SELECT oid, count(*) snaps,
+       SELECT s.oid, count(*) snaps,
          round(avg(t)::numeric,2) avg_total,
          round((stddev(t)/nullif(avg(t),0)*100)::numeric,3) cv_pct,
          round(corr(dlp,dhl) FILTER (WHERE abs(dlp) < 0.01*t AND abs(dhl) < 0.01*t)::numeric,3) corr_lp_hl,
          round((-regr_slope(dhl,dlp) FILTER (WHERE abs(dlp) < 0.01*t AND abs(dhl) < 0.01*t))::numeric,3) hedge_beta
-       FROM s GROUP BY oid ORDER BY oid`,
+       FROM s
+       -- Solo orquestadores VIVOS: un archivado deja de cubrirse y sus snapshots
+       -- viejos disparaban la alarma roja de calidad de datos cada semana (#33
+       -- metia 31 anomalias hl=0 estando muerto desde el 5 ago). Una alarma que
+       -- salta siempre por algo que no se va a arreglar entrena a ignorarla.
+       JOIN lp_orchestrators o ON o.id = s.oid AND o.stopped_at IS NULL
+       GROUP BY s.oid ORDER BY s.oid`,
       [since],
     ),
+    // Se agrega por ORQUESTADOR, no por pool. Antes salia `protected_pool_id` y
+    // el render lo buscaba con `d.risk.get(oid)`, asi que no cruzaba nunca y la
+    // distancia a liquidacion —la linea mas critica del reporte— salia siempre
+    // 'N/A' en silencio. Mismo fallo que tenia la fila de cobertura.
     db.query(
-      `SELECT protected_pool_id pp,
-         round(min(distance_to_liq_pct)::numeric,1) min_dist_liq,
+      `SELECT o.id oid,
+         round(min(l.distance_to_liq_pct)::numeric,1) min_dist_liq,
          count(*) rebalances
-       FROM protected_pool_delta_rebalance_log
-       WHERE created_at >= $1
-       GROUP BY protected_pool_id ORDER BY protected_pool_id`,
+       FROM protected_pool_delta_rebalance_log l
+       JOIN lp_orchestrators o ON o.active_protected_pool_id = l.protected_pool_id
+       WHERE l.created_at >= $1
+       GROUP BY o.id ORDER BY o.id`,
       [since],
     ),
     // COBERTURA REAL: actualQty/deltaQty leido del strategy_state, o sea las dos
@@ -168,7 +179,7 @@ async function collect() {
   return {
     active: eff.rows.map((r) => Number(r.oid)),
     eff: idx(eff.rows, 'oid'),
-    risk: idx(risk.rows, 'pp'),
+    risk: idx(risk.rows, 'oid'),
     cobertura: idx(cobertura.rows, 'oid'),
     cov: idx(cov.rows, 'oid'),
     dq: idx(dq.rows, 'oid'),
