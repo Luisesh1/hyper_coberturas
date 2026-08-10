@@ -77,7 +77,15 @@ En #37 la firma del problema es que el drift (−10.71) y el PnL del hedge (−8
 - [x] **Tarea 1b: ~~pp7 está SIN cobertura~~ → FALSA ALARMA MÍA.** ❌ Afirmé que pp7 tenía ~$38 de delta ETH sin cubrir leyendo `lastDeltaQty` 0.020477 / `lastActualQty` 0.000000 de `strategy_state_json`. **Eran filas congeladas**: un orquestador archivado (#33, el 5 ago) deja de escribir su estado, así que esos valores quedaron como estaban y los leí como si fuesen actuales. La verdad on-chain dice que no hay exposición descubierta.
 
   **Lección para el playbook:** `strategy_state_json` de un orquestador archivado es histórico, no estado. Antes de declarar un riesgo a partir de esa tabla, contrastar con `clearinghouseState` de Hyperliquid.
-- [ ] **Tarea 2b (NUEVA): #35 está sobre-cubierto y la desviación CRECE.** Cobertura 1.0564 → 1.0715 en ~1h: el delta del LP baja (0.042933 → 0.042091) mientras el hedge se queda clavado en 0.045100. Estar net-short cuesta igual que estar expuesto, y las dos métricas viejas lo ocultaban.
+- [ ] **Tarea 2b (NUEVA): #35 lleva sobre-cubierto el 100% del tiempo.** Estar net-short cuesta igual que estar expuesto, y las dos métricas viejas lo ocultaban.
+
+  ⚠️ *Corrección sobre la primera redacción:* dije que "la desviación CRECE" tras ver 1.0564 → 1.0715. Con **790 muestras** del diagnóstico eso resultó ser un artefacto de haber observado durante una subida de precio. Lo que pasa de verdad:
+
+  - `actualQty` es **constante en 0.0451**: el hedge no se ha movido ni una vez.
+  - `deltaQty` oscila entre 0.041909 y 0.044322 siguiendo al precio (sube el precio → el LP vende ETH → baja el delta).
+  - Por tanto cobertura = `0.0451 / delta`, que **oscila entre 1.0175 y 1.0761** en vez de crecer sin límite.
+
+  Es un hedge **congelado** cuyo error oscila con el precio, no una deriva descontrolada. Sigue siendo un problema real: 0.0451 está por encima de *todo* el rango de delta observado, así que está sobre-cubierto el 100% del tiempo, entre 1.8% y 7.6%.
 
   **Mecanismo identificado** (`delta_neutral_preflight_result`, protección 8): `poolValueUsd` $89.28, `driftUsd` $5.99.
 
