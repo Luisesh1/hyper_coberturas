@@ -43,6 +43,12 @@ function corrEmoji(c) {
   if (c == null) return '⚪';
   return c <= -0.6 ? '🟢' : c <= -0.3 ? '🟠' : '🔴';
 }
+// Mismo umbral de 1/3 que usa el recomendador de rango para bloquear el
+// angostamiento: por encima, cubrir se come mas de un tercio de lo que rinde.
+function costEmoji(ratio) {
+  if (ratio == null) return '⚪';
+  return ratio < 0.2 ? '🟢' : ratio < 0.3333 ? '🟠' : '🔴';
+}
 
 async function collect() {
   const since = Date.now() - WIN_MS;
@@ -52,7 +58,11 @@ async function collect() {
     // consecutivos): en ventana semanal los niveles no son estacionarios
     // (rebalanceos y cambios de rango mueven el tamaño de ambas patas y lavan
     // la correlación de niveles). Los Δ son intra-régimen. Se filtran los saltos
-    // de rebalanceo/aporte (|Δ|>1.5 USD; los movimientos normales son <0.5).
+    // de rebalanceo/aporte con un umbral RELATIVO al tamaño (1% del total) en vez
+    // del absoluto de 1.5 USD anterior, que estaba calibrado para orquestadores
+    // de ~$140 y no escala. Verificado el 2026-08-10: a los tamaños actuales
+    // ambos umbrales dan el MISMO beta (#37 = 0.293), o sea que esto no corrige
+    // un sesgo observado — es invariancia de escala para cuando crezcan.
     db.query(
       `WITH s AS (
          SELECT orchestrator_id oid, total_usd t,
@@ -64,8 +74,8 @@ async function collect() {
        SELECT oid, count(*) snaps,
          round(avg(t)::numeric,2) avg_total,
          round((stddev(t)/nullif(avg(t),0)*100)::numeric,3) cv_pct,
-         round(corr(dlp,dhl) FILTER (WHERE abs(dlp) < 1.5 AND abs(dhl) < 1.5)::numeric,3) corr_lp_hl,
-         round((-regr_slope(dhl,dlp) FILTER (WHERE abs(dlp) < 1.5 AND abs(dhl) < 1.5))::numeric,3) hedge_beta
+         round(corr(dlp,dhl) FILTER (WHERE abs(dlp) < 0.01*t AND abs(dhl) < 0.01*t)::numeric,3) corr_lp_hl,
+         round((-regr_slope(dhl,dlp) FILTER (WHERE abs(dlp) < 0.01*t AND abs(dhl) < 0.01*t))::numeric,3) hedge_beta
        FROM s GROUP BY oid ORDER BY oid`,
       [since],
     ),
@@ -78,13 +88,23 @@ async function collect() {
        GROUP BY protected_pool_id ORDER BY protected_pool_id`,
       [since],
     ),
+    // Costo de ejecucion de la cobertura: es el segundo sumidero medido el
+    // 2026-08-10 y no se reportaba. Sustituye a la vieja query de "cobertura
+    // efectiva" (target_qty_after/delta_qty_before), que era tautologica —los
+    // tres campos se escriben del mismo valor en el rebalanceo, asi que daba
+    // 1.00 siempre— y ademas se leia mal: devolvia protected_pool_id pero se
+    // consultaba por orchestrator_id, con lo que casi siempre salia 'N/A'.
     db.query(
-      `SELECT DISTINCT ON (protected_pool_id) protected_pool_id pp,
-         round((target_qty_after/nullif(delta_qty_before,0))::numeric,2) ratio
-       FROM protected_pool_delta_rebalance_log
-       WHERE created_at >= $1
-       ORDER BY protected_pool_id, created_at DESC`,
-      [since],
+      `SELECT id oid,
+         round(((accounting_json::json->>'hedgeExecutionFeesUsd')::numeric
+              + (accounting_json::json->>'hedgeSlippageUsd')::numeric),2) exec_cost,
+         round(((accounting_json::json->>'hedgeExecutionFeesUsd')::numeric
+              + (accounting_json::json->>'hedgeSlippageUsd')::numeric)
+              / nullif((accounting_json::json->>'lpFeesUsd')::numeric,0),2) cost_ratio
+       FROM lp_orchestrators
+       WHERE accounting_json IS NOT NULL
+       ORDER BY id`,
+      [],
     ),
     db.query(
       `SELECT orchestrator_id oid,
@@ -125,7 +145,7 @@ async function collect() {
     active: eff.rows.map((r) => Number(r.oid)),
     eff: idx(eff.rows, 'oid'),
     risk: idx(risk.rows, 'pp'),
-    cov: idx(cov.rows, 'pp'),
+    cov: idx(cov.rows, 'oid'),
     dq: idx(dq.rows, 'oid'),
     tir: idx(tir.rows, 'oid'),
     acc: idx(acc.rows, 'id'),
@@ -164,7 +184,10 @@ function buildMessage(d) {
         + `  (umbral 8%)`,
       `${corrEmoji(corr)} Hedge tracking (Δcorr LP/HL): <b>${corr != null ? corr : 'N/A'}</b>`
         + ` · cobertura β <b>${e.hedge_beta ?? 'N/A'}</b>`,
-      `• Cobertura efectiva: <b>${c.ratio ?? 'N/A'}</b>  (objetivo ~1.0)`,
+      // Ojo: `accounting_json` es acumulado de por vida, NO de la ventana del
+      // reporte. Se etiqueta explicito para no leerlo como coste semanal.
+      `${costEmoji(c.cost_ratio)} Costo cobertura (acum.): <b>${fmtSigned(c.exec_cost)}</b>`
+        + ` = <b>${c.cost_ratio != null ? Math.round(Number(c.cost_ratio) * 100) + '%' : 'N/A'}</b> de las fees`,
       `• Time-in-range: <b>${t.tir != null ? t.tir + '%' : 'N/A'}</b>`
         + ` · CV total: ${e.cv_pct ?? 'N/A'}%`,
       `• Acumulado: net PnL <b>${fmtSigned(a.net_pnl)}</b>`
@@ -178,8 +201,8 @@ function buildMessage(d) {
       + `<b>${anomaliasTot}</b> anomalías hl=0 (debe ser 0)`,
     '',
     `<i>Lectura: dist&lt;8% = margen apretado · Δcorr≤−0.6 = short trackea el delta · `
-      + `β = fracción cubierta (sube hacia 1.0 al dominar el régimen post-cambio) · `
-      + `net PnL/residual revierten lento (deuda del régimen 0.6).</i>`,
+      + `β = fracción cubierta (objetivo ~0.9; los v4 medían 0.29–0.50 el 10 ago) · `
+      + `costo&gt;33% de las fees = angostar el rango ya no compensa.</i>`,
   );
   return lines.join('\n');
 }
