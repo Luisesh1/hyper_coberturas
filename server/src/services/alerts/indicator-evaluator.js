@@ -200,6 +200,12 @@ function momentumRedirect(momentum, idx, direction) {
 // con varias condiciones encadenadas ({ conditions: [...], joiners: [...] }).
 // ------------------------------------------------------------------
 
+function normalizeWeight(value) {
+  if (value == null || value === '') return 1;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 1;
+}
+
 function normalizeRule(rule) {
   if (!rule || typeof rule !== 'object') {
     return { conditions: [], joiners: [], weight: 0 };
@@ -208,7 +214,7 @@ function normalizeRule(rule) {
     return {
       conditions: rule.conditions,
       joiners: Array.isArray(rule.joiners) ? rule.joiners : [],
-      weight: Number(rule.weight) || 1,
+      weight: normalizeWeight(rule.weight),
     };
   }
   // Forma plana (legacy o regla simple)
@@ -222,7 +228,7 @@ function normalizeRule(rule) {
       operand: rule.operand,
     }],
     joiners: [],
-    weight: Number(rule.weight) || 1,
+    weight: normalizeWeight(rule.weight),
   };
 }
 
@@ -430,4 +436,5 @@ module.exports = {
   evaluateCondition,
   evaluateRule,
   normalizeRule,
+  normalizeWeight,
 };

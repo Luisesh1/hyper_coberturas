@@ -240,13 +240,11 @@ function ruleConditions(rule) {
 function lowestTimeframe(rules) {
   let lowest = null;
   let lowestMs = Infinity;
-  for (const r of rules) {
-    for (const c of ruleConditions(r)) {
-      const ms = TF_MS[c.timeframe];
-      if (ms != null && ms < lowestMs) {
-        lowestMs = ms;
-        lowest = c.timeframe;
-      }
+  for (const timeframe of distinctTimeframes(rules)) {
+    const ms = TF_MS[timeframe];
+    if (ms != null && ms < lowestMs) {
+      lowestMs = ms;
+      lowest = timeframe;
     }
   }
   return lowest;
@@ -263,6 +261,45 @@ function distinctTimeframes(rules) {
   return Array.from(set);
 }
 
+function timestampMs(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+}
+
+function candleCloseTimeMs(candle, timeframe) {
+  const explicitClose = timestampMs(candle?.closeTime);
+  if (explicitClose != null) return explicitClose;
+  const openTime = timestampMs(candle?.time);
+  const duration = TF_MS[timeframe];
+  if (openTime == null || !duration) return null;
+  return openTime + duration;
+}
+
+function filterClosedCandles(candles, timeframe, now = Date.now()) {
+  if (!Array.isArray(candles)) return [];
+  return candles.filter((candle) => {
+    const closeTime = candleCloseTimeMs(candle, timeframe);
+    return closeTime != null && closeTime <= now;
+  });
+}
+
+function calculateWeightedScore(rules, ruleResults) {
+  const totalWeight = rules.reduce(
+    (acc, rule) => acc + evaluator.normalizeWeight(rule?.weight),
+    0
+  );
+  const matchedWeight = ruleResults.reduce(
+    (acc, result) => acc + (result.matched ? evaluator.normalizeWeight(result.rule?.weight) : 0),
+    0
+  );
+  return {
+    totalWeight,
+    matchedWeight,
+    score: totalWeight > 0 ? (matchedWeight / totalWeight) * 100 : 0,
+  };
+}
+
 async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, sendTelegram = true } = {}) {
   const rules = alertDto.rules || [];
   if (rules.length === 0) {
@@ -270,12 +307,14 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
   }
   const tfs = distinctTimeframes(rules);
   const candlesByTf = {};
+  const evaluationTime = Date.now();
   await Promise.all(tfs.map(async (tf) => {
     try {
-      candlesByTf[tf] = await marketData.getCandles(asset, tf, {
+      const candles = await marketData.getCandles(asset, tf, {
         datasource: alertDto.datasource,
         limit: CANDLE_FETCH_LIMIT,
       });
+      candlesByTf[tf] = filterClosedCandles(candles, tf, evaluationTime);
     } catch (err) {
       logger.warn('alerts_candles_fetch_failed', {
         alertId: alertDto.id, asset, tf, error: err.message,
@@ -293,15 +332,12 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
     }
   });
 
-  const totalWeight = rules.reduce((acc, r) => acc + (Number(r.weight) || 1), 0);
-  const matchedWeight = ruleResults.reduce((acc, r) =>
-    acc + (r.matched ? (Number(r.rule.weight) || 1) : 0), 0);
-  const score = totalWeight > 0 ? (matchedWeight / totalWeight) * 100 : 0;
+  const { score } = calculateWeightedScore(rules, ruleResults);
 
   const lowestTf = lowestTimeframe(rules);
   const lowestCandles = candlesByTf[lowestTf] || [];
   const lastCandle = lowestCandles[lowestCandles.length - 1];
-  const candleCloseTime = Number(lastCandle?.closeTime ?? lastCandle?.time ?? Date.now());
+  const candleCloseTime = candleCloseTimeMs(lastCandle, lowestTf) ?? evaluationTime;
 
   const wouldTrigger = score >= Number(alertDto.thresholdPercent);
   const cooldownLeftMs = (() => {
@@ -479,9 +515,11 @@ module.exports = {
   TIMEFRAMES,
   DATASOURCES,
   buildAlertMessage,
+  calculateWeightedScore,
   createAlert,
   deleteAlert,
   evaluateAlertOnAsset,
+  filterClosedCandles,
   getAlert,
   listAlertEvents,
   listAlerts,

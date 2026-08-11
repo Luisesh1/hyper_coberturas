@@ -2,7 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const lib = require('../src/services/indicator-library');
-const { computeRoles, evaluateCondition } = require('../src/services/alerts/indicator-evaluator');
+const { computeRoles, evaluateCondition, normalizeRule } = require('../src/services/alerts/indicator-evaluator');
+
+test('normalizeRule conserva un peso explícito de cero', () => {
+  assert.equal(normalizeRule({ conditions: [{}], joiners: [], weight: 0 }).weight, 0);
+});
 
 function makeCandles(length = 80) {
   return Array.from({ length }, (_, i) => {

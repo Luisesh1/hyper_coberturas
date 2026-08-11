@@ -1,7 +1,65 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildAlertMessage, validatePayload } = require('../src/services/alerts/alerts.service');
+const {
+  buildAlertMessage,
+  calculateWeightedScore,
+  filterClosedCandles,
+  lowestTimeframe,
+  validatePayload,
+} = require('../src/services/alerts/alerts.service');
+
+test('lowestTimeframe incluye la temporalidad de una serie usada como operando', () => {
+  const rules = [{
+    weight: 1,
+    conditions: [{
+      indicatorType: 'rsi',
+      timeframe: '1h',
+      operator: '>',
+      operand: {
+        kind: 'series',
+        indicatorType: 'ema',
+        timeframe: '1m',
+      },
+    }],
+  }];
+
+  assert.equal(lowestTimeframe(rules), '1m');
+});
+
+test('calculateWeightedScore no convierte peso cero en uno', () => {
+  const rules = [{ weight: 0 }, { weight: 2 }];
+  const results = [
+    { rule: rules[0], matched: true },
+    { rule: rules[1], matched: false },
+  ];
+
+  assert.deepEqual(calculateWeightedScore(rules, results), {
+    totalWeight: 2,
+    matchedWeight: 0,
+    score: 0,
+  });
+});
+
+test('filterClosedCandles excluye la vela que todavía está en formación', () => {
+  const base = 1_780_000_000_000;
+  const candles = [
+    { time: base, closeTime: base + 59_999, close: 10 },
+    { time: base + 60_000, closeTime: base + 119_999, close: 20 },
+  ];
+
+  assert.deepEqual(filterClosedCandles(candles, '1m', base + 63_000), [candles[0]]);
+});
+
+test('filterClosedCandles calcula el cierre desde time cuando el provider no da closeTime', () => {
+  const base = 1_780_000_000_000;
+  const candles = [
+    { time: base, close: 10 },
+    { time: base + 60_000, close: 20 },
+  ];
+
+  assert.deepEqual(filterClosedCandles(candles, '1m', base + 63_000), [candles[0]]);
+});
 
 test('buildAlertMessage muestra labels de reglas aprobadas', () => {
   const text = buildAlertMessage({

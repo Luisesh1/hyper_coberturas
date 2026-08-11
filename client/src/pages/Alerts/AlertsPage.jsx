@@ -25,7 +25,13 @@ function emptyRule() {
 
 // Normaliza una regla cargada desde el server (que puede ser legacy plana o
 // la nueva forma con conditions/joiners) a la forma que espera el editor.
-function normalizeLoadedRule(raw) {
+function normalizeRuleWeight(value) {
+  if (value == null || value === '') return 1;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 1;
+}
+
+export function normalizeLoadedRule(raw) {
   const base = { ...emptyRule() };
   if (raw && Array.isArray(raw.conditions) && raw.conditions.length > 0) {
     return {
@@ -33,7 +39,7 @@ function normalizeLoadedRule(raw) {
       label: String(raw.label || ''),
       conditions: raw.conditions.map((c) => ({ ...emptyCondition(), ...c })),
       joiners: Array.isArray(raw.joiners) ? raw.joiners.slice() : [],
-      weight: Number(raw.weight) || 1,
+      weight: normalizeRuleWeight(raw.weight),
     };
   }
   if (raw && raw.indicatorType) {
@@ -45,7 +51,7 @@ function normalizeLoadedRule(raw) {
       operator: raw.operator,
       operand: raw.operand ? { ...raw.operand } : { kind: 'constant', value: 0 },
     };
-    return { ...base, label: String(raw.label || ''), conditions: [cond], joiners: [], weight: Number(raw.weight) || 1 };
+    return { ...base, label: String(raw.label || ''), conditions: [cond], joiners: [], weight: normalizeRuleWeight(raw.weight) };
   }
   return base;
 }
