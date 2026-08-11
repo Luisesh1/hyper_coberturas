@@ -155,6 +155,51 @@ describe('sendWalletTransactionDetailed con plan inválido', () => {
   });
 });
 
+describe('sendWalletTransactionDetailed no reenvía una operación ambigua', () => {
+  const baseArgs = {
+    address: '0x1111111111111111111111111111111111111111',
+    chainId: 42161,
+    switchChain: vi.fn(),
+  };
+
+  it('hace un solo eth_sendTransaction cuando el usuario rechaza una tx con gas', async () => {
+    const rejection = Object.assign(new Error('User rejected the request'), { code: 4001 });
+    const provider = { request: vi.fn().mockRejectedValue(rejection) };
+
+    const { hash, normalizedError } = await sendWalletTransactionDetailed({
+      ...baseArgs,
+      provider,
+      tx: validTx({ gas: '0x5208', kind: 'approval' }),
+    });
+
+    expect(hash).toBeNull();
+    expect(normalizedError.code).toBe('user_rejected');
+    expect(provider.request).toHaveBeenCalledTimes(1);
+    expect(provider.request.mock.calls[0][0].method).toBe('eth_sendTransaction');
+  });
+
+  it('recupera el hash del error original sin intentar otra firma', async () => {
+    const txHash = `0x${'ab'.repeat(32)}`;
+    const broadcastError = Object.assign(new Error('provider disconnected after broadcast'), {
+      code: -32000,
+      data: { transactionHash: txHash },
+    });
+    const provider = { request: vi.fn().mockRejectedValue(broadcastError) };
+    const publicClient = { getTransaction: vi.fn().mockResolvedValue({ hash: txHash }) };
+
+    const result = await sendWalletTransactionDetailed({
+      ...baseArgs,
+      provider,
+      publicClient,
+      tx: validTx({ gasEstimate: '0x5208', kind: 'approval' }),
+    });
+
+    expect(result).toMatchObject({ hash: txHash, normalizedError: null, recoveredFromError: true });
+    expect(provider.request).toHaveBeenCalledTimes(1);
+    expect(publicClient.getTransaction).toHaveBeenCalledWith({ hash: txHash });
+  });
+});
+
 // Una tx que SI se ejecuto on-chain reportada como fallida es el peor error
 // posible del runner: aborta el plan a la mitad y el usuario cree que no paso
 // nada. Ocurria porque observar bloques y consultar el recibo pueden caer en

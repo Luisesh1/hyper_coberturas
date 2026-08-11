@@ -52,13 +52,14 @@ describe('useWalletConnection helpers', () => {
     expect(setError).toHaveBeenLastCalledWith('La wallet devolvió un estado ambiguo, pero la transacción podría haberse enviado.');
   });
 
-  it('reintenta sin gas si el wallet rechaza el envío con gas explícito', async () => {
+  it('no reintenta automáticamente si el wallet rechaza el envío con gas explícito', async () => {
     const provider = {
       request: vi.fn()
         .mockRejectedValueOnce(new Error('gas too low'))
         .mockResolvedValueOnce('0x2222222222222222222222222222222222222222222222222222222222222222'),
     };
 
+    const setError = vi.fn();
     const hash = await sendWalletTransaction({
       provider,
       address: '0x00000000000000000000000000000000000000ff',
@@ -70,18 +71,16 @@ describe('useWalletConnection helpers', () => {
         gas: '0x55730',
       },
       switchChain: vi.fn(),
-      setError: vi.fn(),
+      setError,
     });
 
-    expect(hash).toBe('0x2222222222222222222222222222222222222222222222222222222222222222');
-    expect(provider.request).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(hash).toBeNull();
+    expect(provider.request).toHaveBeenCalledTimes(1);
+    expect(provider.request).toHaveBeenCalledWith(expect.objectContaining({
       method: 'eth_sendTransaction',
       params: [expect.objectContaining({ gas: '0x55730' })],
     }));
-    expect(provider.request).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      method: 'eth_sendTransaction',
-      params: [expect.not.objectContaining({ gas: '0x55730' })],
-    }));
+    expect(setError).toHaveBeenCalledWith('gas too low');
   });
 
   it('extrae un hash anidado de una respuesta exitosa del wallet', async () => {

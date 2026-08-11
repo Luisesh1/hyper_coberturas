@@ -365,8 +365,6 @@ export async function sendWalletTransactionDetailed({
     };
   }
 
-  const hasExplicitGas = !!(tx?.gas || tx?.gasEstimate || tx?.gasLimit);
-
   try {
     if (actionKey) PROMPT_LOCKS.add(actionKey);
     if (tx?.chainId && chainId && Number(tx.chainId) !== Number(chainId)) {
@@ -412,24 +410,12 @@ export async function sendWalletTransactionDetailed({
       normalizedError: normalizeWalletError({ message: 'wallet returned without tx hash' }),
     };
   } catch (originalErr) {
-    let err = originalErr;
-
-    if (hasExplicitGas) {
-      try {
-        const retryHash = await provider.request({
-          method: 'eth_sendTransaction',
-          params: [buildTransactionParams({ address, tx, includeGas: false })],
-        });
-        const extractedRetryHash = extractTxHash(retryHash);
-        if (extractedRetryHash) return { hash: extractedRetryHash, normalizedError: null };
-        if (typeof retryHash === 'string') return { hash: retryHash, normalizedError: null };
-        if (typeof retryHash?.hash === 'string') return { hash: retryHash.hash, normalizedError: null };
-        if (typeof retryHash?.transactionHash === 'string') return { hash: retryHash.transactionHash, normalizedError: null };
-      } catch (retryErr) {
-        err = retryErr;
-      }
-    }
-
+    // `eth_sendTransaction` no es idempotente: un error puede llegar después
+    // de que la wallet ya haya difundido la transacción. Reenviarla sin gas
+    // abriría una segunda firma y podría ejecutar dos veces la misma acción.
+    // Conservamos el error original para rescatar cualquier hash embebido y el
+    // usuario decide explícitamente si quiere volver a intentar.
+    const err = originalErr;
     const hashFromError = extractTxHash(err);
     if (hashFromError) {
       const wasBroadcasted = await waitForBroadcastedHash(publicClient || provider, hashFromError);
