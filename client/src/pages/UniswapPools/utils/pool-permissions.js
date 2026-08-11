@@ -6,6 +6,19 @@
  */
 
 const ZERO_HOOKS = '0x0000000000000000000000000000000000000000';
+const DELTA_RETURNING_MASK = 0xfn;
+
+function hasUnsupportedV4Hook(version, hooks) {
+  if (version !== 'v4') return false;
+  const raw = String(hooks || ZERO_HOOKS).trim().toLowerCase();
+  if (!/^0x[0-9a-f]{1,40}$/.test(raw)) return true;
+  const address = BigInt(raw);
+  if (address === 0n) return false;
+
+  // Paridad con el clasificador del backend: solo los cuatro bits bajos que
+  // habilitan custom accounting (returns delta) vuelven inseguro al hook.
+  return (address & DELTA_RETURNING_MASK) !== 0n;
+}
 
 /**
  * @param {Object} params
@@ -19,7 +32,7 @@ const ZERO_HOOKS = '0x0000000000000000000000000000000000000000';
  */
 export function computePoolPermissions({ walletState, ownerAddress, chainId, version, hooks, unclaimedFees = 0 }) {
   const isVersionSupported = ['v3', 'v4'].includes(version);
-  const hasUnsupportedV4Hooks = version === 'v4' && hooks && hooks !== ZERO_HOOKS;
+  const hasUnsupportedV4Hooks = hasUnsupportedV4Hook(version, hooks);
   const isOwner = ownerAddress?.toLowerCase() === walletState?.address?.toLowerCase();
   const isCorrectChain = walletState?.chainId === chainId;
 
