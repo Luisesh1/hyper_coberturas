@@ -556,7 +556,10 @@ export default function TradingViewPage() {
     indicatorsRef,
     chartRef,
     onError: (msg) => addNotification?.('error', msg),
-    onStopped: () => { /* loadData se vuelve a invocar al cambiar deps abajo si es necesario */ },
+    // Durante replay el polling live se suspende. Al salir recargamos el
+    // dataset completo para incluir todas las velas nacidas durante la sesión,
+    // no solo la última que recuperaría el siguiente tick.
+    onStopped: () => { void loadData(); },
     // Cada tick del replay actualiza lastPrice para forzar un re-render
     // del overlay OHLC (que lee la última vela in-progress).
     onTick: (htf) => setLastPrice(htf.close),
