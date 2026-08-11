@@ -6,20 +6,33 @@ const SHUTDOWN_DRAIN_TIMEOUT_MS = 15_000;
 // Intervalo de polling del contador de requests in-flight durante el drain.
 const SHUTDOWN_DRAIN_POLL_MS = 100;
 
+function createRequestTracker() {
+  let count = 0;
+  return {
+    track(_req, res) {
+      count += 1;
+      let completed = false;
+      const done = () => {
+        if (completed) return;
+        completed = true;
+        count = Math.max(0, count - 1);
+      };
+      res.once('finish', done);
+      res.once('close', done);
+    },
+    inFlight() {
+      return count;
+    },
+  };
+}
+
 function startHttpServer({ server, port, onShutdown }) {
   // Contador de requests HTTP actualmente en proceso. Se incrementa al
   // recibir 'request' y se decrementa cuando la response termina (close
   // o finish). Sirve para que el shutdown espere a que llegue a 0 antes
   // de cerrar el pool DB.
-  let inFlightRequests = 0;
-  server.on('request', (req, res) => {
-    inFlightRequests += 1;
-    const done = () => {
-      inFlightRequests = Math.max(0, inFlightRequests - 1);
-    };
-    res.once('finish', done);
-    res.once('close', done);
-  });
+  const requestTracker = createRequestTracker();
+  server.on('request', requestTracker.track);
 
   return new Promise((resolve, reject) => {
     let shuttingDown = false;
@@ -46,7 +59,7 @@ function startHttpServer({ server, port, onShutdown }) {
       //    procesar tenía pendiente una query DB y el shutdown cerró
       //    el pool.
       const drainStartedAt = Date.now();
-      while (inFlightRequests > 0) {
+      while (requestTracker.inFlight() > 0) {
         if (Date.now() - drainStartedAt >= SHUTDOWN_DRAIN_TIMEOUT_MS) break;
         // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_POLL_MS));
@@ -63,4 +76,4 @@ function startHttpServer({ server, port, onShutdown }) {
   });
 }
 
-module.exports = { startHttpServer };
+module.exports = { createRequestTracker, startHttpServer };

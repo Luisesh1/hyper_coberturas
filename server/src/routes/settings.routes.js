@@ -231,8 +231,10 @@ router.delete('/hyperliquid-accounts/:id', asyncHandler(async (req, res) => {
   const accountId = Number(req.params.id);
   const account = await hyperliquidAccountsService.deleteAccount(userId, accountId);
   balanceCacheService.invalidateAccount(userId, accountId);
-  hlRegistry.destroy(userId, accountId);
-  hedgeRegistry.destroy(userId, accountId);
+  await Promise.all([
+    hlRegistry.destroy(userId, accountId),
+    hedgeRegistry.destroy(userId, accountId),
+  ]);
   res.json({ success: true, data: account });
 }));
 

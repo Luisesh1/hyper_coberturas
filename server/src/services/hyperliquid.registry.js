@@ -32,10 +32,10 @@ async function getOrCreate(userId, accountId) {
 
 async function reload(userId, accountId) {
   if (accountId != null) {
-    registry.destroy(userId, accountId);
-    return getOrCreate(userId, accountId);
+    const account = await hyperliquidAccountsService.resolveAccount(userId, accountId);
+    return registry.reload(userId, account.id);
   }
-  registry.destroyByPrefix(`${userId}:`);
+  await registry.destroyByPrefix(`${userId}:`);
   return null;
 }
 
@@ -45,7 +45,7 @@ function get(userId, accountId) {
 }
 
 function destroy(userId, accountId) {
-  registry.destroy(userId, accountId);
+  return registry.destroy(userId, accountId);
 }
 
 function getAllEntries() {

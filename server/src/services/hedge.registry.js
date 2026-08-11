@@ -41,10 +41,9 @@ async function getOrCreateAllForUser(userId) {
 
 async function reload(userId, accountId) {
   if (accountId != null) {
-    registry.destroy(userId, accountId);
-    return registry.getOrCreate(userId, accountId);
+    return registry.reload(userId, accountId);
   }
-  registry.destroyByPrefix(`${userId}:`);
+  await registry.destroyByPrefix(`${userId}:`);
   return null;
 }
 
@@ -54,7 +53,7 @@ function get(userId, accountId) {
 }
 
 function destroy(userId, accountId) {
-  registry.destroy(userId, accountId);
+  return registry.destroy(userId, accountId);
 }
 
 module.exports = {
