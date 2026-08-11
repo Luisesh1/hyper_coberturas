@@ -155,3 +155,38 @@ test('POST /api/backtesting/simulate acepta draftStrategy sin strategyId', async
     server.close();
   }
 });
+
+test('POST /api/backtesting/run ejecuta una sola vez y devuelve el mismo job completado', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalSimulateBacktest = backtestingService.simulateBacktest;
+  let executions = 0;
+  authService.validateSessionToken = async () => buildSessionUser();
+  backtestingService.simulateBacktest = async () => {
+    executions += 1;
+    return { metrics: { trades: 4 }, config: { strategyId: 11 } };
+  };
+
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/backtesting/run`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${buildToken()}`,
+      },
+      body: JSON.stringify({ strategyId: 11, asset: 'BTC', timeframe: '15m' }),
+    });
+    const json = await res.json();
+
+    assert.equal(res.status, 200);
+    assert.equal(json.data.status, 'completed');
+    assert.equal(json.data.result.metrics.trades, 4);
+    assert.equal(executions, 1);
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    backtestingService.simulateBacktest = originalSimulateBacktest;
+    server.close();
+  }
+});

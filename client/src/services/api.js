@@ -371,6 +371,7 @@ export const botsApi = {
 };
 
 export const backtestingApi = {
+  run: (payload) => request('POST', '/backtesting/run', payload),
   simulate: (payload) => request('POST', '/backtesting/simulate', payload),
   enqueue: (payload) => request('POST', '/backtesting/queue', payload),
   getJob: (jobId) => request('GET', `/backtesting/jobs/${jobId}`),

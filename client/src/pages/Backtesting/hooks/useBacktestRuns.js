@@ -4,7 +4,6 @@ import { backtestingApi } from '../../../services/api';
 const MAX_RUNS = 10;
 const COMPACT_THRESHOLD = 3;
 const POLL_INTERVAL_MS = 3_000;
-const SYNC_TIMEOUT_MS = 15_000;
 const HISTORY_PREFIX = 'hl_backtesting_runs_v2';
 
 let nextRunId = 1;
@@ -152,13 +151,18 @@ export default function useBacktestRuns({ getPayload, selectedStrategy, addNotif
   useEffect(() => stopPolling, [stopPolling]);
 
   const pollJob = useCallback((jobId, payload) => {
+    // Solo puede existir un trabajo en background por instancia del hook. Si
+    // este helper vuelve a invocarse por una integración futura, el polling
+    // anterior se cancela antes de registrar el nuevo.
+    stopPolling();
     setPendingJob({ jobId, asset: payload.asset, timeframe: payload.timeframe });
 
-    pollRef.current = setInterval(async () => {
+    const intervalId = setInterval(async () => {
       try {
         const job = await backtestingApi.getJob(jobId);
         if (job.status === 'completed') {
-          stopPolling();
+          clearInterval(intervalId);
+          if (pollRef.current === intervalId) pollRef.current = null;
           setPendingJob(null);
           addRun(payload, job.result);
           addNotification(
@@ -167,14 +171,26 @@ export default function useBacktestRuns({ getPayload, selectedStrategy, addNotif
             8000,
           );
         } else if (job.status === 'failed') {
-          stopPolling();
+          clearInterval(intervalId);
+          if (pollRef.current === intervalId) pollRef.current = null;
           setPendingJob(null);
           addNotification('error', `Backtest fallido: ${job.error}`, 8000);
         }
-      } catch {
-        // network hiccup, keep polling
+      } catch (err) {
+        if (Number(err?.status) === 404) {
+          clearInterval(intervalId);
+          if (pollRef.current === intervalId) pollRef.current = null;
+          setPendingJob(null);
+          addNotification(
+            'error',
+            'El backtest ya no existe en el servidor (posible reinicio). Vuelve a ejecutarlo.',
+            8000,
+          );
+        }
+        // Los errores transitorios de red conservan el polling del mismo job.
       }
     }, POLL_INTERVAL_MS);
+    pollRef.current = intervalId;
   }, [addRun, addNotification, stopPolling]);
 
   const execute = useCallback(async (form) => {
@@ -182,47 +198,43 @@ export default function useBacktestRuns({ getPayload, selectedStrategy, addNotif
       addNotification('info', 'Selecciona una estrategia antes de correr el backtest');
       return null;
     }
+    if (isRunning || pendingJob) {
+      addNotification('info', 'Ya hay un backtest en ejecución o en cola');
+      return null;
+    }
 
     setIsRunning(true);
     const payload = getPayload();
 
     try {
-      const timeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('__sync_timeout__')), SYNC_TIMEOUT_MS),
-      );
-      const result = await Promise.race([
-        backtestingApi.simulate(payload),
-        timeout,
-      ]);
-
-      addRun(payload, result);
-      addNotification(
-        'success',
-        `Simulacion completada\n${result.metrics?.trades || 0} trades | ${payload.asset}`,
-      );
-      return result;
-    } catch (err) {
-      if (err.message === '__sync_timeout__' || err.message?.includes('timeout')) {
-        try {
-          const { jobId } = await backtestingApi.enqueue(payload);
-          addNotification(
-            'info',
-            `Backtest enviado a segundo plano\nTe notificaremos cuando termine | ${payload.asset}`,
-            6000,
-          );
-          pollJob(jobId, payload);
-          return null;
-        } catch (queueErr) {
-          addNotification('error', `Error al encolar backtest: ${queueErr.message}`);
-          return null;
-        }
+      const job = await backtestingApi.run(payload);
+      if (job.status === 'completed') {
+        addRun(payload, job.result);
+        addNotification(
+          'success',
+          `Simulacion completada\n${job.result.metrics?.trades || 0} trades | ${payload.asset}`,
+        );
+        return job.result;
       }
+      if (job.status === 'failed') {
+        addNotification('error', `Backtest fallido: ${job.error}`, 8000);
+        return null;
+      }
+
+      addNotification(
+        'info',
+        `Backtest enviado a segundo plano\nTe notificaremos cuando termine | ${payload.asset}`,
+        6000,
+      );
+      pollJob(job.id, payload);
+      return null;
+    } catch (err) {
       addNotification('error', `Error al simular: ${err.message}`);
       return null;
     } finally {
       setIsRunning(false);
     }
-  }, [getPayload, addNotification, addRun, pollJob]);
+  }, [getPayload, addNotification, addRun, pollJob, isRunning, pendingJob]);
 
   const toggleCompare = useCallback((runId) => {
     setCompareTarget((prev) => (

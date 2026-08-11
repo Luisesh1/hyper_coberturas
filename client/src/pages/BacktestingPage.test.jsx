@@ -13,6 +13,7 @@ const { strategiesApi, indicatorsApi, backtestingApi, addNotification } = vi.hoi
   },
   backtestingApi: {
     simulate: vi.fn(),
+    run: vi.fn(),
   },
   addNotification: vi.fn(),
 }));
@@ -51,7 +52,7 @@ describe('BacktestingPage', () => {
       name: 'Volume Z-Score',
       slug: 'volume-zscore',
     }]);
-    backtestingApi.simulate.mockResolvedValue({
+    const backtestResult = {
       config: {
         strategyId: 11,
         asset: 'BTC',
@@ -107,6 +108,12 @@ describe('BacktestingPage', () => {
           drawdownSeries: [{ time: 2, value: 3 }],
         },
       },
+    };
+    backtestingApi.simulate.mockResolvedValue(backtestResult);
+    backtestingApi.run.mockResolvedValue({
+      status: 'completed',
+      jobId: 'bt-fast-1',
+      result: backtestResult,
     });
   });
 
@@ -132,14 +139,15 @@ describe('BacktestingPage', () => {
     const simBtns = screen.getAllByRole('button', { name: /simular/i });
     await userEvent.click(simBtns[0]);
 
-    await waitFor(() => expect(backtestingApi.simulate).toHaveBeenCalledTimes(1));
-    expect(backtestingApi.simulate).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(backtestingApi.run).toHaveBeenCalledTimes(1));
+    expect(backtestingApi.run).toHaveBeenCalledWith(expect.objectContaining({
       strategyId: 11,
       asset: 'BTC',
       timeframe: '15m',
       sizeUsd: 100,
       overlayRequests: expect.any(Array),
     }));
+    expect(backtestingApi.simulate).not.toHaveBeenCalled();
     expect(await screen.findByText('chart 3')).toBeTruthy();
   });
 

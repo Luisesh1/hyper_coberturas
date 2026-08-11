@@ -31,6 +31,7 @@ function enqueue(userId, input) {
     createdAt: Date.now(),
     startedAt: null,
     completedAt: null,
+    waiters: new Set(),
   };
   jobs.set(jobId, job);
   queue.push(job);
@@ -71,9 +72,31 @@ async function processNext() {
     job.completedAt = Date.now();
     logger.warn('backtest_job_failed', { jobId: job.id, error: job.error });
   } finally {
+    for (const notify of job.waiters) notify();
+    job.waiters.clear();
     processing = false;
     processNext();
   }
+}
+
+function waitForJob(jobId, userId, { timeoutMs = 15_000 } = {}) {
+  const job = jobs.get(jobId);
+  if (!job || job.userId !== userId) return Promise.resolve(null);
+  if (job.status === 'completed' || job.status === 'failed') {
+    return Promise.resolve(sanitizeJob(job));
+  }
+
+  return new Promise((resolve) => {
+    let timer = null;
+    const finish = () => {
+      if (timer) clearTimeout(timer);
+      job.waiters.delete(finish);
+      resolve(sanitizeJob(job));
+    };
+    job.waiters.add(finish);
+    timer = setTimeout(finish, Math.max(0, Number(timeoutMs) || 0));
+    timer.unref?.();
+  });
 }
 
 function getJob(jobId, userId) {
@@ -128,4 +151,4 @@ function stop() {
   }
 }
 
-module.exports = { enqueue, getJob, getUserJobs, start, stop };
+module.exports = { enqueue, getJob, getUserJobs, start, stop, waitForJob };

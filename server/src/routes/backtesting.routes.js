@@ -7,6 +7,16 @@ const backtestQueue = require('../services/backtest-queue.service');
 const router = Router();
 router.use(authenticate);
 
+// Ejecuta una sola vez mediante la cola. Si termina rápido conserva la UX
+// síncrona; si excede 15s devuelve el mismo job para continuar por polling.
+router.post('/run', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const { jobId } = backtestQueue.enqueue(userId, req.body);
+  const job = await backtestQueue.waitForJob(jobId, userId, { timeoutMs: 15_000 });
+  const pending = job?.status === 'pending' || job?.status === 'running';
+  res.status(pending ? 202 : 200).json({ success: true, data: job });
+}));
+
 router.post('/simulate', asyncHandler(async (req, res) => {
   const data = await backtestingService.simulateBacktest(req.user.userId, req.body);
   res.json({ success: true, data });

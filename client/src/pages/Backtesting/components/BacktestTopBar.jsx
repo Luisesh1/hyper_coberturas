@@ -20,16 +20,18 @@ function BacktestTopBar({
   onSelectRun,
   onToggleCompare,
 }) {
+  const runBlocked = isRunning || isLoading || !!pendingJob || !form.strategyId;
+
   useEffect(() => {
     const handler = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !runBlocked) {
         e.preventDefault();
         onRun();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onRun]);
+  }, [onRun, runBlocked]);
 
   return (
     <div className={styles.topbar}>
@@ -65,7 +67,7 @@ function BacktestTopBar({
           className={styles.runBtn}
           aria-label="Simular backtest"
           onClick={onRun}
-          disabled={isRunning || isLoading || !form.strategyId}
+          disabled={runBlocked}
           title="Ctrl+Enter"
         >
           {isRunning ? <><Spinner size={14} color="#92400e" /> Simulando...</> : 'Simular'}
