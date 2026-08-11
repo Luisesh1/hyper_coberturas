@@ -25,6 +25,15 @@ const MIN_REBALANCE_NOTIONAL_FLOOR_USD = 2;
 // temporizador: un cruce de borde es mas urgente que un tick de reloj, asi que
 // se frena solo lo economicamente irrelevante sin abrir hueco de cobertura.
 const DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT = 3;
+// Techo de obsolescencia del hedge en modo adaptativo. Los presets de baja
+// volatilidad llegaban a 12h y el temporizador gatea TAMBIEN el brazo de drift
+// (`timerDue && driftUsd >= minRebalanceNotionalUsd`), asi que una cobertura ya
+// justificada por drift podia esperar medio dia: medido el 2026-08-11, pp12 y
+// pp13 pasaron ~7h con la cobertura en 0.58/0.65 mientras el motor decidia
+// `rebalance_full` en cada ciclo sin poder ejecutarlo.
+// Acortarlo NO fuerza rebalanceos: el piso de notional sigue decidiendo SI se
+// rebalancea, esto solo acota cuanto se tarda en poder hacerlo.
+const MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC = 1800;
 const DEFAULT_MAX_SLIPPAGE_BPS = 20;
 const DEFAULT_TWAP_MIN_NOTIONAL_USD = 10_000;
 const DEFAULT_EXECUTION_MODE = 'auto';
@@ -420,7 +429,10 @@ function deriveBandSettings(protection, rvStats, metrics, currentPrice, opts = {
     : adaptivePreset.priceMovePct * bandTightenFactor;
   const intervalSec = bandMode === 'fixed'
     ? (asFiniteNumber(protection.rebalanceIntervalSec) || DEFAULT_REBALANCE_INTERVAL_SEC)
-    : Math.round(adaptivePreset.intervalSec * intervalTightenFactor);
+    : Math.min(
+      MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC,
+      Math.round(adaptivePreset.intervalSec * intervalTightenFactor)
+    );
   let effectiveBandPct = baseBandPct;
   const distancePct = distanceToRangePct(protection, currentPrice);
   if (
@@ -475,6 +487,7 @@ module.exports = {
   resolveMinRebalanceNotionalUsd,
   resolveUrgentMinRebalanceNotionalUsd,
   DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT,
+  MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,

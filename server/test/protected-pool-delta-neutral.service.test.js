@@ -9,6 +9,7 @@ const {
 const {
   buildCooldown,
   isCooldownActive,
+  MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC,
 } = require('../src/services/protected-pool-delta-neutral.helpers');
 const {
   parseArgs,
@@ -110,8 +111,22 @@ test('deriveBandSettings usa max(rv4h, rv24h) y estrecha la banda cerca del bord
   assert.equal(settings.rv4hPct, 85);
   assert.equal(settings.rv24hPct, 35);
   assert.equal(settings.baseBandPct, 1);
-  assert.equal(settings.intervalSec, 3600);
+  assert.equal(settings.intervalSec, 1800);
   assert.equal(settings.effectiveBandPct, 0.5);
+});
+
+test('deriveBandSettings: el intervalo adaptativo nunca supera el techo de 30 min', () => {
+  // El preset conservative pedia 12h. Como el temporizador gatea tambien el
+  // brazo de drift, ese intervalo era el techo de obsolescencia del hedge.
+  const calmo = deriveBandSettings(
+    { bandMode: 'adaptive', rangeLowerPrice: 2000, rangeUpperPrice: 3000 },
+    { rv4hPct: 10, rv24hPct: 12 }, // preset conservative: 5% / 43200s
+    { normalizedGamma: 0.1 },
+    2500,
+  );
+  assert.equal(calmo.baseBandPct, 5, 'la banda de precio sigue siendo la del preset');
+  assert.equal(calmo.intervalSec, MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC);
+  assert.equal(calmo.intervalSec, 1800);
 });
 
 test('deriveBandSettings: factores de endurecimiento aceleran la cadencia (config-gated)', () => {
@@ -123,17 +138,21 @@ test('deriveBandSettings: factores de endurecimiento aceleran la cadencia (confi
   ];
   const base = deriveBandSettings(...args);
   assert.equal(base.baseBandPct, 3);
-  assert.equal(base.intervalSec, 21600);
+  assert.equal(base.intervalSec, 1800, 'el preset (21600s) queda por encima del techo');
 
-  // Factor 0.5 → mitad de banda y mitad de intervalo.
+  // La banda se sigue endureciendo; el intervalo ya estaba en el techo.
   const tight = deriveBandSettings(...args, { intervalTightenFactor: 0.5, bandTightenFactor: 0.5 });
   assert.equal(tight.baseBandPct, 1.5);
-  assert.equal(tight.intervalSec, 10800);
+  assert.equal(tight.intervalSec, 1800);
 
-  // Default (sin opts) NO cambia el comportamiento histórico.
+  // El factor sigue mordiendo cuando pide MENOS que el techo: 21600*0.05 = 1080.
+  const muyTight = deriveBandSettings(...args, { intervalTightenFactor: 0.05 });
+  assert.equal(muyTight.intervalSec, 1080);
+
+  // Default (sin opts) → mismo techo.
   const def = deriveBandSettings(...args, {});
   assert.equal(def.baseBandPct, 3);
-  assert.equal(def.intervalSec, 21600);
+  assert.equal(def.intervalSec, 1800);
 });
 
 test('deriveBandSettings: el endurecimiento NO afecta el modo fixed', () => {
