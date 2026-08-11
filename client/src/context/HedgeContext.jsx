@@ -28,6 +28,11 @@ export function HedgeProvider({ children }) {
       opened: ['alert', 12000, `POSICION ${dir} ABIERTA\n${accountLabel}\n${hedge.asset} · $${Number(hedge.openPrice).toLocaleString()} · ${hedge.leverage}x Isolated`],
       reconciled: ['info', 4000, `Cobertura reconciliada\n${accountLabel} · #${hedge.id}`],
       protection_missing: ['error', 8000, `Cobertura sin proteccion confirmada\n${accountLabel} · #${hedge.id}`],
+      partial_coverage: [
+        'error',
+        12000,
+        `COBERTURA PARCIAL\n${accountLabel}\n${hedge.asset} · ejecutado ${msg.payload?.actualSize ?? '—'} de ${msg.payload?.expectedSize ?? '—'} · faltante ${msg.payload?.missingSize ?? '—'}`,
+      ],
       cycleComplete: ['success', 6000, `Ciclo completado\n${accountLabel}\n${dir} ${hedge.asset} cerrado a $${msg.cycle?.closePrice}`],
       cancelled: ['info', 5000, `Cobertura cancelada\n${accountLabel} · #${hedge.id}`],
       error: ['error', 8000, `Error en cobertura\n${accountLabel} · #${hedge.id}: ${msg.message}`],
