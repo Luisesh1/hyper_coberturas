@@ -1,8 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { applyMintSlippageCeiling } = require('../src/services/uniswap/actions/prepare-v4');
+const {
+  applyMintSlippageCeiling,
+  assertV4MintAmountCeilings,
+  decodeMaximumAmountExceeded,
+} = require('../src/services/uniswap/actions/prepare-v4');
 const { DEFAULT_SLIPPAGE_BPS } = require('../src/services/uniswap/constants');
+const { ethers } = require('ethers');
 
 // Regresion de un fallo real en Arbitrum: el mint v4 pasaba
 // `amount1Max = amount1Desired` (50.500000 USDC) y el PositionManager
@@ -36,4 +41,52 @@ test('cae al slippage por defecto si no se especifica o es invalido', () => {
 test('un monto en cero se queda en cero (posicion de un solo lado)', () => {
   // Fuera de rango uno de los dos lados va en 0: no hay que inflarlo.
   assert.equal(applyMintSlippageCeiling(0n, 50), 0n);
+});
+
+test('decodifica MaximumAmountExceeded aunque venga anidado por el RPC', () => {
+  const data = ethers.concat([
+    ethers.id('MaximumAmountExceeded(uint128,uint128)').slice(0, 10),
+    ethers.AbiCoder.defaultAbiCoder().encode(['uint128', 'uint128'], [52_573560n, 52_604306n]),
+  ]);
+  assert.deepEqual(
+    decodeMaximumAmountExceeded({ info: { error: { data } } }),
+    { maximumAmount: 52_573560n, amountRequested: 52_604306n }
+  );
+});
+
+test('la simulacion traduce el techo insuficiente antes de pedir firmas', async () => {
+  const data = ethers.concat([
+    ethers.id('MaximumAmountExceeded(uint128,uint128)').slice(0, 10),
+    ethers.AbiCoder.defaultAbiCoder().encode(['uint128', 'uint128'], [52_573560n, 52_604306n]),
+  ]);
+  const rpcError = new Error('execution reverted');
+  rpcError.info = { error: { data } };
+  const provider = { call: async () => { throw rpcError; } };
+
+  await assert.rejects(
+    assertV4MintAmountCeilings({
+      provider,
+      tx: { to: '0x0000000000000000000000000000000000000001', data: '0x12', value: '0x0' },
+      walletAddress: '0x0000000000000000000000000000000000000002',
+      token0: { symbol: 'ETH', decimals: 18 },
+      token1: { symbol: 'USDC', decimals: 6 },
+      amount0Max: 1n,
+      amount1Max: 52_573560n,
+    }),
+    /requiere 52\.604306 USDC.*maximo preparado de 52\.57356 USDC/
+  );
+});
+
+test('la simulacion no bloquea reverts causados por approvals pendientes del plan', async () => {
+  const provider = { call: async () => { throw new Error('TRANSFER_FROM_FAILED'); } };
+  const result = await assertV4MintAmountCeilings({
+    provider,
+    tx: { to: '0x0000000000000000000000000000000000000001', data: '0x12', value: '0x0' },
+    walletAddress: '0x0000000000000000000000000000000000000002',
+    token0: { symbol: 'ETH', decimals: 18 },
+    token1: { symbol: 'USDC', decimals: 6 },
+    amount0Max: 1n,
+    amount1Max: 2n,
+  });
+  assert.deepEqual(result, { simulated: false, skippedReason: 'state_dependencies' });
 });

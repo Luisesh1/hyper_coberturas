@@ -24,6 +24,34 @@ test('estimateLiquidityForAmounts devuelve liquidez con el precio dentro del ran
   assert.ok(liquidity > 0n, `liquidez debe ser positiva, fue ${liquidity}`);
 });
 
+// Regresion del ETH/USDC 0.30% que fallaba al crear un orquestador. El pool
+// estaba en el tick -200967, pero su sqrtPriceX96 exacto estaba avanzado dentro
+// de ese tick. Reconstruir sqrt(current) desde el tick inflaba la liquidez un
+// 0.55% y el PositionManager terminaba pidiendo 52.604306 USDC contra un maximo
+// de 52.573560 (MaximumAmountExceeded).
+test('usa sqrtPriceX96 exacto para no inflar la liquidez dentro del tick activo', () => {
+  const args = {
+    amount0Raw: 27_595632791000000n,
+    amount1Raw: 52_312000n,
+    tickCurrent: -200967,
+    tickLower: -201120,
+    tickUpper: -200820,
+  };
+  const desdeTickEntero = estimateLiquidityForAmounts(args);
+  const desdeSqrtExacto = estimateLiquidityForAmounts({
+    ...args,
+    sqrtPriceX96: '3429045923241452434882560',
+  });
+
+  assert.equal(desdeTickEntero, 158_615787626032n);
+  assert.equal(desdeSqrtExacto, 157_734408893455n);
+  assert.ok(desdeSqrtExacto < desdeTickEntero, 'el tick entero sobreestimaba la liquidez');
+  assert.ok(
+    ((desdeTickEntero - desdeSqrtExacto) * 10_000n) / desdeTickEntero > 50n,
+    'la desviacion real superaba el slippage por defecto de 50 bps'
+  );
+});
+
 test('estimateLiquidityForAmounts soporta el precio por debajo y por encima del rango', () => {
   const below = estimateLiquidityForAmounts({
     amount0Raw: 10n ** 18n,

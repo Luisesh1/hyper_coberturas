@@ -628,6 +628,9 @@ async function getV4PoolContext({
     tickSpacing: resolvedTickSpacing,
     hooks: resolvedHooks,
     poolId: resolvedPoolId,
+    // No reducir el precio v4 al tick entero: el mint necesita la posicion
+    // exacta dentro del tick para calcular correctamente la liquidez.
+    sqrtPriceX96: String(slot0.sqrtPriceX96),
     currentPrice: Number(orientPriceToSelectedOrder(
       uniswapService.tickToPrice(Number(slot0.tick), ordered.token0.decimals, ordered.token1.decimals),
       ordered.reversed
@@ -1892,6 +1895,7 @@ async function buildFundingPlan({
     token0,
     token1,
     currentPrice,
+    sqrtPriceX96: poolContext.sqrtPriceX96 || null,
     poolAddress: poolContext.poolAddress,
     poolId: poolContext.poolId,
     poolToken0Address: poolContext.poolToken0Address,

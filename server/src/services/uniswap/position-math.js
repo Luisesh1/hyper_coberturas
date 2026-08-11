@@ -10,7 +10,7 @@ const { ValidationError } = require('../../errors/app-error');
 // OJO: `position-action-math` NO exporta tickToRawSqrtRatio — importarlo de
 // ahi dejaba `undefined` y reventaba con "is not a function" en el primer
 // mint v4 (unico camino que llama a estimateLiquidityForAmounts).
-const { tickToRawSqrtRatio } = require('./pool-math');
+const { sqrtPriceX96ToFloat, tickToRawSqrtRatio } = require('./pool-math');
 
 /**
  * Convierte un precio (en token1/token0) al tick más cercano según el spacing
@@ -62,10 +62,21 @@ function estimateLiquidityForAmounts({
   amount0Raw,
   amount1Raw,
   tickCurrent,
+  sqrtPriceX96,
   tickLower,
   tickUpper,
 }) {
-  const sqrtCurrent = tickToRawSqrtRatio(tickCurrent);
+  // `slot0.tick` identifica el tick activo, pero no la posicion exacta del
+  // precio dentro de ese tick. En rangos estrechos perder esa fraccion puede
+  // cambiar el monto requerido de un lado mas que el slippage permitido. El
+  // PositionManager usa `sqrtPriceX96`, asi que cuando esta disponible la
+  // estimacion del mint debe partir del mismo valor exacto.
+  const exactSqrtCurrent = sqrtPriceX96 != null
+    ? sqrtPriceX96ToFloat(sqrtPriceX96)
+    : null;
+  const sqrtCurrent = Number.isFinite(exactSqrtCurrent) && exactSqrtCurrent > 0
+    ? exactSqrtCurrent
+    : tickToRawSqrtRatio(tickCurrent);
   const sqrtLower = tickToRawSqrtRatio(tickLower);
   const sqrtUpper = tickToRawSqrtRatio(tickUpper);
   if (

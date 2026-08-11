@@ -50,6 +50,85 @@ const {
 } = require('../../../domains/uniswap/pools/domain/position-action-math');
 
 const ZERO_ADDRESS_V4 = '0x0000000000000000000000000000000000000000';
+const MAXIMUM_AMOUNT_EXCEEDED_SELECTOR = ethers.id('MaximumAmountExceeded(uint128,uint128)').slice(0, 10);
+
+function findRevertData(error, seen = new Set()) {
+  if (!error || seen.has(error)) return null;
+  if (typeof error === 'string') {
+    return /^0x[0-9a-f]+$/i.test(error) ? error : null;
+  }
+  if (typeof error !== 'object') return null;
+  seen.add(error);
+
+  const direct = [
+    error.data,
+    error.info?.error?.data,
+    error.error?.data,
+    error.cause?.data,
+  ];
+  for (const value of direct) {
+    const found = findRevertData(value, seen);
+    if (found) return found;
+  }
+  return null;
+}
+
+function decodeMaximumAmountExceeded(error) {
+  const data = findRevertData(error);
+  if (!data || data.slice(0, 10).toLowerCase() !== MAXIMUM_AMOUNT_EXCEEDED_SELECTOR.toLowerCase()) {
+    return null;
+  }
+  try {
+    const [maximumAmount, amountRequested] = ethers.AbiCoder.defaultAbiCoder().decode(
+      ['uint128', 'uint128'],
+      `0x${data.slice(10)}`
+    );
+    return { maximumAmount: BigInt(maximumAmount), amountRequested: BigInt(amountRequested) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Simula el mint final durante el prepare para detectar un techo insuficiente
+ * antes de que el usuario firme wraps, swaps o approvals previos. Otros
+ * reverts pueden ser esperables porque esas transacciones todavia no cambiaron
+ * el estado (por ejemplo, falta una approval del mismo plan); solo bloqueamos
+ * el error que es independiente de ellas: MaximumAmountExceeded.
+ */
+async function assertV4MintAmountCeilings({
+  provider,
+  tx,
+  walletAddress,
+  token0,
+  token1,
+  amount0Max,
+  amount1Max,
+}) {
+  try {
+    await provider.call({
+      from: walletAddress,
+      to: tx.to,
+      data: tx.data,
+      value: BigInt(tx.value || 0n),
+    });
+    return { simulated: true };
+  } catch (error) {
+    const decoded = decodeMaximumAmountExceeded(error);
+    if (!decoded) return { simulated: false, skippedReason: 'state_dependencies' };
+
+    const isToken0 = decoded.maximumAmount === BigInt(amount0Max);
+    const isToken1 = decoded.maximumAmount === BigInt(amount1Max);
+    const token = isToken0 ? token0 : isToken1 ? token1 : null;
+    const decimals = Number(token?.decimals ?? 18);
+    const symbol = token?.symbol || 'tokens';
+    throw new ValidationError(
+      `El mint v4 requiere ${ethers.formatUnits(decoded.amountRequested, decimals)} ${symbol}, `
+      + `por encima del maximo preparado de ${ethers.formatUnits(decoded.maximumAmount, decimals)} ${symbol}. `
+      + 'Volve a preparar el plan con el precio actual o aumenta el slippage maximo.'
+    );
+  }
+}
 
 const {
   normalizeAddress,
@@ -318,6 +397,9 @@ async function prepareIncreaseLiquiditySmartV4(ctx, payload, mintSlippageBps) {
     amount0Raw: amount0Desired,
     amount1Raw: amount1Desired,
     tickCurrent: ctx.currentTick,
+    // El funding plan acaba de releer slot0; es mas fresco que el contexto de
+    // la posicion cargado antes de cotizar swaps.
+    sqrtPriceX96: plan.sqrtPriceX96 || ctx.sqrtPriceX96,
     tickLower: ctx.tickLower,
     tickUpper: ctx.tickUpper,
   });
@@ -503,6 +585,7 @@ async function prepareIncreaseLiquidityV4(payload) {
     amount0Raw: amount0Desired,
     amount1Raw: amount1Desired,
     tickCurrent: ctx.currentTick,
+    sqrtPriceX96: ctx.sqrtPriceX96,
     tickLower: ctx.tickLower,
     tickUpper: ctx.tickUpper,
   });
@@ -674,6 +757,7 @@ async function prepareReinvestFeesV4(payload) {
     amount0Raw: amount0Fees,
     amount1Raw: amount1Fees,
     tickCurrent: ctx.currentTick,
+    sqrtPriceX96: ctx.sqrtPriceX96,
     tickLower: ctx.tickLower,
     tickUpper: ctx.tickUpper,
   });
@@ -888,6 +972,7 @@ async function prepareModifyRangeV4(payload) {
     amount0Raw: amount0Desired,
     amount1Raw: amount1Desired,
     tickCurrent: ctx.currentTick,
+    sqrtPriceX96: ctx.sqrtPriceX96,
     tickLower,
     tickUpper,
   });
@@ -1036,6 +1121,7 @@ async function prepareCreatePositionV4(payload) {
       amount0Raw: amount0Desired,
       amount1Raw: amount1Desired,
       tickCurrent: Math.round(Math.log(canonicalCurrentPrice / (10 ** (token0.decimals - token1.decimals))) / Math.log(1.0001)),
+      sqrtPriceX96: plan.sqrtPriceX96,
       tickLower,
       tickUpper,
     });
@@ -1131,7 +1217,7 @@ async function prepareCreatePositionV4(payload) {
       amount1Max,
       owner: normalizedWallet,
     });
-    txPlan.push(buildV4ModifyTx(dummyCtx, {
+    const mintTx = buildV4ModifyTx(dummyCtx, {
       actionCodes: mint.actionCodes,
       params: mint.params,
       value: mint.value,
@@ -1145,7 +1231,17 @@ async function prepareCreatePositionV4(payload) {
         createsNewPosition: true,
         nativeValue: mint.value ? mint.value.toString() : null,
       },
-    }));
+    });
+    txPlan.push(mintTx);
+    await assertV4MintAmountCeilings({
+      provider,
+      tx: mintTx,
+      walletAddress: normalizedWallet,
+      token0,
+      token1,
+      amount0Max,
+      amount1Max,
+    });
 
     return {
       action: 'create-position',
@@ -1258,6 +1354,7 @@ async function prepareCreatePositionV4(payload) {
     amount0Raw: amount0Desired,
     amount1Raw: amount1Desired,
     tickCurrent: Number(slot0.tick),
+    sqrtPriceX96: String(slot0.sqrtPriceX96),
     tickLower,
     tickUpper,
   });
@@ -1314,7 +1411,7 @@ async function prepareCreatePositionV4(payload) {
     owner: normalizedWallet,
   });
 
-  txPlan.push(buildV4ModifyTx(dummyCtx, {
+  const mintTx = buildV4ModifyTx(dummyCtx, {
     actionCodes: mint.actionCodes,
     params: mint.params,
     value: mint.value,
@@ -1328,7 +1425,17 @@ async function prepareCreatePositionV4(payload) {
       createsNewPosition: true,
       nativeValue: mint.value ? mint.value.toString() : null,
     },
-  }));
+  });
+  txPlan.push(mintTx);
+  await assertV4MintAmountCeilings({
+    provider,
+    tx: mintTx,
+    walletAddress: normalizedWallet,
+    token0: canonicalToken0,
+    token1: canonicalToken1,
+    amount0Max,
+    amount1Max,
+  });
 
   return {
     action: 'create-position',
@@ -1494,6 +1601,7 @@ async function prepareRebalanceV4(payload) {
     amount0Raw: finalAmount0,
     amount1Raw: finalAmount1,
     tickCurrent: ctx.currentTick,
+    sqrtPriceX96: ctx.sqrtPriceX96,
     tickLower,
     tickUpper,
   });
@@ -1799,6 +1907,10 @@ async function prepareCloseToUsdcV4(payload) {
 }
 
 module.exports = {
+  // Exportados para probar la traduccion del custom error que MetaMask muestra
+  // como "execution reverted for an unknown reason".
+  assertV4MintAmountCeilings,
+  decodeMaximumAmountExceeded,
   // Exportado para test: sin margen, el mint v4 revierte con
   // MaximumAmountExceeded ante cualquier redondeo hacia arriba.
   applyMintSlippageCeiling,
