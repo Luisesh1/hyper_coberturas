@@ -242,13 +242,23 @@ Configurar en **Settings → Secrets and variables → Actions** del repo:
 
 | Secret | Valor |
 |--------|-------|
-| `SERVER_HOST` | Host/IP publico del servidor (ej. `hypercover.luisesh1.duckdns.org`) |
+| `SERVER_HOST` | **IP** publica del servidor (no el dominio — ver nota abajo) |
 | `SERVER_USER` | Usuario SSH de deploy en el servidor |
 | `SERVER_SSH_KEY` | Llave privada SSH (formato PEM) con acceso a `SERVER_USER@SERVER_HOST` |
 | `DEPLOY_PATH` | Ruta absoluta del repo clonado en el servidor (`/root/hyper_coberturas`) |
 
 La llave publica correspondiente debe estar en `~/.ssh/authorized_keys` del
 usuario de deploy en el servidor.
+
+**Por que IP y no dominio:** al principio `SERVER_HOST` era el dominio
+(`hypercover.luisesh1.duckdns.org`), pero `ssh-keyscan` fallaba desde el
+runner de GitHub (resolucion DNS distinta a la del equipo local, causa
+probable con DuckDNS). Se cambio a la IP fija del servidor y el SSH paso a
+funcionar. El health check final necesita igual el dominio (para que nginx
+resuelva el vhost/TLS por SNI), asi que `deploy.yml` lo tiene hardcodeado en
+`env.PROD_DOMAIN` y usa `curl --resolve` para pinearlo a la IP del secret sin
+depender de DNS. Si el servidor cambia de IP, actualizar `SERVER_HOST` (y
+`PROD_DOMAIN` en el workflow si cambia el dominio).
 
 **Nota de seguridad:** el deploy actual usa el usuario `root` del servidor
 (`DEPLOY_PATH=/root/...`). Es lo que hay configurado hoy; conviene migrar a un
@@ -273,7 +283,8 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec -T server npm run migrate
 ```
 
-Luego verifica `https://$SERVER_HOST/api/health` con reintentos (hasta 50 s).
+Luego verifica `https://hypercover.luisesh1.duckdns.org/api/health` (pineado a
+la IP de `SERVER_HOST`) con reintentos (hasta 50 s).
 Si el health check falla, el job de GitHub Actions queda en rojo — no hay
 rollback automatico, hay que entrar por SSH y diagnosticar (ver seccion 7).
 
