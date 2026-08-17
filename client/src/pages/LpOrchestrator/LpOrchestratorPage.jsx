@@ -698,7 +698,7 @@ export default function LpOrchestratorPage() {
         <UnifiedLpWizard
           mode="orchestrated"
           wallet={walletState}
-          defaults={{ network: 'arbitrum', version: 'v3' }}
+          defaults={{ network: 'arbitrum', version: 'v4' }}
           meta={meta}
           accounts={accounts}
           onClose={() => setShowWizard(false)}

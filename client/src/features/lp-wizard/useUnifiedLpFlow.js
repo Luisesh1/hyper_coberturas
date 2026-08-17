@@ -7,6 +7,7 @@ import {
   buildProtectionPayload,
   validateProtectionForm,
 } from './ProtectionFormFields';
+import useEthUsdcRangeRecommendation from './useEthUsdcRangeRecommendation';
 
 /**
  * Pasos propios del wizard unificado. Los cuatro primeros y los tres
@@ -69,7 +70,10 @@ export default function useUnifiedLpFlow({
   // flujo orquestado tiene que poder crear tanto en v3 como en v4. Cambiarlas
   // reinicia el análisis del pool a través de los efectos de useSmartCreateFlow.
   const [network, setNetwork] = useState(defaults?.network || 'arbitrum');
-  const [version, setVersion] = useState(defaults?.version || 'v3');
+  // v4 es el default: todas las redes soportadas la listan y es la versión que
+  // el orquestador crea por omisión. `defaults.version` sigue mandando cuando
+  // quien abre el wizard ya sabe qué versión toca (standalone, attach-lp).
+  const [version, setVersion] = useState(defaults?.version || 'v4');
 
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -245,38 +249,13 @@ export default function useUnifiedLpFlow({
 
   const effectiveName = nameTouched ? name : (name || suggestedName);
 
-  const isEthUsdcPair = useMemo(() => {
-    const symbols = [
-      symbolForAddress(flow.token0Address),
-      symbolForAddress(flow.token1Address),
-    ].map((symbol) => String(symbol || '').toUpperCase());
-    return symbols.includes('USDC') && symbols.some((symbol) => symbol === 'ETH' || symbol === 'WETH');
-  }, [flow.token0Address, flow.token1Address, symbolForAddress]);
-
-  // La recomendación es un default del wizard, no una regla que sobrescriba
-  // una selección del usuario. Al cambiar de par, sólo se restablece mientras
-  // la protección siga intacta desde el valor recomendado.
-  useEffect(() => {
-    if (!isOrchestrated || protectionDirtyRef.current) return;
-    setProtectionState((current) => {
-      if (isEthUsdcPair) {
-        if (current.policyVersion === 'net_profit_v1' && current.executionIntent === 'shadow') return current;
-        return {
-          ...current,
-          policyVersion: 'net_profit_v1',
-          executionIntent: 'shadow',
-          activationConfirmed: false,
-        };
-      }
-      if (current.policyVersion !== 'net_profit_v1' || current.executionIntent !== 'shadow') return current;
-      return {
-        ...current,
-        policyVersion: 'legacy_zones_v1',
-        executionIntent: 'live',
-        activationConfirmed: false,
-      };
-    });
-  }, [isOrchestrated, isEthUsdcPair]);
+  const ethUsdcRange = useEthUsdcRangeRecommendation({
+    isOrchestrated,
+    flow,
+    symbolForAddress,
+    setProtectionState,
+    protectionDirtyRef,
+  });
 
   const derivedRangeWidthPct = useMemo(
     () => deriveRangeWidthPct({
@@ -296,56 +275,6 @@ export default function useUnifiedLpFlow({
     ? Number(strategy.rangeWidthPct) || null
     : derivedRangeWidthPct;
 
-  // El backend publica esta recomendación sólo para ETH/WETH+USDC junto con
-  // el ATR y el precio usados para calcularla. Se vuelve a verificar el par
-  // por símbolo para que una respuesta cacheada o ajena nunca altere otro
-  // wizard ni el flujo standalone.
-  const ethUsdcRangeRecommendation = useMemo(() => {
-    const recommendation = flow.suggestions?.ethUsdcRangeRecommendation;
-    if (!isOrchestrated || !isEthUsdcPair || !recommendation) return null;
-    const halfWidthPct = Number(recommendation.halfWidthPct);
-    const widthPct = Number(recommendation.widthPct);
-    if (!Number.isFinite(halfWidthPct) || halfWidthPct <= 0 || !Number.isFinite(widthPct) || widthPct <= 0) return null;
-    return {
-      ...recommendation,
-      halfWidthPct,
-      widthPct,
-      requiresConfirmation: recommendation.requiresConfirmation === true,
-    };
-  }, [isOrchestrated, isEthUsdcPair, flow.suggestions]);
-  const [ethUsdcRangeRecommendationApplied, setEthUsdcRangeRecommendationApplied] = useState(false);
-  const [ethUsdcRangeConfirmed, setEthUsdcRangeConfirmed] = useState(false);
-
-  const applyEthUsdcRangeRecommendation = useCallback(() => {
-    if (!ethUsdcRangeRecommendation) return false;
-    const currentPrice = Number(flow.suggestions?.currentPrice);
-    if (!Number.isFinite(currentPrice) || currentPrice <= 0) return false;
-    const multiplier = ethUsdcRangeRecommendation.halfWidthPct / 100;
-    const lower = currentPrice * (1 - multiplier);
-    const upper = currentPrice * (1 + multiplier);
-    if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower <= 0 || upper <= lower) return false;
-    // La recomendación tiene que ser un rango explícito, no un preset cuyo
-    // índice pueda cambiar con nuevas sugerencias. `custom` conserva además
-    // exactamente el ±halfWidth que el usuario revisó.
-    flow.setRangeMode('custom');
-    flow.setCustomLowerPrice(String(Number(lower.toFixed(8))));
-    flow.setCustomUpperPrice(String(Number(upper.toFixed(8))));
-    flow.setCustomWeightToken0?.(String(Number(flow.activeRange?.targetWeightToken0Pct ?? 50)));
-    setEthUsdcRangeRecommendationApplied(true);
-    setEthUsdcRangeConfirmed(!ethUsdcRangeRecommendation.requiresConfirmation);
-    return true;
-  }, [ethUsdcRangeRecommendation, flow]);
-
-  const handleContinueFromRange = useCallback(() => {
-    if (ethUsdcRangeRecommendationApplied
-      && ethUsdcRangeRecommendation?.requiresConfirmation
-      && !ethUsdcRangeConfirmed) {
-      return { ok: false, requiresConfirmation: true };
-    }
-    flow.handleContinueToFunding();
-    return { ok: true };
-  }, [ethUsdcRangeRecommendationApplied, ethUsdcRangeRecommendation, ethUsdcRangeConfirmed, flow]);
-
   // El tickSpacing real del pool lo resuelve el backend al preparar las txs.
   const v4TickSpacingOverride = useMemo(() => {
     if (version !== 'v4') return null;
@@ -357,12 +286,11 @@ export default function useUnifiedLpFlow({
 
   /** El plan es lo que viaja al servidor: pre-flight, intención y commit. */
   const buildPlan = useCallback(() => {
-    const rawProtectionPayload = isOrchestrated
+    const protectionPayload = isOrchestrated
       ? buildProtectionPayload(protection)
       : { enabled: false };
     const token0Symbol = symbolForAddress(flow.token0Address);
     const token1Symbol = symbolForAddress(flow.token1Address);
-    const protectionPayload = rawProtectionPayload;
 
     return {
       mode,
@@ -549,12 +477,7 @@ export default function useUnifiedLpFlow({
 
     derivedRangeWidthPct,
     effectiveRangeWidthPct,
-    ethUsdcRangeRecommendation,
-    ethUsdcRangeRecommendationApplied,
-    ethUsdcRangeConfirmed,
-    setEthUsdcRangeConfirmed,
-    applyEthUsdcRangeRecommendation,
-    handleContinueFromRange,
+    ...ethUsdcRange,
 
     preflight,
     preflightBusy,

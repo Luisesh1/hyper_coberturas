@@ -452,12 +452,30 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
     expect(setRangeMode).toHaveBeenCalledWith('custom');
     expect(setCustomLowerPrice).toHaveBeenCalledWith('1700');
     expect(setCustomUpperPrice).toHaveBeenCalledWith('2300');
-    expect(result.current.handleContinueFromRange()).toEqual({ ok: false, requiresConfirmation: true });
+    // El aviso sólo aparece cuando el usuario intenta continuar: aplicar un
+    // rango amplio a propósito no es un error que haya que pintar de entrada.
+    expect(result.current.rangeConfirmationBlocked).toBe(false);
+    let blockedAttempt;
+    act(() => { blockedAttempt = result.current.handleContinueFromRange(); });
+    expect(blockedAttempt).toEqual({ ok: false, requiresConfirmation: true });
+    expect(result.current.rangeConfirmationBlocked).toBe(true);
     expect(handleContinueToFunding).not.toHaveBeenCalled();
 
     act(() => result.current.setEthUsdcRangeConfirmed(true));
-    expect(result.current.handleContinueFromRange()).toEqual({ ok: true });
+    expect(result.current.rangeConfirmationBlocked).toBe(false);
+    let confirmedAttempt;
+    act(() => { confirmedAttempt = result.current.handleContinueFromRange(); });
+    expect(confirmedAttempt).toEqual({ ok: true });
     expect(handleContinueToFunding).toHaveBeenCalledTimes(1);
+  });
+
+  it('arranca en v4 cuando quien abre el wizard no impone versión', () => {
+    smartCreateFlow.current = makeFlow();
+    const { result } = renderHook(() => useUnifiedLpFlow({
+      mode: 'orchestrated',
+      wallet: { address: '0x1111111111111111111111111111111111111111' },
+    }));
+    expect(result.current.version).toBe('v4');
   });
 
   it('no expone la recomendación ATR en standalone ni para otros pares', () => {

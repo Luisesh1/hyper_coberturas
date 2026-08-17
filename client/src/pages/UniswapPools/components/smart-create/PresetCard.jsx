@@ -6,6 +6,13 @@ import styles from '../SmartCreatePoolModal.module.css';
  * Tarjeta de preset (conservative / balanced / aggressive) para el wizard.
  */
 export default function PresetCard({ preset, selected, onClick }) {
+  // `widthPct` llega del backend como ancho TOTAL del rango
+  // ((upper - lower) / currentPrice). El signo ± significa semiancho, que es
+  // además la convención de `rangeWidthPct` en todo el resto del flujo, así
+  // que se divide entre dos con el mismo redondeo que `deriveRangeWidthPct`
+  // para que la tarjeta y el resumen del plan digan el mismo número.
+  const halfWidthPct = Math.round((preset.widthPct / 2) * 100) / 100;
+
   return (
     <div
       className={`${styles.presetCard} ${selected ? styles.presetCardSelected : ''}`}
@@ -24,7 +31,7 @@ export default function PresetCard({ preset, selected, onClick }) {
         </div>
         <div className={styles.infoRow}>
           <span>Ancho</span>
-          <strong>±{preset.widthPct.toFixed(1)}%</strong>
+          <strong>±{halfWidthPct}%</strong>
         </div>
         <div className={styles.infoRow}>
           <span>Token0</span>

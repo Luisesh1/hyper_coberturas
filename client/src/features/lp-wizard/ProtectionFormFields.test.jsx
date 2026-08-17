@@ -1,9 +1,10 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import {
   computeAutoTunedProtection,
   buildDefaultProtection,
   buildProtectionPayload,
+  validateProtectionForm,
 } from './ProtectionFormFields';
 import ProtectionFormFields from './ProtectionFormFields';
 
@@ -145,5 +146,75 @@ describe('buildProtectionPayload', () => {
   it('cuando está desactivada solo manda { enabled: false }', () => {
     expect(buildProtectionPayload({ enabled: false })).toEqual({ enabled: false });
     expect(buildProtectionPayload(null)).toEqual({ enabled: false });
+  });
+});
+
+describe('política de cobertura', () => {
+  const netProfitShadow = () => ({
+    ...buildDefaultProtection(1000, null, { enabled: true, leverage: '10' }),
+    accountId: 1,
+    policyVersion: 'net_profit_v1',
+    executionIntent: 'shadow',
+  });
+
+  it('conserva la política al apagar y volver a encender la protección', () => {
+    const onChange = vi.fn();
+    render(<ProtectionFormFields value={netProfitShadow()} onChange={onChange} accounts={[{ id: 1 }]} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Activar protección delta-neutral/i }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: false,
+      policyVersion: 'net_profit_v1',
+      executionIntent: 'shadow',
+    }));
+  });
+
+  it('conserva la política al re-aplicar el auto-tune', () => {
+    const onChange = vi.fn();
+    render(
+      <ProtectionFormFields
+        value={{ ...netProfitShadow(), autoTunedFor: 3 }}
+        onChange={onChange}
+        accounts={[{ id: 1 }]}
+        rangeWidthPct={9}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Re-aplicar/i }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      policyVersion: 'net_profit_v1',
+      executionIntent: 'shadow',
+    }));
+  });
+
+  it('pasar a operación real limpia la confirmación previa y volver a sombra la descarta', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <ProtectionFormFields value={netProfitShadow()} onChange={onChange} accounts={[{ id: 1 }]} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Operación real/i }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ executionIntent: 'live' }));
+
+    onChange.mockClear();
+    rerender(
+      <ProtectionFormFields
+        value={{ ...netProfitShadow(), executionIntent: 'live', activationConfirmed: true }}
+        onChange={onChange}
+        accounts={[{ id: 1 }]}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Sombra/i }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      executionIntent: 'shadow',
+      activationConfirmed: false,
+    }));
+  });
+
+  it('validateProtectionForm bloquea net profit en real sin confirmar', () => {
+    const live = { ...netProfitShadow(), executionIntent: 'live' };
+    expect(validateProtectionForm(live)).toMatch(/Confirma la operación real/);
+    expect(validateProtectionForm({ ...live, activationConfirmed: true })).toBeNull();
+    expect(validateProtectionForm({ ...netProfitShadow() })).toBeNull();
   });
 });

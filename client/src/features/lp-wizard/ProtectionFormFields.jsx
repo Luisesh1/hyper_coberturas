@@ -14,6 +14,23 @@ const DELTA_NEUTRAL_PRESETS = [
   { id: 'conservative', label: 'Conservative', bandMode: 'fixed', baseRebalancePriceMovePct: 5, rebalanceIntervalSec: 43200, hint: 'Menos rebalanceo, más drift tolerado.' },
 ];
 
+// Sombra no es "la política apagada", es un modo con resultado propio: la
+// cobertura la sigue haciendo el motor legacy y net profit calcula en paralelo
+// lo que habría hecho. Por eso se elige entre dos opciones con nombre y no con
+// una casilla "operación real" cuyo estado apagado no se explica solo.
+const EXECUTION_INTENTS = [
+  {
+    id: 'shadow',
+    label: 'Sombra',
+    hint: 'Cubre con el motor legacy y mide la política nueva en paralelo (BBO, costes y funding). No manda órdenes propias.',
+  },
+  {
+    id: 'live',
+    label: 'Operación real',
+    hint: 'La política nueva decide y ejecuta. Sustituye por completo a las zonas legacy.',
+  },
+];
+
 const DEFAULT_PROTECTION = Object.freeze({
   enabled: false,
   accountId: '',
@@ -157,14 +174,26 @@ export default function ProtectionFormFields({
     onChange({ ...v, [key]: val });
   };
 
+  // La política de cobertura no es un parámetro de tuning: la elige el par
+  // (el wizard recomienda net_profit_v1 en sombra para ETH/USDC) o el usuario
+  // a mano. Reconstruir los defaults por apagar y encender la protección o por
+  // re-aplicar el auto-tune la devolvía a legacy en silencio, y como el cambio
+  // marca la protección como "sucia", la recomendación ya no volvía nunca.
+  const policySelection = {
+    policyVersion: v.policyVersion,
+    executionIntent: v.executionIntent,
+    activationConfirmed: v.activationConfirmed,
+  };
+
   const handleToggle = (enabled) => {
     if (enabled) {
       onChange({
         ...buildDefaultProtection(initialUsd, rangeWidthPct, { enabled: true, leverage: defaultLeverage }),
+        ...policySelection,
         enabled: true,
       });
     } else {
-      onChange({ ...DEFAULT_PROTECTION, enabled: false });
+      onChange({ ...DEFAULT_PROTECTION, ...policySelection, enabled: false });
     }
   };
 
@@ -174,9 +203,29 @@ export default function ProtectionFormFields({
     // Conserva la cuenta y leverage que el usuario ya eligió
     onChange({
       ...tuned,
+      ...policySelection,
       enabled: true,
       accountId: v.accountId || tuned.accountId,
       leverage: v.leverage || tuned.leverage,
+    });
+  };
+
+  // Cambiar de política nunca deja una combinación a medias: net profit entra
+  // siempre en sombra y legacy no tiene modo sombra, así que vuelve a `live`.
+  const handlePolicyChange = (policyVersion) => {
+    onChange({
+      ...v,
+      policyVersion,
+      executionIntent: policyVersion === 'net_profit_v1' ? 'shadow' : 'live',
+      activationConfirmed: false,
+    });
+  };
+
+  const handleIntentChange = (executionIntent) => {
+    onChange({
+      ...v,
+      executionIntent,
+      activationConfirmed: executionIntent === 'live' ? v.activationConfirmed : false,
     });
   };
 
@@ -191,6 +240,8 @@ export default function ProtectionFormFields({
     });
   };
 
+  const isNetProfit = v.policyVersion === 'net_profit_v1';
+  const isLiveNetProfit = isNetProfit && v.executionIntent === 'live';
   const isAutoTuned = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) === Number(rangeWidthPct);
   const tunedDrifted = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) !== Number(rangeWidthPct);
 
@@ -285,6 +336,66 @@ export default function ProtectionFormFields({
             </div>
           </div>
 
+          {/* La política decide qué motor cubre la posición, así que no puede
+              vivir dentro de "Configuración avanzada": el wizard la cambia solo
+              para ETH/USDC y el usuario tiene que ver ese cambio sin abrir nada. */}
+          <div className={`${styles.policyCard} ${isNetProfit ? styles.policyCardNew : ''}`}>
+            <div className={styles.field}>
+              <label>Política de cobertura</label>
+              <select value={v.policyVersion} onChange={(e) => handlePolicyChange(e.target.value)}>
+                <option value="legacy_zones_v1">Zonas legacy — motor en producción</option>
+                <option value="net_profit_v1">Net profit — bandas por coste neto</option>
+              </select>
+            </div>
+
+            {!isNetProfit && (
+              <p className={styles.hint}>
+                Cubre por zonas respecto al borde del rango: en el centro deja ~40% del delta
+                descubierto a propósito, y los umbrales de zona no escalan con el ancho del rango.
+              </p>
+            )}
+
+            {isNetProfit && (
+              <>
+                <div className={styles.presets}>
+                  {EXECUTION_INTENTS.map((intent) => (
+                    <button
+                      key={intent.id}
+                      type="button"
+                      className={`${styles.preset} ${v.executionIntent === intent.id ? styles.presetActive : ''}`}
+                      onClick={() => handleIntentChange(intent.id)}
+                    >
+                      <strong>{intent.label}</strong>
+                      <span>{intent.hint}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {isLiveNetProfit && (
+                  <label className={styles.toggleRow}>
+                    <input
+                      type="checkbox"
+                      checked={!!v.activationConfirmed}
+                      onChange={(e) => handleField('activationConfirmed', e.target.checked)}
+                    />
+                    <span>
+                      <strong>Confirmo activar órdenes reales con net profit</strong>
+                      <br />
+                      <span className={styles.muted}>
+                        El servidor rechaza la creación sin esta confirmación, y además exige que el
+                        feature gate de net_profit_v1 esté habilitado.
+                      </span>
+                    </span>
+                  </label>
+                )}
+
+                {isLiveNetProfit && !v.activationConfirmed && (
+                  <p className={styles.error}>Marca la confirmación o vuelve a modo sombra para continuar.</p>
+                )}
+              </>
+            )}
+          </div>
+
           <div className={styles.field}>
             <label>Preset de rebalanceo</label>
             <div className={styles.presets}>
@@ -304,29 +415,11 @@ export default function ProtectionFormFields({
 
           <details className={styles.advanced}>
             <summary>Configuración avanzada</summary>
-            <div className={styles.field}>
-              <label>Política de cobertura</label>
-              <select value={v.policyVersion} onChange={(e) => handleField('policyVersion', e.target.value)}>
-                <option value="legacy_zones_v1">Legacy zones v1 (operación real)</option>
-                <option value="net_profit_v1">Net profit v1 (recomendado ETH/WETH + USDC)</option>
-              </select>
-              {v.policyVersion === 'net_profit_v1' && (
-                <p className={styles.hint}>Empieza en sombra: simula BBO, costes y funding sin mandar órdenes. Para operación real exige confirmación explícita.</p>
-              )}
-            </div>
-            {v.policyVersion === 'net_profit_v1' && (
-              <div className={styles.field}>
-                <label className={styles.toggleRow}>
-                  <input type="checkbox" checked={v.executionIntent === 'live'} onChange={(e) => handleField('executionIntent', e.target.checked ? 'live' : 'shadow')} />
-                  <span>Operación real (sustituye la política legacy)</span>
-                </label>
-                {v.executionIntent === 'live' && (
-                  <label className={styles.toggleRow}>
-                    <input type="checkbox" checked={!!v.activationConfirmed} onChange={(e) => handleField('activationConfirmed', e.target.checked)} />
-                    <span>Confirmo activar órdenes reales de net_profit_v1</span>
-                  </label>
-                )}
-              </div>
+            {isLiveNetProfit && (
+              <p className={styles.hint}>
+                Con net profit en operación real el motor ignora <strong>target hedge ratio</strong> (fija 1,
+                cobertura del 100% del delta) y recorta el slippage a un máximo de 15 bps.
+              </p>
             )}
             <div className={styles.row}>
               <div className={styles.field}>
@@ -432,6 +525,14 @@ export function validateProtectionForm(formValue) {
   }
   if (!Number.isFinite(Number(formValue.leverage)) || Number(formValue.leverage) < 1) {
     return 'El leverage debe ser >= 1.';
+  }
+  // Espeja la validación del servidor (uniswap-protection.service.js). Sin
+  // esto el wizard dejaba avanzar hasta el pre-flight para morir allí con un
+  // error de validación que ya se podía anticipar en el formulario.
+  if (formValue.policyVersion === 'net_profit_v1'
+    && formValue.executionIntent === 'live'
+    && formValue.activationConfirmed !== true) {
+    return 'Confirma la operación real de net profit o vuelve a modo sombra.';
   }
   return null;
 }

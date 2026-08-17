@@ -9,6 +9,7 @@ import {
 } from '../utils/pool-formatters';
 import { computePoolPermissions } from '../utils/pool-permissions';
 import RangeTrack from './RangeTrack';
+import ShadowPolicyCard from './ShadowPolicyCard';
 import styles from './ProtectedPoolCard.module.css';
 
 function ProtectionStatus({ hedge }) {
@@ -360,6 +361,10 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
               <MetaChip label="Recargas automáticas realizadas hoy" value={`${strategyState?.topUpCount24h || 0} de ${topUpMaxCount24h}`} />
             </>}
           </div>
+
+          {/* Solo aparece si la protección está midiendo una política en sombra:
+              hasta ahora ese cálculo se persistía sin que nadie pudiera verlo. */}
+          {isDeltaNeutral && <ShadowPolicyCard strategyState={strategyState} />}
 
           {/* Coberturas activas — modo estático / dinámico */}
           {!isDeltaNeutral && (

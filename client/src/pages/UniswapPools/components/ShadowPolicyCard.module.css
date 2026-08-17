@@ -1,0 +1,121 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(102, 225, 219, 0.28);
+  background: rgba(102, 225, 219, 0.05);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 800;
+  color: var(--uni-cyan);
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--uni-text-2);
+  max-width: 52ch;
+}
+
+.stamp {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  color: var(--uni-text-3);
+  white-space: nowrap;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.74rem;
+}
+
+.table th,
+.table td {
+  padding: 5px 6px;
+  text-align: right;
+  color: var(--uni-text-1);
+  font-weight: 500;
+}
+
+.table thead th {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--uni-text-3);
+  border-bottom: 1px solid var(--uni-border);
+}
+
+.table tfoot th,
+.table tfoot td {
+  border-top: 1px solid var(--uni-border);
+  color: var(--uni-text-0);
+}
+
+.rowLabel {
+  text-align: left;
+  color: var(--uni-text-2);
+  font-weight: 500;
+}
+
+.edgeRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.74rem;
+  color: var(--uni-text-2);
+}
+
+.pos { color: var(--uni-green); }
+.neg { color: var(--uni-red); }
+
+.footNotes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 0.64rem;
+  color: var(--uni-text-3);
+}
+
+.caveat {
+  margin: 0;
+  font-size: 0.64rem;
+  line-height: 1.5;
+  color: var(--uni-text-3);
+}
+
+.promoteBtn {
+  align-self: flex-start;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--uni-cyan);
+  background: transparent;
+  color: var(--uni-cyan);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.promoteBtn:hover {
+  background: rgba(102, 225, 219, 0.1);
+}

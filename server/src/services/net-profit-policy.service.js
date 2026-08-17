@@ -186,17 +186,42 @@ function decideNetProfitV1({
   };
 }
 
-function createShadowState({ actualQty = 0, markPrice = null } = {}) {
+/**
+ * Normaliza un estado de sombra, sirviendo a la vez de constructor en frío y
+ * de rehidratador.
+ *
+ * Ojo con los defaults: `simulateShadowFill` pasa por aquí su propio estado
+ * previo en cada tick. Cuando esta función descartaba los acumulados, la
+ * contabilidad de la sombra no acumulaba nada — las comisiones y el funding
+ * reflejaban solo el último tick, y `averageEntryPrice` se vaciaba en el
+ * segundo (el estado guarda `averageEntryPrice`, no `markPrice`), que es la
+ * única vía por la que se calcula el PnL realizado. El contrafactual salía
+ * plano por construcción.
+ */
+function createShadowState({
+  actualQty = 0,
+  markPrice = null,
+  averageEntryPrice = null,
+  realizedPnlUsd = 0,
+  unrealizedPnlUsd = 0,
+  executionFeesUsd = 0,
+  slippageUsd = 0,
+  slippageEwmaBps = 0,
+  fundingUsd = 0,
+  lastSnapshotAt = null,
+} = {}) {
   return {
     actualQty: Math.max(0, finite(actualQty, 0)),
-    averageEntryPrice: finite(markPrice),
-    realizedPnlUsd: 0,
-    unrealizedPnlUsd: 0,
-    executionFeesUsd: 0,
-    slippageUsd: 0,
-    slippageEwmaBps: 0,
-    fundingUsd: 0,
-    lastSnapshotAt: null,
+    // Un estado previo trae `averageEntryPrice`; una apertura en frío solo
+    // conoce el `markPrice` del momento.
+    averageEntryPrice: finite(averageEntryPrice, finite(markPrice)),
+    realizedPnlUsd: finite(realizedPnlUsd, 0),
+    unrealizedPnlUsd: finite(unrealizedPnlUsd, 0),
+    executionFeesUsd: finite(executionFeesUsd, 0),
+    slippageUsd: finite(slippageUsd, 0),
+    slippageEwmaBps: finite(slippageEwmaBps, 0),
+    fundingUsd: finite(fundingUsd, 0),
+    lastSnapshotAt: finite(lastSnapshotAt),
   };
 }
 
@@ -217,10 +242,20 @@ function simulateShadowFill(state, { targetQty, bid, ask, feeRate, now = Date.no
   const realized = change < 0 && previous.averageEntryPrice != null
     ? previous.realizedPnlUsd + ((previous.averageEntryPrice - fillPrice) * Math.abs(change))
     : previous.realizedPnlUsd;
+  // Mark-to-market del short contrafactual con la misma convención que el
+  // motor legacy (`hedgeUnrealizedPnlUsd`): un short gana cuando el precio
+  // baja. Sin esta pata la comparación sombra vs real estaba sesgada en
+  // contra de la sombra, que reportaba siempre 0 de latente.
+  const nextEntryPrice = nextTarget > 0 ? nextEntry : null;
+  const unrealized = nextTarget > 0 && nextEntryPrice != null && mid > 0
+    ? (nextEntryPrice - mid) * nextTarget
+    : 0;
+
   return {
     ...previous,
     actualQty: nextTarget,
-    averageEntryPrice: nextTarget > 0 ? nextEntry : null,
+    averageEntryPrice: nextEntryPrice,
+    unrealizedPnlUsd: unrealized,
     realizedPnlUsd: realized,
     executionFeesUsd: previous.executionFeesUsd + fee,
     slippageUsd: previous.slippageUsd + Math.abs(fillPrice - mid) * Math.abs(change),
