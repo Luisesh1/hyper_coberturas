@@ -141,6 +141,24 @@ function recommendRangeWidthPct({
   };
 }
 
+/** Recomendación ETH/WETH+USDC: `halfWidthPct` se muestra como ±X%. */
+function recommendEthUsdcHalfWidthPct({ atr14h, price } = {}) {
+  const currentPrice = Number(price);
+  const atr = Number(atr14h);
+  const fromAtr = Number.isFinite(currentPrice) && currentPrice > 0 && Number.isFinite(atr) && atr > 0
+    ? (3 * atr / currentPrice) * 100
+    : null;
+  const halfWidthPct = round2(Math.max(4.2, fromAtr ?? 5));
+  return {
+    halfWidthPct,
+    // Compatibilidad explícita: el campo legado es el ancho total.
+    widthPct: round2(halfWidthPct * 2),
+    source: fromAtr == null ? 'fallback_5pct' : 'max_4_2pct_or_3atr',
+    requiresConfirmation: halfWidthPct * 2 > 20,
+  };
+}
+
 module.exports = {
   recommendRangeWidthPct,
+  recommendEthUsdcHalfWidthPct,
 };

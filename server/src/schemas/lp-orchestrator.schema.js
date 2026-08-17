@@ -40,6 +40,9 @@ const protectionConfigSchema = z.union([
     minRebalanceNotionalPct: z.number().positive().max(100).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
+    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1']).optional(),
+    executionIntent: z.enum(['shadow', 'live']).optional(),
+    activationConfirmed: z.literal(true).optional(),
   }),
 ]);
 
@@ -136,6 +139,9 @@ const wizardProtectionSchema = z.union([
     minRebalanceNotionalPct: z.number().positive().max(100).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
+    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1']).optional(),
+    executionIntent: z.enum(['shadow', 'live']).optional(),
+    activationConfirmed: z.literal(true).optional(),
   }),
 ]);
 

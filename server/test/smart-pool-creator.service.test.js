@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   buildAutoFundingSelection,
+  buildEthUsdcRangeRecommendation,
   buildOptimalFundingSelection,
   computeAmountsFromWeight,
   computeRangeSuggestions,
@@ -56,6 +57,22 @@ test('computeRangeSuggestions genera presets ATR y fallback validos', () => {
   assert.equal(atrSuggestions[1].preset, 'balanced');
   assert.ok(atrSuggestions[0].rangeLowerPrice < atrSuggestions[0].rangeUpperPrice);
   assert.ok(fallbackSuggestions[2].widthPct > 0);
+});
+
+test('la sugerencia del wizard sólo publica el rango ATR para ETH/WETH+USDC', () => {
+  assert.deepEqual(
+    buildEthUsdcRangeRecommendation({ token0Symbol: 'WETH', token1Symbol: 'USDC', atr14: 100, currentPrice: 2000 }),
+    {
+      halfWidthPct: 15,
+      widthPct: 30,
+      source: 'max_4_2pct_or_3atr',
+      requiresConfirmation: true,
+    }
+  );
+  assert.equal(
+    buildEthUsdcRangeRecommendation({ token0Symbol: 'ARB', token1Symbol: 'USDC', atr14: 100, currentPrice: 2 }),
+    null
+  );
 });
 
 test('computeAmountsFromWeight reparte el valor objetivo segun el balance deseado', () => {

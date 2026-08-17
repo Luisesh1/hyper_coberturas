@@ -17,7 +17,7 @@ const DELTA_NEUTRAL_PRESETS = [
 const DEFAULT_PROTECTION = Object.freeze({
   enabled: false,
   accountId: '',
-  leverage: '5',
+  leverage: '10',
   configuredNotionalUsd: '',
   bandMode: 'adaptive',
   baseRebalancePriceMovePct: '3',
@@ -27,6 +27,9 @@ const DEFAULT_PROTECTION = Object.freeze({
   maxSlippageBps: '20',
   twapMinNotionalUsd: '10000',
   preset: 'adaptive',
+  policyVersion: 'legacy_zones_v1',
+  executionIntent: 'live',
+  activationConfirmed: false,
   autoTunedFor: null,
 });
 
@@ -301,6 +304,30 @@ export default function ProtectionFormFields({
 
           <details className={styles.advanced}>
             <summary>Configuración avanzada</summary>
+            <div className={styles.field}>
+              <label>Política de cobertura</label>
+              <select value={v.policyVersion} onChange={(e) => handleField('policyVersion', e.target.value)}>
+                <option value="legacy_zones_v1">Legacy zones v1 (operación real)</option>
+                <option value="net_profit_v1">Net profit v1 (recomendado ETH/WETH + USDC)</option>
+              </select>
+              {v.policyVersion === 'net_profit_v1' && (
+                <p className={styles.hint}>Empieza en sombra: simula BBO, costes y funding sin mandar órdenes. Para operación real exige confirmación explícita.</p>
+              )}
+            </div>
+            {v.policyVersion === 'net_profit_v1' && (
+              <div className={styles.field}>
+                <label className={styles.toggleRow}>
+                  <input type="checkbox" checked={v.executionIntent === 'live'} onChange={(e) => handleField('executionIntent', e.target.checked ? 'live' : 'shadow')} />
+                  <span>Operación real (sustituye la política legacy)</span>
+                </label>
+                {v.executionIntent === 'live' && (
+                  <label className={styles.toggleRow}>
+                    <input type="checkbox" checked={!!v.activationConfirmed} onChange={(e) => handleField('activationConfirmed', e.target.checked)} />
+                    <span>Confirmo activar órdenes reales de net_profit_v1</span>
+                  </label>
+                )}
+              </div>
+            )}
             <div className={styles.row}>
               <div className={styles.field}>
                 <label>Band mode</label>
@@ -389,6 +416,9 @@ export function buildProtectionPayload(formValue) {
     minRebalanceNotionalPct: Number(formValue.minRebalanceNotionalPct),
     maxSlippageBps: Number(formValue.maxSlippageBps),
     twapMinNotionalUsd: Number(formValue.twapMinNotionalUsd),
+    policyVersion: formValue.policyVersion || 'legacy_zones_v1',
+    executionIntent: formValue.executionIntent || 'live',
+    ...(formValue.activationConfirmed ? { activationConfirmed: true } : {}),
   };
 }
 

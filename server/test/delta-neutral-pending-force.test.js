@@ -109,8 +109,8 @@ function buildService(protection, { onExecute, actualQty = 0.25 } = {}) {
   });
   service._fetchSpot = async () => ({ priceCurrent: PRICE });
   // Aisla la ejecucion: aqui interesa SI se decide ejecutar, no el envio real.
-  service._executeRebalance = async ({ strategyState, reason }) => {
-    onExecute?.(reason);
+  service._executeRebalance = async ({ strategyState, reason, metrics }) => {
+    onExecute?.(reason, { metrics, strategyState });
     return { ...strategyState, lastRebalanceReason: reason, executed: true };
   };
   return service;
@@ -189,7 +189,7 @@ test('un trigger no forzado bloqueado por el dwell no deja nada pendiente', asyn
   assert.equal(state.pendingForceReason ?? null, null);
 });
 
-test('una proteccion migrada con minimo null ejecuta drift entre $11 y el viejo piso de $50', async () => {
+test('un minimo de orden migrado nulo no restaura el viejo piso de $50', async () => {
   const protection = buildProtection({
     minOrderNotionalUsd: null,
     strategyState: {
@@ -199,9 +199,10 @@ test('una proteccion migrada con minimo null ejecuta drift entre $11 y el viejo 
     },
   });
   let ejecutado = null;
-  // El target del snapshot es ~$25 y el short observado vale $5: drift ~$20.
+  // El modelo da un target de ~$15 y el short observado vale $0.25: el drift
+  // supera $11, pero sigue claramente por debajo del viejo piso de $50.
   const service = buildService(protection, {
-    actualQty: 0.002,
+    actualQty: 0.0001,
     onExecute: (reason) => { ejecutado = reason; },
   });
 
@@ -209,5 +210,32 @@ test('una proteccion migrada con minimo null ejecuta drift entre $11 y el viejo 
 
   assert.equal(ejecutado, 'timer_and_drift');
   assert.equal(state.lastDecision, 'rebalance_full');
+  assert.equal(state.executed, true);
+});
+
+test('net_profit_v1 live ejecuta su ajuste parcial, no el target por zonas legacy', async () => {
+  const protection = buildProtection({
+    policyVersion: 'net_profit_v1',
+    targetHedgeRatio: 0.6,
+    strategyState: {
+      lastRebalanceAt: Date.now() - (13 * 60 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+      executionIntent: 'live',
+      policyVersion: 'net_profit_v1',
+    },
+  });
+  let execution = null;
+  const service = buildService(protection, {
+    actualQty: 0.0001,
+    onExecute: (reason, context) => { execution = { reason, ...context }; },
+  });
+
+  const state = await service.evaluateProtection(protection);
+
+  assert.equal(execution.reason, 'net_profit_v1');
+  assert.ok(execution.metrics.targetQty > 0.0001);
+  assert.ok(execution.metrics.targetQty < execution.metrics.deltaQty,
+    'la orden debe ser el ajuste parcial y no el delta completo');
   assert.equal(state.executed, true);
 });

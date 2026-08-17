@@ -240,6 +240,9 @@ class LpOrchestratorService {
           minRebalanceNotionalPct: protectionConfig.minRebalanceNotionalPct,
           maxSlippageBps: protectionConfig.maxSlippageBps,
           twapMinNotionalUsd: protectionConfig.twapMinNotionalUsd,
+          policyVersion: protectionConfig.policyVersion,
+          executionIntent: protectionConfig.executionIntent,
+          activationConfirmed: protectionConfig.activationConfirmed,
           creationOperationId,
         });
         protectedPoolId = protectionResult?.id || protectionResult?.protectedPoolId || null;
@@ -1393,6 +1396,9 @@ class LpOrchestratorService {
           minRebalanceNotionalPct: protection.minRebalanceNotionalPct,
           maxSlippageBps: protection.maxSlippageBps,
           twapMinNotionalUsd: protection.twapMinNotionalUsd,
+          policyVersion: protection.policyVersion,
+          executionIntent: protection.executionIntent,
+          activationConfirmed: protection.activationConfirmed,
         });
         protectedPoolId = result?.id || result?.protectedPoolId || null;
       }

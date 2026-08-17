@@ -59,6 +59,12 @@ function makeFlow(overrides = {}) {
       pool: { priceCurrent: 2200 },
     },
     activeRange: { rangeLowerPrice: 2000, rangeUpperPrice: 2400 },
+    rangeMode: 'preset',
+    setRangeMode: vi.fn(),
+    setCustomLowerPrice: vi.fn(),
+    setCustomUpperPrice: vi.fn(),
+    setCustomWeightToken0: vi.fn(),
+    handleContinueToFunding: vi.fn(),
     prepareData: null,
     handleExecute: vi.fn(),
     step: 'range',
@@ -409,5 +415,87 @@ describe('useUnifiedLpFlow — defaults y validación de cobertura', () => {
     expect(flowReset).toHaveBeenCalledTimes(1);
     expect(view.result.current.preflight).toBe(null);
     expect(view.result.current.protection.enabled).toBe(true);
+  });
+});
+
+describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('aplica la recomendación ATR como rango custom y exige confirmación si supera 20%', () => {
+    const setRangeMode = vi.fn();
+    const setCustomLowerPrice = vi.fn();
+    const setCustomUpperPrice = vi.fn();
+    const handleContinueToFunding = vi.fn();
+    const { result } = renderFlow({
+      setRangeMode,
+      setCustomLowerPrice,
+      setCustomUpperPrice,
+      handleContinueToFunding,
+      suggestions: {
+        token0: { symbol: 'WETH', address: WETH, decimals: 18 },
+        token1: { symbol: 'USDC', address: USDC, decimals: 6 },
+        currentPrice: 2000,
+        atr14: 100,
+        ethUsdcRangeRecommendation: {
+          halfWidthPct: 15,
+          widthPct: 30,
+          source: 'max_4_2pct_or_3atr',
+          requiresConfirmation: true,
+        },
+      },
+    });
+
+    expect(result.current.ethUsdcRangeRecommendation.halfWidthPct).toBe(15);
+    act(() => result.current.applyEthUsdcRangeRecommendation());
+    expect(setRangeMode).toHaveBeenCalledWith('custom');
+    expect(setCustomLowerPrice).toHaveBeenCalledWith('1700');
+    expect(setCustomUpperPrice).toHaveBeenCalledWith('2300');
+    expect(result.current.handleContinueFromRange()).toEqual({ ok: false, requiresConfirmation: true });
+    expect(handleContinueToFunding).not.toHaveBeenCalled();
+
+    act(() => result.current.setEthUsdcRangeConfirmed(true));
+    expect(result.current.handleContinueFromRange()).toEqual({ ok: true });
+    expect(handleContinueToFunding).toHaveBeenCalledTimes(1);
+  });
+
+  it('no expone la recomendación ATR en standalone ni para otros pares', () => {
+    const standalone = renderHook(() => useUnifiedLpFlow({
+      mode: 'standalone',
+      wallet: { address: '0x1111111111111111111111111111111111111111' },
+      defaults: { network: 'arbitrum', version: 'v4' },
+    }));
+    expect(standalone.result.current.ethUsdcRangeRecommendation).toBe(null);
+
+    const otherPair = renderFlow({
+      token0Address: USDC,
+      token1Address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
+      tokenList: [
+        { symbol: 'USDC', address: USDC, decimals: 6 },
+        { symbol: 'ARB', address: '0x912CE59144191C1204E64559FE8253a0e49E6548', decimals: 18 },
+      ],
+      suggestions: {
+        token0: { symbol: 'USDC', address: USDC, decimals: 6 },
+        token1: { symbol: 'ARB', address: '0x912CE59144191C1204E64559FE8253a0e49E6548', decimals: 18 },
+        currentPrice: 1,
+        ethUsdcRangeRecommendation: { halfWidthPct: 15, widthPct: 30, requiresConfirmation: true },
+      },
+    });
+    expect(otherPair.result.current.ethUsdcRangeRecommendation).toBe(null);
+  });
+
+  it('recomienda sombra para ETH/USDC sin reemplazar una elección legacy explícita', () => {
+    const { result } = renderFlow();
+    expect(result.current.protection.policyVersion).toBe('net_profit_v1');
+    expect(result.current.protection.executionIntent).toBe('shadow');
+
+    act(() => result.current.setProtection({
+      ...result.current.protection,
+      policyVersion: 'legacy_zones_v1',
+      executionIntent: 'live',
+      activationConfirmed: false,
+    }));
+    expect(result.current.buildPlan().protection.policyVersion).toBe('legacy_zones_v1');
   });
 });

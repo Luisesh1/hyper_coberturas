@@ -1,7 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { recommendRangeWidthPct } = require('../src/services/lp-orchestrator/range-recommender');
+const { recommendRangeWidthPct, recommendEthUsdcHalfWidthPct } = require('../src/services/lp-orchestrator/range-recommender');
+
+test('ETH/USDC recomienda semiancho max(4.2%, 3×ATR14h/precio) y conserva widthPct legado', () => {
+  const r = recommendEthUsdcHalfWidthPct({ atr14h: 40, price: 2000 });
+  assert.deepEqual(r, { halfWidthPct: 6, widthPct: 12, source: 'max_4_2pct_or_3atr', requiresConfirmation: false });
+});
+
+test('ETH/USDC cae a ±5% sin ATR y pide confirmación si el ancho total supera 20%', () => {
+  assert.deepEqual(recommendEthUsdcHalfWidthPct({}), { halfWidthPct: 5, widthPct: 10, source: 'fallback_5pct', requiresConfirmation: false });
+  assert.equal(recommendEthUsdcHalfWidthPct({ atr14h: 100, price: 1000 }).requiresConfirmation, true);
+});
 
 test('ancho base proporcional a la volatilidad (k·RV)', () => {
   const r = recommendRangeWidthPct({ rvPct: 60, currentWidthPct: 5, volMultiplier: 0.15 });

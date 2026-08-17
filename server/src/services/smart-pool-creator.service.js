@@ -15,6 +15,7 @@ const {
   ZERO_HOOKS_ADDRESS,
 } = require('./uniswap-v4-helpers.service');
 const { classifyHook } = require('./uniswap/v4-hook-safety');
+const { recommendEthUsdcHalfWidthPct } = require('./lp-orchestrator/range-recommender');
 
 const { SUPPORTED_NETWORKS } = require('./uniswap/networks');
 const {
@@ -208,6 +209,16 @@ function resolveVolatileAsset(token0Symbol, token1Symbol) {
   if (!is0Stable && is1Stable) return norm0;
   if (!is0Stable && !is1Stable) return norm1;
   throw new ValidationError('Both tokens are stables, cannot determine volatile asset');
+}
+
+// La recomendación especial debe viajar en la misma respuesta que el precio y
+// el ATR que la originan. No se infiere en el cliente: así se conserva la
+// fórmula versionada y el fallback de servidor para todos los wizard.
+function buildEthUsdcRangeRecommendation({ token0Symbol, token1Symbol, atr14, currentPrice } = {}) {
+  const symbols = [token0Symbol, token1Symbol].map((symbol) => normalizeSymbol(symbol));
+  const isEthUsdc = symbols.includes('USDC') && symbols.some((symbol) => symbol === 'ETH' || symbol === 'WETH');
+  if (!isEthUsdc) return null;
+  return recommendEthUsdcHalfWidthPct({ atr14h: atr14, price: currentPrice });
 }
 
 async function fetchAtr14(volatileAsset) {
@@ -1980,6 +1991,12 @@ async function getSuggestions({
     const atr14 = await fetchAtr14(volatileAsset);
     const hasAtr = atr14 != null && atr14 > 0;
     const rangeSuggestions = computeRangeSuggestions(currentPrice, atr14, hasAtr);
+    const ethUsdcRangeRecommendation = buildEthUsdcRangeRecommendation({
+      token0Symbol: token0Info.symbol,
+      token1Symbol: token1Info.symbol,
+      atr14,
+      currentPrice,
+    });
     const allPrices = await marketService.getAllPrices().catch(() => ({}));
     const { token0UsdPrice, token1UsdPrice } = computeTargetUsdPrices({
       token0: token0Info,
@@ -2036,6 +2053,7 @@ async function getSuggestions({
       currentPrice: Number(currentPrice.toFixed(6)),
       volatileAsset,
       atr14: hasAtr ? Number(atr14.toFixed(4)) : null,
+      ethUsdcRangeRecommendation,
       tickSpacing: poolContext.tickSpacing,
       hooks: poolContext.hooks || ZERO_HOOKS_ADDRESS,
       poolAddress: poolContext.poolAddress,
@@ -2288,6 +2306,7 @@ module.exports = {
   DEFAULT_V4_TICK_SPACING_BY_FEE,
   MIN_SWAP_USD,
   buildAutoFundingSelection,
+  buildEthUsdcRangeRecommendation,
   buildOptimalFundingSelection,
   buildFundingPlan,
   buildIncreaseLiquidityFundingPlan,

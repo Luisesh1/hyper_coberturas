@@ -71,7 +71,7 @@ const IDENTITY_COLUMNS = `
   next_eligible_attempt_at, cooldown_reason, last_decision, last_decision_reason,
   tracking_error_qty, tracking_error_usd, execution_mode, max_spread_bps,
   max_execution_fee_usd, min_order_notional_usd, twap_slices, twap_duration_sec,
-  last_onchain_action, last_tx_hash, last_tx_at, replaced_by_position_identifier,
+  last_onchain_action, last_tx_hash, last_tx_at, replaced_by_position_identifier, policy_version, half_width_pct,
   in_range_checks, in_range_hits, time_in_range_ms, time_tracked_ms, time_in_range_pct,
   range_last_state_in_range, range_last_state_at, range_computed_at, range_frozen_at,
   created_at, updated_at, deactivated_at, creation_operation_id
@@ -140,6 +140,8 @@ function mapIdentityRow(row) {
     minOrderNotionalUsd: row.min_order_notional_usd != null ? Number(row.min_order_notional_usd) : null,
     twapSlices: row.twap_slices != null ? Number(row.twap_slices) : null,
     twapDurationSec: row.twap_duration_sec != null ? Number(row.twap_duration_sec) : null,
+    policyVersion: row.policy_version || null,
+    halfWidthPct: row.half_width_pct != null ? Number(row.half_width_pct) : null,
     lastOnchainAction: row.last_onchain_action || null,
     lastTxHash: row.last_tx_hash || null,
     lastTxAt: row.last_tx_at != null ? Number(row.last_tx_at) : null,
@@ -415,9 +417,9 @@ async function create(record, executor) {
        min_order_notional_usd, twap_slices, twap_duration_sec, last_onchain_action, last_tx_hash, last_tx_at,
        replaced_by_position_identifier, pool_snapshot_json, time_in_range_ms, time_tracked_ms,
        time_in_range_pct, range_last_state_in_range, range_last_state_at, range_computed_at, range_frozen_at,
-       created_at, updated_at, creation_operation_id
+       created_at, updated_at, creation_operation_id, policy_version, half_width_pct
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72)
      ON CONFLICT (creation_operation_id) WHERE creation_operation_id IS NOT NULL
      DO UPDATE SET updated_at = EXCLUDED.updated_at
      RETURNING id`,
@@ -492,6 +494,8 @@ async function create(record, executor) {
       record.createdAt,
       record.updatedAt ?? record.createdAt,
       record.creationOperationId ?? null,
+      record.policyVersion ?? null,
+      record.halfWidthPct ?? null,
     ]
   );
 
@@ -569,6 +573,8 @@ async function reactivate(userId, id, record, executor) {
             range_last_state_at = COALESCE($66, range_last_state_at),
             range_computed_at = COALESCE($67, range_computed_at),
             updated_at = $68,
+            policy_version = $69,
+            half_width_pct = $70,
             range_frozen_at = NULL,
             deactivated_at = NULL
       WHERE user_id = $1 AND id = $2
@@ -642,6 +648,8 @@ async function reactivate(userId, id, record, executor) {
       record.rangeLastStateAt ?? null,
       record.rangeComputedAt ?? null,
       updatedAt,
+      record.policyVersion ?? null,
+      record.halfWidthPct ?? null,
     ]
   );
 

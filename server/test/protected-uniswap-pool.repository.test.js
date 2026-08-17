@@ -69,7 +69,8 @@ test('create usa placeholders consistentes con la cantidad de parámetros', asyn
   assert.ok(capturedParams.length >= maxPlaceholder(capturedSql));
   assert.match(capturedSql, /'active'/);
   assert.match(capturedSql, /ON CONFLICT \(creation_operation_id\)/);
-  assert.equal(capturedParams.at(-1), 31);
+  assert.equal(capturedParams.at(-3), 31);
+  assert.equal(capturedParams.at(-2), null, 'la ausencia preserva legacy_zones_v1');
 });
 
 test('reactivate usa placeholders consistentes con la cantidad de parámetros', async () => {
@@ -78,6 +79,8 @@ test('reactivate usa placeholders consistentes con la cantidad de parámetros', 
 
   await repository.reactivate(1, 99, {
     ...buildRecord(),
+    policyVersion: 'net_profit_v1',
+    halfWidthPct: 5,
     updatedAt: 1234567999,
   }, {
     query: async (sql, params) => {
@@ -88,4 +91,6 @@ test('reactivate usa placeholders consistentes con la cantidad de parámetros', 
   });
 
   assert.equal(maxPlaceholder(capturedSql), capturedParams.length);
+  assert.equal(capturedParams.at(-2), 'net_profit_v1');
+  assert.equal(capturedParams.at(-1), 5);
 });

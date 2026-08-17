@@ -22,6 +22,12 @@ const {
   normalizeProtectionSnapshot,
   validateNormalizedProtectionSnapshot,
 } = require('./delta-neutral-snapshot.service');
+const {
+  NET_PROFIT_V1,
+  decideNetProfitV1,
+  createShadowState,
+  simulateShadowFill,
+} = require('./net-profit-policy.service');
 const MAX_SNAPSHOT_FALLBACK_AGE_MS = 2 * 60_000;
 const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
 const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
@@ -139,6 +145,7 @@ class ProtectedPoolDeltaNeutralService {
     // tras una ejecución, no de forma continua.
     this.userFillsCache = new Map();
     this.evaluationLocks = new Map();
+    this.shadowStates = new Map();
     this.hybridStats = {
       marketTicks: 0,
       truthRefreshes: 0,
@@ -312,8 +319,16 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     const zoneState = this._deriveZoneState(protection, baseTwin.syntheticPriceCurrent);
-    const baseRatio = Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
-    const targetHedgeRatioApplied = baseRatio * this._zoneMultiplier(zoneState);
+    const policyVersion = protection.policyVersion || protection.strategyState?.policyVersion;
+    const isNetProfitPolicy = policyVersion === NET_PROFIT_V1;
+    const liveNetProfit = isNetProfitPolicy && protection.strategyState?.executionIntent === 'live';
+    const baseRatio = liveNetProfit ? 1 : Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
+    // net_profit_v1 vive sobre el 100% del delta y no hereda los escalones
+    // de zona legacy. Es crucial también en live: de otro modo el selector
+    // "Operación real" conservaría una subcobertura de hasta 40% en centro.
+    const targetHedgeRatioApplied = liveNetProfit
+      ? 1
+      : baseRatio * this._zoneMultiplier(zoneState);
     const tunedTwin = buildSyntheticLpState(snapshot, {
       volatilePriceUsd: marketContext?.hlPrice,
       targetHedgeRatio: targetHedgeRatioApplied,
@@ -322,8 +337,8 @@ class ProtectedPoolDeltaNeutralService {
     // Shadow: target propuesto con los multiplicadores alternativos. No se
     // ejecuta; sirve para medir cuánto residual dejaría de existir si se
     // adoptara (ver _logShadowHedge en el loop de evaluación).
-    const shadowRatioApplied = baseRatio * this._zoneMultiplier(zoneState, this.shadowZoneHedgeMultipliers);
-    const shadowTwin = this.shadowMode
+    const shadowRatioApplied = isNetProfitPolicy ? 1 : baseRatio * this._zoneMultiplier(zoneState, this.shadowZoneHedgeMultipliers);
+    const shadowTwin = (this.shadowMode || isNetProfitPolicy)
       ? buildSyntheticLpState(snapshot, {
         volatilePriceUsd: marketContext?.hlPrice,
         targetHedgeRatio: shadowRatioApplied,
@@ -336,6 +351,7 @@ class ProtectedPoolDeltaNeutralService {
       targetHedgeRatioApplied,
       shadowTargetHedgeRatioApplied: shadowRatioApplied,
       shadowTargetQty: shadowTwin?.targetQty ?? null,
+      shadowPolicyVersion: isNetProfitPolicy ? NET_PROFIT_V1 : null,
     };
   }
 
@@ -1760,14 +1776,83 @@ class ProtectedPoolDeltaNeutralService {
       cooldownReason: null,
     };
 
-    const rebalanceDecision = resolveRebalanceDecision({
-      protection: activeProtection,
-      metrics,
-      actualQty,
-      currentPrice,
-      forceReason,
-      forceRebalance,
-    });
+    const isNetProfitLive = (activeProtection.policyVersion || strategyState.policyVersion) === NET_PROFIT_V1
+      && (activeProtection.strategyState?.executionIntent || strategyState.executionIntent) === 'live';
+    const expectedPolicyCostUsd = estimateExecutionCostUsd(
+      Number(metrics.deltaQty) - actualQty,
+      currentPrice
+    );
+    const netProfitDecision = isNetProfitLive
+      ? decideNetProfitV1({
+        deltaQty: Number(metrics.deltaQty),
+        actualQty,
+        currentPrice,
+        rangeLowerPrice: activeProtection.rangeLowerPrice,
+        rangeUpperPrice: activeProtection.rangeUpperPrice,
+        lpValueUsd: Number(metrics.poolValueUsd),
+        expectedCostUsd: expectedPolicyCostUsd,
+        state: strategyState.netProfitPolicyState || {},
+      })
+      : null;
+    // No modificamos el record para ejecutar: esta vista efímera aplica los
+    // límites aprobados a cada IOC y a todos sus reintentos. Riesgo >=15% del
+    // LP puede usar 30 bps, pero sigue pasando los mismos gates de snapshot,
+    // margen aislado, BBO y cooldown que cualquier ajuste live.
+    const executionProtection = isNetProfitLive
+      ? {
+        ...activeProtection,
+        maxSpreadBps: Number.isFinite(Number(activeProtection.maxSpreadBps))
+          ? Math.min(Number(activeProtection.maxSpreadBps), 10)
+          : 10,
+        maxSlippageBps: netProfitDecision?.riskToInner
+          ? 30
+          : Number.isFinite(Number(activeProtection.maxSlippageBps))
+            ? Math.min(Number(activeProtection.maxSlippageBps), 15)
+            : 15,
+        executionMode: 'ioc',
+      }
+      : activeProtection;
+    // La política calcula el delta completo para medir el riesgo, pero la
+    // orden live lleva sólo su corrección parcial. Conservamos ambos targets:
+    // `targetQty` para ejecutar y `policyTargetQty` para observabilidad.
+    const executionMetrics = isNetProfitLive && netProfitDecision?.decision === 'rebalance'
+      ? {
+        ...metrics,
+        targetQty: actualQty + Number(netProfitDecision.adjustQty || 0),
+        policyTargetQty: Number(metrics.deltaQty),
+      }
+      : metrics;
+    const executionTracking = isNetProfitLive && netProfitDecision?.decision === 'rebalance'
+      ? {
+        trackingErrorQty: Number(executionMetrics.targetQty) - actualQty,
+        trackingErrorUsd: Math.abs(Number(executionMetrics.targetQty) - actualQty) * currentPrice,
+      }
+      : null;
+    const rebalanceDecision = isNetProfitLive
+      ? {
+        decision: netProfitDecision.decision === 'rebalance' ? 'net_profit_rebalance' : 'hold',
+        tracking: {
+          trackingErrorQty: Number(metrics.deltaQty) - actualQty,
+          trackingErrorUsd: Math.abs(Number(metrics.deltaQty) - actualQty) * currentPrice,
+        },
+        bands: {
+          holdBandUsd: netProfitDecision.minNotionalUsd,
+          estimatedCostUsd: expectedPolicyCostUsd,
+        },
+      }
+      : resolveRebalanceDecision({
+        protection: activeProtection,
+        metrics,
+        actualQty,
+        currentPrice,
+        forceReason,
+        forceRebalance,
+      });
+    if (isNetProfitLive) {
+      nextState.netProfitPolicyState = netProfitDecision.nextState || strategyState.netProfitPolicyState || {};
+      nextState.netProfitPolicyGate = netProfitDecision.gate;
+      nextState.netProfitPolicyTargetQty = Number(metrics.deltaQty);
+    }
     const tracking = rebalanceDecision.tracking;
     nextState.trackingErrorQty = tracking.trackingErrorQty;
     nextState.trackingErrorUsd = tracking.trackingErrorUsd;
@@ -2014,7 +2099,41 @@ class ProtectedPoolDeltaNeutralService {
     // vs el que dejaría el target propuesto (deltaQty − shadowTargetQty), sin
     // ejecutar. Permite cuantificar la mejora de cobertura sobre plata real
     // antes de adoptar los nuevos multiplicadores. Ver KPIs del plan.
-    if (this.shadowMode && metrics.shadowTargetQty != null) {
+    if ((this.shadowMode || metrics.shadowPolicyVersion === NET_PROFIT_V1) && metrics.shadowTargetQty != null) {
+      // Estado exclusivamente en memoria: no consulta HL ni muta el hedge
+      // real. Se persiste el último resumen en strategyState al final del tick
+      // para recuperación/diagnóstico, pero nunca se usa para reconciliar.
+      const previousShadow = this.shadowStates.get(activeProtection.id)
+        || createShadowState({ actualQty, markPrice: currentPrice });
+      const shadowDecision = metrics.shadowPolicyVersion === NET_PROFIT_V1
+        ? decideNetProfitV1({
+          deltaQty: Number(metrics.deltaQty),
+          actualQty: previousShadow.actualQty,
+          currentPrice,
+          rangeLowerPrice: activeProtection.rangeLowerPrice,
+          rangeUpperPrice: activeProtection.rangeUpperPrice,
+          lpValueUsd: Number(metrics.poolValueUsd),
+          expectedCostUsd: Math.max(0.0005 * currentPrice * Math.abs(Number(metrics.deltaQty) - previousShadow.actualQty), 0),
+          state: nextState.shadowPolicyState || {},
+        })
+        : { decision: 'rebalance', targetQty: Number(metrics.shadowTargetQty), adjustQty: Number(metrics.shadowTargetQty) - previousShadow.actualQty };
+      const shadowTargetQty = shadowDecision.decision === 'rebalance'
+        ? previousShadow.actualQty + Number(shadowDecision.adjustQty || 0)
+        : previousShadow.actualQty;
+      const shadow = simulateShadowFill(previousShadow, {
+        targetQty: shadowTargetQty,
+        bid: Number(liveMarket?.bbo?.bid ?? currentPrice),
+        ask: Number(liveMarket?.bbo?.ask ?? currentPrice),
+        feeRate: Number(liveMarket?.assetContext?.takerFeeRate) || 0.0005,
+        fundingUsd: Number(position?.cumFunding?.sinceOpen) - Number(strategyState.shadowFundingSourceUsd || 0),
+      });
+      this.shadowStates.set(activeProtection.id, shadow);
+      nextState.shadowPolicyState = shadowDecision.nextState || nextState.shadowPolicyState || {};
+      if (!nextState.lastShadowSnapshotAt || Date.now() - Number(nextState.lastShadowSnapshotAt) >= 30_000) {
+        nextState.shadowSnapshot = shadow;
+        nextState.lastShadowSnapshotAt = Date.now();
+      }
+      nextState.shadowFundingSourceUsd = Number(position?.cumFunding?.sinceOpen) || 0;
       const liveResidualUsd = (Number(metrics.deltaQty) - Number(metrics.targetQty)) * currentPrice;
       const shadowResidualUsd = (Number(metrics.deltaQty) - Number(metrics.shadowTargetQty)) * currentPrice;
       this.logger.info?.('delta_neutral_shadow_hedge', {
@@ -2025,14 +2144,23 @@ class ProtectedPoolDeltaNeutralService {
         deltaQty: Number(metrics.deltaQty),
         targetQty: Number(metrics.targetQty),
         shadowTargetQty: Number(metrics.shadowTargetQty),
+        shadowDecision: shadowDecision.decision,
+        shadowGate: shadowDecision.gate || null,
         actualQty,
         liveResidualUsd,
         shadowResidualUsd,
         residualReductionUsd: Math.abs(liveResidualUsd) - Math.abs(shadowResidualUsd),
         currentPrice,
+        shadowExecutionFeesUsd: shadow.executionFeesUsd,
+        shadowSlippageUsd: shadow.slippageUsd,
+        shadowSlippageEwmaBps: shadow.slippageEwmaBps,
+        shadowFundingUsd: shadow.fundingUsd,
+        shadowMtmUsd: shadow.realizedPnlUsd + shadow.unrealizedPnlUsd,
       });
     }
-    const forceReduceNearZero = metrics.targetQty <= NEAR_ZERO_TARGET_QTY && actualQty > 1e-8;
+    const forceReduceNearZero = !isNetProfitLive
+      && metrics.targetQty <= NEAR_ZERO_TARGET_QTY
+      && actualQty > 1e-8;
     const minDwellActive = Number.isFinite(Number(nextState.minDwellUntil)) && Date.now() < Number(nextState.minDwellUntil);
     const confidenceBlocksIncrease = nextState.modelConfidence === 'low' && driftQty > 0;
     const timerDue = !nextState.lastRebalanceAt
@@ -2050,13 +2178,15 @@ class ProtectedPoolDeltaNeutralService {
       metrics.poolValueUsd,
       this.urgentMinRebalanceNotionalPct
     );
-    const urgentTrigger = forceReason === 'boundary_cross'
-      || priceMovePct >= band.effectiveBandPct;
-    const shouldRebalance = forceRebalance
-      || forceReduceNearZero
-      || (urgentTrigger && driftUsd >= urgentMinNotionalUsd)
-      || (timerDue && driftUsd >= minRebalanceNotionalUsd)
-      || (!position && metrics.targetQty > 0.0000001);
+    const urgentTrigger = !isNetProfitLive && (forceReason === 'boundary_cross'
+      || priceMovePct >= band.effectiveBandPct);
+    const shouldRebalance = isNetProfitLive
+      ? netProfitDecision.decision === 'rebalance'
+      : forceRebalance
+        || forceReduceNearZero
+        || (urgentTrigger && driftUsd >= urgentMinNotionalUsd)
+        || (timerDue && driftUsd >= minRebalanceNotionalUsd)
+        || (!position && metrics.targetQty > 0.0000001);
 
     if (urgentTrigger && driftUsd < urgentMinNotionalUsd) {
       this.logger.info?.('delta_neutral_urgent_rebalance_skipped_below_band', {
@@ -2089,12 +2219,12 @@ class ProtectedPoolDeltaNeutralService {
     }
 
     const preflight = await this._buildPreflight({
-      protection: activeProtection,
+      protection: executionProtection,
       hl,
       strategyState: nextState,
       actualQty,
       currentPrice,
-      tracking,
+      tracking: executionTracking || tracking,
       bands: rebalanceDecision.bands,
       decision: rebalanceDecision.decision,
       accountState: liveMarket?.clearinghouseState || null,
@@ -2159,8 +2289,10 @@ class ProtectedPoolDeltaNeutralService {
       preflightOk: preflight.ok,
     });
     nextState.lastDecision = rebalanceDecision.decision;
-    nextState.lastDecisionReason = forceReason
-      || (rebalanceDecision.decision === 'hold' ? 'within_cost_aware_band' : 'drift_exceeds_cost_aware_band');
+    nextState.lastDecisionReason = isNetProfitLive
+      ? netProfitDecision.gate
+      : forceReason
+        || (rebalanceDecision.decision === 'hold' ? 'within_cost_aware_band' : 'drift_exceeds_cost_aware_band');
     if (confidenceBlocksIncrease) {
       nextState.lastDecision = 'refresh_snapshot';
       nextState.lastDecisionReason = 'low_confidence_model';
@@ -2272,7 +2404,7 @@ class ProtectedPoolDeltaNeutralService {
       }
       if (preflight.reason === 'spread_too_wide') {
         preflightExtra.spreadBps = liveMarket?.bbo?.spreadBps;
-        preflightExtra.maxSpreadBps = activeProtection.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS;
+        preflightExtra.maxSpreadBps = executionProtection.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS;
       }
       if (preflight.reason === 'estimated_execution_fee_too_high') {
         preflightExtra.estimatedCost = rebalanceDecision.bands?.estimatedCostUsd;
@@ -2299,19 +2431,21 @@ class ProtectedPoolDeltaNeutralService {
       return nextState;
     }
 
-    const reason = forceReason
-      || (!position && metrics.targetQty > 0.0000001 ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
+    const reason = isNetProfitLive
+      ? 'net_profit_v1'
+      : forceReason
+        || (!position && metrics.targetQty > 0.0000001 ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
     // La senal pendiente se cobra aqui: se ejecuta con su motivo original y no
     // debe sobrevivir a su propia ejecucion.
     nextState.pendingForceReason = null;
     return this._executeRebalance({
-      protection: activeProtection,
+      protection: executionProtection,
       tradingService,
       hl,
       position,
       actualQty,
       currentPrice,
-      metrics,
+      metrics: executionMetrics,
       band,
       strategyState: nextState,
       reason,
@@ -2356,6 +2490,7 @@ class ProtectedPoolDeltaNeutralService {
       actualQty = latestSignedQty < 0 ? Math.abs(latestSignedQty) : 0;
     }
 
+    const policyTargetQty = Number(metrics.policyTargetQty ?? metrics.targetQty);
     const driftQty = Number(metrics.targetQty) - Number(actualQty);
     const driftUsd = Math.abs(driftQty) * currentPrice;
     if (!Number.isFinite(driftQty) || Math.abs(driftQty) < 1e-8) {
@@ -2398,7 +2533,7 @@ class ProtectedPoolDeltaNeutralService {
 
     const beforeState = {
       actualQtyBefore: actualQty,
-      targetQtyBefore: Number(metrics.targetQty),
+      targetQtyBefore: policyTargetQty,
       deltaQtyBefore: Number(metrics.deltaQty),
       gammaBefore: Number(metrics.gamma),
       driftUsd,
@@ -2469,8 +2604,8 @@ class ProtectedPoolDeltaNeutralService {
         cooldownReason: cooldown.cooldownReason,
         lastDecision: strategyState.lastDecision || 'rebalance_full',
         lastDecisionReason: strategyState.lastDecisionReason || reason,
-        trackingErrorQty: Number(metrics.targetQty) - Number(actualQty),
-        trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQty)) * currentPrice,
+        trackingErrorQty: policyTargetQty - Number(actualQty),
+        trackingErrorUsd: Math.abs(policyTargetQty - Number(actualQty)) * currentPrice,
         executionMode,
       });
       await this._persistDecision(protection, {
@@ -2481,10 +2616,10 @@ class ProtectedPoolDeltaNeutralService {
         executionSkippedBecause: err.message,
         executionMode,
         estimatedCostUsd: estimateExecutionCostUsd(driftQty, currentPrice),
-        targetQty: metrics.targetQty,
+        targetQty: policyTargetQty,
         actualQty,
-        trackingErrorQty: Number(metrics.targetQty) - Number(actualQty),
-        trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQty)) * currentPrice,
+        trackingErrorQty: policyTargetQty - Number(actualQty),
+        trackingErrorUsd: Math.abs(policyTargetQty - Number(actualQty)) * currentPrice,
         currentPrice,
         finalStrategyStatus: failedState.status,
         riskGateTriggered: false,
@@ -2529,7 +2664,7 @@ class ProtectedPoolDeltaNeutralService {
       lastRebalanceAt: Date.now(),
       lastRebalanceReason: reason,
       lastActualQty: actualQtyAfter,
-      lastTargetQty: Number(metrics.targetQty),
+      lastTargetQty: Number(metrics.policyTargetQty ?? metrics.targetQty),
       lastSnapshotPrice: currentPrice,
       lastError: executionSummary.partial ? 'El rebalance TWAP quedo parcial.' : null,
       lastExecutionAttemptAt: Date.now(),
@@ -2557,8 +2692,8 @@ class ProtectedPoolDeltaNeutralService {
       cooldownReason: null,
       lastDecision: strategyState.lastDecision || 'rebalance_full',
       lastDecisionReason: strategyState.lastDecisionReason || reason,
-      trackingErrorQty: Number(metrics.targetQty) - Number(actualQtyAfter),
-      trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQtyAfter)) * currentPrice,
+      trackingErrorQty: policyTargetQty - Number(actualQtyAfter),
+      trackingErrorUsd: Math.abs(policyTargetQty - Number(actualQtyAfter)) * currentPrice,
       executionMode,
     });
 
@@ -2576,7 +2711,7 @@ class ProtectedPoolDeltaNeutralService {
       gammaBefore: beforeState.gammaBefore,
       targetQtyBefore: beforeState.targetQtyBefore,
       actualQtyBefore: beforeState.actualQtyBefore,
-      targetQtyAfter: Number(metrics.targetQty),
+      targetQtyAfter: policyTargetQty,
       actualQtyAfter,
       driftUsd: beforeState.driftUsd,
       executionFeeUsd: executionSummary.executionFeeUsd,
@@ -2599,10 +2734,10 @@ class ProtectedPoolDeltaNeutralService {
       executionMode,
       estimatedCostUsd: estimateExecutionCostUsd(driftQty, currentPrice),
       realizedCostUsd: Number(executionSummary.executionFeeUsd || 0) + Number(executionSummary.slippageUsd || 0),
-      targetQty: metrics.targetQty,
+      targetQty: policyTargetQty,
       actualQty: actualQtyAfter,
-      trackingErrorQty: Number(metrics.targetQty) - Number(actualQtyAfter),
-      trackingErrorUsd: Math.abs(Number(metrics.targetQty) - Number(actualQtyAfter)) * currentPrice,
+      trackingErrorQty: policyTargetQty - Number(actualQtyAfter),
+      trackingErrorUsd: Math.abs(policyTargetQty - Number(actualQtyAfter)) * currentPrice,
       currentPrice,
       finalStrategyStatus: updatedState.status,
       riskGateTriggered: false,
@@ -2637,6 +2772,7 @@ class ProtectedPoolDeltaNeutralService {
         size: driftQty,
         leverage: protection.leverage,
         marginMode: 'isolated',
+        maxSlippageBps: protection.maxSlippageBps,
         cloid: this._executionCloid(executionId, `${step}:increase`),
       });
       const fillPrice = Number(result.fillPrice || currentPrice);
@@ -2654,6 +2790,7 @@ class ProtectedPoolDeltaNeutralService {
     const result = await tradingService.closePosition({
       asset: protection.inferredAsset,
       size: reduceQty,
+      maxSlippageBps: protection.maxSlippageBps,
       cloid: this._executionCloid(executionId, `${step}:decrease`),
     });
     const fillPrice = Number(result.closePrice || currentPrice);
@@ -2724,11 +2861,13 @@ class ProtectedPoolDeltaNeutralService {
             size: qty,
             leverage: protection.leverage,
             marginMode: 'isolated',
+            maxSlippageBps: protection.maxSlippageBps,
             cloid: this._executionCloid(executionId, `twap:${index}:increase`),
           })
           : await tradingService.closePosition({
             asset: protection.inferredAsset,
             size: qty,
+            maxSlippageBps: protection.maxSlippageBps,
             cloid: this._executionCloid(executionId, `twap:${index}:decrease`),
           });
         lastFillPrice = Number(sliceResult.fillPrice || sliceResult.closePrice || currentPrice);

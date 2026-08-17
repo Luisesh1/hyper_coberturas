@@ -249,8 +249,46 @@ export default function UnifiedLpWizard({
               activeRange={flow.activeRange}
               error={flow.error}
               handleReset={flow.handleReset}
-              handleContinueToFunding={flow.handleContinueToFunding}
+              handleContinueToFunding={unified.handleContinueFromRange}
             />
+
+            {isOrchestrated && unified.ethUsdcRangeRecommendation && (
+              <section className={`${styles.card} ${styles.cardTeal}`}>
+                <h4 className={styles.cardTitle}>Rango recomendado ETH/USDC</h4>
+                <div className={styles.kv}>
+                  <span>Semiancho ATR</span>
+                  <strong>±{unified.ethUsdcRangeRecommendation.halfWidthPct}%</strong>
+                </div>
+                <div className={styles.kv}>
+                  <span>Ancho total</span>
+                  <strong>{unified.ethUsdcRangeRecommendation.widthPct}%</strong>
+                </div>
+                <p className={styles.hint}>
+                  Se calcula como máximo entre ±4,2% y tres ATR de 14 horas. Al aplicarlo se selecciona
+                  <strong> Personalizado</strong>, para conservar exactamente el rango revisado.
+                </p>
+                <button
+                  type="button"
+                  className={styles.secondaryBtn}
+                  onClick={unified.applyEthUsdcRangeRecommendation}
+                >
+                  Aplicar rango ±{unified.ethUsdcRangeRecommendation.halfWidthPct}%
+                </button>
+                {unified.ethUsdcRangeRecommendation.requiresConfirmation && unified.ethUsdcRangeRecommendationApplied && (
+                  <label className={styles.checkboxRow}>
+                    <input
+                      type="checkbox"
+                      checked={unified.ethUsdcRangeConfirmed}
+                      onChange={(event) => unified.setEthUsdcRangeConfirmed(event.target.checked)}
+                    />
+                    Confirmo el rango amplio ({unified.ethUsdcRangeRecommendation.widthPct}% total).
+                  </label>
+                )}
+                {unified.ethUsdcRangeRecommendation.requiresConfirmation && unified.ethUsdcRangeRecommendationApplied && !unified.ethUsdcRangeConfirmed && (
+                  <p className={styles.error}>Confirma este rango personalizado antes de continuar a fondeo.</p>
+                )}
+              </section>
+            )}
 
             {isOrchestrated && (
               <section className={`${styles.card} ${styles.cardTeal}`}>

@@ -839,6 +839,9 @@ async function createDeltaNeutralProtectedPool({
   minRebalanceNotionalPct,
   maxSlippageBps,
   twapMinNotionalUsd,
+  policyVersion,
+  executionIntent,
+  activationConfirmed,
   creationOperationId,
 }, deps = {}) {
   if (!candidate.deltaNeutralEligible) {
@@ -861,9 +864,20 @@ async function createDeltaNeutralProtectedPool({
   const normalizedBandMode = normalizeBandMode(bandMode);
   const normalizedBaseBandPct = normalizeBaseRebalancePriceMovePct(baseRebalancePriceMovePct);
   const normalizedRebalanceIntervalSec = normalizeRebalanceIntervalSec(rebalanceIntervalSec);
-  const normalizedTargetHedgeRatio = normalizeTargetHedgeRatio(targetHedgeRatio);
+  const isNetProfitV1 = policyVersion === 'net_profit_v1';
+  if (isNetProfitV1 && executionIntent === 'live' && activationConfirmed !== true) {
+    throw new ValidationError('Confirma la operación real antes de activar net_profit_v1.');
+  }
+  const liveNetProfit = isNetProfitV1 && executionIntent === 'live';
+  const normalizedTargetHedgeRatio = liveNetProfit ? 1 : normalizeTargetHedgeRatio(targetHedgeRatio);
   const normalizedMinRebalanceNotionalPct = normalizeMinRebalanceNotionalPct(minRebalanceNotionalPct);
   const normalizedMaxSlippageBps = normalizeMaxSlippageBps(maxSlippageBps);
+  // La política net-profit nueva tiene un presupuesto de ejecución más
+  // estricto en condiciones normales. Los registros legacy conservan sin
+  // cambios su configuración y sus defaults históricos.
+  const policyMaxSlippageBps = liveNetProfit
+    ? Math.min(normalizedMaxSlippageBps, 15)
+    : normalizedMaxSlippageBps;
   const normalizedTwapMinNotionalUsd = normalizeTwapMinNotionalUsd(twapMinNotionalUsd);
 
   const deltaMetrics = computeDeltaNeutralMetrics(snapshot, {
@@ -925,6 +939,11 @@ async function createDeltaNeutralProtectedPool({
   strategyState.lastExecutionAttemptAt = null;
   strategyState.nextEligibleAttemptAt = null;
   strategyState.cooldownReason = null;
+  // La selección vive junto a su estado operativo para que shadow sea
+  // recuperable tras restart sin leer ni resincronizar la posición simulada.
+  strategyState.policyVersion = isNetProfitV1 ? 'net_profit_v1' : 'legacy_zones_v1';
+  strategyState.executionIntent = isNetProfitV1 ? (executionIntent || 'shadow') : 'live';
+  strategyState.shadowPolicyVersion = isNetProfitV1 && !liveNetProfit ? 'net_profit_v1' : null;
   strategyState.trackingErrorQty = Number(deltaMetrics.targetQty);
   strategyState.trackingErrorUsd = Number(deltaMetrics.targetQty) * Number(snapshot.priceCurrent || deltaMetrics.volatilePriceUsd || 0);
   const baseRecord = {
@@ -956,7 +975,7 @@ async function createDeltaNeutralProtectedPool({
     rebalanceIntervalSec: normalizedRebalanceIntervalSec,
     targetHedgeRatio: normalizedTargetHedgeRatio,
     minRebalanceNotionalPct: normalizedMinRebalanceNotionalPct,
-    maxSlippageBps: normalizedMaxSlippageBps,
+    maxSlippageBps: policyMaxSlippageBps,
     twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
     strategyEngineVersion: 'v2',
     snapshotStatus: snapshotMeta.snapshotStatus,
@@ -966,12 +985,14 @@ async function createDeltaNeutralProtectedPool({
     lastDecisionReason: strategyState.lastDecisionReason,
     trackingErrorQty: strategyState.trackingErrorQty,
     trackingErrorUsd: strategyState.trackingErrorUsd,
-    executionMode: DEFAULT_EXECUTION_MODE,
-    maxSpreadBps: DEFAULT_MAX_SPREAD_BPS,
+    executionMode: liveNetProfit ? 'ioc' : DEFAULT_EXECUTION_MODE,
+    maxSpreadBps: liveNetProfit ? 10 : DEFAULT_MAX_SPREAD_BPS,
     maxExecutionFeeUsd: DEFAULT_MAX_EXECUTION_FEE_USD,
     minOrderNotionalUsd: DEFAULT_MIN_ORDER_NOTIONAL_USD,
     twapSlices: DEFAULT_TWAP_SLICES,
     twapDurationSec: DEFAULT_TWAP_DURATION_SEC,
+    policyVersion: isNetProfitV1 ? 'net_profit_v1' : null,
+    halfWidthPct: ((snapshot.rangeUpperPrice - snapshot.rangeLowerPrice) / 2 / snapshot.priceCurrent) * 100,
     strategyState,
     valueMode: 'usd',
     leverage: normalizedLeverage,
@@ -1003,7 +1024,7 @@ async function createDeltaNeutralProtectedPool({
     rebalanceIntervalSec: normalizedRebalanceIntervalSec,
     targetHedgeRatio: normalizedTargetHedgeRatio,
     minRebalanceNotionalPct: normalizedMinRebalanceNotionalPct,
-    maxSlippageBps: normalizedMaxSlippageBps,
+    maxSlippageBps: policyMaxSlippageBps,
     twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
     strategyState,
     initialConfiguredHedgeNotionalUsd: normalizedNotionalUsd,
@@ -1090,6 +1111,9 @@ async function createProtectedPool({
   minRebalanceNotionalPct,
   maxSlippageBps,
   twapMinNotionalUsd,
+  policyVersion,
+  executionIntent,
+  activationConfirmed,
   creationOperationId,
 }, deps = {}) {
   const snapshot = normalizePoolSnapshot(pool);
@@ -1129,6 +1153,9 @@ async function createProtectedPool({
       minRebalanceNotionalPct,
       maxSlippageBps,
       twapMinNotionalUsd,
+      policyVersion,
+      executionIntent,
+      activationConfirmed,
       creationOperationId,
     }, deps);
   }

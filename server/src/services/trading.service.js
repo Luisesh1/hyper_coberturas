@@ -19,6 +19,13 @@ const crypto = require('node:crypto');
 // Slippage para ordenes de mercado: margen minimo para garantizar ejecucion inmediata
 const MARKET_ORDER_SLIPPAGE = config.trading.marketOrderSlippage;
 
+function resolveOrderSlippage(maxSlippageBps) {
+  const policyLimit = Number(maxSlippageBps) / 10_000;
+  return Number.isFinite(policyLimit) && policyLimit > 0
+    ? Math.min(MARKET_ORDER_SLIPPAGE, policyLimit)
+    : MARKET_ORDER_SLIPPAGE;
+}
+
 function deriveCloid(seed, suffix = '') {
   if (!seed) return null;
   return `0x${crypto.createHash('sha256').update(`${seed}:${suffix}`).digest('hex').slice(0, 32)}`;
@@ -49,7 +56,7 @@ class TradingService {
     return isLong ? diff : -diff;
   }
 
-  async openPosition({ asset, side, size, leverage, marginMode, limitPrice, cloid = null }) {
+  async openPosition({ asset, side, size, leverage, marginMode, limitPrice, maxSlippageBps, cloid = null }) {
     const assetName = asset.toUpperCase();
     const isBuy = side === 'long';
     const lev = leverage || config.trading.defaultLeverage;
@@ -139,9 +146,10 @@ class TradingService {
       if (limitPrice) {
         orderPrice = formatPrice(limitPrice);
       } else {
+        const slippage = resolveOrderSlippage(maxSlippageBps);
         orderPrice = isBuy
-          ? formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE))
-          : formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE));
+          ? formatPrice(midPrice * (1 + slippage))
+          : formatPrice(midPrice * (1 - slippage));
       }
 
       const result = await this.hl.placeOrder({
@@ -177,7 +185,7 @@ class TradingService {
     });
   }
 
-  async closePosition({ asset, size, cloid = null }) {
+  async closePosition({ asset, size, maxSlippageBps, cloid = null }) {
     const assetName = asset.toUpperCase();
 
     const state = await this.hl.getClearinghouseState();
@@ -208,9 +216,10 @@ class TradingService {
     const midPrice = parseFloat(mids[assetName]);
     if (!midPrice) throw new Error(`Precio no disponible para ${assetName}`);
 
+    const slippage = resolveOrderSlippage(maxSlippageBps);
     const closePrice = isLong
-      ? formatPrice(midPrice * (1 - MARKET_ORDER_SLIPPAGE))
-      : formatPrice(midPrice * (1 + MARKET_ORDER_SLIPPAGE));
+      ? formatPrice(midPrice * (1 - slippage))
+      : formatPrice(midPrice * (1 + slippage));
 
     let result = await this.hl.placeOrder({
       assetIndex,
@@ -226,7 +235,10 @@ class TradingService {
     // antes de rendirnos. Sin este fallback, un mercado momentáneamente ilíquido
     // deja la posición abierta y expuesta hasta que el usuario repita el cierre.
     if (result.filledSz != null && result.filledSz === 0) {
-      const WIDER_SLIPPAGE = Math.max(MARKET_ORDER_SLIPPAGE * 5, 0.01);
+      // El retry nunca puede ampliar la protección de la política. Si ya se
+      // agotó el precio IOC permitido, el segundo intento es idempotente y
+      // falla de forma explícita en lugar de cruzar un límite de slippage.
+      const WIDER_SLIPPAGE = slippage;
       const aggressivePrice = isLong
         ? formatPrice(midPrice * (1 - WIDER_SLIPPAGE))
         : formatPrice(midPrice * (1 + WIDER_SLIPPAGE));
