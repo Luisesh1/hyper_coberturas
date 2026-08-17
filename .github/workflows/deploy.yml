@@ -1,0 +1,56 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    environment: production
+    steps:
+      - name: Resolver commit a desplegar
+        id: target
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy por SSH
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" "
+            set -e
+            cd '$DEPLOY_PATH'
+            git fetch origin main
+            git checkout '$TARGET_SHA'
+            docker compose -f docker-compose.prod.yml up -d --build
+            docker compose -f docker-compose.prod.yml exec -T server npm run migrate
+          "
+
+      - name: Verificar health endpoint
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS "https://${{ secrets.SERVER_HOST }}/api/health"; then
+              echo "Health check OK"
+              exit 0
+            fi
+            echo "Intento $i fallido, reintentando en 5s..."
+            sleep 5
+          done
+          echo "Health check fallo tras el deploy"
+          exit 1

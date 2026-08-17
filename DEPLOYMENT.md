@@ -5,6 +5,7 @@
 1. [Requisitos previos](#1-requisitos-previos)
 2. [Desarrollo — Inicio rapido](#2-desarrollo--inicio-rapido)
 3. [Produccion — Despliegue paso a paso](#3-produccion--despliegue-paso-a-paso)
+3.8. [Despliegue automatico (CI/CD)](#38-despliegue-automatico-cicd)
 4. [Manejo de datos sensibles (Secrets)](#4-manejo-de-datos-sensibles-secrets)
 5. [Backups y restauracion](#5-backups-y-restauracion)
 6. [Mantenimiento](#6-mantenimiento)
@@ -220,6 +221,78 @@ docker compose -f docker-compose.prod.yml exec server node src/scripts/seed-dev.
 
 ---
 
+## 3.8 Despliegue automatico (CI/CD)
+
+A partir de la primera configuracion manual (pasos 3.1–3.7), los despliegues
+siguientes a produccion se automatizan con GitHub Actions.
+
+### 3.8.1 Flujo
+
+```
+push a main → ci.yml (lint + test + build) → si pasa → deploy.yml → SSH al servidor → docker compose up -d --build → migrate → health check
+```
+
+`deploy.yml` se dispara con `workflow_run` cuando `ci.yml` termina en verde sobre
+`main` — no duplica lint/test/build, solo se ejecuta si ya pasaron. Si CI falla,
+`deploy.yml` ni se ejecuta y produccion no cambia.
+
+### 3.8.2 Secrets de GitHub requeridos
+
+Configurar en **Settings → Secrets and variables → Actions** del repo:
+
+| Secret | Valor |
+|--------|-------|
+| `SERVER_HOST` | Host/IP publico del servidor (ej. `hypercover.luisesh1.duckdns.org`) |
+| `SERVER_USER` | Usuario SSH de deploy en el servidor |
+| `SERVER_SSH_KEY` | Llave privada SSH (formato PEM) con acceso a `SERVER_USER@SERVER_HOST` |
+| `DEPLOY_PATH` | Ruta absoluta del repo clonado en el servidor (`/root/hyper_coberturas`) |
+
+La llave publica correspondiente debe estar en `~/.ssh/authorized_keys` del
+usuario de deploy en el servidor.
+
+**Nota de seguridad:** el deploy actual usa el usuario `root` del servidor
+(`DEPLOY_PATH=/root/...`). Es lo que hay configurado hoy; conviene migrar a un
+usuario sin privilegios con acceso `sudo` acotado a `docker compose` el dia que
+haya tiempo, pero no bloquea activar el flujo automatico.
+
+### 3.8.3 Proteger produccion con aprobacion manual
+
+El workflow usa el **Environment** `production` de GitHub. Si en
+**Settings → Environments → production** se agrega un *required reviewer*, cada
+deploy queda pausado hasta que alguien lo aprueba manualmente desde la pestaña
+Actions, aunque el push y el CI ya hayan pasado. Sin reviewers configurados el
+deploy corre solo, apenas CI esta en verde.
+
+### 3.8.4 Que hace el workflow en el servidor
+
+```bash
+cd $DEPLOY_PATH
+git fetch origin main
+git checkout <sha-exacto-que-paso-ci>
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml exec -T server npm run migrate
+```
+
+Luego verifica `https://$SERVER_HOST/api/health` con reintentos (hasta 50 s).
+Si el health check falla, el job de GitHub Actions queda en rojo — no hay
+rollback automatico, hay que entrar por SSH y diagnosticar (ver seccion 7).
+
+### 3.8.5 Migraciones
+
+`npm run migrate` corre en cada deploy. Las migraciones del proyecto son
+aditivas (ver convencion en columnas nuevas / tablas nuevas, nunca se
+reescriben migraciones ya aplicadas), asi que es seguro correrlas sin
+intervencion manual. Si una migracion fuera destructiva, sacarla del flujo
+automatico y aplicarla a mano siguiendo la regla de backup de la seccion 5.
+
+### 3.8.6 Volver a deploy manual
+
+Si hace falta desactivar el flujo automatico temporalmente, basta con
+deshabilitar el workflow desde la pestaña Actions → Deploy → "..." → Disable
+workflow, y seguir con los pasos manuales de la seccion 6.2.
+
+---
+
 ## 4. Manejo de datos sensibles (Secrets)
 
 ### 4.1 Tabla de secrets
@@ -367,6 +440,10 @@ docker compose -f docker-compose.prod.yml logs --tail=100 server
 ```
 
 ### 6.2 Actualizar la aplicacion
+
+> Con CI/CD activo (seccion 3.8) esto ocurre automaticamente en cada push a
+> `main` que pase CI. Usar estos pasos solo para deploys manuales fuera de
+> ese flujo (hotfix urgente, CI/CD deshabilitado, etc.).
 
 ```bash
 # 1. Descargar cambios
