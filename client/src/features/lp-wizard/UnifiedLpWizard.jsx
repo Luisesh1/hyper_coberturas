@@ -344,6 +344,9 @@ export default function UnifiedLpWizard({
               defaultLeverage={isOrchestrated ? '10' : '5'}
               capitalUsd={Number(flow.totalUsdTarget) || 0}
               rangeWidthPct={unified.effectiveRangeWidthPct}
+              currentPrice={flow.suggestions?.currentPrice}
+              rangeLowerPrice={flow.activeRange?.rangeLowerPrice}
+              rangeUpperPrice={flow.activeRange?.rangeUpperPrice}
               preflight={unified.preflight}
               preflightBusy={unified.preflightBusy}
               onRunPreflight={unified.runPreflight}
