@@ -25,6 +25,7 @@ const {
   V3_QUOTER_V2_ABI,
   V4_STATE_VIEW_ABI,
 } = require('./uniswap/abis');
+const { assertNativeCoversGas, resolveGasReserveRaw } = require('./uniswap/gas-reserve');
 
 const DEFAULT_FEE_TIERS = [100, 500, 3000, 10000];
 const DEFAULT_MAX_SLIPPAGE_BPS = 50;
@@ -46,15 +47,6 @@ const DEFAULT_V4_TICK_SPACING_BY_FEE = {
   3000: 60,
   10000: 200,
 };
-const GAS_RESERVE_BY_NETWORK = {
-  ethereum: '0.01',
-  arbitrum: '0.002',
-  base: '0.0015',
-  optimism: '0.0015',
-  polygon: '1',
-  'base-sepolia': '0.0015',
-};
-
 const KNOWN_TOKENS = {
   ethereum: [
     { symbol: 'WETH', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', decimals: 18, isWrappedNative: true },
@@ -367,10 +359,6 @@ async function getTokenInfoFromChain(provider, tokenAddress, { nativeSymbol = 'E
 
 function getWrappedNativeToken(network) {
   return getKnownTokens(network).find((token) => token.isWrappedNative) || null;
-}
-
-function getGasReserveAmount(network) {
-  return GAS_RESERVE_BY_NETWORK[String(network || '').toLowerCase()] || '0.002';
 }
 
 function getCanonicalUsdcToken(network) {
@@ -791,7 +779,7 @@ async function enrichWalletAssets({
     });
   }
 
-  const reserveRaw = ethers.parseUnits(getGasReserveAmount(network), 18);
+  const reserveRaw = await resolveGasReserveRaw({ provider, network });
   const hydrated = assets
     .map((asset) => {
       const balanceRaw = BigInt(asset.balanceRaw || 0n);
@@ -823,7 +811,9 @@ async function enrichWalletAssets({
     walletAddress: normalizedWallet,
     gasReserve: {
       symbol: networkConfig.nativeSymbol,
-      reservedAmount: getGasReserveAmount(networkConfig.id),
+      // Derivado de `reserveRaw`, no de la tabla: con gas caro la reserva real
+      // es mayor que el piso y el mensaje de error que la cita debe coincidir.
+      reservedAmount: ethers.formatUnits(reserveRaw, 18),
       reservedRaw: reserveRaw.toString(),
       nativeBalanceRaw: nativeBalanceRaw.toString(),
       nativeBalance: ethers.formatUnits(nativeBalanceRaw, 18),
@@ -1899,6 +1889,17 @@ async function buildFundingPlan({
     );
   }
 
+  // Antes de devolver un plan firmable: lo que queda de nativo después del
+  // fondeo tiene que cubrir el gas de las txs. Falla acá, con el usuario
+  // todavía sin firmar nada, en vez de a mitad del plan con el swap ya pagado.
+  assertNativeCoversGas({
+    network: poolContext.networkConfig.id,
+    nativeSymbol: poolContext.networkConfig.nativeSymbol,
+    nativeBalanceRaw: fundingUniverse.gasReserve?.nativeBalanceRaw || 0n,
+    selectedFundingAssets,
+    gasReserveRaw: fundingUniverse.gasReserve?.reservedRaw || 0n,
+  });
+
   return {
     network: poolContext.networkConfig.id,
     version: poolContext.version,
@@ -2315,7 +2316,6 @@ module.exports = {
   discoverAvailablePools,
   computeToken0Pct,
   getCanonicalUsdcToken,
-  getGasReserveAmount,
   getKnownTokens,
   getSuggestions,
   getWrappedNativeToken,
