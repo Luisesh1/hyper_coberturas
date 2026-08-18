@@ -99,6 +99,10 @@
   border-left: 3px solid rgba(255, 191, 95, 0.6);
 }
 
+.section_violet {
+  border-left: 3px solid rgba(176, 155, 255, 0.6);
+}
+
 .sectionTitle {
   font-size: 0.62rem;
   color: var(--uni-text-3);
@@ -114,6 +118,35 @@
 
 .section_amber .sectionTitle {
   color: var(--uni-amber);
+}
+
+.section_violet .sectionTitle {
+  color: var(--uni-violet);
+}
+
+/* Fila de cierre de una sección (neto de la pata, ventaja del contrafactual):
+   separada del grid de celdas para que se lea como total, no como un dato más. */
+.sectionFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--uni-border);
+  font-size: 0.72rem;
+  color: var(--uni-text-2);
+}
+
+.sectionFooterHint {
+  color: var(--uni-text-3);
+}
+
+.sectionNote {
+  margin: 0;
+  font-size: 0.62rem;
+  line-height: 1.35;
+  color: var(--uni-text-3);
 }
 
 @media (max-width: 540px) {

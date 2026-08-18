@@ -165,5 +165,6 @@
   --uni-amber: #ffbf5f;
   --uni-orange: #ff8f4d;
   --uni-red: #ff7d7d;
+  --uni-violet: #b09bff;      /* contrafactual: sombra / simulaciones */
   --uni-shadow: 0 24px 60px rgba(3, 9, 16, 0.34);
 }

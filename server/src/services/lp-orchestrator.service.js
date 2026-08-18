@@ -291,7 +291,11 @@ class LpOrchestratorService {
       // igual de bloqueado que el viejo aunque ya no tenga motivo.
       await this.repo.updateStrategyState(userId, orchestratorId, {
         strategyState: {
-          ...orch.strategyState, hedgeBaseline: null, timeTracking: null, protectionRetry: null,
+          ...orch.strategyState,
+          hedgeBaseline: null,
+          shadowBaseline: null,
+          timeTracking: null,
+          protectionRetry: null,
         },
       }, client);
       await this.repo.appendActionLog({
@@ -936,9 +940,20 @@ class LpOrchestratorService {
             const result = this.accounting.applyHedgeStateDelta(newAccounting, prevBaseline, finalHedgeState);
             newAccounting = result.accounting;
           }
+          // Mismo flush para el contrafactual: el snapshot de sombra muere
+          // con la protección, así que lo que no se acumule ahora se pierde.
+          const finalShadowState = this.accounting.readShadowStateFromProtection(protection);
+          if (finalShadowState) {
+            const prevShadowBaseline = orch.strategyState?.shadowBaseline || null;
+            const shadowResult = this.accounting.applyShadowStateDelta(
+              newAccounting, prevShadowBaseline, finalShadowState
+            );
+            newAccounting = shadowResult.accounting;
+          }
           // Zeroize unrealized ya que el hedge se está cerrando
           const zeroResult = this.accounting.applyHedgeStateDelta(newAccounting, null, null);
           newAccounting = zeroResult.accounting;
+          newAccounting = this.accounting.applyShadowStateDelta(newAccounting, null, null).accounting;
         } catch (err) {
           this.logger.warn('lp_orchestrator_final_hedge_flush_failed', {
             orchestratorId: orch.id, protectedPoolId: orch.activeProtectedPoolId, error: err.message,
@@ -957,7 +972,9 @@ class LpOrchestratorService {
         // Reset baseline del hedge y del tracking de time-in-range: el siguiente
         // attachLp empezará un hedge fresco y un nuevo conteo de tiempo en rango.
         await this.repo.updateStrategyState(userId, orchestratorId, {
-          strategyState: { ...orch.strategyState, hedgeBaseline: null, timeTracking: null },
+          strategyState: {
+            ...orch.strategyState, hedgeBaseline: null, shadowBaseline: null, timeTracking: null,
+          },
         }, client);
       });
       nextPhase = 'idle';
@@ -1731,6 +1748,7 @@ class LpOrchestratorService {
     //     execution fees, slippage, realized + unrealized PnL) y aplicamos
     //     la diferencia contra el baseline guardado en el orquestador.
     let newHedgeBaseline = orch.strategyState?.hedgeBaseline || null;
+    let newShadowBaseline = orch.strategyState?.shadowBaseline || null;
     if (orch.activeProtectedPoolId) {
       try {
         const protection = await this.protectedPoolRepo.getById(orch.userId, orch.activeProtectedPoolId);
@@ -1743,6 +1761,18 @@ class LpOrchestratorService {
           );
           newAccounting = result.accounting;
           newHedgeBaseline = result.hedgeBaseline;
+        }
+        // Misma protección, misma query: la pata contrafactual de
+        // `net_profit_v1`. Devuelve null si la sombra no está corriendo.
+        const currentShadowState = this.accounting.readShadowStateFromProtection(protection);
+        if (currentShadowState) {
+          const shadowResult = this.accounting.applyShadowStateDelta(
+            newAccounting,
+            newShadowBaseline,
+            currentShadowState
+          );
+          newAccounting = shadowResult.accounting;
+          newShadowBaseline = shadowResult.shadowBaseline;
         }
       } catch (err) {
         this.logger.warn('lp_orchestrator_hedge_state_load_failed', {
@@ -1757,6 +1787,8 @@ class LpOrchestratorService {
       const result = this.accounting.applyHedgeStateDelta(newAccounting, null, null);
       newAccounting = result.accounting;
       newHedgeBaseline = null;
+      newAccounting = this.accounting.applyShadowStateDelta(newAccounting, null, null).accounting;
+      newShadowBaseline = null;
     }
 
     // 3) Range eval
@@ -1882,6 +1914,7 @@ class LpOrchestratorService {
         lastDecision: decision,
         lastReason: reason,
         hedgeBaseline: newHedgeBaseline,
+        shadowBaseline: newShadowBaseline,
         timeTracking: newTimeTracking,
       },
       lastEvaluation: {
