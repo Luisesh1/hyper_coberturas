@@ -189,3 +189,121 @@ test('readHedgeStateFromProtection devuelve null si no hay strategyState', () =>
   assert.equal(accounting.readHedgeStateFromProtection({}), null);
   assert.equal(accounting.readHedgeStateFromProtection({ strategyState: null }), null);
 });
+
+// ──────────────── Shadow state delta (contrafactual) ────────────────
+
+test('applyShadowStateDelta: primer tick (sin baseline) toma snapshot como inicio', () => {
+  const start = { ...accounting.DEFAULT_ACCOUNTING };
+  const result = accounting.applyShadowStateDelta(start, null, {
+    realizedPnlUsd: 3,
+    unrealizedPnlUsd: 1.5,
+    fundingUsd: -0.4,
+    executionFeesUsd: 0.2,
+    slippageUsd: 0.05,
+  });
+  assert.equal(result.accounting.shadowRealizedPnlUsd, 0);
+  assert.equal(result.accounting.shadowFundingUsd, 0);
+  assert.equal(result.accounting.shadowExecutionFeesUsd, 0);
+  assert.equal(result.accounting.shadowSlippageUsd, 0);
+  // Latente: mark-to-market absoluto, igual que la pata real.
+  assert.equal(result.accounting.shadowUnrealizedPnlUsd, 1.5);
+  assert.equal(result.shadowBaseline.realizedPnlUsd, 3);
+});
+
+test('applyShadowStateDelta: segundo tick computa delta vs baseline', () => {
+  const start = { ...accounting.DEFAULT_ACCOUNTING };
+  const baseline = {
+    realizedPnlUsd: 3,
+    unrealizedPnlUsd: 1.5,
+    fundingUsd: -0.4,
+    executionFeesUsd: 0.2,
+    slippageUsd: 0.05,
+  };
+  const current = {
+    realizedPnlUsd: 8,        // +$5 realizado
+    unrealizedPnlUsd: 0.9,    // mark-to-market actual
+    fundingUsd: -0.9,         // pagó otros $0.50
+    executionFeesUsd: 0.5,    // +$0.30
+    slippageUsd: 0.15,        // +$0.10
+  };
+  const result = accounting.applyShadowStateDelta(start, baseline, current);
+  assert.equal(result.accounting.shadowRealizedPnlUsd, 5);
+  assert.equal(result.accounting.shadowUnrealizedPnlUsd, 0.9);
+  assert.ok(Math.abs(result.accounting.shadowFundingUsd - -0.5) < 1e-9);
+  assert.ok(Math.abs(result.accounting.shadowExecutionFeesUsd - 0.3) < 1e-9);
+  assert.ok(Math.abs(result.accounting.shadowSlippageUsd - 0.1) < 1e-9);
+});
+
+test('applyShadowStateDelta: sin sombra activa zeroiza el latente y conserva acumuladores', () => {
+  const start = {
+    ...accounting.DEFAULT_ACCOUNTING,
+    shadowRealizedPnlUsd: 12,
+    shadowUnrealizedPnlUsd: 4,
+    shadowFundingUsd: -1,
+    shadowExecutionFeesUsd: 0.7,
+  };
+  const result = accounting.applyShadowStateDelta(start, null, null);
+  assert.equal(result.accounting.shadowUnrealizedPnlUsd, 0);
+  assert.equal(result.accounting.shadowRealizedPnlUsd, 12);
+  assert.equal(result.accounting.shadowFundingUsd, -1);
+  assert.equal(result.shadowBaseline, null);
+});
+
+test('shadowNetPnlUsd usa la convención de la pata de cobertura y NO entra en el neto total', () => {
+  const acc = accounting.recomputeNetPnl({
+    lpFeesUsd: 30,
+    gasSpentUsd: 5,
+    swapSlippageUsd: 1,
+    hedgeRealizedPnlUsd: 10,
+    hedgeUnrealizedPnlUsd: 2,
+    hedgeFundingUsd: -3,
+    hedgeExecutionFeesUsd: 1.5,
+    hedgeSlippageUsd: 0.5,
+    priceDriftUsd: 4,
+    shadowRealizedPnlUsd: 12,
+    shadowUnrealizedPnlUsd: 3,
+    shadowFundingUsd: -2,
+    shadowExecutionFeesUsd: 1,
+    shadowSlippageUsd: 0.25,
+  });
+  // 12 + 3 + (-2) - 1 - 0.25 = 11.75
+  assert.ok(Math.abs(acc.shadowNetPnlUsd - 11.75) < 1e-9);
+  // El neto total es idéntico al del caso sin sombra: es plata contrafactual.
+  assert.equal(acc.totalNetPnlUsd, 35);
+});
+
+test('readShadowStateFromProtection extrae los campos del shadowSnapshot', () => {
+  const protection = {
+    strategyState: {
+      hedgeRealizedPnlUsd: 99,
+      shadowSnapshot: {
+        actualQty: 0.42,
+        averageEntryPrice: 3120.5,
+        realizedPnlUsd: 3,
+        unrealizedPnlUsd: 1.5,
+        fundingUsd: -0.4,
+        executionFeesUsd: 0.2,
+        slippageUsd: 0.05,
+        slippageEwmaBps: 1.4,
+      },
+    },
+  };
+  assert.deepEqual(accounting.readShadowStateFromProtection(protection), {
+    realizedPnlUsd: 3,
+    unrealizedPnlUsd: 1.5,
+    fundingUsd: -0.4,
+    executionFeesUsd: 0.2,
+    slippageUsd: 0.05,
+  });
+});
+
+test('readShadowStateFromProtection devuelve null si la política sombra no está corriendo', () => {
+  assert.equal(accounting.readShadowStateFromProtection(null), null);
+  assert.equal(accounting.readShadowStateFromProtection({}), null);
+  assert.equal(accounting.readShadowStateFromProtection({ strategyState: null }), null);
+  // Protección con hedge real pero sin sombra: no hay contrafactual que mostrar.
+  assert.equal(
+    accounting.readShadowStateFromProtection({ strategyState: { hedgeRealizedPnlUsd: 5 } }),
+    null
+  );
+});

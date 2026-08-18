@@ -19,6 +19,11 @@
  *   priceDriftUsd          - deriva de precio sobre el LP (current vs initial)
  *   totalNetPnlUsd         - sum/diff de todos los anteriores (ver recomputeNetPnl)
  *   lpCount                - número total de LPs creados a lo largo de la vida
+ *
+ * La pata `shadow*` es el mismo desglose para la cobertura **contrafactual**
+ * que el motor delta-neutral simula en paralelo (política `net_profit_v1`).
+ * Se acumula igual que la real —sobrevive al kill+recreate del LP— pero
+ * queda FUERA de `totalNetPnlUsd`: es plata que nunca se movió.
  */
 
 const DEFAULT_ACCOUNTING = Object.freeze({
@@ -37,6 +42,15 @@ const DEFAULT_ACCOUNTING = Object.freeze({
   // para distinguir movimientos de capital de la deriva de precio en
   // los gráficos / debugging del orquestador.
   capitalAdjustmentsUsd: 0,
+  // Cobertura sombra: contrafactual acumulado de `net_profit_v1`. Mismo
+  // desglose que la pata real para poder compararlas fila contra fila.
+  shadowRealizedPnlUsd: 0,
+  shadowUnrealizedPnlUsd: 0,
+  shadowFundingUsd: 0,
+  shadowExecutionFeesUsd: 0,
+  shadowSlippageUsd: 0,
+  // Derivado (ver recomputeNetPnl); no se suma al neto total.
+  shadowNetPnlUsd: 0,
   totalNetPnlUsd: 0,
   lpCount: 0,
 });
@@ -59,6 +73,12 @@ function normalizeAccounting(accounting) {
     hedgeSlippageUsd: num(base.hedgeSlippageUsd),
     priceDriftUsd: num(base.priceDriftUsd),
     capitalAdjustmentsUsd: num(base.capitalAdjustmentsUsd),
+    shadowRealizedPnlUsd: num(base.shadowRealizedPnlUsd),
+    shadowUnrealizedPnlUsd: num(base.shadowUnrealizedPnlUsd),
+    shadowFundingUsd: num(base.shadowFundingUsd),
+    shadowExecutionFeesUsd: num(base.shadowExecutionFeesUsd),
+    shadowSlippageUsd: num(base.shadowSlippageUsd),
+    shadowNetPnlUsd: num(base.shadowNetPnlUsd),
     totalNetPnlUsd: num(base.totalNetPnlUsd),
     lpCount: num(base.lpCount),
   };
@@ -76,6 +96,11 @@ function normalizeAccounting(accounting) {
  *          − execution fees del hedge (taker fees del exchange)
  *          − slippage del hedge (ejecuciones de rebalanceo)
  *          + price drift del LP (delta de valuación por movimiento de precio)
+ *
+ * Aparte se recalcula `shadowNetPnlUsd`, el neto de la pata contrafactual
+ * con la misma convención que la de cobertura (realizado + latente + funding
+ * − comisiones − slippage). NO entra en `totalNetPnlUsd`: sumarlo mezclaría
+ * plata real con una simulación.
  */
 function recomputeNetPnl(accounting) {
   const a = normalizeAccounting(accounting);
@@ -89,6 +114,12 @@ function recomputeNetPnl(accounting) {
     - a.hedgeExecutionFeesUsd
     - a.hedgeSlippageUsd
     + a.priceDriftUsd;
+  a.shadowNetPnlUsd =
+    a.shadowRealizedPnlUsd
+    + a.shadowUnrealizedPnlUsd
+    + a.shadowFundingUsd
+    - a.shadowExecutionFeesUsd
+    - a.shadowSlippageUsd;
   return a;
 }
 
@@ -200,6 +231,74 @@ function applyHedgeStateDelta(currentAccounting, prevHedgeState, currentHedgeSta
 }
 
 /**
+ * Snapshot de la cobertura **sombra**, tal como lo persiste el motor
+ * delta-neutral en `protected_uniswap_pools.strategy_state_json.shadowSnapshot`
+ * (ver `simulateShadowFill` en net-profit-policy.service.js):
+ *
+ *   {
+ *     realizedPnlUsd:    acumulado de recompras simuladas del short
+ *     unrealizedPnlUsd:  mark-to-market del short simulado
+ *     fundingUsd:        signed (positivo = recibido, negativo = pagado)
+ *     executionFeesUsd:  taker fees que habría pagado
+ *     slippageUsd:       slippage contra el mid del BBO del momento
+ *   }
+ *
+ * Devuelve `null` cuando la política sombra no está corriendo para esa
+ * protección: sin snapshot no hay contrafactual que contabilizar, y el panel
+ * usa ese null para no mostrar la sección.
+ */
+function readShadowStateFromProtection(protection) {
+  if (!protection) return null;
+  const state = protection.strategyState || protection.strategy_state_json || null;
+  if (!state || typeof state !== 'object') return null;
+  const shadow = state.shadowSnapshot;
+  if (!shadow || typeof shadow !== 'object') return null;
+  return {
+    realizedPnlUsd: num(shadow.realizedPnlUsd),
+    unrealizedPnlUsd: num(shadow.unrealizedPnlUsd),
+    fundingUsd: num(shadow.fundingUsd),
+    executionFeesUsd: num(shadow.executionFeesUsd),
+    slippageUsd: num(shadow.slippageUsd),
+  };
+}
+
+/**
+ * Espejo de `applyHedgeStateDelta` para la pata sombra: acumuladores por
+ * diferencia contra el baseline, latente por asignación absoluta, y sin
+ * baseline no se acumula nada (el snapshot actual pasa a ser el inicio).
+ *
+ * El baseline propio importa: el snapshot de sombra vive atado a la
+ * protección, así que al matar y recrear el LP vuelve a cero. Acumular por
+ * delta es lo que hace que el contrafactual del orquestador abarque toda su
+ * vida, igual que la pata real, y que las dos columnas sean comparables.
+ *
+ * @param {object} currentAccounting
+ * @param {object|null} prevShadowState - snapshot de sombra del tick anterior
+ * @param {object|null} currentShadowState - snapshot de sombra actual
+ * @returns {{ accounting: object, shadowBaseline: object|null }}
+ */
+function applyShadowStateDelta(currentAccounting, prevShadowState, currentShadowState) {
+  const a = normalizeAccounting(currentAccounting);
+
+  if (!currentShadowState) {
+    // Sin sombra activa: el latente del short simulado deja de existir.
+    a.shadowUnrealizedPnlUsd = 0;
+    return { accounting: recomputeNetPnl(a), shadowBaseline: null };
+  }
+
+  a.shadowUnrealizedPnlUsd = num(currentShadowState.unrealizedPnlUsd);
+
+  if (prevShadowState) {
+    a.shadowRealizedPnlUsd    += num(currentShadowState.realizedPnlUsd)    - num(prevShadowState.realizedPnlUsd);
+    a.shadowFundingUsd        += num(currentShadowState.fundingUsd)        - num(prevShadowState.fundingUsd);
+    a.shadowExecutionFeesUsd  += num(currentShadowState.executionFeesUsd)  - num(prevShadowState.executionFeesUsd);
+    a.shadowSlippageUsd       += num(currentShadowState.slippageUsd)       - num(prevShadowState.slippageUsd);
+  }
+
+  return { accounting: recomputeNetPnl(a), shadowBaseline: currentShadowState };
+}
+
+/**
  * Aplica costos de una transacción confirmada (gas + slippage). Para
  * `collect-fees` y `reinvest-fees`, también permite registrar las fees
  * realmente cobradas (collectedFeesUsd). Para `increase-liquidity` /
@@ -240,4 +339,6 @@ module.exports = {
   incrementLpCount,
   applyHedgeStateDelta,
   readHedgeStateFromProtection,
+  applyShadowStateDelta,
+  readShadowStateFromProtection,
 };
