@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { formatAccountIdentity } from '../../utils/hyperliquidAccounts';
 import { formatUsd } from '../../pages/UniswapPools/utils/pool-formatters';
+import { computeDeltaNotionalUsd, computeHedgeConsequence, computeVolatileFraction } from './hedgeNotional';
 import styles from './ProtectionFormFields.module.css';
 
 // Espeja DEFAULT_MIN_REBALANCE_NOTIONAL_PCT del servidor
@@ -48,6 +49,9 @@ const DEFAULT_PROTECTION = Object.freeze({
   executionIntent: 'live',
   activationConfirmed: false,
   autoTunedFor: null,
+  // El notional se dimensiona solo desde el delta del rango salvo que el
+  // usuario lo desactive. `capital/2` sólo acierta con el precio centrado.
+  notionalAuto: true,
 });
 
 /**
@@ -121,6 +125,48 @@ export function computeAutoTunedProtection(rangeWidthPct, initialUsd) {
   };
 }
 
+/**
+ * Resuelve el notional que propone el modo automático, junto con la frase que
+ * lo justifica. Devuelve `null` cuando ni siquiera hay capital que repartir.
+ *
+ * Sin precio ni bordes del rango cae a `capital/2`, que es la heurística vieja:
+ * correcta sólo con el precio centrado, pero es lo mejor disponible mientras el
+ * paso de rango no haya resuelto todavía sus precios.
+ */
+export function resolveAutoNotional({ capitalUsd, currentPrice, rangeLowerPrice, rangeUpperPrice }) {
+  const capital = Number(capitalUsd);
+  if (!Number.isFinite(capital) || capital <= 0) return null;
+
+  const fromDelta = computeDeltaNotionalUsd({
+    capitalUsd: capital, currentPrice, rangeLowerPrice, rangeUpperPrice,
+  });
+
+  if (fromDelta == null) {
+    return {
+      notionalUsd: capital / 2,
+      exact: false,
+      explanation: 'Sin precio del pool todavía: se usa la mitad del capital. Se recalcula al fijar el rango.',
+    };
+  }
+
+  const fraction = computeVolatileFraction({ currentPrice, rangeLowerPrice, rangeUpperPrice });
+  const pct = Math.round(fraction * 100);
+  let explanation;
+  if (fraction >= 0.99) {
+    explanation = 'El precio está por debajo del rango: el LP es todo token volátil.';
+  } else if (fraction <= 0.01) {
+    explanation = 'El precio está por encima del rango: no queda exposición volátil que cubrir.';
+  } else if (fraction > 0.6) {
+    explanation = `El precio está cerca del borde inferior, así que ${pct}% de tu LP es token volátil.`;
+  } else if (fraction < 0.4) {
+    explanation = `El precio está cerca del borde superior, así que sólo ${pct}% de tu LP es token volátil.`;
+  } else {
+    explanation = `Con el precio centrado en el rango, ${pct}% de tu LP es token volátil.`;
+  }
+
+  return { notionalUsd: fromDelta, exact: true, pct, explanation };
+}
+
 export function buildDefaultProtection(initialUsd, rangeWidthPct = null, options = {}) {
   const defaults = {
     ...DEFAULT_PROTECTION,
@@ -153,8 +199,27 @@ export default function ProtectionFormFields({
   defaultLeverage = '5',
   initialUsd = 0,
   rangeWidthPct = null,
+  currentPrice = null,
+  rangeLowerPrice = null,
+  rangeUpperPrice = null,
 }) {
-  const v = { ...DEFAULT_PROTECTION, ...(value || {}) };
+  const raw = value || {};
+  // Las protecciones persistidas antes de que existiera el modo auto no traen
+  // la clave: heredar el default `true` pisaría en silencio el notional que su
+  // dueño fijó a mano. Sólo se asume auto cuando no hay nada que respetar.
+  const inferredAuto = raw.notionalAuto != null
+    ? !!raw.notionalAuto
+    : !(raw.configuredNotionalUsd > 0 || String(raw.configuredNotionalUsd || '').trim() !== '');
+  const v = { ...DEFAULT_PROTECTION, ...raw, notionalAuto: inferredAuto };
+  const auto = resolveAutoNotional({
+    capitalUsd: initialUsd, currentPrice, rangeLowerPrice, rangeUpperPrice,
+  });
+  // Con auto activo el número mostrado manda sobre lo que haya en el state:
+  // así cambiar el rango en un paso anterior se refleja sin tocar nada.
+  const effectiveNotionalUsd = v.notionalAuto && auto ? auto.notionalUsd : Number(v.configuredNotionalUsd);
+  const hedgeConsequence = computeHedgeConsequence({
+    notionalUsd: effectiveNotionalUsd, leverage: v.leverage,
+  });
   const matchingAccount = accounts.find((account) => (
     lpWalletAddress
     && account?.address
@@ -170,8 +235,28 @@ export default function ProtectionFormFields({
     }
   }, [matchingAccount, onChange, v]);
 
+  // El payload se construye desde `configuredNotionalUsd`, así que el modo auto
+  // tiene que escribir su resultado en el state y no sólo pintarlo. Sin esto un
+  // cambio de rango dejaba la UI mostrando un número y el backend recibiendo otro.
+  useEffect(() => {
+    if (!v.enabled || !v.notionalAuto || !auto) return;
+    const next = auto.notionalUsd.toFixed(2);
+    if (v.configuredNotionalUsd !== next) {
+      onChange({ ...v, configuredNotionalUsd: next });
+    }
+  }, [auto, onChange, v]);
+
   const handleField = (key, val) => {
     onChange({ ...v, [key]: val });
+  };
+
+  // Desmarcar deja el input listo para editar sobre el valor calculado, no vacío.
+  const handleNotionalAuto = (notionalAuto) => {
+    onChange({
+      ...v,
+      notionalAuto,
+      ...(auto ? { configuredNotionalUsd: auto.notionalUsd.toFixed(2) } : {}),
+    });
   };
 
   // La política de cobertura no es un parámetro de tuning: la elige el par
@@ -320,21 +405,45 @@ export default function ProtectionFormFields({
               />
             </div>
             <div className={styles.field}>
-              <label>Notional USD a hedgear</label>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                value={v.configuredNotionalUsd}
-                onChange={(e) => handleField('configuredNotionalUsd', e.target.value)}
-              />
-              {initialUsd ? (
-                <span className={styles.hint}>
-                  Sugerido: {formatUsd(initialUsd / 2)} (mitad del capital LP)
-                </span>
-              ) : null}
+              <label htmlFor="notional-auto">Notional a cubrir</label>
+              <label className={styles.autoRow} htmlFor="notional-auto">
+                <input
+                  id="notional-auto"
+                  type="checkbox"
+                  checked={!!v.notionalAuto}
+                  onChange={(e) => handleNotionalAuto(e.target.checked)}
+                  aria-label="Calcular el notional automáticamente"
+                />
+                <span>Automático</span>
+              </label>
+              {v.notionalAuto ? (
+                <span className={styles.autoValue}>{formatUsd(effectiveNotionalUsd)}</span>
+              ) : (
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  aria-label="Notional USD a hedgear"
+                  value={v.configuredNotionalUsd}
+                  onChange={(e) => handleField('configuredNotionalUsd', e.target.value)}
+                />
+              )}
             </div>
           </div>
+
+          {v.notionalAuto && auto && (
+            <span className={styles.hint}>{auto.explanation}</span>
+          )}
+
+          {/* El margen requerido y la distancia a liquidación salían sólo en el
+              pre-flight, en otra tarjeta y tras pulsar un botón. Aquí convierten
+              dos números abstractos en una decisión informada mientras se teclean. */}
+          {hedgeConsequence && (
+            <div className={styles.consequence}>
+              <span>margen <strong>{formatUsd(hedgeConsequence.requiredMarginUsd)}</strong></span>
+              <span>liquidación <strong>−{hedgeConsequence.liquidationMovePct}%</strong></span>
+            </div>
+          )}
 
           {/* La política decide qué motor cubre la posición, así que no puede
               vivir dentro de "Configuración avanzada": el wizard la cambia solo
@@ -357,22 +466,34 @@ export default function ProtectionFormFields({
 
             {isNetProfit && (
               <>
-                <div className={styles.presets}>
+                {/* Segmented control, no una rejilla de tarjetas: compartir la
+                    clase `.presets` con el preset de rebalanceo hacía que dos
+                    decisiones opuestas — "¿opera con dinero real?" y "¿cada
+                    cuánto rebalanceo?" — tuvieran la misma forma. El color
+                    carga el significado: cian mide, ámbar arriesga. */}
+                <div className={styles.segmented} role="group" aria-label="Modo de ejecución">
                   {EXECUTION_INTENTS.map((intent) => (
                     <button
                       key={intent.id}
                       type="button"
-                      className={`${styles.preset} ${v.executionIntent === intent.id ? styles.presetActive : ''}`}
+                      aria-pressed={v.executionIntent === intent.id}
+                      className={[
+                        styles.segment,
+                        v.executionIntent === intent.id ? styles.segmentActive : '',
+                        v.executionIntent === intent.id && intent.id === 'live' ? styles.segmentLive : '',
+                      ].filter(Boolean).join(' ')}
                       onClick={() => handleIntentChange(intent.id)}
                     >
-                      <strong>{intent.label}</strong>
-                      <span>{intent.hint}</span>
+                      {intent.label}
                     </button>
                   ))}
                 </div>
+                <p className={styles.hint}>
+                  {EXECUTION_INTENTS.find((i) => i.id === v.executionIntent)?.hint}
+                </p>
 
                 {isLiveNetProfit && (
-                  <label className={styles.toggleRow}>
+                  <label className={`${styles.toggleRow} ${styles.riskGate}`}>
                     <input
                       type="checkbox"
                       checked={!!v.activationConfirmed}

@@ -218,3 +218,107 @@ describe('política de cobertura', () => {
     expect(validateProtectionForm({ ...netProfitShadow() })).toBeNull();
   });
 });
+
+describe('notional automático desde el delta del rango', () => {
+  const rangeProps = {
+    initialUsd: 110,
+    currentPrice: 92,
+    rangeLowerPrice: 90,
+    rangeUpperPrice: 110,
+  };
+
+  const enabled = (overrides = {}) => ({
+    ...buildDefaultProtection(110, null, { enabled: true, leverage: '10' }),
+    ...overrides,
+  });
+
+  it('viene activado por defecto', () => {
+    expect(buildDefaultProtection(110, null, { enabled: true }).notionalAuto).toBe(true);
+  });
+
+  it('con auto activo muestra el notional del delta y oculta el input manual', () => {
+    render(
+      <ProtectionFormFields
+        value={enabled()}
+        onChange={vi.fn()}
+        accounts={[{ id: 1 }]}
+        {...rangeProps}
+      />
+    );
+
+    // 88.66% de $110 con el precio pegado al borde inferior, no la mitad.
+    expect(screen.getByText('$97.53')).toBeTruthy();
+    expect(screen.queryByLabelText('Notional USD a hedgear')).toBeNull();
+  });
+
+  it('desmarcar auto revela el input pre-rellenado con el valor calculado', () => {
+    const onChange = vi.fn();
+    render(
+      <ProtectionFormFields
+        value={enabled()}
+        onChange={onChange}
+        accounts={[{ id: 1 }]}
+        {...rangeProps}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Calcular el notional automáticamente'));
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      notionalAuto: false,
+      configuredNotionalUsd: '97.53',
+    }));
+  });
+
+  it('sin precio ni bordes cae a la mitad del capital', () => {
+    render(
+      <ProtectionFormFields
+        value={enabled()}
+        onChange={vi.fn()}
+        accounts={[{ id: 1 }]}
+        initialUsd={110}
+      />
+    );
+
+    expect(screen.getByText('$55')).toBeTruthy();
+  });
+
+  it('el payload manda el notional calculado y descarta notionalAuto', () => {
+    const payload = buildProtectionPayload(enabled({
+      accountId: 1,
+      notionalAuto: true,
+      configuredNotionalUsd: '97.53',
+    }));
+
+    expect(payload.configuredNotionalUsd).toBe(97.53);
+    expect(payload.notionalAuto).toBeUndefined();
+  });
+});
+
+// Las configuraciones ya persistidas no tienen `notionalAuto`. Heredar el
+// default `true` haría que el efecto de auto pisara el notional que el usuario
+// fijó a mano en su día, en silencio y sólo por abrir el modal de edición.
+describe('compatibilidad con protecciones ya guardadas', () => {
+  it('un valor con notional propio y sin notionalAuto se trata como manual', () => {
+    const onChange = vi.fn();
+    render(
+      <ProtectionFormFields
+        value={(() => {
+          // Una fila persistida: la clave `notionalAuto` no existe siquiera.
+          const saved = buildDefaultProtection(110, null, { enabled: true, leverage: '10' });
+          delete saved.notionalAuto;
+          return { ...saved, accountId: 1, configuredNotionalUsd: '42' };
+        })()}
+        onChange={onChange}
+        accounts={[{ id: 1 }]}
+        initialUsd={110}
+        currentPrice={92}
+        rangeLowerPrice={90}
+        rangeUpperPrice={110}
+      />
+    );
+
+    expect(screen.getByLabelText('Notional USD a hedgear').value).toBe('42');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

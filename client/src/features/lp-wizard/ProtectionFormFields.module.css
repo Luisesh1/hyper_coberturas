@@ -187,3 +187,95 @@
 .reTuneBtn:hover {
   background: rgba(255, 255, 255, 0.05);
 }
+
+/* ── Notional automático ─────────────────────────────────────────────────── */
+
+.autoRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.autoRow input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.autoRow span {
+  color: var(--uni-text-2);
+  font-size: 0.8rem;
+}
+
+.autoValue {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--uni-text-0);
+}
+
+/* Convierte leverage y notional en una consecuencia legible sin esperar al
+   pre-flight. Aproximación de primer orden: ver computeHedgeConsequence. */
+.consequence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  border: 1px solid rgba(102, 225, 219, 0.22);
+  background: rgba(102, 225, 219, 0.06);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--uni-cyan);
+}
+
+.consequence strong {
+  color: var(--uni-text-0);
+}
+
+/* ── Modo de ejecución (sombra / real) ───────────────────────────────────── */
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--uni-border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.segment {
+  padding: 9px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--uni-text-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segment:hover {
+  color: var(--uni-text-0);
+}
+
+.segmentActive {
+  background: rgba(102, 225, 219, 0.16);
+  color: var(--uni-cyan);
+  font-weight: 700;
+}
+
+/* Ámbar = órdenes reales. El color es la señal, no sólo el texto. */
+.segmentLive {
+  background: rgba(255, 191, 95, 0.18);
+  color: var(--uni-amber);
+}
+
+/* El gate de riesgo no puede verse como el toggle de activar una función. */
+.riskGate {
+  border-color: rgba(255, 191, 95, 0.45);
+  background: rgba(255, 191, 95, 0.1);
+}
+
+.riskGate strong {
+  color: var(--uni-amber);
+}

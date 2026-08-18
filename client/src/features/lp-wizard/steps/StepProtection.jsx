@@ -20,6 +20,9 @@ export default function StepProtection({
   defaultLeverage = '5',
   capitalUsd,
   rangeWidthPct,
+  currentPrice,
+  rangeLowerPrice,
+  rangeUpperPrice,
   preflight,
   preflightBusy,
   onRunPreflight,
@@ -36,6 +39,9 @@ export default function StepProtection({
         defaultLeverage={defaultLeverage}
         initialUsd={capitalUsd}
         rangeWidthPct={rangeWidthPct}
+        currentPrice={currentPrice}
+        rangeLowerPrice={rangeLowerPrice}
+        rangeUpperPrice={rangeUpperPrice}
       />
 
       {!disabled && (

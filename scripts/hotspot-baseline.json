@@ -12,7 +12,7 @@
     "client/src/pages/UniswapPools/components/ProtectedPoolCard.jsx": 24639,
     "server/src/services/hedge.service.js": 52085,
     "server/src/services/protected-pool-delta-neutral.service.js": 64029,
-    "server/src/services/smart-pool-creator.service.js": 86413,
+    "server/src/services/smart-pool-creator.service.js": 86883,
     "server/src/services/uniswap-position-actions.service.js": 571,
     "server/src/services/uniswap-protection.service.js": 64201,
     "server/src/services/uniswap.service.js": 57999

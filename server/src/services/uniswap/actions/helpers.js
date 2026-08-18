@@ -30,6 +30,7 @@ const {
 const {
   estimateTxPlanCostUsd,
 } = require('../gas-cost-estimator');
+const { getGasReserveAmount } = require('../gas-reserve');
 const {
   isZeroAddress,
 } = require('../position-math');
@@ -381,7 +382,7 @@ function getWrappedNativeTokenForNetwork(network) {
 }
 
 function getGasReserveRaw(network) {
-  return ethers.parseUnits(smartPoolCreatorService.getGasReserveAmount(network), 18);
+  return ethers.parseUnits(getGasReserveAmount(network), 18);
 }
 
 function buildClosedPositionPreview(network, version, token0, token1, extra = {}) {
