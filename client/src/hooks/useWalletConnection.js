@@ -544,7 +544,19 @@ export function useWalletState() {
     isConnected: conn?.isConnected,
     hasProvider: conn?.hasProvider,
     connector: conn?.connector,
-  }), [conn?.address, conn?.chainId, conn?.isConnected, conn?.hasProvider, conn?.connector]);
+    // Los modales que firman contra una posición ajena necesitan poder
+    // ofrecer el cambio de cuenta sin mandar al usuario a la extensión.
+    changeWallet: conn?.changeWallet,
+    isConnecting: conn?.isConnecting,
+  }), [
+    conn?.address,
+    conn?.chainId,
+    conn?.isConnected,
+    conn?.hasProvider,
+    conn?.connector,
+    conn?.changeWallet,
+    conn?.isConnecting,
+  ]);
 }
 
 export {

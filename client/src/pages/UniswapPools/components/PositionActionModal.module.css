@@ -61,3 +61,39 @@
   color: var(--status-ok);
   font-weight: 600;
 }
+
+/**
+ * Barra de identidad: con qué cuenta se está por firmar y el acceso directo
+ * al selector de cuentas de la wallet. Va arriba de todo porque firmar con la
+ * cuenta equivocada revierte la tx con un custom error de v4 que la wallet
+ * muestra como "Execution reverted for an unknown reason".
+ */
+.walletBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+}
+
+.walletBarWarn {
+  border-color: var(--status-warn);
+}
+
+.walletBarInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.walletBarAddress {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-bright);
+  overflow-wrap: anywhere;
+}

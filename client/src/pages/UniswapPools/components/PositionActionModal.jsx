@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { shortenAddress } from '../../../lib/wallet/transaction-utils';
 import { formatUsd, formatCompactPrice } from '../utils/pool-formatters';
 import { formatNumber } from '../../../utils/formatters';
 import { POSITION_ACTION_STEP as STEP, usePositionActionFlow } from '../../../features/uniswap-pools/hooks/usePositionActionFlow';
@@ -51,9 +52,13 @@ export default function PositionActionModal({
   waitForTransactionReceipt,
   defaults = {},
   prefilledPrepareResult = null,
+  // Dueña del NFT de la posición. Cuando viene, es la única wallet que puede
+  // firmar: el resto revierte en el PositionManager con `NotApproved`.
+  ownerAddress = null,
   onClose,
   onFinalized,
 }) {
+  const [isSwitchingWallet, setIsSwitchingWallet] = useState(false);
   const initialFormState = useMemo(() => getInitialState(action, pool, defaults), [action, pool, defaults]);
   const {
     error,
@@ -77,12 +82,34 @@ export default function PositionActionModal({
     prefilledPrepareResult,
   });
 
+  // Si conocemos la dueña de la posición, el prepare SIEMPRE va contra ella:
+  // pisarla con la wallet conectada hacía que "Reintentar" pidiera el LP a una
+  // wallet que no es su dueña y el backend lo rechazara con un 400.
   useEffect(() => {
     setFormState((prev) => ({
       ...prev,
-      walletAddress: wallet?.address || prev.walletAddress,
+      walletAddress: ownerAddress || wallet?.address || prev.walletAddress,
     }));
-  }, [wallet?.address]);
+  }, [wallet?.address, ownerAddress]);
+
+  const signerAddress = wallet?.address || null;
+  const expectedSigner = ownerAddress || prepareData?.walletAddress || null;
+  const walletMismatch = !!signerAddress
+    && !!expectedSigner
+    && signerAddress.toLowerCase() !== expectedSigner.toLowerCase();
+
+  const handleChangeWallet = useCallback(async () => {
+    if (!wallet?.changeWallet) return;
+    setIsSwitchingWallet(true);
+    try {
+      await wallet.changeWallet();
+    } catch {
+      // `changeWallet` ya publica el error en el estado de la wallet; acá
+      // solo evitamos la promesa sin manejar cuando el usuario cancela.
+    } finally {
+      setIsSwitchingWallet(false);
+    }
+  }, [wallet]);
 
   const targetStableSymbol = prepareData?.quoteSummary?.targetStableSymbol || null;
   const title = action === 'close-to-usdc' && targetStableSymbol
@@ -162,6 +189,40 @@ export default function PositionActionModal({
       footer={footer}
     >
       <>
+        {/* La posición la tiene que firmar su dueña. Mostramos con qué cuenta
+            se está trabajando y dejamos cambiarla acá mismo: mandar al usuario
+            a la extensión, sin decirle qué cuenta hace falta, era el paso
+            donde el cierre se trababa con un revert sin motivo legible. */}
+        {(signerAddress || expectedSigner) && (
+          <div className={`${styles.walletBar} ${walletMismatch ? styles.walletBarWarn : ''}`}>
+            <div className={styles.walletBarInfo}>
+              <span className={ui.metricLabel}>Firmando con</span>
+              <strong className={styles.walletBarAddress} title={signerAddress || ''}>
+                {signerAddress ? shortenAddress(signerAddress) : 'Sin wallet conectada'}
+              </strong>
+            </div>
+            {wallet?.changeWallet && (
+              <button
+                type="button"
+                className={ui.btnGhost}
+                onClick={handleChangeWallet}
+                disabled={isBusyStep || isSwitchingWallet}
+              >
+                {isSwitchingWallet ? 'Abriendo wallet…' : 'Cambiar wallet'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {walletMismatch && (
+          <div className={ui.noticeWarn}>
+            Esta posición es de <strong title={expectedSigner}>{shortenAddress(expectedSigner)}</strong>
+            {' '}y estás firmando con <strong>{shortenAddress(signerAddress)}</strong>.
+            {wallet?.changeWallet ? ' Cambiá de wallet acá arriba' : ' Cambiá de cuenta en la wallet'} antes
+            de firmar: con otra cuenta la transacción revierte.
+          </div>
+        )}
+
         {step === STEP.FORM && (
           <>
             <div className={ui.grid2}>

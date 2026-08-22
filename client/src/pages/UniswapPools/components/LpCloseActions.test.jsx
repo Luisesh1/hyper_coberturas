@@ -167,4 +167,65 @@ describe('LP close actions UI', () => {
       positionIdentifier: '123',
     })));
   });
+  // Cerrar el LP del orquestador con otra cuenta conectada revertia con
+  // NotApproved (un custom error que la wallet muestra como "Execution
+  // reverted for an unknown reason"), y no habia forma de cambiar de cuenta
+  // sin salir del modal.
+  it('avisa del mismatch de wallet y permite cambiarla desde el modal', async () => {
+    const changeWallet = vi.fn().mockResolvedValue(null);
+    const owner = '0x00000000000000000000000000000000000000e1';
+
+    render(
+      <PositionActionModal
+        action="close-keep-assets"
+        pool={basePool}
+        wallet={{ ...walletState, changeWallet }}
+        ownerAddress={owner}
+        sendTransaction={vi.fn()}
+        defaults={{ network: 'arbitrum', version: 'v3', walletAddress: owner }}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Firmando con')).toBeTruthy();
+    expect(screen.getByText(/la transacción revierte/i)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: /Cambiar wallet/i }));
+    expect(changeWallet).toHaveBeenCalledTimes(1);
+  });
+
+  // El prepare tiene que ir contra la duena de la posicion aunque la conectada
+  // sea otra: mandar la conectada devolvia un 400 "no es duena de esta
+  // posicion" justo cuando el usuario apretaba "Reintentar".
+  it('prepara contra la wallet duena, no contra la conectada', async () => {
+    const owner = '0x00000000000000000000000000000000000000e1';
+    uniswapApi.preparePositionAction.mockResolvedValueOnce({
+      action: 'close-keep-assets',
+      network: 'arbitrum',
+      version: 'v3',
+      walletAddress: owner,
+      positionIdentifier: '123',
+      quoteSummary: { closeMode: 'keep_assets' },
+      txPlan: [{ label: 'Decrease liquidity' }],
+    });
+
+    render(
+      <PositionActionModal
+        action="close-keep-assets"
+        pool={basePool}
+        wallet={walletState}
+        ownerAddress={owner}
+        sendTransaction={vi.fn()}
+        defaults={{ network: 'arbitrum', version: 'v3', walletAddress: owner }}
+        onClose={vi.fn()}
+      />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /Preparar acción/i }));
+
+    await waitFor(() => expect(uniswapApi.preparePositionAction).toHaveBeenCalledWith(
+      'close-keep-assets',
+      expect.objectContaining({ walletAddress: owner }),
+    ));
+  });
 });
