@@ -132,6 +132,9 @@ export function usePositionActionFlow({
       txPlan: prepareData.txPlan,
       finalizePayload,
       finalizeKind: 'position_action',
+      // El backend arma el plan contra la wallet dueña de la posición: si la
+      // conectada es otra, la tx revierte sin razón legible.
+      expectedWallet: prepareData.walletAddress || null,
     });
     if (result) {
       setFinalResult(result);

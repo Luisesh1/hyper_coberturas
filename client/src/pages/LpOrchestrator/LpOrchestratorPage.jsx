@@ -230,7 +230,27 @@ export default function LpOrchestratorPage() {
     }
   }, [activeAction, refresh]);
 
+  /**
+   * El LP lo firma la wallet dueña del NFT de la posición. Si la conectada es
+   * otra, la tx revierte con un custom error de v4 que la wallet muestra como
+   * "Execution reverted for an unknown reason" recién al firmar — mejor
+   * avisarlo antes de abrir el modal.
+   */
+  const walletMismatchMessage = (orchestrator) => {
+    const owner = orchestrator?.walletAddress;
+    if (!owner || !walletConn.address) return null;
+    if (owner.toLowerCase() === walletConn.address.toLowerCase()) return null;
+    return `Este LP es de la wallet ${owner.slice(0, 6)}...${owner.slice(-4)} y tenés conectada `
+      + `${walletConn.address.slice(0, 6)}...${walletConn.address.slice(-4)}. `
+      + 'Cambiá de cuenta en la wallet antes de cerrar.';
+  };
+
   const handleKill = async (orchestrator) => {
+    const mismatch = walletMismatchMessage(orchestrator);
+    if (mismatch) {
+      setError(mismatch);
+      return;
+    }
     const ok = await confirm({
       title: 'Cerrar LP',
       message: '¿Seguro que quieres cerrar el LP activo? Si el par tiene una stablecoin, los activos se convertirán automáticamente. El orquestador quedará en idle.',
@@ -270,6 +290,11 @@ export default function LpOrchestratorPage() {
    * `archiveAfterKillId`.
    */
   const handleKillAndArchive = async (orchestrator) => {
+    const mismatch = walletMismatchMessage(orchestrator);
+    if (mismatch) {
+      setError(mismatch);
+      return;
+    }
     const ok = await confirm({
       title: 'Cerrar LP y archivar orquestador',
       message: '¿Seguro? Los tokens del LP volverán a la wallet sin convertirse a USDC/USDT. Tras la confirmación on-chain, el orquestador se archivará automáticamente. Esta acción es IRREVERSIBLE.',
@@ -508,7 +533,10 @@ export default function LpOrchestratorPage() {
     return {
       network: orch.network,
       version: orch.version,
-      walletAddress: walletConn.address || orch.walletAddress,
+      // La posición ya existe y es del orquestador: si acá mandáramos la
+      // wallet conectada, un re-prepare desde "Reintentar" pediría el LP a
+      // una wallet que no es su dueña y el backend lo rechaza con un 400.
+      walletAddress: orch.walletAddress || walletConn.address,
     };
   }, [activeAction, walletConn.address]);
 

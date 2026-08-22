@@ -8,6 +8,7 @@ import {
   getInFlightPlan,
   listInFlightPlansForScope,
 } from '../lib/wallet/inFlightTxPlan';
+import { shortenAddress } from '../lib/wallet/transaction-utils';
 
 const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
 const DEFAULT_OPERATION_POLL_MS = 4_000;
@@ -101,11 +102,28 @@ export function useWalletExecution() {
     scope = null,
     resumeFromIndex = null,
     initialHashes = null,
+    expectedWallet = null,
   }) => {
     reset();
 
     if (!wallet?.isConnected || !wallet?.address) {
       const err = buildExecutionError('wallet_unavailable', 'Conecta una wallet antes de continuar.');
+      setNormalizedError(err);
+      setState(WALLET_EXECUTION_STATE.FAILED);
+      return null;
+    }
+
+    // El plan se arma para una wallet concreta (la dueña del LP). Si la
+    // conectada es otra, el PositionManager de v4 revierte con `NotApproved`,
+    // que la wallet muestra como "Execution reverted for an unknown reason":
+    // un callejón sin salida donde el usuario reintenta sin entender nada.
+    if (expectedWallet && String(expectedWallet).toLowerCase() !== String(wallet.address).toLowerCase()) {
+      const err = buildExecutionError(
+        'wallet_mismatch',
+        `La wallet conectada (${shortenAddress(wallet.address)}) no es la dueña de esta posición. `
+        + `Cambiá en la wallet a ${shortenAddress(expectedWallet)} y volvé a intentar.`,
+        { expectedWallet, connectedWallet: wallet.address }
+      );
       setNormalizedError(err);
       setState(WALLET_EXECUTION_STATE.FAILED);
       return null;

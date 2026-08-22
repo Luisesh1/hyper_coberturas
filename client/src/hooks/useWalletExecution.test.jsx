@@ -161,4 +161,75 @@ describe('useWalletExecution', () => {
       txHashes: ['0xaaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999'],
     }));
   });
+  // El plan se arma contra la wallet duena del LP. Firmarlo con otra cuenta
+  // reventaba en el PositionManager de v4 con `NotApproved`, que la wallet
+  // mostraba como "Execution reverted for an unknown reason".
+  it('no firma nada si la wallet conectada no es la del plan', async () => {
+    const { result } = renderHook(() => useWalletExecution());
+
+    let executionResult;
+    await act(async () => {
+      executionResult = await result.current.runPlan({
+        action: 'close-keep-assets',
+        chainId: 42161,
+        txPlan: [{
+          clientTxId: 'tx-1',
+          label: 'Close LP and keep assets (v4)',
+          to: '0x00000000000000000000000000000000000000aa',
+          data: '0x1234',
+          value: '0x0',
+        }],
+        finalizePayload: {
+          network: 'arbitrum',
+          version: 'v4',
+          walletAddress: '0x00000000000000000000000000000000000000e1',
+          positionIdentifier: '123',
+        },
+        expectedWallet: '0x00000000000000000000000000000000000000e1',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state).toBe(WALLET_EXECUTION_STATE.FAILED);
+    });
+
+    expect(executionResult).toBeNull();
+    expect(walletMock.preflightTransaction).not.toHaveBeenCalled();
+    expect(walletMock.submitTransactionDetailed).not.toHaveBeenCalled();
+    expect(result.current.normalizedError).toEqual(expect.objectContaining({
+      code: 'wallet_mismatch',
+      expectedWallet: '0x00000000000000000000000000000000000000e1',
+      connectedWallet: walletMock.address,
+    }));
+  });
+
+  it('firma normalmente cuando expectedWallet coincide sin importar el case', async () => {
+    const { result } = renderHook(() => useWalletExecution());
+
+    await act(async () => {
+      await result.current.runPlan({
+        action: 'close-keep-assets',
+        chainId: 42161,
+        txPlan: [{
+          clientTxId: 'tx-1',
+          label: 'Close LP and keep assets (v4)',
+          to: '0x00000000000000000000000000000000000000aa',
+          data: '0x1234',
+          value: '0x0',
+        }],
+        finalizePayload: {
+          network: 'arbitrum',
+          version: 'v4',
+          walletAddress: walletMock.address,
+          positionIdentifier: '123',
+        },
+        expectedWallet: walletMock.address.toUpperCase().replace('0X', '0x'),
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state).toBe(WALLET_EXECUTION_STATE.DONE);
+    });
+    expect(walletMock.submitTransactionDetailed).toHaveBeenCalledTimes(1);
+  });
 });

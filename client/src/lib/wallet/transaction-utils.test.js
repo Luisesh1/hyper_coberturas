@@ -6,6 +6,8 @@ import {
   prefersEstimatedGas,
   withFailingTxContext,
   sendWalletTransactionDetailed,
+  describeKnownRevert,
+  normalizeWalletError,
 } from './transaction-utils';
 
 // El mint v4 llegaba a MetaMask sin gas: la comparacion era exacta contra
@@ -227,5 +229,54 @@ describe('findReceiptDespiteError', () => {
   it('no explota sin cliente o sin hash', async () => {
     expect(await findReceiptDespiteError(null, '0xabc')).toBeNull();
     expect(await findReceiptDespiteError({ getTransactionReceipt: vi.fn() }, null)).toBeNull();
+  });
+});
+
+// Cerrar un LP del orquestador firmando con otra cuenta hacia que el
+// PositionManager de v4 revirtiera con `NotApproved(address)`. Ni MetaMask ni
+// viem tienen ese ABI, asi que el usuario solo veia "Execution reverted for an
+// unknown reason" y reintentaba sin entender que faltaba cambiar de cuenta.
+describe('normalizeWalletError traduce los custom errors de v4', () => {
+  const notApproved = `0x0ca968d8${'0'.repeat(24)}${'ab'.repeat(20)}`;
+
+  it('reconoce NotApproved y nombra la wallet que firmo', () => {
+    const err = Object.assign(new Error('Execution reverted for an unknown reason.'), {
+      shortMessage: 'Execution reverted for an unknown reason.',
+      cause: { data: notApproved },
+    });
+
+    const normalized = normalizeWalletError(err, { phase: 'preflight' });
+
+    expect(normalized.code).toBe('not_position_owner');
+    expect(normalized.message).toContain('no es dueña de esta posición');
+    expect(normalized.message).toContain('0xabab');
+    expect(normalized.rawMessage).toBe('Execution reverted for an unknown reason.');
+  });
+
+  it('reconoce DeadlinePassed aunque la data venga anidada en el provider', () => {
+    const err = {
+      message: 'execution reverted',
+      cause: { info: { error: { data: '0xbfb22adf' } } },
+    };
+
+    expect(normalizeWalletError(err, { phase: 'preflight' }).code).toBe('deadline_passed');
+  });
+
+  it('deja pasar el mensaje crudo cuando el selector no esta en la tabla', () => {
+    const err = Object.assign(new Error('Execution reverted for an unknown reason.'), {
+      shortMessage: 'Execution reverted for an unknown reason.',
+      cause: { data: '0xdeadbeef' },
+    });
+
+    const normalized = normalizeWalletError(err, { phase: 'preflight' });
+
+    expect(normalized.code).toBe('preflight_reverted');
+    expect(normalized.message).toBe('Execution reverted for an unknown reason.');
+  });
+
+  it('no confunde una address suelta con revert data', () => {
+    const err = Object.assign(new Error('boom'), { data: `0x${'cd'.repeat(20)}` });
+
+    expect(describeKnownRevert(err)).toBeNull();
   });
 });

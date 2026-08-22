@@ -40,6 +40,11 @@ export function normalizeReceiptStatus(status) {
   return null;
 }
 
+export function shortenAddress(address) {
+  const value = String(address || '');
+  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
+}
+
 function normalizeRpcMessage(err) {
   return String(
     err?.shortMessage
@@ -197,8 +202,87 @@ export function addGasBuffer(hexGas, multiplier = 1.2) {
   }
 }
 
-export function formatFriendlyWalletError(code, defaultMessage) {
+/**
+ * Los contratos de Uniswap v4 revierten con custom errors (4 bytes + args),
+ * no con strings. Ni MetaMask ni viem tienen el ABI para decodificarlos, asi
+ * que el usuario ve siempre el mismo texto inutil: "Execution reverted for an
+ * unknown reason". Traducimos los que se pueden disparar desde nuestros
+ * planes para que el mensaje diga que hacer.
+ *
+ * Los selectores son `keccak256(firma)[0..4]` de v4-periphery / v4-core.
+ */
+const KNOWN_REVERT_SELECTORS = {
+  // PositionManager.onlyIfApproved — firmar con una wallet que no es la
+  // dueña del NFT de la posicion (ni tiene approval sobre el).
+  '0x0ca968d8': { code: 'not_position_owner', arg: 'address' },
+  '0xbfb22adf': { code: 'deadline_passed' },
+  '0x31e30ad0': { code: 'v4_maximum_amount_exceeded' },
+  '0x12816f22': { code: 'v4_minimum_amount_insufficient' },
+  '0x5212cba1': { code: 'v4_currency_not_settled' },
+  '0x486aa307': { code: 'v4_pool_not_initialized' },
+};
+
+/**
+ * Busca el blob de revert data en la cadena de causas del error. viem lo
+ * cuelga en `cause.data` (a veces ya parseado como objeto con `.data`),
+ * ethers en `info.error.data`, y los providers crudos en `error.data`.
+ */
+function findRevertData(value, seen = new Set()) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return /^0x[0-9a-fA-F]{8,}$/.test(trimmed) && (trimmed.length - 2) % 2 === 0 ? trimmed : null;
+  }
+  if (typeof value !== 'object' || seen.has(value)) return null;
+  seen.add(value);
+
+  const candidates = [
+    value.data,
+    value.error?.data,
+    value.info?.error?.data,
+    value.cause,
+  ];
+  for (const candidate of candidates) {
+    const found = findRevertData(candidate, seen);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Traduce el custom error del revert a `{ code, message }`, o `null` si no
+ * lo conocemos (ahi conviene seguir mostrando el mensaje crudo de la wallet).
+ */
+export function describeKnownRevert(err) {
+  const data = findRevertData(err);
+  if (!data) return null;
+  const known = KNOWN_REVERT_SELECTORS[data.slice(0, 10).toLowerCase()];
+  if (!known) return null;
+
+  let detail = null;
+  if (known.arg === 'address' && data.length >= 74) {
+    detail = `0x${data.slice(34, 74)}`;
+  }
+  return { code: known.code, message: formatFriendlyWalletError(known.code, null, detail) };
+}
+
+export function formatFriendlyWalletError(code, defaultMessage, detail = null) {
   switch (code) {
+    case 'not_position_owner':
+      return `La wallet que firma${detail ? ` (${shortenAddress(detail)})` : ''} no es dueña de esta posición ni está aprobada para operarla. `
+        + 'Conectá en la wallet la cuenta dueña del LP y volvé a intentar.';
+    case 'wallet_mismatch':
+      return defaultMessage || 'La wallet conectada no es la que firma este plan de transacciones.';
+    case 'deadline_passed':
+      return 'El plan de transacciones expiró (deadline vencido). Volvé a preparar la acción.';
+    case 'v4_maximum_amount_exceeded':
+      return 'El pool pidió más tokens de los que autorizó el plan. Volvé a preparar la acción para recotizar.';
+    case 'v4_minimum_amount_insufficient':
+      return 'El pool devolvería menos tokens que el mínimo del plan (el precio se movió). Volvé a preparar la acción.';
+    case 'v4_currency_not_settled':
+      return 'Quedó un saldo sin liquidar en el PoolManager. Volvé a preparar la acción y reportá el caso si se repite.';
+    case 'v4_pool_not_initialized':
+      return 'El pool v4 no está inicializado en esta red.';
     case 'user_rejected':
       return 'Firma rechazada por el usuario.';
     case 'request_pending':
@@ -254,6 +338,22 @@ export function normalizeWalletError(err, { phase = 'wallet' } = {}) {
   else if (message.includes('insufficient funds')) code = 'insufficient_funds';
   else if (phase === 'preflight') code = 'preflight_reverted';
   else if (phase === 'receipt' && /timeout|timed out|esperando confirmaci/i.test(message)) code = 'tx_timeout';
+
+  // Un revert con custom error de v4 llega como "Execution reverted for an
+  // unknown reason": el codigo por si solo (preflight_reverted / unknown) no
+  // alcanza, hay que mirar la revert data para saber que fallo.
+  const knownRevert = code === 'preflight_reverted' || code === 'unknown'
+    ? describeKnownRevert(err)
+    : null;
+  if (knownRevert) {
+    return {
+      code: knownRevert.code,
+      message: knownRevert.message,
+      rawCode: Number.isFinite(numericCode) ? numericCode : null,
+      rawMessage,
+      cause: err,
+    };
+  }
 
   // Un error sin codigo reconocido no se puede diagnosticar a ciegas: el
   // mensaje de la wallet suele ser generico ("Missing or invalid parameters")
