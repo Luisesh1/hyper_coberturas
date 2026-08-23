@@ -260,3 +260,34 @@ test('fuera del centro (cerca del borde) la cobertura vuelve a operar', async ()
 
   assert.ok(ejecutado, 'cerca del borde el gate no debe aplicar');
 });
+
+// La zona muerta es una regla del usuario, no un detalle del motor legacy:
+// net_profit_v1 tiene su propio analisis coste/beneficio, pero si el usuario
+// dijo "en el centro no se toca", tampoco se toca con esa politica.
+test('net_profit_v1 live tambien respeta la zona central', async () => {
+  const netProfit = {
+    policyVersion: 'net_profit_v1',
+    strategyState: {
+      lastRebalanceAt: Date.now() - (13 * 60 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+      executionIntent: 'live',
+      policyVersion: 'net_profit_v1',
+    },
+  };
+
+  const congelada = buildProtection({ ...netProfit });
+  let ejecutadoEnCentro = null;
+  await buildService(congelada, { onExecute: (reason) => { ejecutadoEnCentro = reason; } })
+    .evaluateProtection(congelada);
+
+  const libre = buildProtection({ ...netProfit });
+  let ejecutadoSinZona = null;
+  await buildService(libre, {
+    onExecute: (reason) => { ejecutadoSinZona = reason; },
+    centerDeadZonePct: 0,
+  }).evaluateProtection(libre);
+
+  assert.equal(ejecutadoEnCentro, null, 'la zona central tiene que frenar tambien a net_profit_v1');
+  assert.equal(ejecutadoSinZona, 'net_profit_v1', 'sin zona, la politica decide como siempre');
+});
