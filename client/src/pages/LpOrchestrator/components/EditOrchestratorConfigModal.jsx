@@ -3,6 +3,7 @@ import { lpOrchestratorApi } from '../../../services/api';
 import ProtectionFormFields, {
   buildProtectionPayload,
   validateProtectionForm,
+  DEFAULT_CENTER_DEAD_ZONE_PCT,
 } from '../../../features/lp-wizard/ProtectionFormFields';
 import StrategyFieldInput from './StrategyFieldInput';
 import { validateStrategyFields } from './strategy-fields';
@@ -27,6 +28,9 @@ function protectionConfigToFormValue(cfg) {
     rebalanceIntervalSec: cfg.rebalanceIntervalSec != null ? String(cfg.rebalanceIntervalSec) : '21600',
     targetHedgeRatio: cfg.targetHedgeRatio != null ? String(cfg.targetHedgeRatio) : '1',
     minRebalanceNotionalPct: cfg.minRebalanceNotionalPct != null ? String(cfg.minRebalanceNotionalPct) : '12',
+    centerDeadZonePct: cfg.centerDeadZonePct != null
+      ? String(cfg.centerDeadZonePct)
+      : String(DEFAULT_CENTER_DEAD_ZONE_PCT),
     maxSlippageBps: cfg.maxSlippageBps != null ? String(cfg.maxSlippageBps) : '20',
     twapMinNotionalUsd: cfg.twapMinNotionalUsd != null ? String(cfg.twapMinNotionalUsd) : '10000',
     preset: 'adaptive',
@@ -62,6 +66,9 @@ export default function EditOrchestratorConfigModal({
   const em = Number(strategy.edgeMarginPct);
   const centralPct = Number.isFinite(rw) && Number.isFinite(em) ? (100 - 2 * em) : null;
 
+  // El LP vivo, para que la zona central sin rebalanceo pueda dibujar donde
+  // esta el precio ahora mismo dentro del rango real.
+  const livePool = orchestrator?.lastEvaluation?.poolSnapshot || null;
   const initialUsd = Number(orchestrator?.initialTotalUsd) || 0;
   const hasActiveProtectedPool = Boolean(orchestrator?.activeProtectedPoolId);
 
@@ -196,6 +203,9 @@ export default function EditOrchestratorConfigModal({
           accounts={accounts}
           initialUsd={initialUsd}
           rangeWidthPct={Number(strategy.rangeWidthPct) || null}
+          currentPrice={livePool?.priceCurrent ?? null}
+          rangeLowerPrice={livePool?.rangeLowerPrice ?? null}
+          rangeUpperPrice={livePool?.rangeUpperPrice ?? null}
         />
       </section>
 

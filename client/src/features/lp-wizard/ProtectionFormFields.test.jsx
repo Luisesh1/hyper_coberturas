@@ -5,6 +5,8 @@ import {
   buildDefaultProtection,
   buildProtectionPayload,
   validateProtectionForm,
+  rangePositionFraction,
+  DEFAULT_CENTER_DEAD_ZONE_PCT,
 } from './ProtectionFormFields';
 import ProtectionFormFields from './ProtectionFormFields';
 
@@ -320,5 +322,63 @@ describe('compatibilidad con protecciones ya guardadas', () => {
 
     expect(screen.getByLabelText('Notional USD a hedgear').value).toBe('42');
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// La zona central sin rebalanceo es la unica preferencia del formulario que
+// depende de DONDE esta el precio dentro del rango, asi que el numero solo no
+// alcanza: el usuario tiene que ver el tramo congelado y su estado actual.
+describe('zona central sin rebalanceo', () => {
+  const baseValue = {
+    ...buildDefaultProtection(1000, 5),
+    enabled: true,
+    accountId: 1,
+  };
+
+  it('arranca en 40% y viaja en el payload', () => {
+    expect(buildDefaultProtection(1000, 5).centerDeadZonePct).toBe(String(DEFAULT_CENTER_DEAD_ZONE_PCT));
+    expect(buildProtectionPayload(baseValue).centerDeadZonePct).toBe(40);
+  });
+
+  it('acepta el 0 como "sin zona muerta" y rechaza valores fuera de rango', () => {
+    expect(validateProtectionForm({ ...baseValue, centerDeadZonePct: '0' })).toBeNull();
+    expect(validateProtectionForm({ ...baseValue, centerDeadZonePct: '95' })).toMatch(/entre 0 y 90/);
+    expect(validateProtectionForm({ ...baseValue, centerDeadZonePct: '-1' })).toMatch(/entre 0 y 90/);
+  });
+
+  // El centro de un rango de ticks es el medio GEOMETRICO: con la mitad
+  // aritmetica el marcador se corre del borde de la zona justo donde el
+  // usuario mira para decidir.
+  it('ubica el precio en espacio logaritmico, como el servidor', () => {
+    expect(rangePositionFraction(Math.sqrt(90 * 110), 90, 110)).toBeCloseTo(0.5, 12);
+    expect(rangePositionFraction(90, 90, 110)).toBe(0);
+    expect(rangePositionFraction(80, 90, 110)).toBeNull();
+  });
+
+  it('dice si con el precio de ahora la cobertura rebalancea o no', async () => {
+    const { rerender } = render(
+      <ProtectionFormFields
+        value={baseValue}
+        onChange={() => {}}
+        accounts={[{ id: 1, alias: 'main', address: '0xabc' }]}
+        currentPrice={Math.sqrt(90 * 110)}
+        rangeLowerPrice={90}
+        rangeUpperPrice={110}
+      />
+    );
+    expect(await screen.findByText(/no rebalancea/i)).toBeTruthy();
+
+    // Cerca del borde inferior (fraccion ~0.05) queda fuera del 40% central.
+    rerender(
+      <ProtectionFormFields
+        value={baseValue}
+        onChange={() => {}}
+        accounts={[{ id: 1, alias: 'main', address: '0xabc' }]}
+        currentPrice={91}
+        rangeLowerPrice={90}
+        rangeUpperPrice={110}
+      />
+    );
+    await waitFor(() => expect(screen.getByText(/^Con el precio de ahora la cobertura rebalancea\.$/)).toBeTruthy());
   });
 });

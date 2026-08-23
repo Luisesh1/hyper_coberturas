@@ -49,6 +49,7 @@ const PROTECTION_CONFIG_KEYS = [
   'rebalanceIntervalSec',
   'targetHedgeRatio',
   'minRebalanceNotionalPct',
+  'centerDeadZonePct',
   'maxSlippageBps',
   'twapMinNotionalUsd',
   'preset',

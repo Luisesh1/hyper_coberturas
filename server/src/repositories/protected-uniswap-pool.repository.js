@@ -65,7 +65,7 @@ const IDENTITY_COLUMNS = `
   initial_configured_hedge_notional_usd, value_multiplier, stop_loss_difference_pct, protection_mode,
   reentry_buffer_pct, flip_cooldown_sec, max_sequential_flips, breakout_confirm_distance_pct,
   breakout_confirm_duration_sec, dynamic_state_json, band_mode, base_rebalance_price_move_pct,
-  rebalance_interval_sec, target_hedge_ratio, min_rebalance_notional_pct, max_slippage_bps,
+  rebalance_interval_sec, target_hedge_ratio, min_rebalance_notional_pct, center_dead_zone_pct, max_slippage_bps,
   twap_min_notional_usd, strategy_state_json, value_mode, leverage, margin_mode, status,
   strategy_engine_version, snapshot_status, snapshot_fresh_at, snapshot_hash,
   next_eligible_attempt_at, cooldown_reason, last_decision, last_decision_reason,
@@ -117,6 +117,8 @@ function mapIdentityRow(row) {
     rebalanceIntervalSec: row.rebalance_interval_sec != null ? Number(row.rebalance_interval_sec) : null,
     targetHedgeRatio: row.target_hedge_ratio != null ? Number(row.target_hedge_ratio) : null,
     minRebalanceNotionalPct: row.min_rebalance_notional_pct != null ? Number(row.min_rebalance_notional_pct) : null,
+    // null = hereda el default del servicio; 0 = zona muerta desactivada.
+    centerDeadZonePct: row.center_dead_zone_pct != null ? Number(row.center_dead_zone_pct) : null,
     maxSlippageBps: row.max_slippage_bps != null ? Number(row.max_slippage_bps) : null,
     twapMinNotionalUsd: row.twap_min_notional_usd != null ? Number(row.twap_min_notional_usd) : null,
     strategyState: parseJsonSafe(row.strategy_state_json, null),
@@ -417,9 +419,10 @@ async function create(record, executor) {
        min_order_notional_usd, twap_slices, twap_duration_sec, last_onchain_action, last_tx_hash, last_tx_at,
        replaced_by_position_identifier, pool_snapshot_json, time_in_range_ms, time_tracked_ms,
        time_in_range_pct, range_last_state_in_range, range_last_state_at, range_computed_at, range_frozen_at,
-       created_at, updated_at, creation_operation_id, policy_version, half_width_pct
+       created_at, updated_at, creation_operation_id, policy_version, half_width_pct,
+       center_dead_zone_pct
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, 'active', $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64, $65, $66, $67, $68, $69, $70, $71, $72, $73)
      ON CONFLICT (creation_operation_id) WHERE creation_operation_id IS NOT NULL
      DO UPDATE SET updated_at = EXCLUDED.updated_at
      RETURNING id`,
@@ -496,6 +499,7 @@ async function create(record, executor) {
       record.creationOperationId ?? null,
       record.policyVersion ?? null,
       record.halfWidthPct ?? null,
+      record.centerDeadZonePct ?? null,
     ]
   );
 
@@ -575,6 +579,7 @@ async function reactivate(userId, id, record, executor) {
             updated_at = $68,
             policy_version = $69,
             half_width_pct = $70,
+            center_dead_zone_pct = $71,
             range_frozen_at = NULL,
             deactivated_at = NULL
       WHERE user_id = $1 AND id = $2
@@ -650,6 +655,7 @@ async function reactivate(userId, id, record, executor) {
       updatedAt,
       record.policyVersion ?? null,
       record.halfWidthPct ?? null,
+      record.centerDeadZonePct ?? null,
     ]
   );
 

@@ -70,8 +70,9 @@ function buildProtection(overrides = {}) {
   };
 }
 
-function buildService(protection, { onExecute, actualQty = 0.25 } = {}) {
+function buildService(protection, { onExecute, actualQty = 0.25, centerDeadZonePct } = {}) {
   const service = new ProtectedPoolDeltaNeutralService({
+    ...(centerDeadZonePct != null ? { centerDeadZonePct } : {}),
     protectedPoolRepository: {
       getById: async () => protection,
       updateStrategyState: async (_userId, _id, payload) => {
@@ -204,6 +205,10 @@ test('un minimo de orden migrado nulo no restaura el viejo piso de $50', async (
   const service = buildService(protection, {
     actualQty: 0.0001,
     onExecute: (reason) => { ejecutado = reason; },
+    // Este caso mide el PISO de notional, no la zona muerta: con el precio en
+    // 2500 sobre un rango 2000-3000 el LP esta en el centro, y la zona central
+    // por defecto congelaria el brazo por temporizador antes de llegar a el.
+    centerDeadZonePct: 0,
   });
 
   const state = await service.evaluateProtection(protection);
@@ -229,6 +234,9 @@ test('net_profit_v1 live ejecuta su ajuste parcial, no el target por zonas legac
   const service = buildService(protection, {
     actualQty: 0.0001,
     onExecute: (reason, context) => { execution = { reason, ...context }; },
+    // Idem: aqui se mide el tamano del ajuste de net_profit_v1, no el gate de
+    // la zona central (que tambien aplica a esta politica).
+    centerDeadZonePct: 0,
   });
 
   const state = await service.evaluateProtection(protection);

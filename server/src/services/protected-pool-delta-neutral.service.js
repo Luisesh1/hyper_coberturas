@@ -87,6 +87,11 @@ class ProtectedPoolDeltaNeutralService {
     // la maquina de prod. Ya paso con los multiplicadores de zona (619cfd4).
     this.urgentMinRebalanceNotionalPct = deps.urgentMinRebalanceNotionalPct
       ?? config.deltaNeutral.urgentMinRebalanceNotionalPct;
+    // Default de la zona central sin rebalanceo para las protecciones que no
+    // traen `centerDeadZonePct` propio (todas las migradas). Mismo motivo que
+    // arriba para inyectarlo en vez de leer `config` en el punto de uso.
+    this.centerDeadZonePct = deps.centerDeadZonePct
+      ?? config.deltaNeutral.centerDeadZonePct;
     // Multiplicadores del hedge ratio por zona (configurables). El "vigente" es
     // el que se ejecuta; el "shadow" es el propuesto que se loguea sin ejecutar
     // cuando `shadowMode` está activo. Ver config.deltaNeutral.zoneHedge*.

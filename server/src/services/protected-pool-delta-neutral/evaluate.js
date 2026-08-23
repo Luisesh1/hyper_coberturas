@@ -22,6 +22,7 @@ const {
   normalizeEvaluationStatus,
   normalizeStrategyState,
   resolveMinOrderNotionalUsd,
+  resolveCenterDeadZone,
   resolveMinRebalanceNotionalUsd,
   resolveRebalanceDecision,
   resolveUrgentMinRebalanceNotionalUsd,
@@ -788,13 +789,40 @@ const evaluateMethods = {
     );
     const urgentTrigger = !isNetProfitLive && (forceReason === 'boundary_cross'
       || priceMovePct >= band.effectiveBandPct);
-    const shouldRebalance = isNetProfitLive
+    // Zona central del rango donde el usuario pidio no rebalancear. Congela
+    // los brazos economicos (urgente y temporizador) mientras el precio este
+    // en el centro del rango, donde el delta se mueve despacio y cada ajuste
+    // paga fee + slippage sin recuperarlo. Las rutas de seguridad se listan
+    // en `deadZoneOverride` y la ignoran: nunca dejamos capital descubierto
+    // por una preferencia de costo.
+    const centerDeadZone = resolveCenterDeadZone(
+      activeProtection,
+      currentPrice,
+      this.centerDeadZonePct
+    );
+    const deadZoneOverride = forceRebalance
+      || forceReduceNearZero
+      || (!position && metrics.targetQty > 0.0000001);
+    const centerDeadZoneBlocks = centerDeadZone.active && !deadZoneOverride;
+    const shouldRebalance = !centerDeadZoneBlocks && (isNetProfitLive
       ? netProfitDecision.decision === 'rebalance'
       : forceRebalance
         || forceReduceNearZero
         || (urgentTrigger && driftUsd >= urgentMinNotionalUsd)
         || (timerDue && driftUsd >= minRebalanceNotionalUsd)
-        || (!position && metrics.targetQty > 0.0000001);
+        || (!position && metrics.targetQty > 0.0000001));
+
+    if (centerDeadZoneBlocks) {
+      this.logger.info?.('delta_neutral_rebalance_skipped_center_dead_zone', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        centerDeadZonePct: centerDeadZone.pct,
+        rangePositionPct: centerDeadZone.positionPct,
+        driftUsd,
+        forceReason: forceReason || null,
+      });
+    }
 
     if (urgentTrigger && driftUsd < urgentMinNotionalUsd) {
       this.logger.info?.('delta_neutral_urgent_rebalance_skipped_below_band', {
@@ -869,6 +897,9 @@ const evaluateMethods = {
       driftUsd,
       timerDue,
       minDwellActive,
+      centerDeadZonePct: centerDeadZone.pct,
+      centerDeadZoneActive: centerDeadZone.active,
+      rangePositionPct: centerDeadZone.positionPct,
     });
     if (preflight.reason === 'insufficient_margin') {
       this.logger.warn?.('delta_neutral_insufficient_margin_blocked', {

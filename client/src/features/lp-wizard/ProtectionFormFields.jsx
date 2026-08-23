@@ -7,6 +7,10 @@ import styles from './ProtectionFormFields.module.css';
 // Espeja DEFAULT_MIN_REBALANCE_NOTIONAL_PCT del servidor
 // (protected-pool-delta-neutral.helpers.js).
 export const DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12;
+// Espeja DEFAULT_CENTER_DEAD_ZONE_PCT del servidor: % del ancho TOTAL del
+// rango, centrado, donde la cobertura no rebalancea. 0 la desactiva.
+export const DEFAULT_CENTER_DEAD_ZONE_PCT = 40;
+export const MAX_CENTER_DEAD_ZONE_PCT = 90;
 
 const DELTA_NEUTRAL_PRESETS = [
   { id: 'adaptive', label: 'Adaptive', bandMode: 'adaptive', baseRebalancePriceMovePct: 3, rebalanceIntervalSec: 21600, hint: 'Bandas adaptativas por volatilidad. Coste intermedio.' },
@@ -42,6 +46,7 @@ const DEFAULT_PROTECTION = Object.freeze({
   rebalanceIntervalSec: '21600',
   targetHedgeRatio: '1',
   minRebalanceNotionalPct: '12',
+  centerDeadZonePct: '40',
   maxSlippageBps: '20',
   twapMinNotionalUsd: '10000',
   preset: 'adaptive',
@@ -122,6 +127,9 @@ export function computeAutoTunedProtection(rangeWidthPct, initialUsd) {
     maxSlippageBps,
     configuredNotionalUsd: Math.round(initialHedge),
     minRebalanceNotionalPct: DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
+    // Es una fraccion del rango, no un valor absoluto: ya escala con el ancho
+    // que elija el usuario, asi que no se auto-ajusta.
+    centerDeadZonePct: DEFAULT_CENTER_DEAD_ZONE_PCT,
   };
 }
 
@@ -182,6 +190,7 @@ export function buildDefaultProtection(initialUsd, rangeWidthPct = null, options
       baseRebalancePriceMovePct: String(tuned.baseRebalancePriceMovePct),
       rebalanceIntervalSec: String(tuned.rebalanceIntervalSec),
       minRebalanceNotionalPct: String(tuned.minRebalanceNotionalPct),
+      centerDeadZonePct: String(tuned.centerDeadZonePct),
       maxSlippageBps: String(tuned.maxSlippageBps),
       preset: tuned.preset,
       autoTunedFor: rangeWidthPct,
@@ -189,6 +198,71 @@ export function buildDefaultProtection(initialUsd, rangeWidthPct = null, options
   }
   const notional = initialUsd ? String(Math.round(initialUsd / 2)) : '';
   return { ...defaults, configuredNotionalUsd: notional };
+}
+
+/**
+ * Posicion del precio dentro del rango, 0 (borde inferior) a 1 (superior).
+ * Espeja `rangePositionFraction` del servidor
+ * (protected-pool-delta-neutral.helpers.js): se mide en espacio logaritmico
+ * porque un rango de Uniswap son ticks, y su centro real es el medio
+ * geometrico. Con la mitad aritmetica el marcador mentiria justo en el borde
+ * de la zona, que es donde el usuario mira.
+ */
+export function rangePositionFraction(currentPrice, rangeLowerPrice, rangeUpperPrice) {
+  const lower = Math.min(Number(rangeLowerPrice), Number(rangeUpperPrice));
+  const upper = Math.max(Number(rangeLowerPrice), Number(rangeUpperPrice));
+  const price = Number(currentPrice);
+  if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower <= 0 || upper <= lower) return null;
+  if (!Number.isFinite(price) || price < lower || price > upper) return null;
+  return Math.log(price / lower) / Math.log(upper / lower);
+}
+
+/**
+ * El corredor de cobertura: el rango completo, con el tramo central congelado
+ * y el precio actual encima. El porcentaje solo no dice DONDE deja de operar
+ * la cobertura, que es la unica pregunta que este ajuste tiene que contestar.
+ */
+function CenterDeadZoneTrack({ pct, currentPrice, rangeLowerPrice, rangeUpperPrice }) {
+  const parsed = Number(pct);
+  const width = Number.isFinite(parsed) ? Math.min(MAX_CENTER_DEAD_ZONE_PCT, Math.max(0, parsed)) : 0;
+  const fraction = rangePositionFraction(currentPrice, rangeLowerPrice, rangeUpperPrice);
+  const frozenNow = fraction != null && width > 0 && Math.abs(fraction - 0.5) <= width / 200;
+  const decimals = (width / 2) % 1 === 0 ? 0 : 1;
+
+  return (
+    <div className={styles.zoneTrack}>
+      <div className={styles.zoneBar}>
+        {width > 0 && (
+          <div
+            className={styles.zoneFrozen}
+            style={{ left: `${50 - width / 2}%`, width: `${width}%` }}
+          />
+        )}
+        {fraction != null && (
+          <div
+            className={`${styles.zoneMarker} ${frozenNow ? styles.zoneMarkerFrozen : ''}`}
+            style={{ left: `${fraction * 100}%` }}
+          />
+        )}
+      </div>
+      <div className={styles.zoneLegend}>
+        <span>Borde inf.</span>
+        <span className={styles.zoneLegendMid}>
+          {width > 0
+            ? `Congelado ${(50 - width / 2).toFixed(decimals)}%–${(50 + width / 2).toFixed(decimals)}%`
+            : 'Rebalancea en todo el rango'}
+        </span>
+        <span>Borde sup.</span>
+      </div>
+      {fraction != null && (
+        <p className={`${styles.zoneNow} ${frozenNow ? styles.zoneNowFrozen : styles.zoneNowLive}`}>
+          {frozenNow
+            ? 'Con el precio de ahora la cobertura no rebalancea.'
+            : 'Con el precio de ahora la cobertura rebalancea.'}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export default function ProtectionFormFields({
@@ -608,6 +682,30 @@ export default function ProtectionFormFields({
                 />
               </div>
             </div>
+            <div className={styles.zoneField}>
+              <div className={styles.zoneHead}>
+                <label htmlFor="centerDeadZonePct">Zona central sin rebalanceo</label>
+                <div className={styles.zoneInput}>
+                  <input
+                    id="centerDeadZonePct"
+                    type="number"
+                    min="0"
+                    max={MAX_CENTER_DEAD_ZONE_PCT}
+                    step="5"
+                    value={v.centerDeadZonePct}
+                    onChange={(e) => handleField('centerDeadZonePct', e.target.value)}
+                  />
+                  <span>% del rango</span>
+                </div>
+              </div>
+              <CenterDeadZoneTrack
+                pct={v.centerDeadZonePct}
+                currentPrice={currentPrice}
+                rangeLowerPrice={rangeLowerPrice}
+                rangeUpperPrice={rangeUpperPrice}
+              />
+              <small className={styles.hint}>{describeCenterDeadZone(v.centerDeadZonePct)}</small>
+            </div>
           </details>
         </div>
       )}
@@ -628,12 +726,27 @@ export function buildProtectionPayload(formValue) {
     rebalanceIntervalSec: Number(formValue.rebalanceIntervalSec),
     targetHedgeRatio: Number(formValue.targetHedgeRatio),
     minRebalanceNotionalPct: Number(formValue.minRebalanceNotionalPct),
+    centerDeadZonePct: Number(formValue.centerDeadZonePct),
     maxSlippageBps: Number(formValue.maxSlippageBps),
     twapMinNotionalUsd: Number(formValue.twapMinNotionalUsd),
     policyVersion: formValue.policyVersion || 'legacy_zones_v1',
     executionIntent: formValue.executionIntent || 'live',
     ...(formValue.activationConfirmed ? { activationConfirmed: true } : {}),
   };
+}
+
+/**
+ * Traduce el % de zona muerta a los bordes que el usuario ve en el rango: con
+ * 40 la cobertura se congela entre el 30% y el 70%. Sin esto el numero solo no
+ * dice donde deja de operar.
+ */
+export function describeCenterDeadZone(pct) {
+  const parsed = Number(pct);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 'Sin zona muerta: la cobertura sigue al delta en todo el rango.';
+  }
+  return 'Ahorra las comisiones de re-cubrir contra ruido. Los cierres, los cambios de liquidez '
+    + 'y los rebalanceos forzados se ejecutan igual.';
 }
 
 export function validateProtectionForm(formValue) {
@@ -650,6 +763,10 @@ export function validateProtectionForm(formValue) {
   // Espeja la validación del servidor (uniswap-protection.service.js). Sin
   // esto el wizard dejaba avanzar hasta el pre-flight para morir allí con un
   // error de validación que ya se podía anticipar en el formulario.
+  const deadZone = Number(formValue.centerDeadZonePct);
+  if (!Number.isFinite(deadZone) || deadZone < 0 || deadZone > MAX_CENTER_DEAD_ZONE_PCT) {
+    return `La zona central sin rebalanceo debe estar entre 0 y ${MAX_CENTER_DEAD_ZONE_PCT}%.`;
+  }
   if (formValue.policyVersion === 'net_profit_v1'
     && formValue.executionIntent === 'live'
     && formValue.activationConfirmed !== true) {

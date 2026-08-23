@@ -18,6 +18,9 @@ test('repository persiste policyVersion y halfWidthPct en una creación nueva', 
     inferredAsset: 'ETH', hedgeSize: 1, hedgeNotionalUsd: 2000, configuredHedgeNotionalUsd: 2000, poolSnapshot: {}, leverage: 10,
     createdAt: 1, policyVersion: 'net_profit_v1', halfWidthPct: 5,
   }, { query: async (_sql, values) => { params = values; return { rows: [{ id: 1 }] }; } });
-  assert.equal(params.at(-2), 'net_profit_v1');
-  assert.equal(params.at(-1), 5);
+  // `center_dead_zone_pct` se agrego al final del INSERT, asi que policy y
+  // halfWidth corrieron una posicion.
+  assert.equal(params.at(-3), 'net_profit_v1');
+  assert.equal(params.at(-2), 5);
+  assert.equal(params.at(-1), null, 'sin valor propio hereda el default del servicio');
 });

@@ -165,6 +165,13 @@ const config = {
     // arbitra entre costo de ejecucion y residual de cobertura.
     urgentMinRebalanceNotionalPct:
       parseFloat(process.env.DELTA_NEUTRAL_URGENT_MIN_NOTIONAL_PCT) || 3,
+    // Zona central del rango (% del ancho total, centrada en el medio
+    // geometrico) donde la cobertura NO rebalancea. Default de la casa para
+    // las protecciones que no traen valor propio; 0 la desactiva. Ojo con el
+    // `||`: aca hace falta distinguir el 0 explicito del valor ausente.
+    centerDeadZonePct: Number.isFinite(parseFloat(process.env.DELTA_NEUTRAL_CENTER_DEAD_ZONE_PCT))
+      ? parseFloat(process.env.DELTA_NEUTRAL_CENTER_DEAD_ZONE_PCT)
+      : 40,
     // Multiplicadores del hedge ratio por zona del precio respecto al rango LP.
     // `center` < 1 sub-cubre deliberadamente cuando el precio está profundo en
     // rango (apuesta a reversión a la media). El análisis histórico mostró que

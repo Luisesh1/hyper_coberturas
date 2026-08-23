@@ -38,6 +38,10 @@ const protectionConfigSchema = z.union([
     rebalanceIntervalSec: z.number().int().min(60).optional(),
     targetHedgeRatio: z.number().positive().max(2).optional(),
     minRebalanceNotionalPct: z.number().positive().max(100).optional(),
+    // % del ancho total del rango, centrado, donde la cobertura no rebalancea.
+    // El 0 es valido y significa "sin zona muerta", por eso `min(0)` y no
+    // `.positive()` como el resto de los porcentajes.
+    centerDeadZonePct: z.number().min(0).max(90).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
     policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1']).optional(),
@@ -137,6 +141,10 @@ const wizardProtectionSchema = z.union([
     rebalanceIntervalSec: z.number().int().min(60).optional(),
     targetHedgeRatio: z.number().positive().max(2).optional(),
     minRebalanceNotionalPct: z.number().positive().max(100).optional(),
+    // % del ancho total del rango, centrado, donde la cobertura no rebalancea.
+    // El 0 es valido y significa "sin zona muerta", por eso `min(0)` y no
+    // `.positive()` como el resto de los porcentajes.
+    centerDeadZonePct: z.number().min(0).max(90).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
     policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1']).optional(),

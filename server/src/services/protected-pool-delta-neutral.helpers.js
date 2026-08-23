@@ -34,6 +34,16 @@ const DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT = 3;
 // Acortarlo NO fuerza rebalanceos: el piso de notional sigue decidiendo SI se
 // rebalancea, esto solo acota cuanto se tarda en poder hacerlo.
 const MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC = 1800;
+// Zona central del rango (en % del ancho TOTAL, centrada en el punto medio)
+// donde no se rebalancea la cobertura. Con el precio profundo en rango el
+// delta se mueve despacio y cada ajuste paga taker fee + slippage y realiza
+// PnL del hedge; el 40% central es la parte del rango donde ese costo no se
+// recupera. 0 la desactiva. Las rutas de seguridad (force manual, reducir a
+// cero, hedge huerfano, cambio de liquidez) la ignoran.
+const DEFAULT_CENTER_DEAD_ZONE_PCT = 40;
+// Techo duro: por encima de esto la zona muerta se comeria tambien los bordes,
+// que es justo donde el delta se acelera y la cobertura tiene que responder.
+const MAX_CENTER_DEAD_ZONE_PCT = 90;
 const DEFAULT_MAX_SLIPPAGE_BPS = 20;
 const DEFAULT_TWAP_MIN_NOTIONAL_USD = 10_000;
 const DEFAULT_EXECUTION_MODE = 'auto';
@@ -115,6 +125,59 @@ function distanceToRangePct(protection, currentPrice) {
   }
   if (price < min) return ((min - price) / min) * 100;
   return ((price - max) / max) * 100;
+}
+
+/**
+ * Posicion del precio dentro del rango, de 0 (borde inferior) a 1 (superior).
+ *
+ * Se mide en espacio LOGARITMICO porque un rango de Uniswap son ticks, y los
+ * ticks son logaritmicos en el precio: el punto medio geometrico
+ * `sqrt(lower*upper)` es el centro real del rango — el que la mitad aritmetica
+ * corre hacia el borde inferior tanto mas cuanto mas ancho es el rango.
+ *
+ * Devuelve null si el rango no es utilizable o el precio esta fuera de el.
+ */
+function rangePositionFraction(protection, currentPrice) {
+  const lower = Math.min(Number(protection?.rangeLowerPrice), Number(protection?.rangeUpperPrice));
+  const upper = Math.max(Number(protection?.rangeLowerPrice), Number(protection?.rangeUpperPrice));
+  const price = Number(currentPrice);
+  if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower <= 0 || upper <= lower) return null;
+  if (!Number.isFinite(price) || price < lower || price > upper) return null;
+  const span = Math.log(upper / lower);
+  if (!Number.isFinite(span) || span <= 0) return null;
+  return Math.log(price / lower) / span;
+}
+
+/**
+ * Zona central del rango donde la cobertura NO rebalancea.
+ *
+ * `pct` es el ancho de la zona como porcentaje del rango completo, centrada en
+ * el medio geometrico: 40 => se congela entre el 30% y el 70% del rango. El
+ * valor por proteccion manda; si viene null se usa el default del servicio.
+ * Cero (o rango/precio no utilizables) la deja inactiva.
+ */
+function resolveCenterDeadZone(protection, currentPrice, fallbackPct) {
+  const configured = Number(protection?.centerDeadZonePct);
+  const candidate = Number.isFinite(configured)
+    ? configured
+    : Number(fallbackPct);
+  const pct = Number.isFinite(candidate)
+    ? Math.min(MAX_CENTER_DEAD_ZONE_PCT, Math.max(0, candidate))
+    : DEFAULT_CENTER_DEAD_ZONE_PCT;
+
+  if (pct <= 0) return { pct, active: false, positionPct: null };
+
+  const fraction = rangePositionFraction(protection, currentPrice);
+  // Fuera de rango (o sin rango) nunca es zona muerta: ahi el LP esta 100% en
+  // un lado del par y la cobertura es justamente lo que hay que respetar.
+  if (fraction == null) return { pct, active: false, positionPct: null };
+
+  const halfWidth = pct / 200;
+  return {
+    pct,
+    active: Math.abs(fraction - 0.5) <= halfWidth,
+    positionPct: fraction * 100,
+  };
 }
 
 function isIsolatedPosition(position) {
@@ -487,6 +550,10 @@ module.exports = {
   resolveMinRebalanceNotionalUsd,
   resolveUrgentMinRebalanceNotionalUsd,
   DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT,
+  DEFAULT_CENTER_DEAD_ZONE_PCT,
+  MAX_CENTER_DEAD_ZONE_PCT,
+  rangePositionFraction,
+  resolveCenterDeadZone,
   MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,

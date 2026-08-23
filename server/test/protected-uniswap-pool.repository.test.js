@@ -69,8 +69,11 @@ test('create usa placeholders consistentes con la cantidad de parámetros', asyn
   assert.ok(capturedParams.length >= maxPlaceholder(capturedSql));
   assert.match(capturedSql, /'active'/);
   assert.match(capturedSql, /ON CONFLICT \(creation_operation_id\)/);
-  assert.equal(capturedParams.at(-3), 31);
-  assert.equal(capturedParams.at(-2), null, 'la ausencia preserva legacy_zones_v1');
+  // El orden del final del INSERT es: creationOperationId, policyVersion,
+  // halfWidthPct, centerDeadZonePct.
+  assert.equal(capturedParams.at(-4), 31);
+  assert.equal(capturedParams.at(-3), null, 'la ausencia preserva legacy_zones_v1');
+  assert.equal(capturedParams.at(-1), null, 'sin zona muerta propia se hereda la del servicio');
 });
 
 test('reactivate usa placeholders consistentes con la cantidad de parámetros', async () => {
@@ -91,6 +94,7 @@ test('reactivate usa placeholders consistentes con la cantidad de parámetros', 
   });
 
   assert.equal(maxPlaceholder(capturedSql), capturedParams.length);
-  assert.equal(capturedParams.at(-2), 'net_profit_v1');
-  assert.equal(capturedParams.at(-1), 5);
+  assert.equal(capturedParams.at(-3), 'net_profit_v1');
+  assert.equal(capturedParams.at(-2), 5);
+  assert.equal(capturedParams.at(-1), null);
 });

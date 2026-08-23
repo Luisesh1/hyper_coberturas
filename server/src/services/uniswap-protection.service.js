@@ -26,6 +26,8 @@ const {
   DEFAULT_REBALANCE_INTERVAL_SEC,
   DEFAULT_TARGET_HEDGE_RATIO,
   DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
+  DEFAULT_CENTER_DEAD_ZONE_PCT,
+  MAX_CENTER_DEAD_ZONE_PCT,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   buildInitialStrategyState,
@@ -214,6 +216,7 @@ function buildCandidateFromMarket(pool, availableAssets, mids) {
     rebalanceIntervalSec: DEFAULT_REBALANCE_INTERVAL_SEC,
     targetHedgeRatio: DEFAULT_TARGET_HEDGE_RATIO,
     minRebalanceNotionalPct: DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
+    centerDeadZonePct: DEFAULT_CENTER_DEAD_ZONE_PCT,
     maxSlippageBps: DEFAULT_MAX_SLIPPAGE_BPS,
     twapMinNotionalUsd: DEFAULT_TWAP_MIN_NOTIONAL_USD,
   };
@@ -436,6 +439,7 @@ async function annotatePoolsWithProtection({ userId, pools }, deps = {}) {
             rebalanceIntervalSec: protection.rebalanceIntervalSec ?? null,
             targetHedgeRatio: protection.targetHedgeRatio ?? null,
             minRebalanceNotionalPct: protection.minRebalanceNotionalPct ?? null,
+            centerDeadZonePct: protection.centerDeadZonePct ?? null,
             maxSlippageBps: protection.maxSlippageBps ?? null,
             twapMinNotionalUsd: protection.twapMinNotionalUsd ?? null,
             strategyState: protection.strategyState ?? null,
@@ -618,6 +622,7 @@ function buildStoredPoolSnapshot({
   rebalanceIntervalSec,
   targetHedgeRatio,
   minRebalanceNotionalPct,
+  centerDeadZonePct,
   maxSlippageBps,
   twapMinNotionalUsd,
   strategyState,
@@ -648,6 +653,7 @@ function buildStoredPoolSnapshot({
       rebalanceIntervalSec,
       targetHedgeRatio,
       minRebalanceNotionalPct,
+      centerDeadZonePct,
       maxSlippageBps,
       twapMinNotionalUsd,
       strategyState,
@@ -672,6 +678,7 @@ function buildStoredPoolSnapshot({
       rebalanceIntervalSec,
       targetHedgeRatio,
       minRebalanceNotionalPct,
+      centerDeadZonePct,
       maxSlippageBps,
       twapMinNotionalUsd,
       defaultLeverage: Math.min(10, candidate.maxLeverage),
@@ -805,6 +812,18 @@ function normalizeMinRebalanceNotionalPct(value) {
   return parsed;
 }
 
+// Zona central del rango sin rebalanceo, en % del ancho TOTAL. A diferencia
+// de los otros porcentajes, el 0 es un valor VALIDO y significativo: apaga la
+// zona muerta. `null`/ausente cae al default del servicio.
+function normalizeCenterDeadZonePct(value) {
+  if (value == null) return DEFAULT_CENTER_DEAD_ZONE_PCT;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > MAX_CENTER_DEAD_ZONE_PCT) {
+    throw new ValidationError(`centerDeadZonePct debe ser un porcentaje entre 0 y ${MAX_CENTER_DEAD_ZONE_PCT}.`);
+  }
+  return parsed;
+}
+
 function normalizeMaxSlippageBps(value) {
   if (value == null) return DEFAULT_MAX_SLIPPAGE_BPS;
   const parsed = Number(value);
@@ -837,6 +856,7 @@ async function createDeltaNeutralProtectedPool({
   rebalanceIntervalSec,
   targetHedgeRatio,
   minRebalanceNotionalPct,
+  centerDeadZonePct,
   maxSlippageBps,
   twapMinNotionalUsd,
   policyVersion,
@@ -871,6 +891,7 @@ async function createDeltaNeutralProtectedPool({
   const liveNetProfit = isNetProfitV1 && executionIntent === 'live';
   const normalizedTargetHedgeRatio = liveNetProfit ? 1 : normalizeTargetHedgeRatio(targetHedgeRatio);
   const normalizedMinRebalanceNotionalPct = normalizeMinRebalanceNotionalPct(minRebalanceNotionalPct);
+  const normalizedCenterDeadZonePct = normalizeCenterDeadZonePct(centerDeadZonePct);
   const normalizedMaxSlippageBps = normalizeMaxSlippageBps(maxSlippageBps);
   // La política net-profit nueva tiene un presupuesto de ejecución más
   // estricto en condiciones normales. Los registros legacy conservan sin
@@ -975,6 +996,7 @@ async function createDeltaNeutralProtectedPool({
     rebalanceIntervalSec: normalizedRebalanceIntervalSec,
     targetHedgeRatio: normalizedTargetHedgeRatio,
     minRebalanceNotionalPct: normalizedMinRebalanceNotionalPct,
+    centerDeadZonePct: normalizedCenterDeadZonePct,
     maxSlippageBps: policyMaxSlippageBps,
     twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
     strategyEngineVersion: 'v2',
@@ -1024,6 +1046,7 @@ async function createDeltaNeutralProtectedPool({
     rebalanceIntervalSec: normalizedRebalanceIntervalSec,
     targetHedgeRatio: normalizedTargetHedgeRatio,
     minRebalanceNotionalPct: normalizedMinRebalanceNotionalPct,
+    centerDeadZonePct: normalizedCenterDeadZonePct,
     maxSlippageBps: policyMaxSlippageBps,
     twapMinNotionalUsd: normalizedTwapMinNotionalUsd,
     strategyState,
@@ -1109,6 +1132,7 @@ async function createProtectedPool({
   rebalanceIntervalSec,
   targetHedgeRatio,
   minRebalanceNotionalPct,
+  centerDeadZonePct,
   maxSlippageBps,
   twapMinNotionalUsd,
   policyVersion,
@@ -1151,6 +1175,7 @@ async function createProtectedPool({
       rebalanceIntervalSec,
       targetHedgeRatio,
       minRebalanceNotionalPct,
+      centerDeadZonePct,
       maxSlippageBps,
       twapMinNotionalUsd,
       policyVersion,
@@ -1497,6 +1522,7 @@ async function diagnoseDeltaNeutral(userId, protectionId, deps = {}) {
       rebalanceIntervalSec: protection.rebalanceIntervalSec,
       targetHedgeRatio: protection.targetHedgeRatio,
       minRebalanceNotionalPct: protection.minRebalanceNotionalPct,
+      centerDeadZonePct: protection.centerDeadZonePct,
       maxSlippageBps: protection.maxSlippageBps,
       twapMinNotionalUsd: protection.twapMinNotionalUsd,
       configuredNotionalUsd: protection.configuredHedgeNotionalUsd,

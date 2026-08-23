@@ -279,3 +279,131 @@
 .riskGate strong {
   color: var(--uni-amber);
 }
+
+/**
+ * Corredor de cobertura: el rango completo de lado a lado, con el tramo
+ * central congelado y el precio actual encima. El tramo muerto va rayado y sin
+ * color — un fondo plano se confunde con un estado (verde/rojo), y el rayado
+ * se lee como "acá no pasa nada" sin competir con el marcador de precio.
+ */
+.zoneField {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--uni-border);
+  background: var(--uni-bg-1);
+}
+
+.zoneHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.zoneHead label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--uni-text-1);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.zoneInput {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoneInput input {
+  width: 84px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--uni-border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--uni-text-0);
+  font-size: 0.9rem;
+  text-align: right;
+}
+
+.zoneInput span {
+  color: var(--uni-text-2);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.zoneTrack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.zoneBar {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(90deg,
+    rgba(102, 225, 219, 0.35),
+    rgba(102, 225, 219, 0.12) 30%,
+    rgba(102, 225, 219, 0.12) 70%,
+    rgba(102, 225, 219, 0.35));
+  border: 1px solid var(--uni-border);
+}
+
+.zoneFrozen {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.16) 0 2px,
+    transparent 2px 6px
+  );
+  background-color: rgba(8, 13, 20, 0.72);
+}
+
+.zoneMarker {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  transform: translateX(-1px);
+  background: var(--uni-amber);
+  box-shadow: 0 0 6px rgba(255, 191, 95, 0.55);
+}
+
+.zoneMarkerFrozen {
+  background: var(--uni-text-2);
+  box-shadow: none;
+}
+
+.zoneLegend {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--uni-text-2);
+  font-size: 0.7rem;
+}
+
+.zoneLegendMid {
+  color: var(--uni-text-1);
+  font-weight: 700;
+}
+
+.zoneNow {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.zoneNowFrozen {
+  color: var(--uni-text-2);
+}
+
+.zoneNowLive {
+  color: var(--uni-cyan);
+}
