@@ -55,6 +55,17 @@ test('cero desactiva la zona; el valor de la proteccion pisa al default', () => 
   assert.equal(resolveCenterDeadZone(RANGE, mid, 0).active, false);
 });
 
+// Regresion vista en los logs de prod (2026-08-23): la columna nace NULL en
+// toda proteccion migrada y `Number(null)` es 0 — un valor FINITO — asi que la
+// zona muerta salia desactivada justo en las protecciones que tenian que
+// heredar el default.
+test('una proteccion con la columna en null hereda el default, no el 0', () => {
+  const mid = Math.sqrt(90 * 110);
+  assert.equal(resolveCenterDeadZone({ ...RANGE, centerDeadZonePct: null }, mid, 40).pct, 40);
+  assert.equal(resolveCenterDeadZone({ ...RANGE, centerDeadZonePct: null }, mid, 40).active, true);
+  assert.equal(resolveCenterDeadZone({ ...RANGE, centerDeadZonePct: undefined }, mid, 40).pct, 40);
+});
+
 test('el ancho se clampea al techo y nunca es negativo', () => {
   const mid = Math.sqrt(90 * 110);
   assert.equal(resolveCenterDeadZone({ ...RANGE, centerDeadZonePct: 200 }, mid, 40).pct, MAX_CENTER_DEAD_ZONE_PCT);

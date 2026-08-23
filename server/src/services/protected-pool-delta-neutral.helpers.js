@@ -157,7 +157,12 @@ function rangePositionFraction(protection, currentPrice) {
  * Cero (o rango/precio no utilizables) la deja inactiva.
  */
 function resolveCenterDeadZone(protection, currentPrice, fallbackPct) {
-  const configured = Number(protection?.centerDeadZonePct);
+  // Ojo con `Number(null)`: da 0, que es finito. La columna nace NULL en toda
+  // proteccion migrada, asi que un `Number.isFinite` a secas apagaba la zona
+  // muerta justo en las protecciones que tenian que heredar el default. Es la
+  // misma trampa que documenta `resolveMinRebalanceNotionalUsd`.
+  const raw = protection?.centerDeadZonePct;
+  const configured = raw == null ? NaN : Number(raw);
   const candidate = Number.isFinite(configured)
     ? configured
     : Number(fallbackPct);
