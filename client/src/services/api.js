@@ -326,6 +326,21 @@ export const lpOrchestratorApi = {
 };
 
 // ------------------------------------------------------------------
+// Smart Contract Registry
+// ------------------------------------------------------------------
+export const smartContractRegistryApi = {
+  list: () => request('GET', '/smart-contracts'),
+  listVerifiedHooks: (network) => request(
+    'GET',
+    `/smart-contracts/verified-hooks?network=${encodeURIComponent(network)}`
+  ),
+  createContract: (payload) => request('POST', '/smart-contracts', payload),
+  createVersion: (contractId, payload) => request('POST', `/smart-contracts/${contractId}/versions`, payload),
+  recordDeployment: (versionId, payload) => request('POST', `/smart-contracts/versions/${versionId}/deployments`, payload),
+  verifyVersion: (versionId, network) => request('POST', `/smart-contracts/versions/${versionId}/verify`, { network }),
+};
+
+// ------------------------------------------------------------------
 // Orchestrator Metrics (pagina /metricas)
 // ------------------------------------------------------------------
 export const metricsApi = {

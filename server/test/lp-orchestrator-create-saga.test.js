@@ -38,6 +38,7 @@ const FINALIZE = {
 function makeSaga({
   createOrchestrator,
   attachLp,
+  verifiedHooksRepository,
   findProtection = async () => null,
   deactivateProtection = async () => ({ ok: true }),
   removeOrchestrator = async () => 1,
@@ -75,6 +76,7 @@ function makeSaga({
         return removeOrchestrator(userId, id);
       },
     },
+    verifiedHooksRepository,
   });
 
   return { saga, calls };
@@ -283,6 +285,49 @@ test('intención: se registra con el plan antes de firmar y sin txHashes', async
   assert.equal(op.status, 'awaiting_signature');
   assert.deepEqual(op.txHashes, []);
   assert.equal(op.plan.name, BASE_PLAN.name);
+});
+
+test('intención: rechaza un hook V4 que no esté verificado para esa red', async () => {
+  const { saga } = makeSaga({
+    verifiedHooksRepository: {
+      async listVerifiedHooks() { return []; },
+    },
+  });
+  saga.operationRepo = { async createOrReuse() { assert.fail('no debe crear intención'); } };
+
+  await assert.rejects(
+    () => saga.beginIntent({
+      userId: 1,
+      plan: {
+        ...BASE_PLAN,
+        version: 'v4',
+        hooks: '0x0000000000000000000000000000000000000080',
+        v4DynamicFeeHookVersionId: 99,
+      },
+    }),
+    /verificado/
+  );
+});
+
+test('intención: conserva el hook V4 que el registro verificó para la red', async () => {
+  const { saga, operations } = makeSagaWithOperations();
+  saga.verifiedHooksRepository = {
+    async listVerifiedHooks() {
+      return [{ id: 99, deployment: { address: '0x0000000000000000000000000000000000000080' } }];
+    },
+  };
+
+  const { operationId } = await saga.beginIntent({
+    userId: 1,
+    plan: {
+      ...BASE_PLAN,
+      version: 'v4',
+      hooks: '0x0000000000000000000000000000000000000080',
+      v4DynamicFeeHookVersionId: 99,
+    },
+  });
+
+  assert.equal(operations.get(operationId).plan.v4DynamicFeeHookVersionId, 99);
 });
 
 test('intención: el commit guarda el resultado y marca la operación como done', async () => {

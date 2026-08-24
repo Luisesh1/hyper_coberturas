@@ -41,6 +41,17 @@ test('plan: conserva v4TickSpacing', () => {
   assert.equal(parsed.strategy.v4TickSpacing, 30);
 });
 
+test('plan: conserva la identidad del hook dinámico V4', () => {
+  const parsed = lpPlanSchema.parse({
+    ...BASE,
+    hooks: '0x0000000000000000000000000000000000000080',
+    v4DynamicFeeHookVersionId: 42,
+  });
+
+  assert.equal(parsed.hooks, '0x0000000000000000000000000000000000000080');
+  assert.equal(parsed.v4DynamicFeeHookVersionId, 42);
+});
+
 test('plan: acepta v3 y v4, y rechaza cualquier otra versión', () => {
   assert.equal(lpPlanSchema.parse({ ...BASE, version: 'v3' }).version, 'v3');
   assert.equal(lpPlanSchema.parse({ ...BASE, version: 'v4' }).version, 'v4');

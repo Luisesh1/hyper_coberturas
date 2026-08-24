@@ -18,11 +18,13 @@ const strategyConfigSchema = z.object({
   // Un pool v4 se identifica por poolId = keccak(currency0, currency1, fee,
   // tickSpacing, hooks). El poolId se computa y el tickSpacing se deriva del
   // feeTier, asi que solo hace falta declararlo si el pool usa uno no
-  // estandar. Los hooks requieren una identidad de PoolKey completa y un
-  // perfil auditado; aún no se exponen como configuración del orquestador.
+  // estandar. Un hook dinámico se persiste sólo si su versión fue verificada
+  // por el registro antes de crear la intención.
   // Vive aca (y no en una columna nueva) porque strategy_config_json ya
   // persiste con el orquestador y sobrevive a los kill+recreate.
   v4TickSpacing: z.number().int().positive().max(32767).optional(),
+  v4Hooks: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+  v4DynamicFeeHookVersionId: z.number().int().positive().optional(),
 });
 
 const protectionConfigSchema = z.union([
@@ -163,6 +165,8 @@ const wizardStrategySchema = strategyConfigPatchSchema.extend({
   // Solo v4: se persiste cuando el pool declara un tickSpacing distinto del
   // que el backend derivaría del fee tier.
   v4TickSpacing: z.number().int().positive().max(32767).optional(),
+  v4Hooks: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+  v4DynamicFeeHookVersionId: z.number().int().positive().optional(),
 });
 
 const lpPlanSchema = z.object({
@@ -176,6 +180,10 @@ const lpPlanSchema = z.object({
   token0Symbol: z.string().min(1),
   token1Symbol: z.string().min(1),
   feeTier: z.number().int().positive().optional(),
+  // El hook y su versión verificada forman parte de la PoolKey V4. Se validan
+  // de nuevo contra el registro al crear la intención antes de cualquier firma.
+  hooks: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+  v4DynamicFeeHookVersionId: z.number().int().positive().optional(),
   capitalUsd: z.number().positive(),
   rangeLowerPrice: z.number().positive(),
   rangeUpperPrice: z.number().positive(),

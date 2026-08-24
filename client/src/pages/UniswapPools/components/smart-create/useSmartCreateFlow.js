@@ -51,7 +51,7 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
   const version = defaults?.version || 'v3';
   // Identidad opcional del pool v4. Ausentes, el backend deriva tickSpacing
   // del fee y computa el poolId — que es el caso de un pool sin hook.
-  const v4Hooks = defaults?.hooks || null;
+  const v4Hooks = defaults?.hooks || defaults?.v4DynamicFeeHook?.address || null;
   const v4TickSpacing = defaults?.tickSpacing != null ? Number(defaults.tickSpacing) : null;
 
   // ── state ─────────────────────────────────────────────────────────

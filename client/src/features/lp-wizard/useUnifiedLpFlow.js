@@ -75,6 +75,9 @@ export default function useUnifiedLpFlow({
   // el orquestador crea por omisión. `defaults.version` sigue mandando cuando
   // quien abre el wizard ya sabe qué versión toca (standalone, attach-lp).
   const [version, setVersion] = useState(defaults?.version || 'v4');
+  // Sólo puede llegar desde el selector de contratos verificados. El servidor
+  // lo vuelve a validar antes de registrar la intención de firma.
+  const v4DynamicFeeHook = defaults?.v4DynamicFeeHook || null;
 
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -304,6 +307,10 @@ export default function useUnifiedLpFlow({
       token0Symbol,
       token1Symbol,
       feeTier: Number(flow.fee),
+      ...(flow.version === 'v4' && v4DynamicFeeHook ? {
+        hooks: v4DynamicFeeHook.address,
+        v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId),
+      } : {}),
       capitalUsd: Number(flow.totalUsdTarget),
       rangeLowerPrice: Number(flow.activeRange?.rangeLowerPrice),
       rangeUpperPrice: Number(flow.activeRange?.rangeUpperPrice),
@@ -327,7 +334,7 @@ export default function useUnifiedLpFlow({
     mode, isOrchestrated, effectiveName, wallet, protection, strategy,
     effectiveRangeWidthPct, v4TickSpacingOverride, flow.network, flow.version, flow.token0Address,
     flow.token1Address, flow.fee, flow.totalUsdTarget, flow.activeRange,
-    flow.suggestions, symbolForAddress,
+    flow.suggestions, symbolForAddress, v4DynamicFeeHook,
   ]);
 
   /** Dry-run de la cobertura. Bloquea el avance a Revisión si no pasa. */

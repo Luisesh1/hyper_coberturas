@@ -72,11 +72,11 @@ function makeFlow(overrides = {}) {
   };
 }
 
-function renderFlow(flowOverrides = {}) {
+function renderFlow(flowOverrides = {}, defaultsOverrides = {}) {
   smartCreateFlow.current = makeFlow(flowOverrides);
   const view = renderHook(() => useUnifiedLpFlow({
     wallet: { address: '0x1111111111111111111111111111111111111111' },
-    defaults: { network: 'arbitrum', version: 'v4' },
+    defaults: { network: 'arbitrum', version: 'v4', ...defaultsOverrides },
     initialMode: 'orchestrated',
   }));
   act(() => {
@@ -208,6 +208,19 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     expect(plan.priceCurrent).toBe(2200);
     expect(plan.rangeLowerPrice).toBe(2000);
     expect(plan.rangeUpperPrice).toBe(2400);
+  });
+
+  it('incluye en la intención sólo la identidad del hook dinámico seleccionado', () => {
+    const { result } = renderFlow({}, {
+      v4DynamicFeeHook: {
+        versionId: 19,
+        address: '0x0000000000000000000000000000000000000080',
+      },
+    });
+
+    const plan = result.current.buildPlan();
+    expect(plan.hooks).toBe('0x0000000000000000000000000000000000000080');
+    expect(plan.v4DynamicFeeHookVersionId).toBe(19);
   });
 });
 

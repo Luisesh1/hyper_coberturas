@@ -10,6 +10,12 @@ test('la migración deja policy_version nullable para preservar filas legacy', (
   assert.match(sql, /net_profit_v1/);
 });
 
+test('la migración de Net Profit V2 admite la nueva política en la base de datos', () => {
+  const sql = fs.readFileSync(path.join(__dirname, '../src/db/migrations/023_net_profit_v2_policy.sql'), 'utf8');
+  assert.match(sql, /DROP CONSTRAINT IF EXISTS protected_uniswap_pools_policy_version_check/);
+  assert.match(sql, /net_profit_v2/);
+});
+
 test('repository persiste policyVersion y halfWidthPct en una creación nueva', async () => {
   let params;
   await repository.create({
