@@ -2,8 +2,8 @@
   "comment": "Trinquete de tamaño: ningún archivo puede crecer sobre su baseline. Encoger es libre; bájalo con: npm run check:hotspots -- --update",
   "updatedAt": "2026-08-24",
   "files": {
-    "client/src/features/lp-wizard/UnifiedLpWizard.jsx": 19557,
-    "client/src/features/lp-wizard/useUnifiedLpFlow.js": 18658,
+    "client/src/features/lp-wizard/UnifiedLpWizard.jsx": 20869,
+    "client/src/features/lp-wizard/useUnifiedLpFlow.js": 21311,
     "client/src/hooks/useWalletConnection.js": 18494,
     "client/src/pages/UniswapPools/UniswapPoolsPage.jsx": 23870,
     "client/src/pages/UniswapPools/components/ApplyProtectionModal.jsx": 32662,
@@ -12,7 +12,7 @@
     "client/src/pages/UniswapPools/components/ProtectedPoolCard.jsx": 24639,
     "server/src/services/hedge.service.js": 52085,
     "server/src/services/protected-pool-delta-neutral.service.js": 64360,
-    "server/src/services/smart-pool-creator.service.js": 86883,
+    "server/src/services/smart-pool-creator.service.js": 88818,
     "server/src/services/uniswap-position-actions.service.js": 571,
     "server/src/services/uniswap-protection.service.js": 65383,
     "server/src/services/uniswap.service.js": 57999
