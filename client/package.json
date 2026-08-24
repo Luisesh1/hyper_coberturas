@@ -30,6 +30,9 @@
     "viem": "^2.47.10",
     "wagmi": "^3.6.1"
   },
+  "overrides": {
+    "axios": "1.19.0"
+  },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
@@ -38,9 +41,9 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^4.6.2",
     "jsdom": "^22.1.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "vite": "^7.3.1",
     "vite-plugin-pwa": "^1.2.0",
-    "vitest": "^1.6.1"
+    "vitest": "^4.1.11"
   }
 }
