@@ -67,6 +67,10 @@ function buildOrchestratorPayload(plan) {
       ...strategyRest,
       rangeWidthPct,
       ...v4Identity,
+      ...(plan.version === 'v4' && plan.hooks && plan.v4DynamicFeeHookVersionId != null ? {
+        v4Hooks: plan.hooks,
+        v4DynamicFeeHookVersionId: Number(plan.v4DynamicFeeHookVersionId),
+      } : {}),
     },
     protectionConfig: protection.enabled === false
       ? { enabled: false }
@@ -118,6 +122,8 @@ class LpCreateSaga {
     this.repo = deps.repo || require('../../repositories/lp-orchestrator.repository');
     this.operationRepo = deps.operationRepo
       || require('../../repositories/uniswap-operation.repository');
+    this.verifiedHooksRepository = deps.verifiedHooksRepository
+      || require('../../repositories/smart-contract-registry.repository');
     this.newOperationKey = deps.newOperationKey
       || (() => `orch_lp_create:${require('node:crypto').randomUUID()}`);
   }
@@ -133,6 +139,22 @@ class LpCreateSaga {
       disabled.code = 'ORCHESTRATED_LP_CREATE_DISABLED';
       disabled.statusCode = 503;
       throw disabled;
+    }
+    if (plan?.v4DynamicFeeHookVersionId != null) {
+      if (plan.version !== 'v4' || !plan.hooks) {
+        throw new Error('Un hook dinámico requiere una pool V4 y la dirección del hook verificado.');
+      }
+      if (Number(plan.feeTier) !== 0x800000) {
+        throw new Error('Un hook de tarifa dinámica requiere la bandera de tarifa dinámica V4.');
+      }
+      const hooks = await this.verifiedHooksRepository.listVerifiedHooks(userId, plan.network);
+      const selected = hooks.find((item) => (
+        Number(item.id) === Number(plan.v4DynamicFeeHookVersionId)
+        && String(item.deployment?.address || '').toLowerCase() === String(plan.hooks).toLowerCase()
+      ));
+      if (!selected) {
+        throw new Error('El hook seleccionado no está verificado para esta red.');
+      }
     }
     const operationKey = this.newOperationKey();
     const operation = await this.operationRepo.createOrReuse({

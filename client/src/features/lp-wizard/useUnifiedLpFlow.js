@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { lpOrchestratorApi } from '../../services/api';
+import { lpOrchestratorApi, smartContractRegistryApi } from '../../services/api';
 import useSmartCreateFlow from '../../pages/UniswapPools/components/smart-create/useSmartCreateFlow';
 import { STEP } from '../../pages/UniswapPools/components/smart-create/constants';
 import {
@@ -40,6 +40,7 @@ export function deriveRangeWidthPct(range) {
  * del fee: si coincide, no hace falta persistirlo.
  */
 const DEFAULT_V4_TICK_SPACING_BY_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
+const DYNAMIC_FEE_FLAG = 0x800000;
 const PROTECTION_CONFIG_KEYS = [
   'enabled',
   'leverage',
@@ -75,6 +76,12 @@ export default function useUnifiedLpFlow({
   // el orquestador crea por omisión. `defaults.version` sigue mandando cuando
   // quien abre el wizard ya sabe qué versión toca (standalone, attach-lp).
   const [version, setVersion] = useState(defaults?.version || 'v4');
+  // La dirección nunca se trata como un default de confianza: se rehidrata
+  // desde el registro por red antes de poder entrar al plan de firma.
+  const [verifiedDynamicFeeHooks, setVerifiedDynamicFeeHooks] = useState([]);
+  const [dynamicFeeHooksLoading, setDynamicFeeHooksLoading] = useState(false);
+  const [dynamicFeeHooksError, setDynamicFeeHooksError] = useState('');
+  const [v4DynamicFeeHook, setV4DynamicFeeHook] = useState(null);
 
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -153,8 +160,50 @@ export default function useUnifiedLpFlow({
     [defaults, network, version]
   );
 
-  const flow = useSmartCreateFlow({ wallet, defaults: flowDefaults, onFinalized: handleFinalized });
+  const flow = useSmartCreateFlow({ wallet, defaults: flowDefaults, v4DynamicFeeHook, onFinalized: handleFinalized });
   flowResetRef.current = flow.handleReset;
+
+  useEffect(() => {
+    let active = true;
+    if (version !== 'v4') {
+      setVerifiedDynamicFeeHooks([]);
+      setV4DynamicFeeHook(null);
+      setDynamicFeeHooksError('');
+      return () => { active = false; };
+    }
+
+    setDynamicFeeHooksLoading(true);
+    setDynamicFeeHooksError('');
+    smartContractRegistryApi.listVerifiedHooks(network)
+      .then((items) => {
+        if (!active) return;
+        const hooks = Array.isArray(items) ? items.filter((item) => item?.versionId && item?.address) : [];
+        setVerifiedDynamicFeeHooks(hooks);
+        const configured = defaults?.v4DynamicFeeHook;
+        const selected = hooks.find((item) => (
+          Number(item.versionId) === Number(configured?.versionId)
+          && String(item.address).toLowerCase() === String(configured?.address || '').toLowerCase()
+        ));
+        setV4DynamicFeeHook(selected || null);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setVerifiedDynamicFeeHooks([]);
+        setV4DynamicFeeHook(null);
+        setDynamicFeeHooksError(error?.message || 'No se pudieron cargar los hooks verificados.');
+      })
+      .finally(() => { if (active) setDynamicFeeHooksLoading(false); });
+
+    return () => { active = false; };
+  }, [defaults?.v4DynamicFeeHook?.address, defaults?.v4DynamicFeeHook?.versionId, network, version]);
+
+  const selectDynamicFeeHook = useCallback((versionId) => {
+    const selected = verifiedDynamicFeeHooks.find((item) => Number(item.versionId) === Number(versionId));
+    if (selected && Number(flow.fee) !== DYNAMIC_FEE_FLAG) {
+      flow.setFee(DYNAMIC_FEE_FLAG);
+    }
+    setV4DynamicFeeHook(selected || null);
+  }, [flow, verifiedDynamicFeeHooks]);
 
   const resetProtection = useCallback((targetUsd = 0) => {
     protectionDirtyRef.current = false;
@@ -277,13 +326,14 @@ export default function useUnifiedLpFlow({
     : derivedRangeWidthPct;
 
   // El tickSpacing real del pool lo resuelve el backend al preparar las txs.
+  const effectiveFeeTier = v4DynamicFeeHook ? DYNAMIC_FEE_FLAG : Number(flow.fee);
   const v4TickSpacingOverride = useMemo(() => {
     if (version !== 'v4') return null;
     const actual = flow.prepareData?.tickSpacing;
     if (actual == null) return null;
-    const derived = DEFAULT_V4_TICK_SPACING_BY_FEE[Number(flow.fee)];
+    const derived = DEFAULT_V4_TICK_SPACING_BY_FEE[effectiveFeeTier];
     return Number(actual) === derived ? null : Number(actual);
-  }, [version, flow.prepareData, flow.fee]);
+  }, [version, flow.prepareData, effectiveFeeTier]);
 
   /** El plan es lo que viaja al servidor: pre-flight, intención y commit. */
   const buildPlan = useCallback(() => {
@@ -303,7 +353,11 @@ export default function useUnifiedLpFlow({
       token1Address: flow.token1Address,
       token0Symbol,
       token1Symbol,
-      feeTier: Number(flow.fee),
+      feeTier: effectiveFeeTier,
+      ...(flow.version === 'v4' && v4DynamicFeeHook ? {
+        hooks: v4DynamicFeeHook.address,
+        v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId),
+      } : {}),
       capitalUsd: Number(flow.totalUsdTarget),
       rangeLowerPrice: Number(flow.activeRange?.rangeLowerPrice),
       rangeUpperPrice: Number(flow.activeRange?.rangeUpperPrice),
@@ -326,8 +380,8 @@ export default function useUnifiedLpFlow({
   }, [
     mode, isOrchestrated, effectiveName, wallet, protection, strategy,
     effectiveRangeWidthPct, v4TickSpacingOverride, flow.network, flow.version, flow.token0Address,
-    flow.token1Address, flow.fee, flow.totalUsdTarget, flow.activeRange,
-    flow.suggestions, symbolForAddress,
+    flow.token1Address, effectiveFeeTier, flow.totalUsdTarget, flow.activeRange,
+    flow.suggestions, symbolForAddress, v4DynamicFeeHook,
   ]);
 
   /** Dry-run de la cobertura. Bloquea el avance a Revisión si no pasa. */
@@ -468,6 +522,11 @@ export default function useUnifiedLpFlow({
     setNetwork,
     setVersion,
     handleNetworkChange,
+    verifiedDynamicFeeHooks,
+    dynamicFeeHooksLoading,
+    dynamicFeeHooksError,
+    v4DynamicFeeHook,
+    selectDynamicFeeHook,
 
     name: effectiveName,
     setName: (value) => { setNameTouched(true); setName(value); },

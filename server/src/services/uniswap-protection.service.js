@@ -884,11 +884,11 @@ async function createDeltaNeutralProtectedPool({
   const normalizedBandMode = normalizeBandMode(bandMode);
   const normalizedBaseBandPct = normalizeBaseRebalancePriceMovePct(baseRebalancePriceMovePct);
   const normalizedRebalanceIntervalSec = normalizeRebalanceIntervalSec(rebalanceIntervalSec);
-  const isNetProfitV1 = policyVersion === 'net_profit_v1';
-  if (isNetProfitV1 && executionIntent === 'live' && activationConfirmed !== true) {
-    throw new ValidationError('Confirma la operación real antes de activar net_profit_v1.');
+  const isNetProfitPolicy = ['net_profit_v1', 'net_profit_v2'].includes(policyVersion);
+  if (isNetProfitPolicy && executionIntent === 'live' && activationConfirmed !== true) {
+    throw new ValidationError('Confirma la operación real antes de activar net_profit.');
   }
-  const liveNetProfit = isNetProfitV1 && executionIntent === 'live';
+  const liveNetProfit = isNetProfitPolicy && executionIntent === 'live';
   const normalizedTargetHedgeRatio = liveNetProfit ? 1 : normalizeTargetHedgeRatio(targetHedgeRatio);
   const normalizedMinRebalanceNotionalPct = normalizeMinRebalanceNotionalPct(minRebalanceNotionalPct);
   const normalizedCenterDeadZonePct = normalizeCenterDeadZonePct(centerDeadZonePct);
@@ -962,9 +962,9 @@ async function createDeltaNeutralProtectedPool({
   strategyState.cooldownReason = null;
   // La selección vive junto a su estado operativo para que shadow sea
   // recuperable tras restart sin leer ni resincronizar la posición simulada.
-  strategyState.policyVersion = isNetProfitV1 ? 'net_profit_v1' : 'legacy_zones_v1';
-  strategyState.executionIntent = isNetProfitV1 ? (executionIntent || 'shadow') : 'live';
-  strategyState.shadowPolicyVersion = isNetProfitV1 && !liveNetProfit ? 'net_profit_v1' : null;
+  strategyState.policyVersion = isNetProfitPolicy ? policyVersion : 'legacy_zones_v1';
+  strategyState.executionIntent = isNetProfitPolicy ? (executionIntent || 'shadow') : 'live';
+  strategyState.shadowPolicyVersion = isNetProfitPolicy && !liveNetProfit ? policyVersion : null;
   strategyState.trackingErrorQty = Number(deltaMetrics.targetQty);
   strategyState.trackingErrorUsd = Number(deltaMetrics.targetQty) * Number(snapshot.priceCurrent || deltaMetrics.volatilePriceUsd || 0);
   const baseRecord = {
@@ -1013,7 +1013,7 @@ async function createDeltaNeutralProtectedPool({
     minOrderNotionalUsd: DEFAULT_MIN_ORDER_NOTIONAL_USD,
     twapSlices: DEFAULT_TWAP_SLICES,
     twapDurationSec: DEFAULT_TWAP_DURATION_SEC,
-    policyVersion: isNetProfitV1 ? 'net_profit_v1' : null,
+    policyVersion: isNetProfitPolicy ? policyVersion : null,
     halfWidthPct: ((snapshot.rangeUpperPrice - snapshot.rangeLowerPrice) / 2 / snapshot.priceCurrent) * 100,
     strategyState,
     valueMode: 'usd',

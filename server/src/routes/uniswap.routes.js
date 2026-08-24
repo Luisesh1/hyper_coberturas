@@ -31,9 +31,35 @@ const {
 } = require('../schemas/uniswap.schema');
 const claimFeesService = require('../services/uniswap-claim-fees.service');
 const positionActionsService = require('../services/uniswap-position-actions.service');
+const smartContractRegistryRepository = require('../repositories/smart-contract-registry.repository');
+const { ValidationError } = require('../errors/app-error');
 
 const router = Router();
 router.use(authenticate);
+
+const V4_DYNAMIC_FEE_FLAG = 0x800000;
+
+/**
+ * La dirección de un hook cambia la identidad de una PoolKey. Para una
+ * tarifa dinámica no aceptamos direcciones arbitrarias: la versión debe haber
+ * pasado la verificación de bytecode y permisos para el mismo usuario y red.
+ */
+async function assertVerifiedDynamicFeeHook(userId, payload) {
+  const versionId = payload?.v4DynamicFeeHookVersionId;
+  const isDynamicFee = Number(payload?.fee) === V4_DYNAMIC_FEE_FLAG;
+  if (versionId == null && !isDynamicFee) return;
+  if (payload?.version !== 'v4' || !payload?.hooks || versionId == null) {
+    throw new ValidationError('Una tarifa dinámica V4 requiere un hook verificado.');
+  }
+  const verified = await smartContractRegistryRepository.listVerifiedHooks(userId, payload.network);
+  const selected = verified.find((item) => (
+    Number(item.id) === Number(versionId)
+    && String(item.deployment?.address || '').toLowerCase() === String(payload.hooks).toLowerCase()
+  ));
+  if (!selected) {
+    throw new ValidationError('El hook dinámico seleccionado no está verificado para esta red.');
+  }
+}
 
 const ACTION_SCHEMAS = {
   'increase-liquidity': increaseLiquidityPrepareSchema,
@@ -123,6 +149,7 @@ router.post('/protected-pools/:id/force-close-hedge', asyncHandler(async (req, r
 // --- Smart Pool Creation -------------------------------------------------------
 
 router.post('/smart-create/suggest', validate(smartCreateSuggestSchema), asyncHandler(async (req, res) => {
+  await assertVerifiedDynamicFeeHook(req.user.userId, req.body);
   const data = await smartPoolCreatorService.getSuggestions(req.body);
   res.json({ success: true, data });
 }));
@@ -167,6 +194,7 @@ router.get('/smart-create/assets', asyncHandler(async (req, res) => {
 }));
 
 router.post('/smart-create/funding-plan', validate(smartCreateFundingPlanSchema), asyncHandler(async (req, res) => {
+  await assertVerifiedDynamicFeeHook(req.user.userId, req.body);
   const data = await smartPoolCreatorService.buildFundingPlan(req.body);
   res.json({ success: true, data });
 }));
@@ -206,6 +234,9 @@ router.get('/operations/:id', asyncHandler(async (req, res) => {
 
 Object.entries(ACTION_SCHEMAS).forEach(([action, schema]) => {
   router.post(`/${action}/prepare`, validate(schema), asyncHandler(async (req, res) => {
+    if (action === 'create-position') {
+      await assertVerifiedDynamicFeeHook(req.user.userId, req.body);
+    }
     const data = await positionActionsService.preparePositionAction({
       action,
       payload: req.body,

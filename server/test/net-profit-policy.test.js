@@ -3,15 +3,40 @@ const assert = require('node:assert/strict');
 
 const {
   NET_PROFIT_V1,
+  NET_PROFIT_V2,
   resolveProtectionPolicy,
   decideNetProfitV1,
   createShadowState,
   simulateShadowFill,
 } = require('../src/services/net-profit-policy.service');
 
+test('net_profit_v2 corrige 75% fuera de banda y fuerza la correccion ante riesgo duro', () => {
+  const partial = decideNetProfitV1({
+    policyVersion: NET_PROFIT_V2, deltaQty: 1, actualQty: 0.7, currentPrice: 100,
+    rangeLowerPrice: 95, rangeUpperPrice: 105, lpValueUsd: 1_000, now: 1_000_000, state: {},
+  });
+  assert.equal(partial.decision, 'rebalance');
+  assert.equal(partial.adjustQty, 0.225);
+  const emergency = decideNetProfitV1({
+    policyVersion: NET_PROFIT_V2, deltaQty: 2, actualQty: 0, currentPrice: 100,
+    rangeLowerPrice: 95, rangeUpperPrice: 105, lpValueUsd: 1_000, now: 1_000_000, state: {},
+  });
+  assert.equal(emergency.adjustQty, 1.92);
+  assert.equal(emergency.riskToInner, true);
+});
+
+test('net_profit_v2 respeta el presupuesto diario salvo riesgo duro', () => {
+  const base = { policyVersion: NET_PROFIT_V2, deltaQty: 1, actualQty: 0.7, currentPrice: 100, rangeLowerPrice: 95, rangeUpperPrice: 105, lpValueUsd: 1_000, now: 1_000_000 };
+  const held = decideNetProfitV1({ ...base, state: { rotationBudgetDay: 0, rotationBudgetCount: 4, rotationBudgetNotionalUsd: 100 } });
+  assert.equal(held.gate, 'daily_rotation_budget');
+  const emergency = decideNetProfitV1({ ...base, deltaQty: 2, actualQty: 0, state: { rotationBudgetDay: 0, rotationBudgetCount: 4, rotationBudgetNotionalUsd: 100 } });
+  assert.equal(emergency.decision, 'rebalance');
+});
+
 test('un campo de política ausente mantiene legacy_zones_v1', () => {
   assert.equal(resolveProtectionPolicy({}), 'legacy_zones_v1');
   assert.equal(resolveProtectionPolicy({ policyVersion: NET_PROFIT_V1 }), NET_PROFIT_V1);
+  assert.equal(resolveProtectionPolicy({ policyVersion: NET_PROFIT_V2 }), NET_PROFIT_V2);
 });
 
 test('net_profit_v1 cubre el 100% del delta y escala el umbral con el semiancho', () => {

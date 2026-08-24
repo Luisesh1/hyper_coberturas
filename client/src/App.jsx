@@ -27,6 +27,7 @@ const BacktestingPage      = lazy(() => import('./pages/Backtesting/BacktestingP
 const HidenActionsPage     = lazy(() => import('./pages/HidenActions/HidenActionsPage'));
 const TradingViewPage      = lazy(() => import('./pages/TradingView/TradingViewPage'));
 const AlertsPage           = lazy(() => import('./pages/Alerts/AlertsPage'));
+const SmartContractsPage   = lazy(() => import('./pages/SmartContracts/SmartContractsPage'));
 
 // DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
 // completo en build de producción gracias al guard `import.meta.env.DEV`.
@@ -44,6 +45,7 @@ const BASE_NAV = [
   { id: 'alerts', path: '/alertas', label: '🔔 Alertas', activeClass: 'modeBtnActive', title: 'Alertas' },
   { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
   { id: 'lp-orchestrator', path: '/lp-orchestrator', label: '🎛 Orquestador LP', activeClass: 'modeBtnActive', title: 'Orquestador LP' },
+  { id: 'smart-contracts', path: '/contratos', label: '◈ Contratos', activeClass: 'modeBtnActive', title: 'Contratos' },
   { id: 'metricas', path: '/metricas', label: '📊 Metricas', activeClass: 'modeBtnActive', title: 'Metricas' },
   { id: 'trading-view', path: '/trading-view', label: '📈 Trading View', activeClass: 'modeBtnActive', title: 'Trading View' },
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
@@ -173,6 +175,7 @@ function AppContent() {
                 <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
                 <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
                 <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
+                <Route path="/contratos" element={<SmartContractsPage />} />
                 <Route path="/metricas"   element={<MetricasPage />} />
                 <Route path="/trading-view" element={<TradingViewPage />} />
                 <Route path="/alertas"     element={<AlertsPage />} />

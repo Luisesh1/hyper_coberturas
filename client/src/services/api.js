@@ -252,6 +252,10 @@ export const uniswapApi = {
     fee,
     totalUsdHint,
     totalUsdTarget,
+    tickSpacing,
+    hooks,
+    poolId,
+    v4DynamicFeeHookVersionId,
   }) =>
     request('POST', '/uniswap/smart-create/suggest', {
       network,
@@ -262,6 +266,10 @@ export const uniswapApi = {
       fee,
       ...(totalUsdHint != null ? { totalUsdHint } : {}),
       ...(totalUsdTarget != null ? { totalUsdTarget } : {}),
+      ...(tickSpacing != null ? { tickSpacing } : {}),
+      ...(hooks ? { hooks } : {}),
+      ...(poolId ? { poolId } : {}),
+      ...(v4DynamicFeeHookVersionId != null ? { v4DynamicFeeHookVersionId } : {}),
     }),
   // `version` importa: en v4 el catalogo ofrece ETH nativo en vez de WETH.
   getSmartCreateTokenList: (network, version = 'v3') =>
@@ -323,6 +331,21 @@ export const lpOrchestratorApi = {
     const qs = limit ? `?limit=${limit}` : '';
     return request('GET', `/lp-orchestrators/${id}/protection-ops${qs}`);
   },
+};
+
+// ------------------------------------------------------------------
+// Smart Contract Registry
+// ------------------------------------------------------------------
+export const smartContractRegistryApi = {
+  list: () => request('GET', '/smart-contracts'),
+  listVerifiedHooks: (network) => request(
+    'GET',
+    `/smart-contracts/verified-hooks?network=${encodeURIComponent(network)}`
+  ),
+  createContract: (payload) => request('POST', '/smart-contracts', payload),
+  createVersion: (contractId, payload) => request('POST', `/smart-contracts/${contractId}/versions`, payload),
+  recordDeployment: (versionId, payload) => request('POST', `/smart-contracts/versions/${versionId}/deployments`, payload),
+  verifyVersion: (versionId, network) => request('POST', `/smart-contracts/versions/${versionId}/verify`, { network }),
 };
 
 // ------------------------------------------------------------------

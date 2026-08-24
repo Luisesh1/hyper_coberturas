@@ -247,3 +247,30 @@ test('net_profit_v1 live ejecuta su ajuste parcial, no el target por zonas legac
     'la orden debe ser el ajuste parcial y no el delta completo');
   assert.equal(state.executed, true);
 });
+
+test('net_profit_v2 live ejecuta el ajuste parcial y conserva su identidad', async () => {
+  const protection = buildProtection({
+    policyVersion: 'net_profit_v2',
+    targetHedgeRatio: 0.6,
+    strategyState: {
+      lastRebalanceAt: Date.now() - (13 * 60 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+      executionIntent: 'live',
+      policyVersion: 'net_profit_v2',
+    },
+  });
+  let execution = null;
+  const service = buildService(protection, {
+    actualQty: 0.0001,
+    onExecute: (reason, context) => { execution = { reason, ...context }; },
+    centerDeadZonePct: 0,
+  });
+
+  const state = await service.evaluateProtection(protection);
+
+  assert.equal(execution.reason, 'net_profit_v2');
+  assert.ok(execution.metrics.targetQty > 0.0001);
+  assert.ok(execution.metrics.targetQty < execution.metrics.deltaQty);
+  assert.equal(state.executed, true);
+});

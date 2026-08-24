@@ -4,6 +4,7 @@
 
 const { ethers } = require('ethers');
 const { ValidationError } = require('../../errors/app-error');
+const { V4_POSITION_MANAGER_ABI } = require('./abis');
 const {
   buildV4ModifyLiquiditiesCalldata,
   buildUniversalRouterCalldata,
@@ -37,6 +38,43 @@ function buildV4ModifyTx(ctx, { actionCodes, params, label, kind, meta = {}, val
 }
 
 /**
+ * Inicializa una PoolKey V4 nueva antes de mintear su primera posición. La
+ * inicialización debe confirmarse como transacción separada: PositionManager
+ * no puede mintear contra un pool que aún no existe en PoolManager.
+ */
+function buildV4InitializePoolTx(ctx, { poolKey, sqrtPriceX96 }) {
+  const iface = new ethers.Interface(V4_POSITION_MANAGER_ABI);
+  const normalizedPoolKey = {
+    currency0: ethers.getAddress(poolKey.currency0),
+    currency1: ethers.getAddress(poolKey.currency1),
+    fee: Number(poolKey.fee),
+    tickSpacing: Number(poolKey.tickSpacing),
+    hooks: ethers.getAddress(poolKey.hooks),
+  };
+  return encodeTx(
+    ethers.getAddress(ctx.positionManagerAddress),
+    iface.encodeFunctionData('initializePool', [[
+      normalizedPoolKey.currency0,
+      normalizedPoolKey.currency1,
+      normalizedPoolKey.fee,
+      normalizedPoolKey.tickSpacing,
+      normalizedPoolKey.hooks,
+    ], BigInt(sqrtPriceX96)]),
+    {
+      chainId: ctx.networkConfig.chainId,
+      kind: 'initialize_pool_v4',
+      label: 'Initialize pool (v4)',
+      meta: {
+        poolKey: {
+          ...normalizedPoolKey,
+        },
+        sqrtPriceX96: BigInt(sqrtPriceX96).toString(),
+      },
+    }
+  );
+}
+
+/**
  * Construye una tx que llama a `execute` en el Universal Router para
  * encadenar acciones V4 con swaps universales.
  */
@@ -64,6 +102,7 @@ function buildV4RouterTx(ctx, { actionCodes, params, label, kind, meta = {}, val
 }
 
 module.exports = {
+  buildV4InitializePoolTx,
   buildV4ModifyTx,
   buildV4RouterTx,
 };

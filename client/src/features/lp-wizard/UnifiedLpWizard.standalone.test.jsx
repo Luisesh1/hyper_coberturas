@@ -14,6 +14,10 @@ const { uniswapApi } = vi.hoisted(() => ({
   },
 }));
 
+const { smartContractRegistryApi } = vi.hoisted(() => ({
+  smartContractRegistryApi: { listVerifiedHooks: vi.fn() },
+}));
+
 const { walletConnection } = vi.hoisted(() => ({
   walletConnection: {
     address: '0x00000000000000000000000000000000000000FF',
@@ -75,6 +79,7 @@ const { executionController } = vi.hoisted(() => {
 
 vi.mock('../../services/api', () => ({
   uniswapApi,
+  smartContractRegistryApi,
 }));
 
 vi.mock('../../hooks/useWalletConnection', () => ({
@@ -170,6 +175,7 @@ describe('UnifiedLpWizard · modo standalone', () => {
       { symbol: 'WETH', address: '0x00000000000000000000000000000000000000AA' },
       { symbol: 'USDC', address: '0x00000000000000000000000000000000000000BB' },
     ]);
+    smartContractRegistryApi.listVerifiedHooks.mockResolvedValue([]);
     uniswapApi.smartCreateSuggest.mockResolvedValue({
       token0: { symbol: 'WETH', decimals: 18, usdPrice: 2500, address: '0x00000000000000000000000000000000000000AA' },
       token1: { symbol: 'USDC', decimals: 6, usdPrice: 1, address: '0x00000000000000000000000000000000000000BB' },
@@ -264,6 +270,26 @@ describe('UnifiedLpWizard · modo standalone', () => {
     await userEvent.click(screen.getByRole('button', { name: /Cambiar wallet/i }));
     expect(walletConnection.changeWallet).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('ofrece en modo orquestado sólo hooks V4 verificados de la red activa', async () => {
+    smartContractRegistryApi.listVerifiedHooks.mockResolvedValue([
+      { versionId: 7, name: 'Volatility Shield', version: '1.0.0', address: '0x0000000000000000000000000000000000000080' },
+    ]);
+
+    render(
+      <UnifiedLpWizard
+        mode="orchestrated"
+        wallet={{ address: walletConnection.address }}
+        defaults={{ network: 'arbitrum', version: 'v4' }}
+        meta={{ networks: [{ id: 'arbitrum', label: 'Arbitrum', versions: ['v3', 'v4'] }] }}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByLabelText(/Hook de tarifa dinámica/i)).toBeTruthy();
+    expect(screen.getByRole('option', { name: /Volatility Shield.*1\.0\.0/i })).toBeTruthy();
+    expect(smartContractRegistryApi.listVerifiedHooks).toHaveBeenCalledWith('arbitrum');
   });
 
   it('recorre el wizard completo hasta review mostrando swaps, approvals y mint', async () => {

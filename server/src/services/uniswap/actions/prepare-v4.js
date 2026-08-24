@@ -13,6 +13,7 @@ const {
   buildWrapNativeTx,
 } = require('../tx-encoders');
 const {
+  buildV4InitializePoolTx,
   buildV4ModifyTx,
   buildV4RouterTx,
 } = require('../tx-builders-v4');
@@ -1217,6 +1218,16 @@ async function prepareCreatePositionV4(payload) {
       amount1Max,
       owner: normalizedWallet,
     });
+    // Una PoolKey dinámica nueva se inicializa antes de su primer mint. La
+    // inicialización no se puede empacar dentro de modifyLiquidities porque
+    // PoolManager todavía no conoce el pool; el cliente firma este paso en el
+    // mismo plan, inmediatamente antes del mint.
+    if (plan.poolExists === false) {
+      txPlan.push(buildV4InitializePoolTx(dummyCtx, {
+        poolKey: dummyCtx.poolKey,
+        sqrtPriceX96: plan.sqrtPriceX96,
+      }));
+    }
     const mintTx = buildV4ModifyTx(dummyCtx, {
       actionCodes: mint.actionCodes,
       params: mint.params,
@@ -1233,15 +1244,17 @@ async function prepareCreatePositionV4(payload) {
       },
     });
     txPlan.push(mintTx);
-    await assertV4MintAmountCeilings({
-      provider,
-      tx: mintTx,
-      walletAddress: normalizedWallet,
-      token0,
-      token1,
-      amount0Max,
-      amount1Max,
-    });
+    if (plan.poolExists !== false) {
+      await assertV4MintAmountCeilings({
+        provider,
+        tx: mintTx,
+        walletAddress: normalizedWallet,
+        token0,
+        token1,
+        amount0Max,
+        amount1Max,
+      });
+    }
 
     return {
       action: 'create-position',
@@ -1263,7 +1276,10 @@ async function prepareCreatePositionV4(payload) {
         rangeUpperPrice: Number(payload.rangeUpperPrice),
         gasReserve: plan.gasReserve,
         fundingPlan: plan.fundingPlan,
-        v4ActionPlan: ['MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+        v4ActionPlan: [
+          ...(plan.poolExists === false ? ['INITIALIZE_POOL'] : []),
+          'MINT_POSITION', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY',
+        ],
       },
       requiresApproval,
       txPlan: txPlan.filter(Boolean),

@@ -43,9 +43,9 @@ const CATALOGO_V4 = [
   { symbol: 'USDC', address: USDC, decimals: 6 },
 ];
 
-function render(defaults, wallet = { address: '0x1ecC8f8db20cEc65749200F711279FA2aeFC9fde' }) {
+function render(defaults, wallet = { address: '0x1ecC8f8db20cEc65749200F711279FA2aeFC9fde' }, v4DynamicFeeHook = null) {
   return renderHook(
-    (props) => useSmartCreateFlow({ wallet, defaults: props, onFinalized: vi.fn() }),
+    (props) => useSmartCreateFlow({ wallet, defaults: props, v4DynamicFeeHook, onFinalized: vi.fn() }),
     { initialProps: defaults }
   );
 }
@@ -144,6 +144,23 @@ describe('catálogo de tokens por versión', () => {
     await waitFor(() => expect(result.current.tokenOptions.length).toBe(2));
     expect(result.current.token0Address).toBe(NATIVE);
     expect(result.current.token1Address).toBe(USDC);
+  });
+
+  it('conserva la identidad del hook verificado durante el análisis V4', async () => {
+    const { result } = render({
+      network: 'arbitrum', version: 'v4', token0Address: NATIVE, token1Address: USDC, totalUsdTarget: '100',
+    }, undefined, {
+      address: '0x0000000000000000000000000000000000000080',
+      tickSpacing: 60,
+    });
+    await waitFor(() => expect(result.current.tokenOptions.length).toBe(2));
+
+    await act(async () => { await result.current.handleAnalyzePool(); });
+
+    expect(uniswapApi.smartCreateSuggest).toHaveBeenCalledWith(expect.objectContaining({
+      hooks: '0x0000000000000000000000000000000000000080',
+      tickSpacing: 60,
+    }));
   });
 });
 

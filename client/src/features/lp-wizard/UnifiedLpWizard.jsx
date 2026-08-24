@@ -183,12 +183,34 @@ export default function UnifiedLpWizard({
             )}
 
             {isOrchestrated && unified.version === 'v4' && (
-              <p className={styles.hint}>
-                En v4 solo son gestionables los pools <strong>sin hook y con tokens
-                ERC-20</strong>: la gestión on-chain rechaza los hooks y el ETH
-                nativo, así que un pool así se podría crear pero no rebalancear
-                ni cerrar.
-              </p>
+              <>
+                <div className={styles.field}>
+                  <label htmlFor="v4-dynamic-fee-hook">Hook de tarifa dinámica</label>
+                  <select
+                    id="v4-dynamic-fee-hook"
+                    value={unified.v4DynamicFeeHook?.versionId || ''}
+                    onChange={(event) => unified.selectDynamicFeeHook(event.target.value || null)}
+                    disabled={unified.dynamicFeeHooksLoading}
+                  >
+                    <option value="">Sin hook dinámico</option>
+                    {unified.verifiedDynamicFeeHooks.map((hook) => (
+                      <option key={hook.versionId} value={hook.versionId}>
+                        {hook.name} · {hook.version}
+                      </option>
+                    ))}
+                  </select>
+                  {unified.dynamicFeeHooksLoading && <span className={styles.hint}>Cargando hooks verificados…</span>}
+                  {unified.dynamicFeeHooksError && <span className={styles.errorText}>{unified.dynamicFeeHooksError}</span>}
+                  {!unified.dynamicFeeHooksLoading && !unified.dynamicFeeHooksError && (
+                    <span className={styles.hint}>
+                      Sólo aparecen versiones verificadas para esta red. Un hook requiere crear una pool V4 y una posición nuevas.
+                    </span>
+                  )}
+                </div>
+                <p className={styles.hint}>
+                  En v4 los hooks dinámicos son experimentales: el flujo de creación y gestión valida la identidad exacta de la pool antes de firmar.
+                </p>
+              </>
             )}
 
             {isOrchestrated && (

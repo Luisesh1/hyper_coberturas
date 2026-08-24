@@ -46,13 +46,15 @@ export function resolveDefaultTokenAddress(tokenList = [], preferredSymbols = []
  * SmartCreatePoolModal. La UI sólo consume los valores y callbacks
  * que retorna este hook.
  */
-export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
+export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook = null, onFinalized }) {
   const network = defaults?.network || 'arbitrum';
   const version = defaults?.version || 'v3';
   // Identidad opcional del pool v4. Ausentes, el backend deriva tickSpacing
   // del fee y computa el poolId — que es el caso de un pool sin hook.
-  const v4Hooks = defaults?.hooks || null;
-  const v4TickSpacing = defaults?.tickSpacing != null ? Number(defaults.tickSpacing) : null;
+  const v4Hooks = v4DynamicFeeHook?.address || defaults?.hooks || defaults?.v4DynamicFeeHook?.address || null;
+  const v4TickSpacing = v4DynamicFeeHook?.tickSpacing != null
+    ? Number(v4DynamicFeeHook.tickSpacing)
+    : defaults?.tickSpacing != null ? Number(defaults.tickSpacing) : null;
 
   // ── state ─────────────────────────────────────────────────────────
   const [step, setStep] = useState(STEP.POOL);
@@ -410,6 +412,7 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
         totalUsdTarget: Number(totalUsdTarget),
         ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
         ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       setToken0AddressState(resolvedToken0);
       setToken1AddressState(resolvedToken1);
@@ -458,6 +461,9 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
         importTokenAddresses: importedFundingTokens,
         fundingSelections: preserveSelections ? normalizedFundingSelections : undefined,
         ...buildOptionalPoolContext(suggestions),
+        ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
+        ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       if (!isMountedRef.current) return;
 
@@ -549,6 +555,9 @@ export default function useSmartCreateFlow({ wallet, defaults, onFinalized }) {
         importTokenAddresses: importedFundingTokens,
         fundingSelections: normalizedFundingSelections,
         ...buildOptionalPoolContext(suggestions),
+        ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
+        ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       setPrepareData(data);
       setFundingIssue(null);
