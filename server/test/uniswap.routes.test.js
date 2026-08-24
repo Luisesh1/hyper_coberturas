@@ -11,6 +11,7 @@ const protectedPoolRefreshService = require('../src/services/protected-pool-refr
 const positionActionsService = require('../src/services/uniswap-position-actions.service');
 const uniswapOperationService = require('../src/services/uniswap-operation.service');
 const smartPoolCreatorService = require('../src/services/smart-pool-creator.service');
+const smartContractRegistryRepository = require('../src/repositories/smart-contract-registry.repository');
 const { AppError } = require('../src/errors/app-error');
 
 async function listen(server) {
@@ -305,6 +306,41 @@ test('POST /api/uniswap/smart-create/funding-plan delega al planner de fondeo', 
   } finally {
     authService.validateSessionToken = originalValidateSessionToken;
     smartPoolCreatorService.buildFundingPlan = originalBuildFundingPlan;
+    server.close();
+  }
+});
+
+test('POST /api/uniswap/smart-create/funding-plan rechaza una tarifa dinámica sin hook verificado', async () => {
+  const originalValidateSessionToken = authService.validateSessionToken;
+  const originalBuildFundingPlan = smartPoolCreatorService.buildFundingPlan;
+  const originalListVerifiedHooks = smartContractRegistryRepository.listVerifiedHooks;
+  authService.validateSessionToken = async () => buildSessionUser();
+  smartPoolCreatorService.buildFundingPlan = async () => ({ unexpected: true });
+  smartContractRegistryRepository.listVerifiedHooks = async () => [];
+  const server = http.createServer(app);
+  const baseUrl = await listen(server);
+
+  try {
+    const res = await fetch(`${baseUrl}/api/uniswap/smart-create/funding-plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${buildToken()}` },
+      body: JSON.stringify({
+        network: 'base-sepolia', version: 'v4',
+        walletAddress: '0x00000000000000000000000000000000000000AA',
+        token0Address: '0x00000000000000000000000000000000000000BB',
+        token1Address: '0x00000000000000000000000000000000000000CC',
+        fee: 0x800000, hooks: '0x0000000000000000000000000000000000000080',
+        v4DynamicFeeHookVersionId: 42, totalUsdTarget: 1000, targetWeightToken0Pct: 50,
+        rangeLowerPrice: 2000, rangeUpperPrice: 3000,
+      }),
+    });
+    const json = await res.json();
+    assert.equal(res.status, 400);
+    assert.match(json.error, /no está verificado/i);
+  } finally {
+    authService.validateSessionToken = originalValidateSessionToken;
+    smartPoolCreatorService.buildFundingPlan = originalBuildFundingPlan;
+    smartContractRegistryRepository.listVerifiedHooks = originalListVerifiedHooks;
     server.close();
   }
 });

@@ -412,6 +412,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         totalUsdTarget: Number(totalUsdTarget),
         ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
         ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       setToken0AddressState(resolvedToken0);
       setToken1AddressState(resolvedToken1);
@@ -460,6 +461,9 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         importTokenAddresses: importedFundingTokens,
         fundingSelections: preserveSelections ? normalizedFundingSelections : undefined,
         ...buildOptionalPoolContext(suggestions),
+        ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
+        ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       if (!isMountedRef.current) return;
 
@@ -551,6 +555,9 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         importTokenAddresses: importedFundingTokens,
         fundingSelections: normalizedFundingSelections,
         ...buildOptionalPoolContext(suggestions),
+        ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
+        ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       setPrepareData(data);
       setFundingIssue(null);

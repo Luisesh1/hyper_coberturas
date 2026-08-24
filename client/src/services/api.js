@@ -252,6 +252,10 @@ export const uniswapApi = {
     fee,
     totalUsdHint,
     totalUsdTarget,
+    tickSpacing,
+    hooks,
+    poolId,
+    v4DynamicFeeHookVersionId,
   }) =>
     request('POST', '/uniswap/smart-create/suggest', {
       network,
@@ -262,6 +266,10 @@ export const uniswapApi = {
       fee,
       ...(totalUsdHint != null ? { totalUsdHint } : {}),
       ...(totalUsdTarget != null ? { totalUsdTarget } : {}),
+      ...(tickSpacing != null ? { tickSpacing } : {}),
+      ...(hooks ? { hooks } : {}),
+      ...(poolId ? { poolId } : {}),
+      ...(v4DynamicFeeHookVersionId != null ? { v4DynamicFeeHookVersionId } : {}),
     }),
   // `version` importa: en v4 el catalogo ofrece ETH nativo en vez de WETH.
   getSmartCreateTokenList: (network, version = 'v3') =>

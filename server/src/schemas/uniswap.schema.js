@@ -174,6 +174,7 @@ const createPositionPrepareSchema = positionActionBaseSchema.extend({
   tickSpacing: optionalPositiveIntField,
   hooks: optionalStringField,
   poolId: optionalStringField,
+  v4DynamicFeeHookVersionId: optionalPositiveIntField,
   importTokenAddresses: z.array(z.string().min(1)).optional(),
   fundingSelections: z.array(z.object({
     assetId: z.string().min(1),
@@ -217,6 +218,7 @@ const smartCreateSuggestSchema = z.object({
   tickSpacing: optionalPositiveIntField,
   hooks: optionalStringField,
   poolId: optionalStringField,
+  v4DynamicFeeHookVersionId: optionalPositiveIntField,
 });
 
 const smartCreateFundingPlanSchema = z.object({
@@ -234,6 +236,7 @@ const smartCreateFundingPlanSchema = z.object({
   tickSpacing: optionalPositiveIntField,
   hooks: optionalStringField,
   poolId: optionalStringField,
+  v4DynamicFeeHookVersionId: optionalPositiveIntField,
   importTokenAddresses: z.array(z.string().min(1)).optional(),
   fundingSelections: z.array(z.object({
     assetId: z.string().min(1),

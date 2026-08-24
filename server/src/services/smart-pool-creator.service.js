@@ -15,6 +15,8 @@ const {
   ZERO_HOOKS_ADDRESS,
 } = require('./uniswap-v4-helpers.service');
 const { classifyHook } = require('./uniswap/v4-hook-safety');
+const { getSqrtPriceX96AtTick } = require('./uniswap/v4-tick-math');
+const { priceToNearestTick } = require('./uniswap/position-math');
 const { recommendEthUsdcHalfWidthPct } = require('./lp-orchestrator/range-recommender');
 
 const { SUPPORTED_NETWORKS } = require('./uniswap/networks');
@@ -397,6 +399,15 @@ function computeTargetUsdPrices({
   return { token0UsdPrice, token1UsdPrice };
 }
 
+function resolveInitialPairPrice(token0, token1, allPrices) {
+  const token0UsdPrice = getUsdPriceForSymbol(token0.symbol, allPrices);
+  const token1UsdPrice = getUsdPriceForSymbol(token1.symbol, allPrices);
+  if (!Number.isFinite(token0UsdPrice) || token0UsdPrice <= 0 || !Number.isFinite(token1UsdPrice) || token1UsdPrice <= 0) {
+    throw new ValidationError('No se pudo obtener un precio USD confiable para inicializar la nueva pool V4');
+  }
+  return token0UsdPrice / token1UsdPrice;
+}
+
 function computeAmountsFromWeight(token0PctWeight, totalUsd, token0UsdPrice, token1UsdPrice, token0Decimals, token1Decimals) {
   const amount0Usd = totalUsd * (token0PctWeight / 100);
   const amount1Usd = totalUsd * ((100 - token0PctWeight) / 100);
@@ -578,6 +589,7 @@ async function getV4PoolContext({
   tickSpacing,
   hooks,
   poolId,
+  initialPrice,
 }) {
   const ordered = sortTokensByAddress(token0, token1);
   const resolvedTickSpacing = Number(tickSpacing || DEFAULT_V4_TICK_SPACING_BY_FEE[fee]);
@@ -618,7 +630,29 @@ async function getV4PoolContext({
   }
 
   if (!slot0?.sqrtPriceX96 || BigInt(slot0.sqrtPriceX96) <= 0n) {
-    throw new ValidationError('Solo se soporta crear posicion sobre pools v4 existentes');
+    if (!hasHooks(resolvedHooks) || !Number.isFinite(Number(initialPrice)) || Number(initialPrice) <= 0) {
+      throw new ValidationError('Solo se soporta crear posicion sobre pools v4 existentes');
+    }
+    const canonicalInitialPrice = ordered.reversed ? (1 / Number(initialPrice)) : Number(initialPrice);
+    const initialTick = priceToNearestTick(
+      canonicalInitialPrice,
+      ordered.token0.decimals,
+      ordered.token1.decimals,
+      resolvedTickSpacing
+    );
+    return {
+      poolExists: false,
+      poolAddress: null,
+      tickSpacing: resolvedTickSpacing,
+      hooks: resolvedHooks,
+      poolId: resolvedPoolId,
+      sqrtPriceX96: getSqrtPriceX96AtTick(initialTick).toString(),
+      currentPrice: Number(Number(initialPrice).toFixed(6)),
+      poolToken0Address: ordered.token0.address,
+      poolToken1Address: ordered.token1.address,
+      requestedTokenOrderReversed: ordered.reversed,
+      initialTick,
+    };
   }
 
   return {
@@ -649,6 +683,7 @@ async function resolvePoolContext({
   tickSpacing,
   hooks,
   poolId,
+  initialPrice,
 }) {
   const networkConfig = getNetworkConfig(network);
   const provider = getProvider(networkConfig);
@@ -664,6 +699,7 @@ async function resolvePoolContext({
       tickSpacing,
       hooks,
       poolId,
+      initialPrice,
     });
     return { ...ctx, networkConfig, provider, version: 'v4' };
   }
@@ -1460,6 +1496,7 @@ async function buildFundingPlan({
     getTokenInfoFromChain(provider, token0Address, { nativeSymbol: networkConfigForTokens.nativeSymbol }),
     getTokenInfoFromChain(provider, token1Address, { nativeSymbol: networkConfigForTokens.nativeSymbol }),
   ]);
+  const allPrices = await marketService.getAllPrices().catch(() => ({}));
   const poolContext = await resolvePoolContext({
     network,
     version,
@@ -1469,9 +1506,11 @@ async function buildFundingPlan({
     tickSpacing,
     hooks,
     poolId,
+    initialPrice: String(version).toLowerCase() === 'v4'
+      ? resolveInitialPairPrice(token0, token1, allPrices)
+      : null,
   });
   const currentPrice = poolContext.currentPrice;
-  const allPrices = await marketService.getAllPrices().catch(() => ({}));
   const { token0UsdPrice, token1UsdPrice } = computeTargetUsdPrices({
     token0,
     token1,
@@ -1908,6 +1947,8 @@ async function buildFundingPlan({
     token1,
     currentPrice,
     sqrtPriceX96: poolContext.sqrtPriceX96 || null,
+    poolExists: poolContext.poolExists !== false,
+    initialTick: poolContext.initialTick ?? null,
     poolAddress: poolContext.poolAddress,
     poolId: poolContext.poolId,
     poolToken0Address: poolContext.poolToken0Address,
@@ -1970,6 +2011,7 @@ async function getSuggestions({
       || await getTokenInfoFromChain(provider, token0Address);
     const token1Info = knownTokens.find((t) => t.address.toLowerCase() === token1Address.toLowerCase())
       || await getTokenInfoFromChain(provider, token1Address);
+    const allPrices = await marketService.getAllPrices().catch(() => ({}));
     const poolContext = await resolvePoolContext({
       network,
       version,
@@ -1979,6 +2021,9 @@ async function getSuggestions({
       tickSpacing,
       hooks,
       poolId,
+      initialPrice: String(version).toLowerCase() === 'v4'
+        ? resolveInitialPairPrice(token0Info, token1Info, allPrices)
+        : null,
     });
     const balances = await enrichWalletAssets({
       network,
@@ -1998,7 +2043,6 @@ async function getSuggestions({
       atr14,
       currentPrice,
     });
-    const allPrices = await marketService.getAllPrices().catch(() => ({}));
     const { token0UsdPrice, token1UsdPrice } = computeTargetUsdPrices({
       token0: token0Info,
       token1: token1Info,
@@ -2063,7 +2107,7 @@ async function getSuggestions({
       poolToken1Address: poolContext.poolToken1Address,
       requestedTokenOrderReversed: poolContext.requestedTokenOrderReversed === true,
       validation: {
-        poolExists: true,
+        poolExists: poolContext.poolExists !== false,
         // Un pool con hook safe (sin returns-delta) es soportado para cobertura.
         hooksSupported: classifyHook(poolContext.hooks || ZERO_HOOKS_ADDRESS).safe,
       },
