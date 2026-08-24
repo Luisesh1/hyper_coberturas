@@ -4,6 +4,7 @@
 
 const { ethers } = require('ethers');
 const { ValidationError } = require('../../errors/app-error');
+const { V4_POSITION_MANAGER_ABI } = require('./abis');
 const {
   buildV4ModifyLiquiditiesCalldata,
   buildUniversalRouterCalldata,
@@ -42,7 +43,7 @@ function buildV4ModifyTx(ctx, { actionCodes, params, label, kind, meta = {}, val
  * no puede mintear contra un pool que aún no existe en PoolManager.
  */
 function buildV4InitializePoolTx(ctx, { poolKey, sqrtPriceX96 }) {
-  const iface = new ethers.Interface(require('../uniswap/abis').V4_POSITION_MANAGER_ABI);
+  const iface = new ethers.Interface(V4_POSITION_MANAGER_ABI);
   const normalizedPoolKey = {
     currency0: ethers.getAddress(poolKey.currency0),
     currency1: ethers.getAddress(poolKey.currency1),
