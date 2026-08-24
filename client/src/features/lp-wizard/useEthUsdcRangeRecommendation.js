@@ -29,15 +29,15 @@ export default function useEthUsdcRangeRecommendation({
     if (!isOrchestrated || protectionDirtyRef.current) return;
     setProtectionState((current) => {
       if (isEthUsdcPair) {
-        if (current.policyVersion === 'net_profit_v1' && current.executionIntent === 'shadow') return current;
+        if (current.policyVersion === 'net_profit_v2' && current.executionIntent === 'shadow') return current;
         return {
           ...current,
-          policyVersion: 'net_profit_v1',
+          policyVersion: 'net_profit_v2',
           executionIntent: 'shadow',
           activationConfirmed: false,
         };
       }
-      if (current.policyVersion !== 'net_profit_v1' || current.executionIntent !== 'shadow') return current;
+      if (current.policyVersion !== 'net_profit_v2' || current.executionIntent !== 'shadow') return current;
       return {
         ...current,
         policyVersion: 'legacy_zones_v1',

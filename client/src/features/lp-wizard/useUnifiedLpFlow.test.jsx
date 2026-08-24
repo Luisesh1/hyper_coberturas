@@ -505,7 +505,7 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
 
   it('recomienda sombra para ETH/USDC sin reemplazar una elección legacy explícita', () => {
     const { result } = renderFlow();
-    expect(result.current.protection.policyVersion).toBe('net_profit_v1');
+    expect(result.current.protection.policyVersion).toBe('net_profit_v2');
     expect(result.current.protection.executionIntent).toBe('shadow');
 
     act(() => result.current.setProtection({

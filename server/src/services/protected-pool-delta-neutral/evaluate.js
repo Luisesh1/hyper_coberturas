@@ -30,6 +30,7 @@ const {
 } = require('../protected-pool-delta-neutral.helpers');
 const {
   NET_PROFIT_V1,
+  NET_PROFIT_V2,
   createShadowState,
   decideNetProfitV1,
   simulateShadowFill,
@@ -380,7 +381,8 @@ const evaluateMethods = {
       cooldownReason: null,
     };
 
-    const isNetProfitLive = (activeProtection.policyVersion || strategyState.policyVersion) === NET_PROFIT_V1
+    const policyVersion = activeProtection.policyVersion || strategyState.policyVersion;
+    const isNetProfitLive = [NET_PROFIT_V1, NET_PROFIT_V2].includes(policyVersion)
       && (activeProtection.strategyState?.executionIntent || strategyState.executionIntent) === 'live';
     const expectedPolicyCostUsd = estimateExecutionCostUsd(
       Number(metrics.deltaQty) - actualQty,
@@ -388,6 +390,7 @@ const evaluateMethods = {
     );
     const netProfitDecision = isNetProfitLive
       ? decideNetProfitV1({
+        policyVersion,
         deltaQty: Number(metrics.deltaQty),
         actualQty,
         currentPrice,
@@ -453,7 +456,25 @@ const evaluateMethods = {
         forceRebalance,
       });
     if (isNetProfitLive) {
-      nextState.netProfitPolicyState = netProfitDecision.nextState || strategyState.netProfitPolicyState || {};
+      // El presupuesto de V2 se consume únicamente cuando el IOC/TWAP termina
+      // correctamente. Esta evaluación persiste antes del preflight para que
+      // el monitor sea observable; gastar aquí penalizaría un intento
+      // rechazado por margen, spread o fallo de red.
+      const decisionState = netProfitDecision.nextState || strategyState.netProfitPolicyState || {};
+      if (policyVersion === NET_PROFIT_V2 && netProfitDecision.decision === 'rebalance') {
+        const priorPolicyState = strategyState.netProfitPolicyState || {};
+        nextState.netProfitPolicyState = {
+          ...decisionState,
+          rotationBudgetDay: priorPolicyState.rotationBudgetDay,
+          rotationBudgetCount: priorPolicyState.rotationBudgetCount,
+        };
+        nextState.pendingRotationBudgetIncrement = {
+          rotationBudgetDay: decisionState.rotationBudgetDay,
+          rotationBudgetCount: decisionState.rotationBudgetCount,
+        };
+      } else {
+        nextState.netProfitPolicyState = decisionState;
+      }
       nextState.netProfitPolicyGate = netProfitDecision.gate;
       nextState.netProfitPolicyTargetQty = Number(metrics.deltaQty);
     }
@@ -703,7 +724,7 @@ const evaluateMethods = {
     // vs el que dejaría el target propuesto (deltaQty − shadowTargetQty), sin
     // ejecutar. Permite cuantificar la mejora de cobertura sobre plata real
     // antes de adoptar los nuevos multiplicadores. Ver KPIs del plan.
-    if ((this.shadowMode || metrics.shadowPolicyVersion === NET_PROFIT_V1) && metrics.shadowTargetQty != null) {
+    if ((this.shadowMode || [NET_PROFIT_V1, NET_PROFIT_V2].includes(metrics.shadowPolicyVersion)) && metrics.shadowTargetQty != null) {
       // El estado vive en memoria durante la sesión: no consulta HL ni muta el
       // hedge real, y nunca se usa para reconciliar. Pero al arrancar hay que
       // recuperarlo del snapshot persistido: sin esto cada reinicio ponía a
@@ -714,8 +735,9 @@ const evaluateMethods = {
         || (strategyState.shadowSnapshot
           ? createShadowState(strategyState.shadowSnapshot)
           : createShadowState({ actualQty, markPrice: currentPrice }));
-      const shadowDecision = metrics.shadowPolicyVersion === NET_PROFIT_V1
+      const shadowDecision = [NET_PROFIT_V1, NET_PROFIT_V2].includes(metrics.shadowPolicyVersion)
         ? decideNetProfitV1({
+          policyVersion: metrics.shadowPolicyVersion,
           deltaQty: Number(metrics.deltaQty),
           actualQty: previousShadow.actualQty,
           currentPrice,
@@ -1071,7 +1093,7 @@ const evaluateMethods = {
     }
 
     const reason = isNetProfitLive
-      ? 'net_profit_v1'
+      ? policyVersion
       : forceReason
         || (!position && metrics.targetQty > 0.0000001 ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
     // La senal pendiente se cobra aqui: se ejecuta con su motivo original y no

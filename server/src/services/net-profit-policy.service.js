@@ -7,6 +7,7 @@
  */
 const LEGACY_ZONES_V1 = 'legacy_zones_v1';
 const NET_PROFIT_V1 = 'net_profit_v1';
+const NET_PROFIT_V2 = 'net_profit_v2';
 
 const DWELL_MS = 5 * 60_000;
 const COOLDOWN_MS = 10 * 60_000;
@@ -15,6 +16,8 @@ const MAX_FILLS_PER_WINDOW = 2;
 const RISK_TO_INNER_PCT = 0.15;
 const FALLBACK_FEE_RATE = 0.0005;
 const UPPER_HYSTERESIS_CONFIRM_MS = 120_000;
+const DAY_MS = 24 * 60 * 60_000;
+const V2_MAX_REBALANCES_PER_DAY = 4;
 
 function finite(value, fallback = null) {
   if (value == null) return fallback;
@@ -28,7 +31,7 @@ function round(value, decimals = 10) {
 }
 
 function resolveProtectionPolicy(record = {}) {
-  return record.policyVersion === NET_PROFIT_V1 ? NET_PROFIT_V1 : LEGACY_ZONES_V1;
+  return [NET_PROFIT_V1, NET_PROFIT_V2].includes(record.policyVersion) ? record.policyVersion : LEGACY_ZONES_V1;
 }
 
 function resolveThresholds({ currentPrice, rangeLowerPrice, rangeUpperPrice }) {
@@ -98,6 +101,7 @@ function resolveUpperHysteresis({ currentPrice, rangeLowerPrice, rangeUpperPrice
 }
 
 function decideNetProfitV1({
+  policyVersion = NET_PROFIT_V1,
   deltaQty,
   actualQty,
   currentPrice,
@@ -162,11 +166,17 @@ function decideNetProfitV1({
 
   const lpValue = finite(lpValueUsd, 0);
   const riskToInner = lpValue > 0 && errorUsd / lpValue >= RISK_TO_INNER_PCT;
+  const budgetDay = Math.floor(now / DAY_MS);
+  const sameBudgetDay = Number(stateAfterHysteresis?.rotationBudgetDay) === budgetDay;
+  const rotationBudgetCount = sameBudgetDay ? Math.max(0, finite(stateAfterHysteresis?.rotationBudgetCount, 0)) : 0;
+  if (policyVersion === NET_PROFIT_V2 && !riskToInner && rotationBudgetCount >= V2_MAX_REBALANCES_PER_DAY) {
+    return { decision: 'hold', gate: 'daily_rotation_budget', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
+  }
   const adjustAbsQty = riskToInner
     ? Math.max(0, errorAbsQty - (targetQty * thresholds.innerPct))
     : Math.min(
       Math.max(0, errorAbsQty - (targetQty * thresholds.innerPct)),
-      errorAbsQty * 0.5,
+      errorAbsQty * (policyVersion === NET_PROFIT_V2 ? 0.75 : 0.5),
     );
   if (adjustAbsQty <= 0) {
     return { decision: 'hold', gate: 'inner', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
@@ -181,7 +191,11 @@ function decideNetProfitV1({
     adjustQty: round(Math.sign(errorQty || 1) * adjustAbsQty),
     riskToInner,
     fillTimestamps: fills,
-    nextState: { ...stateAfterHysteresis, fillTimestamps: [...fills, now], lastFillAt: now, cooldownUntil: now + COOLDOWN_MS },
+    nextState: {
+      ...stateAfterHysteresis,
+      fillTimestamps: [...fills, now], lastFillAt: now, cooldownUntil: now + COOLDOWN_MS,
+      ...(policyVersion === NET_PROFIT_V2 ? { rotationBudgetDay: budgetDay, rotationBudgetCount: rotationBudgetCount + 1 } : {}),
+    },
     ...thresholds,
   };
 }
@@ -268,9 +282,11 @@ function simulateShadowFill(state, { targetQty, bid, ask, feeRate, now = Date.no
 module.exports = {
   LEGACY_ZONES_V1,
   NET_PROFIT_V1,
+  NET_PROFIT_V2,
   DWELL_MS,
   COOLDOWN_MS,
   UPPER_HYSTERESIS_CONFIRM_MS,
+  V2_MAX_REBALANCES_PER_DAY,
   resolveProtectionPolicy,
   resolveThresholds,
   decideNetProfitV1,

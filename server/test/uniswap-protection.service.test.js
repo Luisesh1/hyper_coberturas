@@ -496,6 +496,41 @@ test('net_profit_v1 live persiste IOC y sus límites sin alterar los defaults le
   assert.equal(protectionWrites[0].maxSlippageBps, 15);
 });
 
+test('net_profit_v2 live conserva los mismos límites de ejecución y la versión elegida', async () => {
+  const protectionWrites = [];
+  await createProtectedPool({
+    userId: 1,
+    pool: buildDeltaNeutralPool(),
+    accountId: 5,
+    leverage: 10,
+    configuredNotionalUsd: 2500,
+    protectionMode: 'delta_neutral',
+    policyVersion: 'net_profit_v2',
+    executionIntent: 'live',
+    activationConfirmed: true,
+    maxSlippageBps: 50,
+  }, {
+    availableAssets: [{ name: 'ETH', maxLeverage: 25 }],
+    mids: { ETH: '2500' },
+    hyperliquidAccountsService: { resolveAccount: async () => ({ id: 5, alias: 'Cuenta test', address: '0xabc' }) },
+    protectedPoolRepository: {
+      findReusableByIdentity: async () => null,
+      listActiveByUser: async () => [],
+      create: async (record) => { protectionWrites.push(record); return 122; },
+      updateSnapshot: async () => 122,
+      getById: async () => ({ id: 122, userId: 1, accountId: 5, status: 'active', poolSnapshot: buildDeltaNeutralPool() }),
+    },
+    protectedPoolDeltaNeutralService: { bootstrapProtection: async () => {} },
+    timeInRangeService: buildTimeInRangeService(),
+  });
+
+  assert.equal(protectionWrites[0].policyVersion, 'net_profit_v2');
+  assert.equal(protectionWrites[0].strategyState.executionIntent, 'live');
+  assert.equal(protectionWrites[0].executionMode, 'ioc');
+  assert.equal(protectionWrites[0].maxSpreadBps, 10);
+  assert.equal(protectionWrites[0].maxSlippageBps, 15);
+});
+
 test('createProtectedPool delta-neutral deja snapshot_invalid y no bootstrappea si el snapshot no es operativo', async () => {
   const protectionWrites = [];
   const bootstrapCalls = [];

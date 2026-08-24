@@ -18,8 +18,8 @@ const strategyConfigSchema = z.object({
   // Un pool v4 se identifica por poolId = keccak(currency0, currency1, fee,
   // tickSpacing, hooks). El poolId se computa y el tickSpacing se deriva del
   // feeTier, asi que solo hace falta declararlo si el pool usa uno no
-  // estandar. NO hay campo de hooks: `loadV4PositionContext` rechaza todo
-  // pool con hook, de modo que una posicion asi no seria gestionable.
+  // estandar. Los hooks requieren una identidad de PoolKey completa y un
+  // perfil auditado; aún no se exponen como configuración del orquestador.
   // Vive aca (y no en una columna nueva) porque strategy_config_json ya
   // persiste con el orquestador y sobrevive a los kill+recreate.
   v4TickSpacing: z.number().int().positive().max(32767).optional(),
@@ -44,7 +44,7 @@ const protectionConfigSchema = z.union([
     centerDeadZonePct: z.number().min(0).max(90).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
-    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1']).optional(),
+    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1', 'net_profit_v2']).optional(),
     executionIntent: z.enum(['shadow', 'live']).optional(),
     activationConfirmed: z.literal(true).optional(),
   }),
@@ -147,7 +147,7 @@ const wizardProtectionSchema = z.union([
     centerDeadZonePct: z.number().min(0).max(90).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
-    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1']).optional(),
+    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1', 'net_profit_v2']).optional(),
     executionIntent: z.enum(['shadow', 'live']).optional(),
     activationConfirmed: z.literal(true).optional(),
   }),

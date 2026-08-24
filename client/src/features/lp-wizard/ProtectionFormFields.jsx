@@ -334,7 +334,7 @@ export default function ProtectionFormFields({
   };
 
   // La política de cobertura no es un parámetro de tuning: la elige el par
-  // (el wizard recomienda net_profit_v1 en sombra para ETH/USDC) o el usuario
+  // (el wizard recomienda net_profit_v2 en sombra para ETH/USDC) o el usuario
   // a mano. Reconstruir los defaults por apagar y encender la protección o por
   // re-aplicar el auto-tune la devolvía a legacy en silencio, y como el cambio
   // marca la protección como "sucia", la recomendación ya no volvía nunca.
@@ -375,7 +375,7 @@ export default function ProtectionFormFields({
     onChange({
       ...v,
       policyVersion,
-      executionIntent: policyVersion === 'net_profit_v1' ? 'shadow' : 'live',
+      executionIntent: ['net_profit_v1', 'net_profit_v2'].includes(policyVersion) ? 'shadow' : 'live',
       activationConfirmed: false,
     });
   };
@@ -399,7 +399,7 @@ export default function ProtectionFormFields({
     });
   };
 
-  const isNetProfit = v.policyVersion === 'net_profit_v1';
+  const isNetProfit = ['net_profit_v1', 'net_profit_v2'].includes(v.policyVersion);
   const isLiveNetProfit = isNetProfit && v.executionIntent === 'live';
   const isAutoTuned = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) === Number(rangeWidthPct);
   const tunedDrifted = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) !== Number(rangeWidthPct);
@@ -528,6 +528,7 @@ export default function ProtectionFormFields({
               <select value={v.policyVersion} onChange={(e) => handlePolicyChange(e.target.value)}>
                 <option value="legacy_zones_v1">Zonas legacy — motor en producción</option>
                 <option value="net_profit_v1">Net profit — bandas por coste neto</option>
+                <option value="net_profit_v2">Net profit V2 — ajuste parcial y límites de rotación</option>
               </select>
             </div>
 
@@ -578,7 +579,7 @@ export default function ProtectionFormFields({
                       <br />
                       <span className={styles.muted}>
                         El servidor rechaza la creación sin esta confirmación, y además exige que el
-                        feature gate de net_profit_v1 esté habilitado.
+                        feature gate de net profit esté habilitado.
                       </span>
                     </span>
                   </label>
@@ -767,7 +768,7 @@ export function validateProtectionForm(formValue) {
   if (!Number.isFinite(deadZone) || deadZone < 0 || deadZone > MAX_CENTER_DEAD_ZONE_PCT) {
     return `La zona central sin rebalanceo debe estar entre 0 y ${MAX_CENTER_DEAD_ZONE_PCT}%.`;
   }
-  if (formValue.policyVersion === 'net_profit_v1'
+  if (['net_profit_v1', 'net_profit_v2'].includes(formValue.policyVersion)
     && formValue.executionIntent === 'live'
     && formValue.activationConfirmed !== true) {
     return 'Confirma la operación real de net profit o vuelve a modo sombra.';

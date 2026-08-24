@@ -160,6 +160,9 @@ const executionMethods = {
         pendingExecutionId: outcomeUnknown ? executionId : null,
         minDwellUntil: Date.now() + this.minDwellMs,
       };
+      // Un presupuesto de rotación solo se confirma tras una ejecución que
+      // terminó. Un fallo, timeout o rechazo no debe consumirlo.
+      delete failedState.pendingRotationBudgetIncrement;
       const cooldown = buildCooldown(err, failedState);
       failedState.status = cooldown.status;
       failedState.nextEligibleAttemptAt = cooldown.nextEligibleAttemptAt;
@@ -215,6 +218,7 @@ const executionMethods = {
     const wasNeverReconciledExec = !strategyState.lastReconciledFillsAt;
     const fillsSinceExec = Number(strategyState.lastReconciledFillsAt || 0);
     const reconciledExec = await this._reconcileHedgeFills(protection, hl, fillsSinceExec);
+    const pendingRotationBudget = strategyState.pendingRotationBudgetIncrement;
     const updatedState = {
       ...strategyState,
       status: executionSummary.partial ? 'partial_hedge_warning' : 'healthy',
@@ -241,6 +245,14 @@ const executionMethods = {
       cooldownReason: null,
       minDwellUntil: Date.now() + this.minDwellMs,
     };
+    delete updatedState.pendingRotationBudgetIncrement;
+    if (pendingRotationBudget && Number.isFinite(Number(pendingRotationBudget.rotationBudgetDay))) {
+      updatedState.netProfitPolicyState = {
+        ...(updatedState.netProfitPolicyState || {}),
+        rotationBudgetDay: Number(pendingRotationBudget.rotationBudgetDay),
+        rotationBudgetCount: Math.max(0, Number(pendingRotationBudget.rotationBudgetCount) || 0),
+      };
+    }
 
     updatedState.netProtectionPnlUsd =
       Number(updatedState.lpPnlUsd || 0)
