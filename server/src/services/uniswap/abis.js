@@ -78,6 +78,7 @@ const V4_POSITION_MANAGER_ABI = [
   'function ownerOf(uint256 tokenId) view returns (address)',
   'function getPoolAndPositionInfo(uint256 tokenId) view returns ((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks), uint256)',
   'function getPositionLiquidity(uint256 tokenId) view returns (uint128 liquidity)',
+  'function initializePool(tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks) key, uint160 sqrtPriceX96) payable returns (int24 tick)',
   'function modifyLiquidities(bytes unlockData, uint256 deadline) payable',
 ];
 

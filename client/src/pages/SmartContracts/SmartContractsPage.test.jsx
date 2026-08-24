@@ -2,7 +2,10 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 const { smartContractRegistryApi } = vi.hoisted(() => ({
-  smartContractRegistryApi: { list: vi.fn(), createContract: vi.fn(), createVersion: vi.fn() },
+  smartContractRegistryApi: {
+    list: vi.fn(), createContract: vi.fn(), createVersion: vi.fn(),
+    recordDeployment: vi.fn(), verifyVersion: vi.fn(),
+  },
 }));
 
 vi.mock('../../services/api', () => ({ smartContractRegistryApi }));
@@ -46,5 +49,30 @@ describe('SmartContractsPage', () => {
       }));
     });
     expect(await screen.findByText('Versión registrada en verificación.')).toBeTruthy();
+  });
+
+  it('permite registrar un despliegue y ofrece verificarlo solo después', async () => {
+    smartContractRegistryApi.list.mockResolvedValue([
+      { id: 9, name: 'Volatility Shield', version: '1.0.0', status: 'verification', deployment: null },
+    ]);
+    smartContractRegistryApi.recordDeployment.mockResolvedValue({ id: 12 });
+
+    render(<SmartContractsPage />);
+
+    await screen.findByText('Volatility Shield');
+    fireEvent.change(screen.getByLabelText('Versión a desplegar'), { target: { value: '9' } });
+    fireEvent.change(screen.getByLabelText('Red de despliegue'), { target: { value: 'base-sepolia' } });
+    fireEvent.change(screen.getByLabelText('Dirección desplegada'), { target: { value: '0x0000000000000000000000000000000000000080' } });
+    fireEvent.change(screen.getByLabelText('Hash de transacción'), { target: { value: '0xabc123' } });
+    fireEvent.change(screen.getByLabelText('Hash de bytecode runtime'), { target: { value: '0xdef456' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Registrar despliegue firmado' }));
+
+    await vi.waitFor(() => {
+      expect(smartContractRegistryApi.recordDeployment).toHaveBeenCalledWith(9, expect.objectContaining({
+        network: 'base-sepolia',
+        address: '0x0000000000000000000000000000000000000080',
+      }));
+    });
+    expect(await screen.findByText('Despliegue registrado. Ya puedes contrastar el bytecode en cadena.')).toBeTruthy();
   });
 });

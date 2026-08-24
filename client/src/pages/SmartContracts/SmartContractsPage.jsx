@@ -24,6 +24,7 @@ export default function SmartContractsPage() {
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState({ name: '', version: '1.0.0', sourceCode: '', description: '', compilerVersion: '' });
+  const [deploymentDraft, setDeploymentDraft] = useState({ versionId: '', network: 'base-sepolia', address: '', txHash: '', artifactBytecodeHash: '' });
 
   const load = async () => {
     const data = await smartContractRegistryApi.list();
@@ -71,6 +72,49 @@ export default function SmartContractsPage() {
     }
   };
 
+  const updateDeployment = (field) => (event) => {
+    setDeploymentDraft((current) => ({ ...current, [field]: event.target.value }));
+  };
+
+  const registerDeployment = async (event) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      await smartContractRegistryApi.recordDeployment(Number(deploymentDraft.versionId), {
+        network: deploymentDraft.network.trim(),
+        address: deploymentDraft.address.trim(),
+        txHash: deploymentDraft.txHash.trim(),
+        artifactBytecodeHash: deploymentDraft.artifactBytecodeHash.trim() || undefined,
+      });
+      setNotice('Despliegue registrado. Ya puedes contrastar el bytecode en cadena.');
+      setDeploymentDraft((current) => ({ ...current, address: '', txHash: '', artifactBytecodeHash: '' }));
+      await load();
+    } catch (err) {
+      setError(err.message || 'No se pudo registrar el despliegue.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const verifyVersion = async (version) => {
+    if (saving || !version?.deployment?.network) return;
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      await smartContractRegistryApi.verifyVersion(version.id, version.deployment.network);
+      setNotice('Bytecode y permisos verificados. El hook ya puede aparecer en el wizard de esa red.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'No se pudo verificar el contrato en cadena.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
@@ -105,6 +149,32 @@ export default function SmartContractsPage() {
         </form>
       </section>
 
+      {versions.some((version) => version.status === 'verification' && !version.deployment) && (
+        <section className={styles.register} aria-labelledby="deployment-title">
+          <div>
+            <span className={styles.eyebrow}>Despliegue firmado</span>
+            <h2 id="deployment-title">Registrar evidencia de despliegue</h2>
+            <p>La firma ocurre desde la wallet. Registra después la dirección y el hash de la transacción para iniciar la verificación.</p>
+          </div>
+          <form onSubmit={registerDeployment} className={styles.form}>
+            <label>Versión a desplegar<select required value={deploymentDraft.versionId} onChange={updateDeployment('versionId')}>
+              <option value="">Selecciona una versión</option>
+              {versions.filter((version) => version.status === 'verification' && !version.deployment).map((version) => (
+                <option key={version.id} value={version.id}>{version.name} · {version.version}</option>
+              ))}
+            </select></label>
+            <label>Red de despliegue<input required value={deploymentDraft.network} onChange={updateDeployment('network')} /></label>
+            <label className={styles.wide}>Dirección desplegada<input required value={deploymentDraft.address} placeholder="0x…" onChange={updateDeployment('address')} /></label>
+            <label>Hash de transacción<input required value={deploymentDraft.txHash} placeholder="0x…" onChange={updateDeployment('txHash')} /></label>
+            <label>Hash de bytecode runtime<input required value={deploymentDraft.artifactBytecodeHash} placeholder="0x…" onChange={updateDeployment('artifactBytecodeHash')} /></label>
+            <div className={styles.formFooter}>
+              <small>La verificación vuelve a leer el bytecode desde el RPC; el navegador no puede aprobarlo por sí mismo.</small>
+              <button type="submit" disabled={saving || !deploymentDraft.versionId}>{saving ? 'Registrando…' : 'Registrar despliegue firmado'}</button>
+            </div>
+          </form>
+        </section>
+      )}
+
       {loading && <p className={styles.state}>Cargando versiones registradas…</p>}
       {error && <p className={styles.error}>{error}</p>}
       {notice && <p className={styles.notice}>{notice}</p>}
@@ -131,6 +201,11 @@ export default function SmartContractsPage() {
                 ? 'Apto para ser elegido al crear una pool V4 nueva en esta red.'
                 : 'No se puede seleccionar ni operar hasta comprobar bytecode y permisos del hook.'}
             </p>
+            {version.status === 'verification' && version.deployment && (
+              <button className={styles.verifyButton} type="button" disabled={saving} onClick={() => verifyVersion(version)}>
+                Verificar bytecode on-chain
+              </button>
+            )}
           </article>
         ))}
       </div>
