@@ -6,19 +6,70 @@ function statusLabel(status) {
   return status === 'verified' ? 'Verificado' : 'En verificación';
 }
 
+async function sourceHash(sourceCode) {
+  const payload = new TextEncoder().encode(sourceCode);
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', payload);
+    return `0x${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+  }
+  // El servidor vuelve a contrastar el bytecode antes de verificar. Este
+  // fallback solo conserva una huella de trazabilidad en navegadores antiguos.
+  return `source-${sourceCode.length}`;
+}
+
 export default function SmartContractsPage() {
   const [versions, setVersions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({ name: '', version: '1.0.0', sourceCode: '', description: '', compilerVersion: '' });
+
+  const load = async () => {
+    const data = await smartContractRegistryApi.list();
+    setVersions(Array.isArray(data) ? data : []);
+  };
 
   useEffect(() => {
     let active = true;
-    smartContractRegistryApi.list()
-      .then((data) => { if (active) setVersions(Array.isArray(data) ? data : []); })
+    load()
+      .then(() => { if (!active) return; })
       .catch((err) => { if (active) setError(err.message || 'No se pudo cargar el registro.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, []); // La carga inicial se mantiene aislada para no repetir llamadas al editar el borrador.
+
+  const updateDraft = (field) => (event) => {
+    setDraft((current) => ({ ...current, [field]: event.target.value }));
+  };
+
+  const registerVersion = async (event) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const contract = await smartContractRegistryApi.createContract({
+        name: draft.name.trim(),
+        contractType: 'uniswap_v4_dynamic_fee_hook',
+        description: draft.description.trim() || undefined,
+      });
+      await smartContractRegistryApi.createVersion(contract.id, {
+        version: draft.version.trim(),
+        sourceCode: draft.sourceCode,
+        sourceHash: await sourceHash(draft.sourceCode),
+        compilerVersion: draft.compilerVersion.trim() || undefined,
+      });
+      setDraft({ name: '', version: '1.0.0', sourceCode: '', description: '', compilerVersion: '' });
+      setNotice('Versión registrada en verificación.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'No se pudo registrar la versión.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className={styles.page}>
@@ -35,8 +86,28 @@ export default function SmartContractsPage() {
         <span>Código</span><b>→</b><span>Firma y despliegue</span><b>→</b><span>Verificación on-chain</span><b>→</b><span>Uso en orquestador</span>
       </section>
 
+      <section className={styles.register} aria-labelledby="register-title">
+        <div>
+          <span className={styles.eyebrow}>Nueva versión</span>
+          <h2 id="register-title">Registrar código para verificación</h2>
+          <p>El registro conserva el código y la versión. Aún no habilita el hook ni envía una transacción.</p>
+        </div>
+        <form onSubmit={registerVersion} className={styles.form}>
+          <label>Nombre del contrato<input required value={draft.name} onChange={updateDraft('name')} /></label>
+          <label>Versión<input required value={draft.version} onChange={updateDraft('version')} /></label>
+          <label className={styles.wide}>Descripción<input value={draft.description} onChange={updateDraft('description')} /></label>
+          <label>Compilador<input placeholder="solc 0.8.26" value={draft.compilerVersion} onChange={updateDraft('compilerVersion')} /></label>
+          <label className={styles.wide}>Código fuente<textarea required rows="7" value={draft.sourceCode} onChange={updateDraft('sourceCode')} /></label>
+          <div className={styles.formFooter}>
+            <small>Después se registra el despliegue firmado y se contrasta su bytecode on-chain.</small>
+            <button type="submit" disabled={saving}>{saving ? 'Registrando…' : 'Registrar versión'}</button>
+          </div>
+        </form>
+      </section>
+
       {loading && <p className={styles.state}>Cargando versiones registradas…</p>}
       {error && <p className={styles.error}>{error}</p>}
+      {notice && <p className={styles.notice}>{notice}</p>}
       {!loading && !error && versions.length === 0 && (
         <div className={styles.empty}>
           <strong>Aún no hay contratos registrados.</strong>
