@@ -9,12 +9,17 @@ const { lpOrchestratorApi } = vi.hoisted(() => ({
   },
 }));
 
+const { smartContractRegistryApi } = vi.hoisted(() => ({
+  smartContractRegistryApi: { listVerifiedHooks: vi.fn() },
+}));
+
 const { smartCreateFlow } = vi.hoisted(() => ({
   smartCreateFlow: { current: null },
 }));
 
 vi.mock('../../services/api', () => ({
   lpOrchestratorApi,
+  smartContractRegistryApi,
   uniswapApi: {},
 }));
 
@@ -43,6 +48,7 @@ function makeFlow(overrides = {}) {
     token0Address: WETH,
     token1Address: USDC,
     fee: 500,
+    setFee: vi.fn(),
     totalUsdTarget: '100',
     tokenList: [
       { symbol: 'WETH', address: WETH, decimals: 18 },
@@ -92,6 +98,7 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     lpOrchestratorApi.preflightProtection.mockResolvedValue({ ok: true, checks: [] });
+    smartContractRegistryApi.listVerifiedHooks.mockResolvedValue([]);
   });
 
   it('manda token0Symbol y token1Symbol resueltos, no undefined', async () => {
@@ -210,7 +217,10 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     expect(plan.rangeUpperPrice).toBe(2400);
   });
 
-  it('incluye en la intención sólo la identidad del hook dinámico seleccionado', () => {
+  it('rehidrata desde el registro la identidad del hook dinámico preseleccionado', async () => {
+    smartContractRegistryApi.listVerifiedHooks.mockResolvedValue([
+      { versionId: 19, address: '0x0000000000000000000000000000000000000080' },
+    ]);
     const { result } = renderFlow({}, {
       v4DynamicFeeHook: {
         versionId: 19,
@@ -218,9 +228,33 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
       },
     });
 
+    await act(async () => {});
+
     const plan = result.current.buildPlan();
     expect(plan.hooks).toBe('0x0000000000000000000000000000000000000080');
     expect(plan.v4DynamicFeeHookVersionId).toBe(19);
+  });
+
+  it('carga hooks verificados de la red y sólo propaga la selección explícita', async () => {
+    smartContractRegistryApi.listVerifiedHooks.mockResolvedValue([
+      { versionId: 24, name: 'Volatility Shield', version: '1.0.0', address: '0x0000000000000000000000000000000000000080' },
+    ]);
+    const { result } = renderFlow();
+
+    await act(async () => {});
+
+    expect(smartContractRegistryApi.listVerifiedHooks).toHaveBeenCalledWith('arbitrum');
+    expect(result.current.verifiedDynamicFeeHooks).toHaveLength(1);
+    expect(result.current.buildPlan().hooks).toBeUndefined();
+
+    act(() => result.current.selectDynamicFeeHook(24));
+
+    expect(smartCreateFlow.current.setFee).toHaveBeenCalledWith(0x800000);
+    expect(result.current.buildPlan()).toMatchObject({
+      hooks: '0x0000000000000000000000000000000000000080',
+      v4DynamicFeeHookVersionId: 24,
+      feeTier: 0x800000,
+    });
   });
 });
 

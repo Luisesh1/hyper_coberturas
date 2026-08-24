@@ -301,11 +301,37 @@ test('intención: rechaza un hook V4 que no esté verificado para esa red', asyn
       plan: {
         ...BASE_PLAN,
         version: 'v4',
+        feeTier: 0x800000,
         hooks: '0x0000000000000000000000000000000000000080',
         v4DynamicFeeHookVersionId: 99,
       },
     }),
     /verificado/
+  );
+});
+
+test('intención: rechaza un hook dinámico V4 si el fee no usa la bandera dinámica', async () => {
+  const { saga } = makeSaga({
+    verifiedHooksRepository: {
+      async listVerifiedHooks() {
+        return [{ id: 99, deployment: { address: '0x0000000000000000000000000000000000000080' } }];
+      },
+    },
+  });
+  saga.operationRepo = { async createOrReuse() { assert.fail('no debe crear intención'); } };
+
+  await assert.rejects(
+    () => saga.beginIntent({
+      userId: 1,
+      plan: {
+        ...BASE_PLAN,
+        version: 'v4',
+        feeTier: 3000,
+        hooks: '0x0000000000000000000000000000000000000080',
+        v4DynamicFeeHookVersionId: 99,
+      },
+    }),
+    /tarifa dinámica/
   );
 });
 
@@ -322,6 +348,7 @@ test('intención: conserva el hook V4 que el registro verificó para la red', as
     plan: {
       ...BASE_PLAN,
       version: 'v4',
+      feeTier: 0x800000,
       hooks: '0x0000000000000000000000000000000000000080',
       v4DynamicFeeHookVersionId: 99,
     },

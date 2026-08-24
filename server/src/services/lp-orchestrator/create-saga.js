@@ -144,6 +144,9 @@ class LpCreateSaga {
       if (plan.version !== 'v4' || !plan.hooks) {
         throw new Error('Un hook dinámico requiere una pool V4 y la dirección del hook verificado.');
       }
+      if (Number(plan.feeTier) !== 0x800000) {
+        throw new Error('Un hook de tarifa dinámica requiere la bandera de tarifa dinámica V4.');
+      }
       const hooks = await this.verifiedHooksRepository.listVerifiedHooks(userId, plan.network);
       const selected = hooks.find((item) => (
         Number(item.id) === Number(plan.v4DynamicFeeHookVersionId)
