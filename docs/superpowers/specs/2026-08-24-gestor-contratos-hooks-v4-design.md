@@ -36,7 +36,8 @@ fallback específicos.
 1. Registrar contrato y versión con código/artefacto reproducible.
 2. Preparar una transacción de despliegue; la wallet del usuario firma y envía.
 3. Guardar la dirección y el hash de la transacción por red.
-4. Ejecutar pruebas/auditoría externas y elegir "Marcar verificado".
+4. Ejecutar pruebas (unitarias, fuzz/invariantes y Base Sepolia) y elegir
+   "Marcar verificado".
 5. El backend confirma bytecode y permisos. Sólo entonces el wizard muestra la
    versión para esa red.
 6. Elegirla crea una PoolKey V4 nueva con flag de fee dinámica, hook y tick
