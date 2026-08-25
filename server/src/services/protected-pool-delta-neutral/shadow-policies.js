@@ -184,6 +184,16 @@ function resolveExecutionGate({
   // Un forzado del orquestador y el cruce de borde se saltan la banda, igual
   // que en `resolveRebalanceDecision`.
   if (forceRebalance || forceReason === 'boundary_cross') return null;
+  // Tercer escape, el que se me habia pasado: el cierre a cero. En vivo lo hace
+  // `evaluate.js` ascendiendo la decision a `rebalance_full` cuando
+  // `forceReduceNearZero`, y el preflight lo remata con el bypass
+  // `isFullCloseReduce` del minimo notional. Sin el, una sombra que baja a
+  // polvo queda ATRAPADA para siempre: el drift de cerrar un residuo de
+  // $2,50 nunca supera el piso de $11, asi que arrastraria funding y latente
+  // abiertos justo en `legacy_zones_v1`, la politica que esta comparativa
+  // existe para juzgar. Se mira el campo y no el gate porque con un forzado
+  // simultaneo el gate seria 'forced'.
+  if (decision.forceReduceNearZero === true) return null;
   if (policy !== LEGACY_ZONES_V1) return null;
 
   const targetQty = Number(decision.targetQty);

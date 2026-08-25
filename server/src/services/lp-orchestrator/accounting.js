@@ -258,8 +258,15 @@ function readShadowStateFromProtection(protection) {
   // base —un cero donde debe haber hueco— y el baseline se perdería, tirando
   // en silencio todo lo acumulado. El desglose por política llega con la
   // contabilidad multi-política.
+  // La política declarada se resuelve igual que en el motor
+  // (`activeProtection.policyVersion || strategyState.policyVersion`). Mirar
+  // sólo el estado dejaría fuera a las filas cuyo `policy_version` vive
+  // únicamente en la columna de base: el motor escribiría en
+  // `shadowSnapshots[net_profit_v1]` y aquí se buscaría
+  // `shadowSnapshots[undefined]`, devolviendo el cero silencioso otra vez.
+  const declaredPolicy = protection.policyVersion || state.policyVersion;
   const shadow = state.shadowSnapshot
-    || state.shadowSnapshots?.[state.policyVersion]
+    || state.shadowSnapshots?.[declaredPolicy]
     || null;
   if (!shadow || typeof shadow !== 'object') return null;
   return {
