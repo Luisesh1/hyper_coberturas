@@ -68,11 +68,11 @@ test('Volatility Shield V1 conserva los límites y guardrails de tarifa', async 
   assert.equal(first.fee & LP_FEE_OVERRIDE_FLAG, LP_FEE_OVERRIDE_FLAG, 'debe activar el flag de override de fee');
 
   // De BASE_FEE (3000) a CAP_FEE (6000) en pasos de MAX_FEE_STEP (500) son 6
-  // intervalos con la señal de volatilidad saturada; encadenamos 7 saltos de
-  // tick grandes para tocar el techo de verdad y confirmar que un intervalo
-  // adicional con la misma señal no lo perfora.
+  // intervalos con la señal de volatilidad saturada, más uno que se va en fijar
+  // la referencia del TWAP; encadenamos 8 saltos de tick grandes para tocar el
+  // techo de verdad y confirmar que un intervalo adicional no lo perfora.
   let last = first;
-  for (let i = 0; i < 7; i += 1) {
+  for (let i = 0; i < 8; i += 1) {
     const previousRawFee = last.fee - LP_FEE_OVERRIDE_FLAG;
     tick += 500_000;
     timestamp += 5n * 60n + 1n;

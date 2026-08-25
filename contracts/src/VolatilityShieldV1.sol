@@ -33,17 +33,26 @@ contract VolatilityShieldV1 is BaseHook {
     struct PoolState {
         // Acumulador del oráculo: suma de tick * segundos que ese tick estuvo
         // vigente. int56 es el mismo ancho que usa el oráculo de Uniswap v3 y
-        // le sobra: |tick| <= 887272 (MAX_TICK) por 2^32 segundos de vida del
-        // pool da 3,8e15, frente a los 3,6e16 que cabe en int56.
+        // le sobra: |tick| <= 887272 (MAX_TICK) por los 2^32 s que representa
+        // el reloj de abajo da 3,8e15, frente a los 3,6e16 que caben en int56.
+        // Ojo: esa cota no describe una vida útil de 136 años, sino el punto en
+        // que el reloj uint32 ya rompió la señal (ver justo debajo).
         int56 tickCumulative;
         int56 checkpointTickCumulative;
         int24 lastTwapTick;
+        // Relojes truncados a uint32, heredado de lastUpdatedAt. Pasado 2106
+        // uint32(block.timestamp) envuelve mientras block.timestamp no: la resta
+        // salta a ~4,3e9 s, que cabe de sobra en int56 pero convierte la ventana
+        // y el TWAP en ruido. Es el horizonte real del contrato, no del acumulador.
         uint32 lastObservedAt;
         uint32 lastUpdatedAt;
         uint64 shortEwma;
         uint64 longEwma;
         uint24 fee;
         bool initialized;
+        // Falso hasta que cierra la PRIMERA ventana. Distingue "el pool ya vio un
+        // swap" de "ya existe un TWAP anterior contra el que medir movimiento".
+        bool hasTwapReference;
     }
 
     mapping(bytes32 poolId => PoolState) public poolState;
@@ -80,12 +89,14 @@ contract VolatilityShieldV1 is BaseHook {
         uint24 fee = state.fee;
 
         if (!state.initialized) {
-            // Primer swap del pool: no hay ventana previa que promediar. El
-            // acumulador abre en cero y la referencia se siembra con el tick
-            // actual, el único dato que existe. Es un punto instantáneo, pero
-            // sólo interviene en la comparación de la primera ventana.
+            // Primer swap del pool: sólo abre el acumulador y arranca el reloj.
+            // Deliberadamente NO se siembra `lastTwapTick` con el tick actual:
+            // ese valor es un punto instantáneo que el primer swapper elige, y
+            // usarlo como referencia dejaba que un LP inicializara el pool en un
+            // tick extremo y cobrara comisiones infladas sin volatilidad real.
+            // El movimiento se mide entre TWAPs de ventanas consecutivas, y aquí
+            // todavía no ha cerrado ninguna.
             state.initialized = true;
-            state.lastTwapTick = tick;
             state.lastObservedAt = uint32(block.timestamp);
             state.lastUpdatedAt = uint32(block.timestamp);
             fee = BASE_FEE;
@@ -108,31 +119,47 @@ contract VolatilityShieldV1 is BaseHook {
                 int56 elapsed = int56(uint56(block.timestamp - state.lastUpdatedAt));
                 int56 windowCumulative = state.tickCumulative - state.checkpointTickCumulative;
                 int56 twap = windowCumulative / elapsed;
-                // La división con signo trunca hacia cero: redondear hacia abajo
-                // da a un pool en ticks negativos el mismo trato que a su reflejo
-                // en positivos, igual que hace OracleLibrary.consult de Uniswap.
+                // La división con signo trunca hacia cero, y eso le da al escalón
+                // que rodea al cero el doble de ancho que a todos los demás.
+                // Redondear hacia abajo cuantiza uniforme, que es lo que hace
+                // OracleLibrary.consult de Uniswap. Se paga con la simetría de
+                // reflexión: trunc(-x) = -trunc(x), floor no (+703000/301 da 2335
+                // y -703000/301 da -2336). Se prefiere la cuantización uniforme.
                 if (windowCumulative < 0 && windowCumulative % elapsed != 0) twap -= 1;
                 int24 twapTick = int24(twap);
 
-                uint24 absoluteMove = twapTick >= state.lastTwapTick
-                    ? uint24(twapTick - state.lastTwapTick)
-                    : uint24(state.lastTwapTick - twapTick);
+                // La primera ventana que cierra no mide movimiento: sólo fija la
+                // referencia. Medir "movimiento" exige dos TWAPs consecutivos, y
+                // aquí sólo hay uno. Alimentar el EWMA contra una referencia
+                // inventada era el sesgo de la semilla: como shortEwma/longEwma
+                // son estado persistente, una referencia extrema abría una
+                // excursión de tarifa que duraba ~10 ventanas. El coste de
+                // saltarse esta ventana es que el hook tarda un UPDATE_INTERVAL
+                // más en reaccionar tras crear el pool.
+                if (state.hasTwapReference) {
+                    uint24 absoluteMove = twapTick >= state.lastTwapTick
+                        ? uint24(twapTick - state.lastTwapTick)
+                        : uint24(state.lastTwapTick - twapTick);
 
-                state.shortEwma = _ewma(state.shortEwma, absoluteMove, SHORT_ALPHA_BPS);
-                state.longEwma = _ewma(state.longEwma, absoluteMove, LONG_ALPHA_BPS);
+                    state.shortEwma = _ewma(state.shortEwma, absoluteMove, SHORT_ALPHA_BPS);
+                    state.longEwma = _ewma(state.longEwma, absoluteMove, LONG_ALPHA_BPS);
 
-                uint64 signal = state.shortEwma > state.longEwma
-                    ? state.shortEwma - state.longEwma
-                    : 0;
-                uint256 target = BASE_FEE;
-                if (signal > VOL_THRESHOLD) target += uint256(signal - VOL_THRESHOLD) * FEE_PER_TICK;
-                if (target > CAP_FEE) target = CAP_FEE;
+                    uint64 signal = state.shortEwma > state.longEwma
+                        ? state.shortEwma - state.longEwma
+                        : 0;
+                    uint256 target = BASE_FEE;
+                    if (signal > VOL_THRESHOLD) target += uint256(signal - VOL_THRESHOLD) * FEE_PER_TICK;
+                    if (target > CAP_FEE) target = CAP_FEE;
 
-                fee = _stepToward(fee, uint24(target));
+                    fee = _stepToward(fee, uint24(target));
+                    state.fee = fee;
+                } else {
+                    state.hasTwapReference = true;
+                }
+
                 state.lastTwapTick = twapTick;
                 state.checkpointTickCumulative = state.tickCumulative;
                 state.lastUpdatedAt = uint32(block.timestamp);
-                state.fee = fee;
             }
         }
 
