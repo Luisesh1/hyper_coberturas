@@ -96,6 +96,13 @@ contract VolatilityShieldV1 is BaseHook {
             // tick extremo y cobrara comisiones infladas sin volatilidad real.
             // El movimiento se mide entre TWAPs de ventanas consecutivas, y aquí
             // todavía no ha cerrado ninguna.
+            //
+            // Esto ENCARECE ese abuso, no lo elimina: quien sostenga el tick
+            // extremo aunque sea un bloque dentro de la primera ventana vuelve a
+            // provocar la excursión entera (medido: pico 5500 con 12 s). Lo que
+            // se cierra es el caso gratis, el de duración cero. El residuo no es
+            // del TWAP sino de la fórmula, que satura a CAP_FEE con ~964 ticks de
+            // movimiento y no distingue eso de 887.272.
             state.initialized = true;
             state.lastObservedAt = uint32(block.timestamp);
             state.lastUpdatedAt = uint32(block.timestamp);
