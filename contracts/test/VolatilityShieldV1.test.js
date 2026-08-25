@@ -60,20 +60,30 @@ test('Volatility Shield V1 conserva los límites y guardrails de tarifa', async 
   };
   const params = { zeroForOne: true, amountSpecified: -1_000_000n, sqrtPriceLimitX96: 0n };
 
-  await harness.setSlot0({ tick: 0 });
-  const first = await harness.beforeSwap({ key, params, timestamp: 1_000n });
+  let timestamp = 1_000n;
+  let tick = 0;
+  await harness.setSlot0({ key, tick });
+  const first = await harness.beforeSwap({ key, params, timestamp });
   assert.equal(first.delta, 0n, 'el hook no debe modificar el accounting del swap');
   assert.equal(first.fee & LP_FEE_OVERRIDE_FLAG, LP_FEE_OVERRIDE_FLAG, 'debe activar el flag de override de fee');
 
-  // Movimiento de tick extremo tras UPDATE_INTERVAL: la tarifa nunca puede
-  // saltarse el techo (CAP_FEE) aunque la señal de volatilidad lo empuje muy por encima.
-  await harness.setSlot0({ tick: 500_000 });
-  const second = await harness.beforeSwap({ key, params, timestamp: 1_000n + 5n * 60n + 1n });
-  const secondRawFee = second.fee - LP_FEE_OVERRIDE_FLAG;
-  assert.ok(secondRawFee >= 500n && secondRawFee <= 6000n, 'la tarifa debe permanecer en [FLOOR_FEE, CAP_FEE]');
+  // De BASE_FEE (3000) a CAP_FEE (6000) en pasos de MAX_FEE_STEP (500) son 6
+  // intervalos con la señal de volatilidad saturada; encadenamos 7 saltos de
+  // tick grandes para tocar el techo de verdad y confirmar que un intervalo
+  // adicional con la misma señal no lo perfora.
+  let last = first;
+  for (let i = 0; i < 7; i += 1) {
+    const previousRawFee = last.fee - LP_FEE_OVERRIDE_FLAG;
+    tick += 500_000;
+    timestamp += 5n * 60n + 1n;
+    await harness.setSlot0({ key, tick });
+    last = await harness.beforeSwap({ key, params, timestamp });
+    const rawFee = last.fee - LP_FEE_OVERRIDE_FLAG;
+    assert.ok(rawFee >= 500n && rawFee <= 6000n, 'la tarifa debe permanecer en [FLOOR_FEE, CAP_FEE]');
+    assert.ok(rawFee - previousRawFee <= 500n, 'la tarifa no puede subir más de MAX_FEE_STEP por intervalo');
+  }
 
-  const firstRawFee = first.fee - LP_FEE_OVERRIDE_FLAG;
-  assert.ok(secondRawFee - firstRawFee <= 500n, 'la tarifa no puede subir más de MAX_FEE_STEP por intervalo');
+  assert.equal(last.fee - LP_FEE_OVERRIDE_FLAG, 6000n, 'tras suficientes intervalos saturados debe tocar exactamente CAP_FEE');
 });
 
 test('el compilador genera un artefacto reproducible para registrar el hook', () => {

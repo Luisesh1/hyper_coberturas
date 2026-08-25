@@ -5,30 +5,45 @@
 // No usamos Foundry/Hardhat/ganache: montamos una @ethereumjs/evm mínima y
 // escribimos el runtime bytecode del hook directamente en una dirección
 // elegida a mano cuyos bits bajos llevan el flag BEFORE_SWAP (0x80) que
-// BaseHook.validateHookAddress exige. Así evitamos el problema de "minar"
-// una dirección con CREATE2: en un despliegue real hace falta buscar un
-// salt que produzca esos bits; aquí basta con inyectar el código en la
-// dirección que ya cumple la condición.
+// BaseHook.validateHookAddress exige. Un revisor confirmó, desplegando con
+// CREATE2 y comparando byte a byte, que el runtime parcheado a mano coincide
+// exactamente con el de un despliegue real.
 //
-// El truco tiene una trampa: `poolManager` es `immutable` en ImmutableState
-// (heredado por BaseHook). El compilador solo "hornea" ese valor dentro del
-// runtime bytecode cuando el contrato pasa por su constructor real; el
-// `evm.deployedBytecode.object` que emite solc trae esos huecos rellenos de
-// ceros (ver `immutableReferences`). Como aquí saltamos el constructor,
-// parcheamos esos huecos a mano con la dirección de nuestro PoolManager
-// simulado antes de inyectar el bytecode. Alternativa descartada: desplegar
-// de verdad con CREATE2 minando el salt — funciona, pero es complejidad de
-// más cuando parchear los huecos declarados por el propio compilador es
-// determinista y no depende de fuerza bruta.
+// Ese revisor señaló con razón que la inyección manual, por sí sola, no ata
+// la dirección elegida a la máscara de `getHookPermissions()`: si el
+// contrato ganara un flag nuevo (p.ej. `afterSwap: true`), este arnés
+// seguiría inyectando en la misma dirección y todos los tests seguirían en
+// verde, aunque un despliegue real revertiría con `HookAddressNotValid`. Por
+// eso `createHookHarness()` expone `readHookPermissions()` y el archivo de
+// pruebas verifica explícitamente que los bits bajos de HOOK_ADDRESS
+// coinciden con lo que el contrato declara — así, si la máscara cambia sin
+// re-elegir la dirección, la prueba falla. Se prefirió esto sobre desplegar
+// de verdad con CREATE2 minando un salt (la otra opción válida) porque no
+// exige repetir la lógica de mining ni tocar el resto del arnés, y cierra el
+// mismo hueco: la prueba directamente reimplementa la comprobación de
+// `Hooks.validateHookPermissions` contra el bytecode real.
+//
+// El truco de inyectar el runtime directamente tiene una segunda trampa:
+// `poolManager` es `immutable` en ImmutableState (heredado por BaseHook). El
+// compilador solo "hornea" ese valor dentro del runtime bytecode cuando el
+// contrato pasa por su constructor real; el `evm.deployedBytecode.object`
+// que emite solc trae esos huecos rellenos de ceros (ver
+// `immutableReferences`). Como aquí saltamos el constructor, parcheamos esos
+// huecos a mano con la dirección de nuestro PoolManager simulado antes de
+// inyectar el bytecode.
 //
 // Esta compilación es independiente de `scripts/compile.js`: ese script
 // genera el artefacto reproducible que consume el registro de contratos del
 // servidor y no debe tocarse para las necesidades de este arnés de pruebas.
+// Para que ambas compilaciones no diverjan en silencio (mismo código, mismos
+// ajustes de optimizador, mismo evmVersion), `getRawRuntimeBytecode()` expone
+// el `deployedBytecode.object` crudo (con los immutables aún a cero) para que
+// las pruebas lo comparen contra `artifacts/VolatilityShieldV1.json`.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const solc = require('solc');
-const { Interface } = require('ethers');
+const { Interface, AbiCoder, keccak256, concat, id, toBeHex, zeroPadValue } = require('ethers');
 const { createEVM } = require('@ethereumjs/evm');
 const { SimpleStateManager } = require('@ethereumjs/statemanager');
 const { Common, Mainnet, Hardfork } = require('@ethereumjs/common');
@@ -45,13 +60,30 @@ const SWAP_ROUTER_ADDRESS = new Address(hexToBytes(`0x${'0'.repeat(36)}aaaa`));
 
 const LP_FEE_OVERRIDE_FLAG = 0x400000n; // LPFeeLibrary.OVERRIDE_FEE_FLAG
 const DEFAULT_SQRT_PRICE_X96 = 1n << 96n; // precio 1:1
+const ALL_HOOK_MASK = 0x3fffn; // Hooks.ALL_HOOK_MASK: 14 bits bajos
 
-// PoolManager simulado: ignora selector y argumentos, y devuelve la palabra
-// almacenada en su slot 0 de storage ante cualquier llamada. Es justo lo que
-// necesita `StateLibrary.getSlot0`, que resuelve todo con un único
-// `extsload(bytes32)` de bajo nivel (ver @uniswap/v4-core StateLibrary.sol).
-// Bytecode: PUSH1 0x00; SLOAD; PUSH1 0x00; MSTORE; PUSH1 0x20; PUSH1 0x00; RETURN
-const POOL_MANAGER_MOCK_CODE = hexToBytes('0x60005460005260206000f3');
+// Orden y peso de bits tal como los declara Hooks.sol. Es la misma tabla que
+// usa `Hooks.validateHookPermissions` para comparar la máscara de permisos
+// contra los bits bajos de la dirección del hook.
+const HOOK_FLAG_BITS = {
+  beforeInitialize: 1 << 13,
+  afterInitialize: 1 << 12,
+  beforeAddLiquidity: 1 << 11,
+  afterAddLiquidity: 1 << 10,
+  beforeRemoveLiquidity: 1 << 9,
+  afterRemoveLiquidity: 1 << 8,
+  beforeSwap: 1 << 7,
+  afterSwap: 1 << 6,
+  beforeDonate: 1 << 5,
+  afterDonate: 1 << 4,
+  beforeSwapReturnDelta: 1 << 3,
+  afterSwapReturnDelta: 1 << 2,
+  afterAddLiquidityReturnDelta: 1 << 1,
+  afterRemoveLiquidityReturnDelta: 1 << 0,
+};
+
+// bytes32 constant POOLS_SLOT = bytes32(uint256(6)); en StateLibrary.sol.
+const POOLS_SLOT = zeroPadValue(toBeHex(6n), 32);
 
 let compiledHookCache;
 
@@ -98,15 +130,60 @@ function patchImmutables(runtimeHex, immutableReferences, poolManagerAddress) {
 function getCompiledHook() {
   if (!compiledHookCache) {
     const artifact = compileHook();
+    const rawRuntimeBytecode = `0x${artifact.evm.deployedBytecode.object}`;
     const runtimeCode = patchImmutables(
       artifact.evm.deployedBytecode.object,
       artifact.evm.deployedBytecode.immutableReferences,
       POOL_MANAGER_ADDRESS,
     );
-    compiledHookCache = { abi: artifact.abi, runtimeCode };
+    compiledHookCache = { abi: artifact.abi, runtimeCode, rawRuntimeBytecode };
   }
   return compiledHookCache;
 }
+
+// Runtime bytecode tal como lo emite solc, ANTES de parchear los huecos de
+// `immutable` (siguen a cero, igual que en `evm.deployedBytecode.object`).
+// Sirve para anclar esta compilación de pruebas a la de producción: si
+// `scripts/compile.js` cambiara `evmVersion`, `runs`, o el propio fuente
+// cambiara sin que este arnés se actualizara, la comparación byte a byte
+// contra `artifacts/VolatilityShieldV1.json` lo detecta.
+function getRawRuntimeBytecode() {
+  return getCompiledHook().rawRuntimeBytecode;
+}
+
+// PoolManager simulado. Solo entiende `extsload(bytes32)` (la única lectura
+// que el hook hace sobre el PoolManager, vía StateLibrary.getSlot0) y
+// devuelve el storage de ESE slot exacto, indexado por lo que venga en
+// calldata — no un valor fijo. Cualquier otro selector revierte: una lectura
+// nueva que el hook añadiera contra el PoolManager (p.ej. para TWAP) fallaría
+// aquí en vez de devolver silenciosamente una palabra cualquiera reinterpretada.
+//
+// Ensamblado a mano en vez de compilado para no añadir dependencias ni un
+// contrato Solidity extra:
+//   PUSH1 0; CALLDATALOAD; PUSH1 0xe0; SHR         -- extrae el selector (4 bytes altos)
+//   PUSH4 <selector extsload(bytes32)>; EQ; ISZERO
+//   PUSH1 <destino>; JUMPI                          -- salta a revertir si no coincide
+//   PUSH1 4; CALLDATALOAD; SLOAD                    -- slot = calldata[4:36]; sload(slot)
+//   PUSH1 0; MSTORE; PUSH1 0x20; PUSH1 0; RETURN
+//   JUMPDEST; PUSH1 0; PUSH1 0; REVERT
+function buildPoolManagerMockCode() {
+  const selector = Array.from(hexToBytes(id('extsload(bytes32)').slice(0, 10)));
+  const push1 = (n) => [0x60, n];
+
+  const header = [...push1(0x00), 0x35, ...push1(0xe0), 0x1c, 0x63, ...selector, 0x14, 0x15];
+  const matched = [...push1(0x04), 0x35, 0x54, ...push1(0x00), 0x52, ...push1(0x20), ...push1(0x00), 0xf3];
+  const reverted = [0x5b, ...push1(0x00), ...push1(0x00), 0xfd];
+
+  const code = [...header, ...push1(0x00) /* placeholder de destino */, 0x57, ...matched];
+  const destIndex = header.length + 1; // byte del PUSH1 que llevará el destino de salto
+  const jumpDest = code.length; // el JUMPDEST arranca justo después del bloque "matched"
+  code[destIndex] = jumpDest;
+  code.push(...reverted);
+
+  return Uint8Array.from(code);
+}
+
+const POOL_MANAGER_MOCK_CODE = buildPoolManagerMockCode();
 
 function makeBlock(timestamp) {
   return {
@@ -133,6 +210,19 @@ function encodeSlot0({ tick, sqrtPriceX96 = DEFAULT_SQRT_PRICE_X96, protocolFee 
   return setLengthLeft(bigIntToBytes(word), 32);
 }
 
+// Reproduce StateLibrary._getPoolStateSlot: keccak256(abi.encodePacked(poolId, POOLS_SLOT)),
+// donde poolId = keccak256(abi.encode(key)) tal como lo calcula _beforeSwap.
+// Cada PoolKey obtiene así su propio slot en el storage del PoolManager
+// simulado — dos pools distintos ya no comparten tarifa.
+function computePoolStateSlot(key) {
+  const encodedKey = AbiCoder.defaultAbiCoder().encode(
+    ['address', 'address', 'uint24', 'int24', 'address'],
+    [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks],
+  );
+  const poolId = keccak256(encodedKey);
+  return keccak256(concat([poolId, POOLS_SLOT]));
+}
+
 function describeRevert(iface, returnValue) {
   if (returnValue.length === 0) return 'sin datos de retorno';
   try {
@@ -155,14 +245,19 @@ async function createHookHarness() {
   await stateManager.putCode(HOOK_ADDRESS, runtimeCode);
   await stateManager.putCode(POOL_MANAGER_ADDRESS, POOL_MANAGER_MOCK_CODE);
 
-  async function setSlot0(slot0) {
-    await stateManager.putStorage(POOL_MANAGER_ADDRESS, new Uint8Array(32), encodeSlot0(slot0));
+  async function setSlot0({ key, tick, sqrtPriceX96, protocolFee, lpFee }) {
+    const slot = computePoolStateSlot(key);
+    await stateManager.putStorage(
+      POOL_MANAGER_ADDRESS,
+      hexToBytes(slot),
+      encodeSlot0({ tick, sqrtPriceX96, protocolFee, lpFee }),
+    );
   }
 
-  async function call(functionName, args, { caller = createZeroAddress(), timestamp = 0n } = {}) {
+  async function call(functionName, args, { caller = createZeroAddress(), timestamp = 0n, to = HOOK_ADDRESS } = {}) {
     const data = iface.encodeFunctionData(functionName, args);
     const result = await evm.runCall({
-      to: HOOK_ADDRESS,
+      to,
       caller,
       data: hexToBytes(data),
       gasLimit: 5_000_000n,
@@ -190,6 +285,24 @@ async function createHookHarness() {
     return value;
   }
 
+  async function readHookPermissions() {
+    const [permissions] = await call('getHookPermissions', []);
+    return permissions;
+  }
+
+  // Llama directamente al PoolManager simulado (sin pasar por el hook), para
+  // poder probar su comportamiento ante selectores desconocidos.
+  async function callPoolManagerMock(rawData, { caller = createZeroAddress() } = {}) {
+    const result = await evm.runCall({
+      to: POOL_MANAGER_ADDRESS,
+      caller,
+      data: hexToBytes(rawData),
+      gasLimit: 1_000_000n,
+      block: makeBlock(0n),
+    });
+    return result.execResult;
+  }
+
   return {
     hookAddress: HOOK_ADDRESS.toString(),
     poolManagerAddress: POOL_MANAGER_ADDRESS.toString(),
@@ -198,11 +311,17 @@ async function createHookHarness() {
     setSlot0,
     beforeSwap,
     readConstant,
+    readHookPermissions,
+    callPoolManagerMock,
   };
 }
 
 module.exports = {
   createHookHarness,
+  getRawRuntimeBytecode,
+  computePoolStateSlot,
+  HOOK_FLAG_BITS,
+  ALL_HOOK_MASK,
   LP_FEE_OVERRIDE_FLAG,
   DEFAULT_SQRT_PRICE_X96,
 };
