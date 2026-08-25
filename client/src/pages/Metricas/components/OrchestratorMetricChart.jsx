@@ -399,6 +399,10 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
   const pnlClass = pnl.totalUsd == null
     ? ''
     : (pnl.totalUsd >= 0 ? styles.statDeltaPos : styles.statDeltaNeg);
+  const selectedPolicyVersion = stats.current?.breakdown?.selectedPolicy;
+  const selectedPolicyIsLive = selectedPolicyVersion
+    ? stats.current?.breakdown?.policies?.[selectedPolicyVersion]?.isLive === true
+    : null;
 
   return (
     <div className={styles.card}>
@@ -424,6 +428,11 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
               {POLICY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
+          {selectedPolicyIsLive != null && (
+            <span className={selectedPolicyIsLive ? styles.policyReal : styles.policySimulated}>
+              {selectedPolicyIsLive ? 'Medición real' : 'Simulación contrafactual'}
+            </span>
+          )}
         </div>
         <div className={styles.cardStats}>
           <button

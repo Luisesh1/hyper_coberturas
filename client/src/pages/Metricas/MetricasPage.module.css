@@ -155,6 +155,17 @@
   font: inherit;
 }
 
+.policyReal,
+.policySimulated {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.policyReal { color: var(--uni-green, #3dd991); }
+.policySimulated { color: var(--uni-orange, #ffbf5f); }
+
 .cardStats {
   display: flex;
   gap: 14px;
