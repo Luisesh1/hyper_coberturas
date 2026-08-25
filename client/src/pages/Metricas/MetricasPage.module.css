@@ -137,6 +137,24 @@
   color: var(--uni-text-2);
 }
 
+.policyPicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  color: var(--uni-text-2);
+  font-size: 0.72rem;
+}
+
+.policyPicker select {
+  border: 1px solid var(--uni-border, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  background: var(--uni-surface-2, #1b2030);
+  color: var(--uni-text-0);
+  padding: 3px 6px;
+  font: inherit;
+}
+
 .cardStats {
   display: flex;
   gap: 14px;

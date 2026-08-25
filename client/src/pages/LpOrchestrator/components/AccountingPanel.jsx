@@ -1,5 +1,4 @@
 import { formatUsd, formatSignedUsd } from '../../UniswapPools/utils/pool-formatters';
-import { formatDuration } from '../../../utils/formatters';
 import styles from './AccountingPanel.module.css';
 
 /** Number() a secas convierte los ausentes en NaN, y `NaN !== 0` es true:
@@ -52,16 +51,6 @@ export default function AccountingPanel({
     || num(a.hedgeExecutionFeesUsd) !== 0
     || num(a.hedgeSlippageUsd) !== 0;
 
-  // La sombra solo existe cuando la política `net_profit_v1` corre en
-  // paralelo. Sin datos no se muestra la sección: un bloque de ceros
-  // sugeriría que el contrafactual no rinde, cuando en realidad no corrió.
-  const hasShadowData =
-    num(a.shadowRealizedPnlUsd) !== 0
-    || num(a.shadowUnrealizedPnlUsd) !== 0
-    || num(a.shadowFundingUsd) !== 0
-    || num(a.shadowExecutionFeesUsd) !== 0
-    || num(a.shadowSlippageUsd) !== 0;
-
   // Neto de cada pata de cobertura con la misma convención que usa el motor:
   // realizado + latente + funding − comisiones − slippage. El P&L del LP no
   // entra: es idéntico bajo las dos políticas y solo diluiría la diferencia.
@@ -71,8 +60,6 @@ export default function AccountingPanel({
     + num(a.hedgeFundingUsd)
     - num(a.hedgeExecutionFeesUsd)
     - num(a.hedgeSlippageUsd);
-  const shadowNetUsd = num(a.shadowNetPnlUsd);
-  const shadowEdgeUsd = shadowNetUsd - hedgeNetUsd;
 
   // Yield del LP solo por fees: lo que rindió el capital inicial en fees
   // brutas, sin contar gas, slippage ni deriva de precio. Útil para comparar
@@ -124,14 +111,6 @@ export default function AccountingPanel({
     { label: 'Slippage hedge', value: `-${formatUsd(a.hedgeSlippageUsd)}`, tone: 'negative' },
   ];
 
-  const shadowItems = [
-    { label: 'Sombra realizado', value: formatSignedUsd(a.shadowRealizedPnlUsd), tone: signTone(a.shadowRealizedPnlUsd) },
-    { label: 'Sombra no realizado', value: formatSignedUsd(a.shadowUnrealizedPnlUsd), tone: signTone(a.shadowUnrealizedPnlUsd) },
-    { label: 'Funding sombra', value: formatSignedUsd(a.shadowFundingUsd), tone: signTone(a.shadowFundingUsd) },
-    { label: 'Fees ejecución', value: `-${formatUsd(a.shadowExecutionFeesUsd)}`, tone: 'negative' },
-    { label: 'Slippage sombra', value: `-${formatUsd(a.shadowSlippageUsd)}`, tone: 'negative' },
-  ];
-
   return (
     <div className={`${styles.root} ${compact ? styles.compact : ''}`}>
       <div className={styles.header}>
@@ -154,27 +133,6 @@ export default function AccountingPanel({
             <span>Neto de cobertura</span>
             <strong className={styles[signTone(hedgeNetUsd)]}>{formatSignedUsd(hedgeNetUsd)}</strong>
           </div>
-        </Section>
-      )}
-
-      {hasShadowData && (
-        <Section title="Sombra (net profit)" tone="violet">
-          <div className={styles.grid}>
-            {shadowItems.map((item) => <Cell key={item.label} {...item} />)}
-          </div>
-          <div className={styles.sectionFooter}>
-            <span>Neto sombra</span>
-            <strong className={styles[signTone(shadowNetUsd)]}>{formatSignedUsd(shadowNetUsd)}</strong>
-          </div>
-          <div className={styles.sectionFooter}>
-            <span className={styles.sectionFooterHint}>Ventaja del contrafactual</span>
-            <strong className={styles[signTone(shadowEdgeUsd)]}>{formatSignedUsd(shadowEdgeUsd)}</strong>
-          </div>
-          <p className={styles.sectionNote}>
-            Cobertura simulada que habría hecho la política net profit, acumulada durante
-            toda la vida del orquestador. No manda órdenes y rellena contra el BBO del
-            momento: es un límite optimista, y no entra en el P&amp;L neto total.
-          </p>
         </Section>
       )}
 

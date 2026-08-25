@@ -23,10 +23,70 @@ const protectedPoolRepository = require('../repositories/protected-uniswap-pool.
 const marketService = require('./market.service');
 const { resolveOrchestratorAccountId } = require('./orchestrator-account-resolver');
 const { recomputeNetPnl } = require('./lp-orchestrator/accounting');
+const { ALL_POLICIES, resolveLivePolicy } = require('./protected-pool-delta-neutral/shadow-policies');
 
 const FUNDING_CACHE_TTL_MS = 60_000;
 
 const HOUR_MS = 60 * 60_000;
+
+function hedgeNet(accounting) {
+  return Number(accounting.hedgeRealizedPnlUsd || 0)
+    + Number(accounting.hedgeUnrealizedPnlUsd || 0)
+    + Number(accounting.hedgeFundingUsd || 0)
+    - Number(accounting.hedgeExecutionFeesUsd || 0)
+    - Number(accounting.hedgeSlippageUsd || 0);
+}
+
+function policyFields(source) {
+  if (!source || typeof source !== 'object') return null;
+  return {
+    hedgeRealizedPnlUsd: Number(source.hedgeRealizedPnlUsd ?? source.realizedPnlUsd),
+    hedgeUnrealizedPnlUsd: Number(source.hedgeUnrealizedPnlUsd ?? source.unrealizedPnlUsd),
+    hedgeFundingUsd: Number(source.hedgeFundingUsd ?? source.fundingUsd),
+    hedgeExecutionFeesUsd: Number(source.hedgeExecutionFeesUsd ?? source.executionFeesUsd),
+    hedgeSlippageUsd: Number(source.hedgeSlippageUsd ?? source.slippageUsd),
+  };
+}
+
+function finitePolicyFields(source) {
+  const fields = policyFields(source);
+  return fields && Object.values(fields).every(Number.isFinite) ? fields : null;
+}
+
+function policyNet(fields) {
+  return fields.hedgeRealizedPnlUsd
+    + fields.hedgeUnrealizedPnlUsd
+    + fields.hedgeFundingUsd
+    - fields.hedgeExecutionFeesUsd
+    - fields.hedgeSlippageUsd;
+}
+
+function buildPoliciesBreakdown(accounting, livePolicy, hlAccountUsd) {
+  const a = accounting || {};
+  const real = finitePolicyFields(a);
+  const realNet = real ? policyNet(real) : null;
+  return Object.fromEntries(ALL_POLICIES.map((policyVersion) => {
+    const isLive = policyVersion === livePolicy;
+    const fields = isLive ? real : finitePolicyFields(a.shadowPolicies?.[policyVersion]);
+    // Para una política contrafactual, sustituimos únicamente la pata hedge
+    // dentro del valor de la cuenta HL. Si falta esa medición, es un hueco,
+    // nunca un cero ficticio.
+    const policyHlAccountUsd = isLive
+      ? hlAccountUsd
+      : (fields && realNet != null && Number.isFinite(Number(hlAccountUsd))
+        ? Number(hlAccountUsd) - realNet + policyNet(fields)
+        : null);
+    return [policyVersion, {
+      isLive,
+      hedgeRealizedPnlUsd: fields?.hedgeRealizedPnlUsd ?? null,
+      hedgeUnrealizedPnlUsd: fields?.hedgeUnrealizedPnlUsd ?? null,
+      hedgeFundingUsd: fields?.hedgeFundingUsd ?? null,
+      hedgeExecutionFeesUsd: fields?.hedgeExecutionFeesUsd ?? null,
+      hedgeSlippageUsd: fields?.hedgeSlippageUsd ?? null,
+      hlAccountUsd: policyHlAccountUsd,
+    }];
+  }));
+}
 
 class OrchestratorMetricsService {
   constructor() {
@@ -293,12 +353,18 @@ class OrchestratorMetricsService {
     // `totalNetPnlUsd` persistido: es un no-op cuando la fila esta sana y
     // corrige el valor si quedo desincronizado.
     const accounting = recomputeNetPnl(orchestrator.accounting);
+    const policies = buildPoliciesBreakdown(
+      accounting,
+      hedgeTracking.livePolicy || 'legacy_zones_v1',
+      hlAccountUsd,
+    );
 
     return {
       walletUsd,
       lpUsd,
       hlAccountUsd,
       accounting,
+      policies,
       wallet: walletDetail,
       lpSource: poolSnapshot ? {
         currentValueUsd: Number(poolSnapshot.currentValueUsd) || 0,
@@ -421,6 +487,7 @@ class OrchestratorMetricsService {
         fundingRateHourly: finite(fundingRateHourly),
         projectedDailyFundingUsd: finite(projectedDailyFundingUsd),
         fundingHeadwind: Number.isFinite(projectedDailyFundingUsd) ? projectedDailyFundingUsd < 0 : null,
+        livePolicy: resolveLivePolicy(protection),
       };
     } catch (err) {
       logger.warn('orchestrator_metrics_hedge_tracking_failed', {
@@ -434,3 +501,4 @@ class OrchestratorMetricsService {
 
 module.exports = new OrchestratorMetricsService();
 module.exports.OrchestratorMetricsService = OrchestratorMetricsService;
+module.exports.buildPoliciesBreakdown = buildPoliciesBreakdown;

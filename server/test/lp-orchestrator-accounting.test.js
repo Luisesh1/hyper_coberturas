@@ -307,3 +307,93 @@ test('readShadowStateFromProtection devuelve null si la política sombra no est�
     null
   );
 });
+
+test('las sombras se contabilizan de forma independiente por política y sobreviven a un recreate', () => {
+  const firstSnapshots = {
+    legacy_zones_v1: {
+      realizedPnlUsd: 2,
+      unrealizedPnlUsd: 1,
+      fundingUsd: -0.2,
+      executionFeesUsd: 0.1,
+      slippageUsd: 0.05,
+    },
+    net_profit_v2: {
+      realizedPnlUsd: 7,
+      unrealizedPnlUsd: -0.5,
+      fundingUsd: 0.3,
+      executionFeesUsd: 0.4,
+      slippageUsd: 0.15,
+    },
+  };
+  const first = accounting.applyShadowStatesDelta(
+    accounting.DEFAULT_ACCOUNTING,
+    null,
+    firstSnapshots,
+  );
+
+  // El primer tick fija dos baselines separados y sólo expone los marks.
+  assert.deepEqual(first.shadowBaselines, firstSnapshots);
+  assert.equal(first.accounting.shadowPolicies.legacy_zones_v1.realizedPnlUsd, 0);
+  assert.equal(first.accounting.shadowPolicies.legacy_zones_v1.unrealizedPnlUsd, 1);
+  assert.equal(first.accounting.shadowPolicies.net_profit_v2.unrealizedPnlUsd, -0.5);
+
+  const second = accounting.applyShadowStatesDelta(first.accounting, first.shadowBaselines, {
+    legacy_zones_v1: {
+      ...firstSnapshots.legacy_zones_v1,
+      realizedPnlUsd: 5,
+      unrealizedPnlUsd: 0.4,
+      fundingUsd: -0.5,
+      executionFeesUsd: 0.25,
+      slippageUsd: 0.08,
+    },
+    net_profit_v2: {
+      ...firstSnapshots.net_profit_v2,
+      realizedPnlUsd: 8,
+      unrealizedPnlUsd: 1.2,
+      fundingUsd: 0.1,
+      executionFeesUsd: 0.6,
+      slippageUsd: 0.2,
+    },
+  });
+
+  const legacy = second.accounting.shadowPolicies.legacy_zones_v1;
+  const v2 = second.accounting.shadowPolicies.net_profit_v2;
+  assert.equal(legacy.realizedPnlUsd, 3);
+  assert.equal(legacy.unrealizedPnlUsd, 0.4);
+  assert.ok(Math.abs(legacy.fundingUsd + 0.3) < 1e-9);
+  assert.equal(v2.realizedPnlUsd, 1);
+  assert.equal(v2.unrealizedPnlUsd, 1.2);
+  assert.ok(Math.abs(v2.fundingUsd + 0.2) < 1e-9);
+
+  // Al matar el LP desaparece el mark, pero los acumuladores no se reinician.
+  const afterKill = accounting.applyShadowStatesDelta(second.accounting, second.shadowBaselines, {});
+  assert.equal(afterKill.accounting.shadowPolicies.legacy_zones_v1.unrealizedPnlUsd, 0);
+  assert.equal(afterKill.accounting.shadowPolicies.legacy_zones_v1.realizedPnlUsd, 3);
+  assert.deepEqual(afterKill.shadowBaselines, {});
+
+  // El primer tick del LP recreado vuelve a ser baseline: no duplica P&L previo.
+  const recreated = accounting.applyShadowStatesDelta(afterKill.accounting, null, {
+    legacy_zones_v1: { ...firstSnapshots.legacy_zones_v1, realizedPnlUsd: 99, unrealizedPnlUsd: 2 },
+  });
+  assert.equal(recreated.accounting.shadowPolicies.legacy_zones_v1.realizedPnlUsd, 3);
+  assert.equal(recreated.accounting.shadowPolicies.legacy_zones_v1.unrealizedPnlUsd, 2);
+});
+
+test('readShadowStatesFromProtection lee cada snapshot sin inferir la política viva', () => {
+  const states = accounting.readShadowStatesFromProtection({
+    strategyState: {
+      shadowSnapshots: {
+        legacy_zones_v1: { realizedPnlUsd: 1, unrealizedPnlUsd: 2 },
+        net_profit_v1: { realizedPnlUsd: 3, fundingUsd: -1 },
+      },
+    },
+  });
+  assert.deepEqual(states, {
+    legacy_zones_v1: {
+      realizedPnlUsd: 1, unrealizedPnlUsd: 2, fundingUsd: 0, executionFeesUsd: 0, slippageUsd: 0,
+    },
+    net_profit_v1: {
+      realizedPnlUsd: 3, unrealizedPnlUsd: 0, fundingUsd: -1, executionFeesUsd: 0, slippageUsd: 0,
+    },
+  });
+});
