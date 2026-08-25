@@ -37,13 +37,11 @@ const {
   simulateShadowFill,
 } = require('../net-profit-policy.service');
 const {
+  NEAR_ZERO_TARGET_QTY,
+  ORPHAN_TARGET_QTY,
   decideLegacyZones,
   isCenterDeadZoneBlocking,
 } = require('../legacy-zones-policy.service');
-
-// Por debajo de esta cantidad el target se considera cero: espeja la
-// constante del servicio.
-const NEAR_ZERO_TARGET_QTY = 1e-6;
 
 const evaluateMethods = {
   async _evaluateProtectionUnlocked(protection, options = {}) {
@@ -821,6 +819,9 @@ const evaluateMethods = {
     // se usan sus diagnosticos (temporizador y movimiento de precio, que no
     // dependen del target) para los logs comunes a las dos rutas.
     const legacyDecision = decideLegacyZones({
+      // El target del motor, NO uno derivado: es el mismo numero que dimensiona
+      // la orden mas abajo y con el que se persiste la decision.
+      targetQty: Number(metrics.targetQty),
       deltaQty: Number(metrics.deltaQty),
       targetHedgeRatio: activeProtection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
       zoneState,
@@ -881,7 +882,7 @@ const evaluateMethods = {
       });
     }
 
-    if (!position && metrics.targetQty > 0.0000001) {
+    if (!position && metrics.targetQty > ORPHAN_TARGET_QTY) {
       this.logger.info?.('delta_neutral_restart_reconcile_candidate', {
         protectionId: activeProtection.id,
         accountId: activeProtection.accountId,
@@ -894,8 +895,8 @@ const evaluateMethods = {
       });
     }
 
-    if (forceReduceNearZero) {
-      rebalanceDecision.decision = legacyDecision.bandDecision;
+    if (forceReduceNearZero && rebalanceDecision.decision === 'hold') {
+      rebalanceDecision.decision = 'rebalance_full';
     }
 
     const preflight = await this._buildPreflight({
@@ -1117,7 +1118,7 @@ const evaluateMethods = {
     const reason = isNetProfitLive
       ? policyVersion
       : forceReason
-        || (!position && metrics.targetQty > 0.0000001 ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
+        || (!position && metrics.targetQty > ORPHAN_TARGET_QTY ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
     // La senal pendiente se cobra aqui: se ejecuta con su motivo original y no
     // debe sobrevivir a su propia ejecucion.
     nextState.pendingForceReason = null;

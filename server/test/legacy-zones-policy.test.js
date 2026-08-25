@@ -61,6 +61,47 @@ test('un delta negativo no produce target negativo', () => {
   assert.equal(resolveLegacyTargetQty({ deltaQty: -3, targetHedgeRatio: 1, zoneState: 'edge', multipliers: MULTIPLICADORES }), 0);
 });
 
+// La ruta viva NO deriva el target: le pasa el del motor, que es el mismo
+// numero que despues dimensiona la orden. Si la politica lo ignorase y usara el
+// derivado, el dia que los dos discrepen el gate opinaria sobre un target y la
+// ejecucion moveria otro — con el hedge parado en el derivado, `errorUsd` sale
+// ~0 y el bot se queda infracubierto en hold permanente, sin emitir una orden.
+test('la ruta viva decide sobre el target que recibe, no sobre el derivado', () => {
+  // Derivado seria 0.6 (zona center): con el hedge en 0.6 el error seria cero.
+  // El target del motor es 1, asi que hay 0.4 sin cubrir y tiene que verse.
+  const comun = { deltaQty: 1, zoneState: 'center', multipliers: MULTIPLICADORES, actualQty: 0.6 };
+  assert.equal(resolveLegacyTargetQty({ ...comun, targetHedgeRatio: 1 }), 0.6);
+
+  const conTarget = decideLegacyZones(entrada({ ...comun, targetQty: 1 }));
+  assert.equal(conTarget.targetQty, 1);
+  assert.equal(conTarget.errorQty, 0.4);
+  assert.equal(conTarget.errorUsd, 400);
+  assert.equal(conTarget.decision, 'rebalance');
+  assert.equal(conTarget.gate, 'timer_and_drift');
+
+  // Sin `targetQty` la politica deriva el suyo: es lo que necesita la sombra,
+  // donde no hay target del motor que respetar.
+  const derivado = decideLegacyZones(entrada(comun));
+  assert.equal(derivado.targetQty, 0.6);
+  assert.equal(derivado.errorQty, 0);
+  assert.equal(derivado.decision, 'hold');
+});
+
+test('un targetQty de cero es un valor de primera clase, no un "ausente"', () => {
+  // Con `|| ` en vez de `!= null` esto derivaria 1 y la politica creeria que
+  // hay que cubrir justo cuando el motor pide cerrar.
+  const resultado = decideLegacyZones(entrada({
+    targetQty: 0,
+    deltaQty: 1,
+    actualQty: 0.5,
+    minRebalanceNotionalUsd: INALCANZABLE,
+    urgentMinNotionalUsd: INALCANZABLE,
+    lastRebalanceAt: AHORA - 60_000,
+  }));
+  assert.equal(resultado.targetQty, 0);
+  assert.equal(resultado.gate, 'reduce_near_zero');
+});
+
 // Este es el punto donde la extraccion puede romper la ruta real: el motor
 // calcula el target dentro del gemelo digital y la politica lo recalcula. Si
 // las dos formulas divergen, la decision se toma sobre otro numero.
@@ -183,6 +224,9 @@ test('sin rebalanceo previo no hay referencia de precio y el temporizador esta v
   assert.equal(resultado.timerDue, true);
   assert.equal(resultado.urgentTrigger, true);
   assert.equal(resultado.decision, 'rebalance');
+  // El brazo urgente gana al del temporizador: se evalua antes.
+  assert.equal(resultado.gate, 'price_band');
+  assert.equal(resultado.minNotionalUsd, 30);
 });
 
 test('el forzado del orquestador manda sobre cualquier piso y sobre el temporizador', () => {
@@ -284,7 +328,10 @@ test('las rutas de seguridad atraviesan la zona muerta', () => {
   assert.equal(huerfano.gate, 'restart_reconcile');
 });
 
-test('el gate de zona muerta es el mismo que aplica el motor a las demas politicas', () => {
+// El motor llama a este helper directamente para la rama net_profit live; la
+// equivalencia extremo a extremo con el motor la cubre
+// `delta-neutral-center-dead-zone.test.js`. Aqui solo se fija el helper.
+test('el helper de zona muerta cede ante forzado, cierre a cero y hedge huerfano', () => {
   const comun = { centerDeadZone: ZONA_MUERTA, hasPosition: true, targetQty: 1 };
   assert.equal(isCenterDeadZoneBlocking(comun), true);
   assert.equal(isCenterDeadZoneBlocking({ ...comun, forceRebalance: true }), false);
@@ -293,6 +340,46 @@ test('el gate de zona muerta es el mismo que aplica el motor a las demas politic
   assert.equal(isCenterDeadZoneBlocking({ ...comun, centerDeadZone: ZONA_LIBRE }), false);
   // Sin posicion pero sin nada que cubrir, la zona sigue mandando.
   assert.equal(isCenterDeadZoneBlocking({ ...comun, hasPosition: false, targetQty: 0 }), true);
+});
+
+// ── Piso reportado ─────────────────────────────────────────────────────────
+// La comparativa entre politicas se lee de estos campos. Un piso reportado en
+// una decision que jamas lo consulto se leeria como "esta politica respeto el
+// umbral", que es exactamente lo contrario de lo que paso.
+
+test('solo se reporta el piso que la decision midio de verdad', () => {
+  const porTemporizador = decideLegacyZones(entrada());
+  assert.equal(porTemporizador.gate, 'timer_and_drift');
+  assert.equal(porTemporizador.minNotionalUsd, 120);
+
+  const bajoElPiso = decideLegacyZones(entrada({ minRebalanceNotionalUsd: 2000, urgentMinNotionalUsd: 2000 }));
+  assert.equal(bajoElPiso.gate, 'below_min_notional');
+  assert.equal(bajoElPiso.minNotionalUsd, 2000);
+
+  const urgenteBloqueado = decideLegacyZones(entrada({
+    forceReason: 'boundary_cross',
+    lastRebalanceAt: AHORA - 60_000,
+    urgentMinNotionalUsd: 2000,
+  }));
+  assert.equal(urgenteBloqueado.gate, 'urgent_below_min_notional');
+  assert.equal(urgenteBloqueado.minNotionalUsd, 2000);
+});
+
+test('las rutas sin umbral economico no inventan un piso', () => {
+  const sinPiso = [
+    entrada({ forceRebalance: true }),
+    entrada({ deltaQty: 0, actualQty: 0.5 }),
+    entrada({ hasPosition: false, lastRebalanceAt: AHORA - 60_000, minRebalanceNotionalUsd: INALCANZABLE }),
+    entrada({ centerDeadZone: ZONA_MUERTA }),
+    entrada({ lastRebalanceAt: AHORA - 60_000 }),
+  ];
+  const gatesEsperados = ['forced', 'reduce_near_zero', 'restart_reconcile', 'center_dead_zone', 'timer_not_due'];
+
+  sinPiso.forEach((caso, indice) => {
+    const resultado = decideLegacyZones(caso);
+    assert.equal(resultado.gate, gatesEsperados[indice]);
+    assert.equal(resultado.minNotionalUsd, null, `gate ${resultado.gate}`);
+  });
 });
 
 // ── Contrato de estado ─────────────────────────────────────────────────────

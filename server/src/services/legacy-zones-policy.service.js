@@ -58,6 +58,7 @@ function isCenterDeadZoneBlocking({
 
 function decideLegacyZones({
   policyVersion = LEGACY_ZONES_V1,
+  targetQty: engineTargetQty = null,
   deltaQty,
   targetHedgeRatio = 1,
   zoneState = 'center',
@@ -78,7 +79,15 @@ function decideLegacyZones({
   now = Date.now(),
   state = {},
 } = {}) {
-  const targetQty = resolveLegacyTargetQty({ deltaQty, targetHedgeRatio, zoneState, multipliers });
+  // La ruta viva pasa `targetQty` a proposito: la decision tiene que caer sobre
+  // EL MISMO numero que despues dimensiona la orden. Derivarlo aqui dejaria al
+  // gate opinando sobre un target y a la ejecucion moviendo otro, y el sintoma
+  // seria un hold permanente con el hedge infracubierto y sin una sola orden.
+  // La sombra lo omite: alli no hay target del motor que respetar y cada
+  // politica calcula el suyo.
+  const targetQty = engineTargetQty != null
+    ? Number(engineTargetQty)
+    : resolveLegacyTargetQty({ deltaQty, targetHedgeRatio, zoneState, multipliers });
   const actual = Number(actualQty);
   const price = Number(currentPrice);
   const errorQty = targetQty - actual;
@@ -123,6 +132,15 @@ function decideLegacyZones({
       : 'timer_not_due';
   const gate = centerDeadZoneBlocks ? 'center_dead_zone' : (trigger || blockedGate);
   const decision = !centerDeadZoneBlocks && trigger != null ? 'rebalance' : 'hold';
+  // El piso que REALMENTE se aplico, o null si la decision no midio ninguno.
+  // Las rutas de seguridad (forzado, cierre a cero, hedge huerfano) y la zona
+  // muerta no pasan por umbral economico: reportar uno ahi se leeria como
+  // "esta politica respeto el piso" cuando ni siquiera lo consulto.
+  const minNotionalUsd = (gate === 'price_band' || gate === 'urgent_below_min_notional')
+    ? urgentMinNotionalUsd
+    : (gate === 'timer_and_drift' || gate === 'below_min_notional')
+      ? minRebalanceNotionalUsd
+      : null;
 
   return {
     policyVersion,
@@ -132,9 +150,7 @@ function decideLegacyZones({
     errorQty,
     errorUsd,
     adjustQty: errorQty,
-    minNotionalUsd: urgentTrigger
-      ? urgentMinNotionalUsd
-      : timerDue ? minRebalanceNotionalUsd : null,
+    minNotionalUsd,
     // La banda de coste decide la ETIQUETA de la orden, no si se dispara. Un
     // cierre a cero la asciende: sin esto el residuo se quedaria abierto.
     bandDecision: forceReduceNearZero && bandDecision === 'hold' ? 'rebalance_full' : bandDecision,
@@ -158,7 +174,6 @@ module.exports = {
   LEGACY_ZONES_V1,
   NEAR_ZERO_TARGET_QTY,
   ORPHAN_TARGET_QTY,
-  RESIDUAL_ACTUAL_QTY,
   zoneMultiplier,
   resolveLegacyTargetQty,
   isCenterDeadZoneBlocking,
