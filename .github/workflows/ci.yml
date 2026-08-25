@@ -68,6 +68,19 @@ jobs:
       - run: npm ci --prefix client
       - run: npm run build --prefix client
 
+  test-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+      - run: npm ci --prefix contracts
+      - run: npm run compile --prefix contracts
+      - run: npm run test --prefix contracts
+
   audit:
     runs-on: ubuntu-latest
     steps:
@@ -79,3 +92,5 @@ jobs:
         run: npm --prefix server audit --audit-level=high
       - name: npm audit (client)
         run: npm --prefix client audit --audit-level=high
+      - name: npm audit (contracts)
+        run: npm --prefix contracts audit --audit-level=high

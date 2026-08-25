@@ -13,8 +13,9 @@
     "lint": "npm --prefix server run lint && npm --prefix client run lint",
     "test": "npm --prefix server run test",
     "test:client": "npm --prefix client run test",
+    "test:contracts": "npm --prefix contracts run compile && npm --prefix contracts run test",
     "test:e2e": "playwright test",
-    "check": "npm run check:architecture && npm run check:hotspots && npm run lint && npm run test && npm run test:client && npm --prefix client run build"
+    "check": "npm run check:architecture && npm run check:hotspots && npm run lint && npm run test && npm run test:client && npm run test:contracts && npm --prefix client run build"
   },
   "engines": {
     "node": ">=20.19.0"
