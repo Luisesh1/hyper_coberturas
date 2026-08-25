@@ -29,6 +29,10 @@ contract VolatilityShieldV1 is BaseHook {
     uint64 public constant LONG_ALPHA_BPS = 800;
     uint64 public constant VOL_THRESHOLD = 12;
     uint64 public constant FEE_PER_TICK = 15;
+    // En régimen de calma el rango BASE→FLOOR se reparte linealmente entre
+    // señal 0 y VOL_THRESHOLD. Así FLOOR_FEE deja de ser código muerto sin
+    // alterar la pendiente FEE_PER_TICK del lado volátil.
+    uint24 public constant CALM_FEE_RANGE = BASE_FEE - FLOOR_FEE;
 
     /// @notice Tope de lo que una sola ventana puede aportar a la señal.
     /// @dev 1000 ticks son un movimiento de precio del +10,5% en una ventana de
@@ -175,8 +179,13 @@ contract VolatilityShieldV1 is BaseHook {
                     uint64 signal = state.shortEwma > state.longEwma
                         ? state.shortEwma - state.longEwma
                         : 0;
-                    uint256 target = BASE_FEE;
-                    if (signal > VOL_THRESHOLD) target += uint256(signal - VOL_THRESHOLD) * FEE_PER_TICK;
+                    uint256 target;
+                    if (signal > VOL_THRESHOLD) {
+                        target = BASE_FEE + uint256(signal - VOL_THRESHOLD) * FEE_PER_TICK;
+                    } else {
+                        // signal=0 => FLOOR_FEE; signal=VOL_THRESHOLD => BASE_FEE.
+                        target = FLOOR_FEE + uint256(signal) * CALM_FEE_RANGE / VOL_THRESHOLD;
+                    }
                     if (target > CAP_FEE) target = CAP_FEE;
 
                     fee = _stepToward(fee, uint24(target));
@@ -201,10 +210,13 @@ contract VolatilityShieldV1 is BaseHook {
     }
 
     function _stepToward(uint24 current, uint24 target) private pure returns (uint24) {
-        if (target > current + MAX_FEE_STEP) return current + MAX_FEE_STEP;
-        if (target + MAX_FEE_STEP < current) return current - MAX_FEE_STEP;
+        // Acotar antes de comparar garantiza el rango incluso cuando el
+        // resultado sale por una rama de paso máximo.
         if (target < FLOOR_FEE) return FLOOR_FEE;
         if (target > CAP_FEE) return CAP_FEE;
-        return target;
+        if (target > current) {
+            return target - current > MAX_FEE_STEP ? current + MAX_FEE_STEP : target;
+        }
+        return current - target > MAX_FEE_STEP ? current - MAX_FEE_STEP : target;
     }
 }
