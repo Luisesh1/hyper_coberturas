@@ -54,6 +54,7 @@ const {
   deriveBandSettings,
   computeVolatilityStats,
 } = require('./protected-pool-delta-neutral.helpers');
+const { zoneMultiplier } = require('./legacy-zones-policy.service');
 const { marginMethods } = require('./protected-pool-delta-neutral/margin');
 const { pricingMethods } = require('./protected-pool-delta-neutral/pricing');
 const { executionMethods } = require('./protected-pool-delta-neutral/execution');
@@ -219,9 +220,7 @@ class ProtectedPoolDeltaNeutralService {
   }
 
   _zoneMultiplier(zoneState, multipliers = this.zoneHedgeMultipliers) {
-    if (zoneState === 'center') return multipliers.center;
-    if (zoneState === 'transition') return multipliers.transition;
-    return multipliers.edge;
+    return zoneMultiplier(zoneState, multipliers);
   }
 
   /**

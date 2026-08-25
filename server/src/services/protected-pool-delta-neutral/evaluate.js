@@ -11,6 +11,7 @@ const {
   DEFAULT_MAX_AUTO_TOPUPS_PER_24H,
   DEFAULT_MAX_EXECUTION_FEE_USD,
   DEFAULT_MAX_SPREAD_BPS,
+  DEFAULT_TARGET_HEDGE_RATIO,
   MARGIN_COOLDOWN_MS,
   buildCooldown,
   clampNonNegative,
@@ -35,10 +36,12 @@ const {
   decideNetProfitV1,
   simulateShadowFill,
 } = require('../net-profit-policy.service');
-
-// Por debajo de esta cantidad el target se considera cero: espeja la
-// constante del servicio.
-const NEAR_ZERO_TARGET_QTY = 1e-6;
+const {
+  NEAR_ZERO_TARGET_QTY,
+  ORPHAN_TARGET_QTY,
+  decideLegacyZones,
+  isCenterDeadZoneBlocking,
+} = require('../legacy-zones-policy.service');
 
 const evaluateMethods = {
   async _evaluateProtectionUnlocked(protection, options = {}) {
@@ -666,9 +669,6 @@ const evaluateMethods = {
       }
     }
 
-    const priceMovePct = nextState.lastRebalanceAt && Number.isFinite(referencePrice)
-      ? Math.abs(((currentPrice - referencePrice) / referencePrice) * 100)
-      : Infinity;
     const driftQty = Number(metrics.targetQty) - actualQty;
     const driftUsd = Math.abs(driftQty) * currentPrice;
     const isReduceOnlyPath = driftQty < -1e-8;
@@ -789,13 +789,8 @@ const evaluateMethods = {
         shadowMtmUsd: shadow.realizedPnlUsd + shadow.unrealizedPnlUsd,
       });
     }
-    const forceReduceNearZero = !isNetProfitLive
-      && metrics.targetQty <= NEAR_ZERO_TARGET_QTY
-      && actualQty > 1e-8;
     const minDwellActive = Number.isFinite(Number(nextState.minDwellUntil)) && Date.now() < Number(nextState.minDwellUntil);
     const confidenceBlocksIncrease = nextState.modelConfidence === 'low' && driftQty > 0;
-    const timerDue = !nextState.lastRebalanceAt
-      || ((Date.now() - Number(nextState.lastRebalanceAt || 0)) >= (band.intervalSec * 1000));
     // Porcentaje del valor VIVO del LP, no un absoluto congelado al crear la
     // proteccion: si el LP crece o mengua, el umbral lo sigue.
     const minRebalanceNotionalUsd = resolveMinRebalanceNotionalUsd(activeProtection, metrics.poolValueUsd);
@@ -809,30 +804,58 @@ const evaluateMethods = {
       metrics.poolValueUsd,
       this.urgentMinRebalanceNotionalPct
     );
-    const urgentTrigger = !isNetProfitLive && (forceReason === 'boundary_cross'
-      || priceMovePct >= band.effectiveBandPct);
     // Zona central del rango donde el usuario pidio no rebalancear. Congela
     // los brazos economicos (urgente y temporizador) mientras el precio este
     // en el centro del rango, donde el delta se mueve despacio y cada ajuste
-    // paga fee + slippage sin recuperarlo. Las rutas de seguridad se listan
-    // en `deadZoneOverride` y la ignoran: nunca dejamos capital descubierto
-    // por una preferencia de costo.
+    // paga fee + slippage sin recuperarlo. Las rutas de seguridad la ignoran:
+    // nunca dejamos capital descubierto por una preferencia de costo.
     const centerDeadZone = resolveCenterDeadZone(
       activeProtection,
       currentPrice,
       this.centerDeadZonePct
     );
-    const deadZoneOverride = forceRebalance
-      || forceReduceNearZero
-      || (!position && metrics.targetQty > 0.0000001);
-    const centerDeadZoneBlocks = centerDeadZone.active && !deadZoneOverride;
-    const shouldRebalance = !centerDeadZoneBlocks && (isNetProfitLive
-      ? netProfitDecision.decision === 'rebalance'
-      : forceRebalance
-        || forceReduceNearZero
-        || (urgentTrigger && driftUsd >= urgentMinNotionalUsd)
-        || (timerDue && driftUsd >= minRebalanceNotionalUsd)
-        || (!position && metrics.targetQty > 0.0000001));
+    // La politica legacy se evalua SIEMPRE, tambien bajo net_profit live. Su
+    // veredicto solo manda cuando ella es la politica viva; el resto del tiempo
+    // se usan sus diagnosticos (temporizador y movimiento de precio, que no
+    // dependen del target) para los logs comunes a las dos rutas.
+    const legacyDecision = decideLegacyZones({
+      // El target del motor, NO uno derivado: es el mismo numero que dimensiona
+      // la orden mas abajo y con el que se persiste la decision.
+      targetQty: Number(metrics.targetQty),
+      deltaQty: Number(metrics.deltaQty),
+      targetHedgeRatio: activeProtection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
+      zoneState,
+      multipliers: this.zoneHedgeMultipliers,
+      actualQty,
+      currentPrice,
+      referencePrice,
+      hasPosition: Boolean(position),
+      bandDecision: rebalanceDecision.decision,
+      effectiveBandPct: band.effectiveBandPct,
+      intervalSec: band.intervalSec,
+      minRebalanceNotionalUsd,
+      urgentMinNotionalUsd,
+      centerDeadZone,
+      lastRebalanceAt: nextState.lastRebalanceAt,
+      forceReason,
+      forceRebalance,
+      now: Date.now(),
+    });
+    const { priceMovePct, timerDue } = legacyDecision;
+    const forceReduceNearZero = !isNetProfitLive && legacyDecision.forceReduceNearZero;
+    const urgentTrigger = !isNetProfitLive && legacyDecision.urgentTrigger;
+    const centerDeadZoneBlocks = isNetProfitLive
+      ? isCenterDeadZoneBlocking({
+        centerDeadZone,
+        forceRebalance,
+        forceReduceNearZero,
+        hasPosition: Boolean(position),
+        targetQty: Number(metrics.targetQty),
+      })
+      : legacyDecision.centerDeadZoneBlocks;
+    const shouldRebalance = isNetProfitLive
+      ? !centerDeadZoneBlocks && netProfitDecision.decision === 'rebalance'
+      : legacyDecision.decision === 'rebalance';
 
     if (centerDeadZoneBlocks) {
       this.logger.info?.('delta_neutral_rebalance_skipped_center_dead_zone', {
@@ -859,7 +882,7 @@ const evaluateMethods = {
       });
     }
 
-    if (!position && metrics.targetQty > 0.0000001) {
+    if (!position && metrics.targetQty > ORPHAN_TARGET_QTY) {
       this.logger.info?.('delta_neutral_restart_reconcile_candidate', {
         protectionId: activeProtection.id,
         accountId: activeProtection.accountId,
@@ -1095,7 +1118,7 @@ const evaluateMethods = {
     const reason = isNetProfitLive
       ? policyVersion
       : forceReason
-        || (!position && metrics.targetQty > 0.0000001 ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
+        || (!position && metrics.targetQty > ORPHAN_TARGET_QTY ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
     // La senal pendiente se cobra aqui: se ejecuta con su motivo original y no
     // debe sobrevivir a su propia ejecucion.
     nextState.pendingForceReason = null;
