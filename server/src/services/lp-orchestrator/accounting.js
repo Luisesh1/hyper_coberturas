@@ -251,7 +251,16 @@ function readShadowStateFromProtection(protection) {
   if (!protection) return null;
   const state = protection.strategyState || protection.strategy_state_json || null;
   if (!state || typeof state !== 'object') return null;
-  const shadow = state.shadowSnapshot;
+  // El motor pasó de un `shadowSnapshot` singular a `shadowSnapshots` indexado
+  // por política. Mientras esta columna siga siendo UNA sola, se lee la de la
+  // política declarada en la protección, que es exactamente la que alimentaba
+  // el singular. Sin esto la pata contrafactual se sobreescribiría con 0 en
+  // base —un cero donde debe haber hueco— y el baseline se perdería, tirando
+  // en silencio todo lo acumulado. El desglose por política llega con la
+  // contabilidad multi-política.
+  const shadow = state.shadowSnapshot
+    || state.shadowSnapshots?.[state.policyVersion]
+    || null;
   if (!shadow || typeof shadow !== 'object') return null;
   return {
     realizedPnlUsd: num(shadow.realizedPnlUsd),

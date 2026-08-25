@@ -835,6 +835,10 @@ const evaluateMethods = {
       centerDeadZone,
       forceReason,
       forceRebalance,
+      // Gates de ejecucion que la ruta viva aplica DESPUES de la decision. Sin
+      // ellos la sombra mediria "esta politica si nada la frenara".
+      minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
+      minDwellMs: this.minDwellMs,
     });
     if (shadowResults.length) {
       const snapshotDue = !nextState.lastShadowSnapshotAt
@@ -842,22 +846,39 @@ const evaluateMethods = {
       if (snapshotDue) {
         nextState.shadowSnapshots = buildShadowSnapshots(shadowResults);
         nextState.lastShadowSnapshotAt = Date.now();
-        // El formato singular ya se migro dentro de `shadowSnapshots`. Se borra
-        // en el mismo momento en que se escribe el nuevo (nunca antes) para que
-        // un reinicio a mitad de camino no pierda lo ya medido.
+        // El singular ya se migro dentro de `shadowSnapshots` si tenia dueno
+        // entre las sombras. Si su dueno es hoy la politica VIVA no hay ranura
+        // donde guardarlo y se descarta: se avisa para que el borrado de una
+        // medicion real deje rastro.
+        if (nextState.shadowSnapshot && !nextState.shadowSnapshots[policyVersion]) {
+          this.logger.warn?.('delta_neutral_shadow_snapshot_discarded', {
+            protectionId: activeProtection.id,
+            accountId: activeProtection.accountId,
+            reason: 'owner_is_live_policy',
+            ownerPolicyVersion: policyVersion || null,
+            discarded: nextState.shadowSnapshot,
+          });
+        }
+        // Se borran en el MISMO tick en que se escribe el formato nuevo, nunca
+        // antes: un reinicio a mitad de camino no pierde lo ya medido.
         delete nextState.shadowSnapshot;
         delete nextState.shadowPolicyState;
         delete nextState.shadowFundingSourceUsd;
       }
-      for (const shadow of shadowResults) {
-        this.logger.info?.('delta_neutral_shadow_policy', {
-          protectionId: activeProtection.id,
-          accountId: activeProtection.accountId,
-          asset: activeProtection.inferredAsset,
-          liveTargetQty: Number(metrics.targetQty),
-          liveActualQty: actualQty,
-          ...shadow.log,
-        });
+      // Mismo ritmo que el snapshot: a 2 s por tick, un log por politica y por
+      // tick serian ~86.400 lineas/dia por proteccion, y ahora se emite para
+      // TODAS las delta-neutral, no solo las net_profit.
+      if (snapshotDue) {
+        for (const shadow of shadowResults) {
+          this.logger.info?.('delta_neutral_shadow_policy', {
+            protectionId: activeProtection.id,
+            accountId: activeProtection.accountId,
+            asset: activeProtection.inferredAsset,
+            liveTargetQty: Number(metrics.targetQty),
+            liveActualQty: actualQty,
+            ...shadow.log,
+          });
+        }
       }
     }
 
