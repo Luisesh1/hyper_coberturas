@@ -87,7 +87,11 @@ test('dos pools distintos mantienen su propia tarifa: no comparten el slot0 simu
   const afterB = await harness.beforeSwap({ key: keyB, params: swapParams, timestamp: medida });
 
   assert.notEqual(afterA.fee, afterB.fee, 'el pool B no debió heredar el movimiento de tarifa del pool A');
-  assert.equal(afterB.fee, LP_FEE_OVERRIDE_FLAG | BASE_FEE, 'el pool B, sin su propio salto de tick, sigue en BASE_FEE');
+  assert.equal(
+    afterB.fee,
+    LP_FEE_OVERRIDE_FLAG | (BASE_FEE - MAX_FEE_STEP),
+    'el pool B, sin volatilidad, inicia su descenso independiente hacia FLOOR_FEE',
+  );
 });
 
 test('la primera llamada de un pool fija BASE_FEE con el flag de override activo', async () => {

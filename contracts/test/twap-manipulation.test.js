@@ -131,7 +131,11 @@ test('un tick manipulado y revertido dentro del mismo bloque no aporta absolutam
   const state = await harness.readPoolState(key);
   assert.equal(state.tickCumulative, 0n, 'la manipulación intra-bloque aporta exactamente cero');
   assert.equal(state.lastTwapTick, 0n);
-  assert.equal(fee, BASE_FEE, 'un movimiento de 1.000.000 de ticks revertido en el bloque no mueve la tarifa');
+  assert.equal(
+    fee,
+    BASE_FEE - MAX_FEE_STEP,
+    'el ataque no añade volatilidad: sólo sigue el descenso normal de un pool calmo',
+  );
 });
 
 test('el mismo movimiento de 1000 ticks: sostenido toda la ventana sube la tarifa, mantenido un bloque no la mueve', async () => {
@@ -159,7 +163,11 @@ test('el mismo movimiento de 1000 ticks: sostenido toda la ventana sube la tarif
   // dos puntos devuelve aquí 3500, igual que el movimiento real. Si va detrás
   // de las aserciones sobre el struct, un fallo de ponderación queda enmascarado
   // por el primer campo que no cuadre.
-  assert.equal(feeManipulado, BASE_FEE, 'la manipulación no llega ni a cruzar VOL_THRESHOLD');
+  assert.equal(
+    feeManipulado,
+    BASE_FEE - MAX_FEE_STEP,
+    'la manipulación no cruza VOL_THRESHOLD y el pool sigue su descenso de calma',
+  );
   assert.equal(feeSostenido, BASE_FEE + MAX_FEE_STEP, 'el movimiento real satura el paso de tarifa');
 
   const estadoSostenido = await harness.readPoolState(sostenido);
@@ -255,8 +263,9 @@ test('un tick extremo presente sólo en el instante del primer swap no infla la 
 
   // El abuso que cierra este test: un LP inicializa el pool en el extremo del
   // rango, es el primer swapper, y a partir de ahí el pool se queda
-  // absolutamente quieto en el tick 0. No hay ni un tick de volatilidad real en
-  // toda la secuencia, así que la tarifa no debe moverse de BASE_FEE ni una vez.
+  // absolutamente quieto en el tick 0. No hay volatilidad real: la tarifa no
+  // puede inflarse sobre BASE_FEE; la caída posterior es el régimen de calma
+  // deliberado que lleva al suelo nominal.
   //
   // OJO con el alcance de este test: cubre el caso de duración CERO, el que era
   // gratis. El caso de duración no nula lo acota MAX_TICK_MOVE, y tiene sus
@@ -276,7 +285,9 @@ test('un tick extremo presente sólo en el instante del primer swap no infla la 
   // valor entraba en shortEwma/longEwma, que son estado persistente: la
   // excursión sobrevivía a la ventana que la originó y drenaba al ritmo de
   // LONG_ALPHA_BPS. MAX_FEE_STEP sólo acotaba cada peldaño, no la suma.
-  assert.deepEqual(tarifas, Array(10).fill(BASE_FEE), 'sin volatilidad real la tarifa no se mueve de BASE_FEE');
+  assert.equal(tarifas[0], BASE_FEE, 'la primera referencia no altera la tarifa');
+  assert.ok(tarifas.every((fee) => fee <= BASE_FEE), 'sin volatilidad real no hay tarifa inflada');
+  assert.equal(tarifas.at(-1), 500n, 'la calma sostenida converge al suelo nominal');
 
   // La referencia sí queda fijada al cerrar la primera ventana, con el TWAP
   // real de esa ventana (0, el tick donde estuvo el pool), no con el extremo.
@@ -333,8 +344,10 @@ test('MAX_TICK_MOVE iguala el efecto de un salto de 887.272 ticks al de uno de 1
   assert.deepEqual(intermedio, deLaCota, 'un salto de 35.491 ticks no puede valer más que la cota');
   assert.deepEqual(extremo, deLaCota, 'un salto de 887.272 ticks tampoco');
   // El pico queda en 4020 en vez de 5500: sigue habiendo reacción —debe haberla,
-  // un movimiento así merece tarifa alta— pero acotada y con drenaje corto.
-  assert.deepEqual(deLaCota, [3500n, 4000n, 4020n, 3520n, 3045n, 3000n, 3000n, 3000n, 3000n, 3000n]);
+  // un movimiento así merece tarifa alta— pero acotada. Al drenar la señal el
+  // nuevo régimen de calma continúa hacia FLOOR_FEE, no se queda artificialmente
+  // detenido en BASE_FEE.
+  assert.deepEqual(deLaCota, [3500n, 4000n, 4020n, 3520n, 3045n, 2545n, 2045n, 1545n, 1045n, 545n]);
 });
 
 test('un movimiento de MAX_TICK_MOVE ya exige CAP_FEE, así que la cota no recorta la primera reacción', async () => {

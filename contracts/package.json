@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "compile": "node scripts/compile.js",
-    "test": "node --test test/*.test.js"
+    "test:properties": "node --test test/hook-properties.test.js",
+    "test": "npm run test:properties && node --test test/*.test.js"
   },
   "devDependencies": {
     "@ethereumjs/common": "10.1.3",
