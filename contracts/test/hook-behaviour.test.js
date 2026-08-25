@@ -110,11 +110,12 @@ test('una llamada antes de UPDATE_INTERVAL no modifica la tarifa ni adelanta el 
   });
   assert.equal(second.fee, first.fee);
 
-  // Prueba de que el estado de referencia (lastTick) no se adelantó durante
-  // la llamada sub-intervalo: si lo hubiera hecho, el tick "actual" (900, sin
-  // cambios desde la llamada anterior) coincidiría con la referencia y no
-  // habría movimiento. El contrato real sigue comparando contra el tick
-  // original (100), así que tras cruzar el intervalo la tarifa SÍ debe subir.
+  // Prueba de que la llamada sub-intervalo observó pero no cerró la ventana:
+  // si hubiera movido el checkpoint, la ventana siguiente arrancaría con la
+  // referencia ya en 900 y no habría movimiento que medir. Como el checkpoint
+  // sigue en la referencia original (100) y el TWAP de la ventana [1000, 1301]
+  // sale 900 (el tick 900 rigió 299 de esos 301 s), al cruzar el intervalo la
+  // tarifa SÍ debe subir, y saturada contra MAX_FEE_STEP.
   const third = await harness.beforeSwap({
     key,
     params: swapParams,

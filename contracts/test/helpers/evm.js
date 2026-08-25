@@ -210,17 +210,21 @@ function encodeSlot0({ tick, sqrtPriceX96 = DEFAULT_SQRT_PRICE_X96, protocolFee 
   return setLengthLeft(bigIntToBytes(word), 32);
 }
 
-// Reproduce StateLibrary._getPoolStateSlot: keccak256(abi.encodePacked(poolId, POOLS_SLOT)),
-// donde poolId = keccak256(abi.encode(key)) tal como lo calcula _beforeSwap.
-// Cada PoolKey obtiene así su propio slot en el storage del PoolManager
-// simulado — dos pools distintos ya no comparten tarifa.
-function computePoolStateSlot(key) {
+// keccak256(abi.encode(key)), tal como lo calcula _beforeSwap para indexar
+// tanto el storage del PoolManager como su propio mapping `poolState`.
+function computePoolId(key) {
   const encodedKey = AbiCoder.defaultAbiCoder().encode(
     ['address', 'address', 'uint24', 'int24', 'address'],
     [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks],
   );
-  const poolId = keccak256(encodedKey);
-  return keccak256(concat([poolId, POOLS_SLOT]));
+  return keccak256(encodedKey);
+}
+
+// Reproduce StateLibrary._getPoolStateSlot: keccak256(abi.encodePacked(poolId, POOLS_SLOT)).
+// Cada PoolKey obtiene así su propio slot en el storage del PoolManager
+// simulado — dos pools distintos ya no comparten tarifa.
+function computePoolStateSlot(key) {
+  return keccak256(concat([computePoolId(key), POOLS_SLOT]));
 }
 
 function describeRevert(iface, returnValue) {
@@ -290,6 +294,14 @@ async function createHookHarness() {
     return permissions;
   }
 
+  // Estado interno que el hook lleva para ese pool, vía el getter público del
+  // mapping. Permite observar el acumulador del TWAP directamente, en vez de
+  // inferirlo del fee (que satura y esconde la magnitud real de la señal).
+  // Los campos se leen por nombre desde la ABI: `readPoolState(key).tickCumulative`.
+  async function readPoolState(key) {
+    return call('poolState', [computePoolId(key)]);
+  }
+
   // Llama directamente al PoolManager simulado (sin pasar por el hook), para
   // poder probar su comportamiento ante selectores desconocidos.
   async function callPoolManagerMock(rawData, { caller = createZeroAddress() } = {}) {
@@ -312,6 +324,7 @@ async function createHookHarness() {
     beforeSwap,
     readConstant,
     readHookPermissions,
+    readPoolState,
     callPoolManagerMock,
   };
 }
@@ -319,6 +332,7 @@ async function createHookHarness() {
 module.exports = {
   createHookHarness,
   getRawRuntimeBytecode,
+  computePoolId,
   computePoolStateSlot,
   HOOK_FLAG_BITS,
   ALL_HOOK_MASK,
