@@ -259,11 +259,8 @@ test('un tick extremo presente sólo en el instante del primer swap no infla la 
   // toda la secuencia, así que la tarifa no debe moverse de BASE_FEE ni una vez.
   //
   // OJO con el alcance de este test: cubre el caso de duración CERO, el que era
-  // gratis. Si el LP sostiene el tick extremo aunque sea un bloque dentro de la
-  // primera ventana, la excursión vuelve entera (medido: pico 5500 con 12 s), y
-  // eso NO está cerrado. El residuo está documentado en el reporte de la tarea;
-  // no vive aquí porque cerrarlo exige tocar la fórmula, que es decisión del
-  // dueño del producto.
+  // gratis. El caso de duración no nula lo acota MAX_TICK_MOVE, y tiene sus
+  // propios tests más abajo.
   await swapAt(harness, key, MIN_TICK, 1_000n);
 
   const tarifas = [];
@@ -307,4 +304,109 @@ test('saltarse la primera ventana sólo retrasa la reacción un UPDATE_INTERVAL,
 
   const tercera = await swapAt(harness, key, 10_000, 1_000n + WINDOW * 3n);
   assert.equal(tercera, BASE_FEE + 2n * MAX_FEE_STEP, 'y sigue escalando al ritmo de siempre');
+});
+
+// Un pool que fija su referencia en 0, da UN salto de `salto` ticks y se queda
+// ahí quieto. Devuelve la tarifa de cada una de las `ventanas` siguientes: la
+// primera mide el salto, las demás miden movimiento cero y sólo drenan el EWMA.
+async function secuenciaTrasSalto(harness, key, salto, ventanas = 10n) {
+  await swapAt(harness, key, 0, 1_000n);
+  await swapAt(harness, key, 0, 1_000n + WINDOW); // ventana 1: fija la referencia
+  const tarifas = [];
+  for (let v = 1n; v <= ventanas; v += 1n) {
+    tarifas.push(await swapAt(harness, key, salto, 1_000n + WINDOW * (v + 1n)));
+  }
+  return tarifas;
+}
+
+test('MAX_TICK_MOVE iguala el efecto de un salto de 887.272 ticks al de uno de 1.000', async () => {
+  const harness = await createHookHarness();
+
+  // Sin la cota, estas tres secuencias son distintas: el salto extremo mantiene
+  // los EWMA saturados varias ventanas más y llega a un pico de 5500 frente al
+  // de 4020 del salto de 1.000. Con la cota, las tres son idénticas: una sola
+  // ventana no puede aportar más que MAX_TICK_MOVE, venga de donde venga.
+  const deLaCota = await secuenciaTrasSalto(harness, buildPoolKey(harness.hookAddress, 1), 1_000);
+  const intermedio = await secuenciaTrasSalto(harness, buildPoolKey(harness.hookAddress, 2), 35_491);
+  const extremo = await secuenciaTrasSalto(harness, buildPoolKey(harness.hookAddress, 3), 887_272);
+
+  assert.deepEqual(intermedio, deLaCota, 'un salto de 35.491 ticks no puede valer más que la cota');
+  assert.deepEqual(extremo, deLaCota, 'un salto de 887.272 ticks tampoco');
+  // El pico queda en 4020 en vez de 5500: sigue habiendo reacción —debe haberla,
+  // un movimiento así merece tarifa alta— pero acotada y con drenaje corto.
+  assert.deepEqual(deLaCota, [3500n, 4000n, 4020n, 3520n, 3045n, 3000n, 3000n, 3000n, 3000n, 3000n]);
+});
+
+test('un movimiento de MAX_TICK_MOVE ya exige CAP_FEE, así que la cota no recorta la primera reacción', async () => {
+  const harness = await createHookHarness();
+
+  // Invariante que justifica el valor de la cota: MAX_TICK_MOVE se eligió como el
+  // movimiento a partir del cual el objetivo de tarifa YA pide CAP_FEE. Por eso
+  // acotar ahí no le quita nada a la primera reacción — sólo impide que una
+  // ventana deje los EWMA cargados para las diez siguientes.
+  //
+  // Este test se lee contra las constantes reales del contrato, así que si la
+  // Task 3 retoca VOL_THRESHOLD o FEE_PER_TICK y la cota deja de saturar, salta
+  // aquí en vez de degradar la señal en silencio.
+  const cota = await harness.readConstant('MAX_TICK_MOVE');
+  const alphaCorta = await harness.readConstant('SHORT_ALPHA_BPS');
+  const alphaLarga = await harness.readConstant('LONG_ALPHA_BPS');
+  const umbral = await harness.readConstant('VOL_THRESHOLD');
+  const porTick = await harness.readConstant('FEE_PER_TICK');
+
+  const señalMaxima = (cota * alphaCorta) / 10_000n - (cota * alphaLarga) / 10_000n;
+  const objetivo = BASE_FEE + (señalMaxima - umbral) * porTick;
+
+  assert.ok(señalMaxima > umbral, 'la cota debe superar VOL_THRESHOLD');
+  assert.ok(
+    objetivo >= CAP_FEE,
+    `una muestra de ${cota} ticks debe seguir exigiendo CAP_FEE; da ${objetivo}`,
+  );
+});
+
+test('la volatilidad sostenida sigue alcanzando CAP_FEE con la cota puesta', async () => {
+  const harness = await createHookHarness();
+  const key = buildPoolKey(harness.hookAddress);
+
+  // Contrapeso del test anterior: la cota no puede volver sordo al hook. Ante un
+  // régimen de volatilidad sostenida —el pool avanza 5.000 ticks cada ventana,
+  // muy por encima de la cota— la tarifa tiene que seguir subiendo hasta el techo.
+  await swapAt(harness, key, 0, 1_000n);
+  await swapAt(harness, key, 0, 1_000n + WINDOW);
+
+  let tarifa = BASE_FEE;
+  for (let v = 1n; v <= 7n; v += 1n) {
+    tarifa = await swapAt(harness, key, Number(v) * 5_000, 1_000n + WINDOW * (v + 1n));
+  }
+
+  assert.equal(tarifa, CAP_FEE, 'la volatilidad real y sostenida sigue llevando la tarifa al techo');
+});
+
+test('con la cota, sostener el tick extremo un bloque ya no devuelve la excursión completa', async () => {
+  const harness = await createHookHarness();
+
+  // Barrido sobre cuánto sostiene el abusador MIN_TICK dentro de la primera
+  // ventana. Antes de la cota, 12 s bastaban para devolver la excursión entera
+  // (pico 5500), igual que sostenerlo los 300 s. Con la cota, todas las
+  // duraciones no nulas colapsan a la misma respuesta acotada.
+  const picos = [];
+  const duraciones = [1n, 12n, 60n, 150n, 300n];
+  for (const [indice, duracion] of duraciones.entries()) {
+    const key = buildPoolKey(harness.hookAddress, indice + 1);
+    await swapAt(harness, key, MIN_TICK, 1_000n);
+    if (duracion < WINDOW) {
+      await swapAt(harness, key, MIN_TICK, 1_000n + duracion);
+      await swapAt(harness, key, 0, 1_000n + WINDOW);
+    } else {
+      await swapAt(harness, key, MIN_TICK, 1_000n + WINDOW);
+    }
+    const tarifas = [];
+    for (let v = 1n; v <= 10n; v += 1n) {
+      tarifas.push(await swapAt(harness, key, 0, 1_000n + WINDOW * (v + 1n)));
+    }
+    picos.push(tarifas.reduce((maximo, valor) => (valor > maximo ? valor : maximo)));
+  }
+
+  assert.deepEqual(picos, [4020n, 4020n, 4020n, 4020n, 4020n], 'ninguna duración supera el pico acotado');
+  assert.ok(picos.every((p) => p < 5_500n), 'la excursión completa de 5500 ya no es alcanzable');
 });

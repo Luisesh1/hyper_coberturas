@@ -30,6 +30,17 @@ contract VolatilityShieldV1 is BaseHook {
     uint64 public constant VOL_THRESHOLD = 12;
     uint64 public constant FEE_PER_TICK = 15;
 
+    /// @notice Tope de lo que una sola ventana puede aportar a la señal.
+    /// @dev 1000 ticks son un movimiento de precio del +10,5% en una ventana de
+    /// 5 minutos. El valor no es arbitrario: a partir de 960 ticks el objetivo de
+    /// tarifa YA pide CAP_FEE, así que acotar en 1000 no le quita nada a la
+    /// primera reacción —deja margen sobre esos 960 para que el redondeo entero
+    /// de los EWMA nunca lo desature— y sólo impide que una única ventana deje
+    /// los EWMA cargados durante las diez siguientes. Sin este tope, un salto de
+    /// 887.272 ticks (MIN_TICK) valía mucho más que uno de 1.000 pese a que
+    /// ambos ya exigen el techo, y esa diferencia era pura persistencia.
+    uint24 public constant MAX_TICK_MOVE = 1000;
+
     struct PoolState {
         // Acumulador del oráculo: suma de tick * segundos que ese tick estuvo
         // vigente. int56 es el mismo ancho que usa el oráculo de Uniswap v3 y
@@ -147,6 +158,16 @@ contract VolatilityShieldV1 is BaseHook {
                     uint24 absoluteMove = twapTick >= state.lastTwapTick
                         ? uint24(twapTick - state.lastTwapTick)
                         : uint24(state.lastTwapTick - twapTick);
+
+                    // Una ventana no puede aportar más que MAX_TICK_MOVE. Por
+                    // encima de esa cota el objetivo ya está pegado a CAP_FEE, así
+                    // que lo único que añadía el exceso era dejar los EWMA
+                    // cargados durante ventanas posteriores: ahí es donde un
+                    // abusador convertía un tick absurdo en tarifa inflada durante
+                    // ~45 min. Cuesta reacción ante un pico REAL y transitorio muy
+                    // grande (drena antes); no cuesta nada ante volatilidad
+                    // sostenida, que sigue llegando al techo ventana a ventana.
+                    if (absoluteMove > MAX_TICK_MOVE) absoluteMove = MAX_TICK_MOVE;
 
                     state.shortEwma = _ewma(state.shortEwma, absoluteMove, SHORT_ALPHA_BPS);
                     state.longEwma = _ewma(state.longEwma, absoluteMove, LONG_ALPHA_BPS);
