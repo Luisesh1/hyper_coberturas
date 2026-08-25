@@ -90,6 +90,42 @@ multiplicadores de zona alternativos, hoy `false` por defecto): queda subsumido
 por la comparación entre políticas y mantenerlo sería un segundo camino de
 sombra con distinta semántica.
 
+#### Qué gates replica la sombra, y cuáles no
+
+Que la política viva y su sombra compartan la función de decisión no basta: la
+ruta viva aplica además una cadena de gates **después** de decidir. Una sombra
+que sólo corra la función pura no mide "esta política corriendo viva" sino
+"esta política si nada la frenara" — rebalancearía de más, pagaría más
+comisiones y luciría un tracking que la versión real nunca consigue.
+
+Se replican los dos que más frenan en la práctica:
+
+- **`min_dwell_active`** (`config.deltaNeutral.minDwellMs`, 60 s). En vivo lo
+  escribe la ejecución al llenarse una orden; cada sombra lleva el suyo dentro
+  de su `shadowPolicyState`.
+- **`within_cost_aware_band`** (`deriveDecisionBandUsd`). Sólo aplica a la
+  sombra `legacy_zones_v1`, **y eso es fiel al vivo, no un olvido**: bajo
+  net_profit la `rebalanceDecision` se sintetiza de la propia decisión de la
+  política, y su equivalente económico ya vive dentro de `decideNetProfitV1`
+  (gate `min_notional`). Aplicársela además a las sombras net_profit las
+  volvería más conservadoras que su propia versión viva.
+
+Quedan **fuera** por decisión de producto: preflight, margen insuficiente,
+spread demasiado ancho, `confidenceBlocksIncrease` y `risk_paused`. Ninguno
+frena a las sombras, así que **la serie de una política en sombra es un límite
+superior de lo que esa política habría conseguido**, no una estimación
+insesgada. La Task 6 debe etiquetarlo en la gráfica: un punto simulado no es
+directamente comparable con uno medido sin esta advertencia.
+
+#### Funding
+
+A cada sombra se le imputa el funding real **escalado por su propia posición**
+(`shadowQty / liveActualQty`), porque el funding se devenga sobre el notional.
+Imputarlo íntegro favorecía de forma determinista a la política que cubre menos
+— siempre `legacy_zones_v1`, el incumbente que esta comparación existe para
+poner a prueba. Con la posición viva en cero el factor es 0: no hay tasa
+observada que repartir y no se inventa una.
+
 ### 3. Persistencia
 
 `strategy_state_json.shadowSnapshot` (singular) pasa a

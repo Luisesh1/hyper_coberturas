@@ -6,9 +6,11 @@ const {
   resolveLivePolicy,
   resolveShadowPolicies,
   readPersistedShadow,
+  scaleFundingToShadow,
   runShadowPolicies,
   buildShadowSnapshots,
 } = require('../src/services/protected-pool-delta-neutral/shadow-policies');
+const { estimateExecutionCostUsd } = require('../src/services/protected-pool-delta-neutral.helpers');
 const {
   ProtectedPoolDeltaNeutralService,
 } = require('../src/services/protected-pool-delta-neutral.service');
@@ -239,8 +241,11 @@ test('el formato nuevo por politica gana sobre el singular', () => {
 });
 
 test('buildShadowSnapshots indexa por politica con su policyState y su funding', () => {
+  // `liveActualQty: 2` con las sombras arrancando en frio desde ahi: el factor
+  // de reparto del funding vale 1 y el importe llega integro.
   const snapshots = buildShadowSnapshots(runShadowPolicies(shadowArgs({
     livePolicy: V2, declaredPolicy: V2, zoneState: 'edge', realFundingUsd: -3,
+    liveActualQty: 2, deltaQty: 2,
   })));
 
   assert.deepEqual(Object.keys(snapshots).sort(), [LEGACY, V1].sort());
@@ -254,29 +259,236 @@ test('buildShadowSnapshots indexa por politica con su policyState y su funding',
 
 // ── Coste del tick: cero llamadas de red ──────────────────────────────────
 
-test('evaluar las sombras no hace ninguna llamada de red ni consulta de base', () => {
-  // Dobles que EXPLOTAN si alguien los toca. Si una sombra necesitara precio,
-  // posicion o estado persistido propio, tendria que pasar por aqui.
-  const prohibido = (nombre) => new Proxy({}, {
-    get: () => { throw new Error(`la sombra no puede usar ${nombre}`); },
-  });
+// Este test intercepta las primitivas REALES de red. Un intento anterior
+// pasaba dobles como claves extra del objeto de entrada, pero
+// `runShadowPolicies` destructura una lista fija y esas claves no se leen
+// nunca: eran objetos muertos que no podian explotar aunque el modulo hiciera
+// IO. Aqui se sabotea `fetch`, `http/https.request` y `net.Socket.connect`,
+// que es por donde tendria que salir cualquier llamada de verdad.
+test('evaluar las sombras no hace ninguna llamada de red', () => {
+  const http = require('node:http');
+  const https = require('node:https');
+  const net = require('node:net');
+  const original = {
+    fetch: global.fetch,
+    httpRequest: http.request,
+    httpsRequest: https.request,
+    connect: net.Socket.prototype.connect,
+  };
+  const intentos = [];
+  const sabotear = (nombre) => () => {
+    intentos.push(nombre);
+    throw new Error(`la sombra no puede usar ${nombre}`);
+  };
+  global.fetch = sabotear('fetch');
+  http.request = sabotear('http.request');
+  https.request = sabotear('https.request');
+  net.Socket.prototype.connect = sabotear('net.connect');
 
-  const resultados = runShadowPolicies(shadowArgs({
-    livePolicy: LEGACY,
-    hl: prohibido('hyperliquid'),
-    repo: prohibido('repositorio'),
-    tradingService: prohibido('tradingService'),
-    hyperliquidStreamService: prohibido('stream'),
-  }));
+  let resultados;
+  try {
+    resultados = runShadowPolicies(shadowArgs({ livePolicy: LEGACY }));
+  } finally {
+    global.fetch = original.fetch;
+    http.request = original.httpRequest;
+    https.request = original.httpsRequest;
+    net.Socket.prototype.connect = original.connect;
+  }
 
+  assert.deepEqual(intentos, [], `la sombra intento salir a red: ${intentos.join(', ')}`);
   assert.equal(resultados.length, 2);
+  // Sincrono por construccion: si algo hiciera IO habria que esperarlo, asi que
+  // devolver un array y no una promesa es la prueba estructural de que no lo hay.
+  assert.ok(!(resultados instanceof Promise), 'runShadowPolicies no puede ser asincrona');
   // Y el resultado no contiene nada ejecutable: solo estado y diagnostico.
   for (const result of resultados) {
     assert.deepEqual(
       Object.keys(result).sort(),
-      ['decision', 'fundingSourceUsd', 'gate', 'log', 'policyState', 'policyVersion', 'state', 'targetQty'],
+      ['decision', 'fundingSourceUsd', 'gate', 'log', 'minNotionalUsd', 'policyState', 'policyVersion', 'state', 'targetQty'],
     );
   }
+});
+
+// ── Gates de ejecucion: la sombra simula la politica CORRIENDO VIVA ────────
+// Sin estos gates la sombra mediria "esta politica si nada la frenara":
+// rebalancearia de mas, pagaria menos comisiones de las que deberia lucir y
+// mostraria un tracking que la version real nunca consigue.
+
+test('el dwell minimo frena a la sombra igual que a la ruta viva', () => {
+  const now = 1_800_000_000_000;
+  const base = shadowArgs({
+    now, livePolicy: V1, declaredPolicy: V1, zoneState: 'edge',
+    deltaQty: 2, liveActualQty: 1, minDwellMs: 60_000,
+    strategyState: {
+      shadowSnapshots: {
+        [LEGACY]: {
+          actualQty: 1,
+          averageEntryPrice: 2500,
+          // Fill simulado hace 10 s: dentro del dwell de 60 s.
+          shadowPolicyState: { minDwellUntil: now + 50_000 },
+        },
+      },
+    },
+  });
+  const frenada = runShadowPolicies(base).find((r) => r.policyVersion === LEGACY);
+
+  assert.equal(frenada.gate, 'min_dwell_active');
+  assert.equal(frenada.decision, 'hold');
+  assert.equal(frenada.state.actualQty, 1, 'con el dwell activo la posicion no se mueve');
+  assert.equal(frenada.state.executionFeesUsd, 0, 'ni paga comisiones');
+});
+
+test('tras llenar, la sombra se pone su propio dwell', () => {
+  const now = 1_800_000_000_000;
+  const llena = runShadowPolicies(shadowArgs({
+    now, livePolicy: V1, declaredPolicy: V1, zoneState: 'edge',
+    deltaQty: 2, liveActualQty: 0, minDwellMs: 60_000,
+  })).find((r) => r.policyVersion === LEGACY);
+
+  assert.equal(llena.decision, 'rebalance');
+  assert.equal(llena.policyState.minDwellUntil, now + 60_000);
+});
+
+test('la banda de coste frena a la sombra legacy cuando la correccion no la paga', () => {
+  const now = 1_800_000_000_000;
+  // Deriva de $20: la politica legacy dispara (su piso esta en $1) pero la
+  // banda de coste de la ejecucion exige $50.
+  const base = shadowArgs({
+    now, livePolicy: V1, declaredPolicy: V1, zoneState: 'edge',
+    deltaQty: 1.008, liveActualQty: 1,
+    minRebalanceNotionalUsd: 1, urgentMinNotionalUsd: 1,
+    strategyState: {
+      shadowSnapshots: {
+        [LEGACY]: { actualQty: 1, averageEntryPrice: 2500, shadowPolicyState: {} },
+      },
+    },
+  });
+
+  const frenada = runShadowPolicies({ ...base, minOrderNotionalUsd: 50 })
+    .find((r) => r.policyVersion === LEGACY);
+  assert.equal(frenada.gate, 'within_cost_aware_band');
+  assert.equal(frenada.state.actualQty, 1);
+
+  // Control: con la banda por debajo de la deriva, la misma entrada si ejecuta.
+  const pasa = runShadowPolicies({ ...base, minOrderNotionalUsd: 5 })
+    .find((r) => r.policyVersion === LEGACY);
+  assert.equal(pasa.decision, 'rebalance');
+  assert.ok(pasa.state.actualQty > 1);
+});
+
+test('un forzado del orquestador atraviesa la banda de coste, como en vivo', () => {
+  const base = shadowArgs({
+    livePolicy: V1, declaredPolicy: V1, zoneState: 'edge',
+    deltaQty: 1.008, liveActualQty: 1, minOrderNotionalUsd: 50,
+    minRebalanceNotionalUsd: 1, urgentMinNotionalUsd: 1,
+    strategyState: {
+      shadowSnapshots: {
+        [LEGACY]: { actualQty: 1, averageEntryPrice: 2500, shadowPolicyState: {} },
+      },
+    },
+  });
+  const forzada = runShadowPolicies({ ...base, forceRebalance: true })
+    .find((r) => r.policyVersion === LEGACY);
+
+  assert.notEqual(forzada.gate, 'within_cost_aware_band');
+  assert.equal(forzada.decision, 'rebalance');
+});
+
+// La asimetria es DELIBERADA y fiel a la ruta viva, no un olvido: bajo
+// net_profit la `rebalanceDecision` se sintetiza de la propia politica y su
+// equivalente economico ya vive dentro de `decideNetProfitV1`. Aplicarles
+// ademas la banda legacy las volveria mas conservadoras que su version viva.
+test('la banda de coste NO se aplica a las sombras net_profit', () => {
+  const resultados = runShadowPolicies(shadowArgs({
+    livePolicy: LEGACY, declaredPolicy: LEGACY, zoneState: 'edge',
+    deltaQty: 1, liveActualQty: 0, minOrderNotionalUsd: 1_000_000,
+    lpValueUsd: 100_000,
+  }));
+
+  for (const policy of [V1, V2]) {
+    const result = resultados.find((r) => r.policyVersion === policy);
+    assert.notEqual(result.gate, 'within_cost_aware_band', `${policy} no debe sufrir la banda legacy`);
+    assert.equal(result.decision, 'rebalance');
+  }
+});
+
+// ── Funding proporcional a la posicion contrafactual ──────────────────────
+
+test('el funding se reparte por tamano de posicion, no integro a cada sombra', () => {
+  // Sombra legacy con la mitad de posicion que la viva: le toca la mitad del
+  // funding. Imputarle el integro premia sistematicamente a quien cubre menos,
+  // que es siempre legacy — el incumbente que esto viene a poner a prueba.
+  const [legacyShadow] = runShadowPolicies(shadowArgs({
+    livePolicy: V1, declaredPolicy: V1, zoneState: 'edge',
+    deltaQty: 1, liveActualQty: 2, realFundingUsd: -10,
+    strategyState: {
+      shadowSnapshots: {
+        [LEGACY]: {
+          actualQty: 1, averageEntryPrice: 2500,
+          shadowPolicyState: {}, shadowFundingSourceUsd: 0,
+        },
+      },
+    },
+  })).filter((r) => r.policyVersion === LEGACY);
+
+  assert.equal(legacyShadow.state.fundingUsd, -5);
+});
+
+test('sin posicion viva no hay funding observado que repartir', () => {
+  assert.equal(scaleFundingToShadow(-10, 1, 0), 0);
+  assert.equal(scaleFundingToShadow(-10, 1, null), 0);
+  // Y el reparto es proporcional en ambos sentidos.
+  assert.equal(scaleFundingToShadow(-10, 2, 1), -20);
+  assert.equal(scaleFundingToShadow(0, 5, 1), 0);
+});
+
+// ── El estimador de coste que reporta la politica ─────────────────────────
+
+test('la sombra net_profit reporta el MISMO piso que su version viva', () => {
+  // El piso es `max(11, 3*costeEsperado)`. La sombra estimaba el coste con
+  // 0.0005 mientras la ruta viva usa `estimateExecutionCostUsd` (0.00025), asi
+  // que la misma politica REPORTABA dos umbrales distintos segun donde
+  // corriera. Con error de $25.000 los dos estimadores se separan de verdad
+  // (18,75 contra 37,50) y este test se cae si alguien revierte el arreglo.
+  const errorUsd = 10 * 2500;
+  const esperado = Math.max(11, 3 * estimateExecutionCostUsd(10, 2500));
+  assert.equal(esperado, 18.75);
+
+  const [v1] = runShadowPolicies(shadowArgs({
+    livePolicy: LEGACY, declaredPolicy: LEGACY, zoneState: 'edge',
+    deltaQty: 10, liveActualQty: 0, lpValueUsd: 10_000_000,
+  })).filter((r) => r.policyVersion === V1);
+
+  assert.equal(v1.minNotionalUsd, esperado);
+  assert.notEqual(v1.minNotionalUsd, Math.max(11, 3 * errorUsd * 0.0005));
+});
+
+// ── Puente motor -> contabilidad ──────────────────────────────────────────
+// No habia ningun test que uniera lo que el motor ESCRIBE con lo que la
+// contabilidad LEE: los de `lp-orchestrator-accounting.test.js` usan fixtures
+// fabricadas, asi que el camino podia quedar muerto sin que nada se pusiera
+// rojo. Al pasar de `shadowSnapshot` a `shadowSnapshots` eso es exactamente lo
+// que ocurrio.
+
+test('la contabilidad sigue leyendo la sombra despues del cambio de formato', () => {
+  const accounting = require('../src/services/lp-orchestrator/accounting');
+  const protection = {
+    strategyState: {
+      policyVersion: V1,
+      shadowSnapshots: {
+        [V1]: { realizedPnlUsd: 12, unrealizedPnlUsd: -3, fundingUsd: 1, executionFeesUsd: 2, slippageUsd: 0.5 },
+      },
+    },
+  };
+
+  const leido = accounting.readShadowStateFromProtection(protection);
+  assert.ok(leido, 'sin esto la pata contrafactual se sobreescribe con 0 en base');
+  assert.equal(leido.realizedPnlUsd, 12);
+  assert.equal(leido.unrealizedPnlUsd, -3);
+
+  // Y el baseline sobrevive: es lo que impide que el acumulado se descarte.
+  const { shadowBaseline } = accounting.applyShadowStateDelta({}, null, leido);
+  assert.ok(shadowBaseline, 'un baseline nulo tira el acumulado de toda la ventana');
 });
 
 // ── Integracion contra el motor real ──────────────────────────────────────

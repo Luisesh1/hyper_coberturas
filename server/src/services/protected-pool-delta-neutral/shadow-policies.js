@@ -19,7 +19,10 @@ const {
   simulateShadowFill,
 } = require('../net-profit-policy.service');
 const { decideLegacyZones } = require('../legacy-zones-policy.service');
-const { estimateExecutionCostUsd } = require('../protected-pool-delta-neutral.helpers');
+const {
+  estimateExecutionCostUsd,
+  resolveMinOrderNotionalUsd,
+} = require('../protected-pool-delta-neutral.helpers');
 
 const ALL_POLICIES = [LEGACY_ZONES_V1, NET_PROFIT_V1, NET_PROFIT_V2];
 const NET_PROFIT_POLICIES = [NET_PROFIT_V1, NET_PROFIT_V2];
@@ -140,6 +143,81 @@ function decideShadow(policy, {
 }
 
 /**
+ * Gates de EJECUCION que la ruta viva aplica DESPUES de que la politica dice
+ * "rebalancea". Sin ellos la sombra no simula "esta politica corriendo viva"
+ * sino "esta politica si nada la frenara": rebalancearia de mas, pagaria mas
+ * comisiones y luciria un tracking que la version real nunca consigue.
+ *
+ * Se replican dos, los que mas frenan en la practica:
+ *
+ * - `min_dwell_active`: tras un fill hay un dwell minimo. En vivo lo escribe la
+ *   ejecucion (`execution.js`); aqui cada politica lleva el suyo en su
+ *   policyState.
+ * - `within_cost_aware_band`: la banda de coste de `deriveDecisionBandUsd`.
+ *   OJO con la asimetria, que es fiel al vivo y no un olvido: en la ruta viva
+ *   esta banda solo gatea a legacy. Bajo net_profit, `rebalanceDecision` se
+ *   sintetiza de la propia decision de la politica y su equivalente economico
+ *   ya vive dentro de `decideNetProfitV1` (gate `min_notional`). Aplicarsela
+ *   ademas a las sombras net_profit las volveria mas conservadoras que su
+ *   version viva, que es exactamente el sesgo que esto viene a quitar.
+ *
+ * FUERA de alcance por decision de producto: preflight, margen, spread,
+ * `confidenceBlocksIncrease` y `risk_paused`. Las sombras no los sufren, asi
+ * que siguen siendo un limite SUPERIOR de lo que su politica habria logrado.
+ */
+function resolveExecutionGate({
+  policy,
+  decision,
+  previous,
+  policyState,
+  currentPrice,
+  now,
+  minOrderNotionalUsd,
+  forceReason,
+  forceRebalance,
+}) {
+  if (decision.decision !== 'rebalance') return null;
+
+  const minDwellUntil = Number(policyState?.minDwellUntil);
+  if (Number.isFinite(minDwellUntil) && now < minDwellUntil) return 'min_dwell_active';
+
+  // Un forzado del orquestador y el cruce de borde se saltan la banda, igual
+  // que en `resolveRebalanceDecision`.
+  if (forceRebalance || forceReason === 'boundary_cross') return null;
+  if (policy !== LEGACY_ZONES_V1) return null;
+
+  const targetQty = Number(decision.targetQty);
+  const driftUsd = Math.abs(targetQty - previous.actualQty) * currentPrice;
+  const holdBandUsd = Math.max(
+    minOrderNotionalUsd,
+    estimateExecutionCostUsd(targetQty, currentPrice) * 3,
+  );
+  return driftUsd < holdBandUsd ? 'within_cost_aware_band' : null;
+}
+
+/**
+ * Reparte el funding real entre las posiciones contrafactuales.
+ *
+ * El funding se cobra sobre el NOTIONAL, asi que imputarle a una sombra el
+ * funding integro de la posicion viva la premia o la castiga por un tamano que
+ * no tiene. Con el hedge legacy sub-cubriendo en centro (0.6x) el error es
+ * determinista y siempre a favor de quien cubre menos — justo el incumbente
+ * que esta comparativa existe para poner a prueba.
+ *
+ * Con la posicion viva en cero no hay funding observado que repartir: el
+ * factor es 0. Es una subestimacion conocida (una sombra con posicion abierta
+ * mientras la viva esta plana si pagaria funding), pero sin tasa observada la
+ * alternativa seria inventarla.
+ */
+function scaleFundingToShadow(fundingDeltaUsd, shadowQty, liveActualQty) {
+  const delta = Number(fundingDeltaUsd);
+  if (!Number.isFinite(delta) || delta === 0) return 0;
+  const live = Math.abs(Number(liveActualQty));
+  if (!Number.isFinite(live) || live <= 0) return 0;
+  return delta * (Math.abs(Number(shadowQty)) / live);
+}
+
+/**
  * Simula un tick de cada politica no viva y devuelve su estado actualizado.
  *
  * @returns {Array<{policyVersion, decision, gate, targetQty, state, policyState, fundingSourceUsd, log}>}
@@ -171,6 +249,8 @@ function runShadowPolicies({
   centerDeadZone = null,
   forceReason = null,
   forceRebalance = false,
+  minOrderNotionalUsd = resolveMinOrderNotionalUsd(null),
+  minDwellMs = 0,
 } = {}) {
   const delta = Number(deltaQty);
   const price = Number(currentPrice);
@@ -206,7 +286,19 @@ function runShadowPolicies({
       forceReason,
       forceRebalance,
     });
-    const filledTargetQty = decision.decision === 'rebalance'
+    const executionGate = resolveExecutionGate({
+      policy,
+      decision,
+      previous,
+      policyState,
+      currentPrice: price,
+      now,
+      minOrderNotionalUsd,
+      forceReason,
+      forceRebalance,
+    });
+    const fills = decision.decision === 'rebalance' && !executionGate;
+    const filledTargetQty = fills
       ? previous.actualQty + Number(decision.adjustQty || 0)
       : previous.actualQty;
     const nextFundingSourceUsd = Number(realFundingUsd);
@@ -216,15 +308,30 @@ function runShadowPolicies({
       ask: Number(ask ?? price),
       feeRate: Number(feeRate) || FALLBACK_TAKER_FEE_RATE,
       now,
-      fundingUsd: nextFundingSourceUsd - fundingSourceUsd,
+      // El funding se devenga sobre la posicion que se TENIA en la ventana, no
+      // sobre la que se acaba de abrir.
+      fundingUsd: scaleFundingToShadow(
+        nextFundingSourceUsd - fundingSourceUsd,
+        previous.actualQty,
+        liveActualQty,
+      ),
     });
+    // Un gate de ejecucion no deja avanzar el estado de la politica: en vivo
+    // tampoco se consume cooldown ni presupuesto por una orden que no se mando.
+    const nextPolicyState = fills ? (decision.nextState || policyState) : policyState;
     const entry = {
       policyVersion: policy,
-      decision: decision.decision,
-      gate: decision.gate || null,
+      decision: executionGate ? 'hold' : decision.decision,
+      gate: executionGate || decision.gate || null,
       targetQty: Number(decision.targetQty),
+      // Piso economico que la politica REPORTA. Se expone para que la
+      // comparativa pueda mostrar con que umbral decidio cada una y para que un
+      // test pueda fijar el estimador de coste que lo alimenta.
+      minNotionalUsd: decision.minNotionalUsd ?? null,
       state,
-      policyState: decision.nextState || policyState,
+      policyState: fills
+        ? { ...nextPolicyState, minDwellUntil: now + Number(minDwellMs || 0) }
+        : nextPolicyState,
       fundingSourceUsd: Number.isFinite(nextFundingSourceUsd) ? nextFundingSourceUsd : fundingSourceUsd,
     };
     memory?.set(key, {
@@ -276,6 +383,8 @@ module.exports = {
   resolveLivePolicy,
   resolveShadowPolicies,
   readPersistedShadow,
+  resolveExecutionGate,
+  scaleFundingToShadow,
   runShadowPolicies,
   buildShadowSnapshots,
 };
