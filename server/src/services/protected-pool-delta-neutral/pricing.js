@@ -110,24 +110,15 @@ const pricingMethods = {
       targetHedgeRatio: targetHedgeRatioApplied,
     });
 
-    // Shadow: target propuesto con los multiplicadores alternativos. No se
-    // ejecuta; sirve para medir cuánto residual dejaría de existir si se
-    // adoptara (ver _logShadowHedge en el loop de evaluación).
-    const shadowRatioApplied = isNetProfitPolicy ? 1 : baseRatio * this._zoneMultiplier(zoneState, this.shadowZoneHedgeMultipliers);
-    const shadowTwin = (this.shadowMode || isNetProfitPolicy)
-      ? buildSyntheticLpState(snapshot, {
-        volatilePriceUsd: marketContext?.hlPrice,
-        targetHedgeRatio: shadowRatioApplied,
-      })
-      : null;
-
+    // Ya no se construye un gemelo de sombra. Cada politica no viva deriva su
+    // propio target en `shadow-policies.js` a partir de `deltaQty`, que es
+    // independiente del ratio (`targetQty = deltaQty * ratio` dentro de
+    // `buildSyntheticLpState`): el segundo gemelo por tick solo reproducia esa
+    // multiplicacion.
     return {
       ...tunedTwin,
       zoneState,
       targetHedgeRatioApplied,
-      shadowTargetHedgeRatioApplied: shadowRatioApplied,
-      shadowTargetQty: shadowTwin?.targetQty ?? null,
-      shadowPolicyVersion: isNetProfitPolicy ? policyVersion : null,
     };
   },
 

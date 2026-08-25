@@ -180,14 +180,6 @@ const config = {
     zoneHedgeMultiplierCenter: parseFloat(process.env.DELTA_NEUTRAL_ZONE_MULT_CENTER) || 0.6,
     zoneHedgeMultiplierTransition: parseFloat(process.env.DELTA_NEUTRAL_ZONE_MULT_TRANSITION) || 0.85,
     zoneHedgeMultiplierEdge: parseFloat(process.env.DELTA_NEUTRAL_ZONE_MULT_EDGE) || 1,
-    // Shadow mode: cuando true, el motor computa el target del hedge con los
-    // multiplicadores "propuestos" (shadow*) y loguea el residual proyectado,
-    // pero EJECUTA con los multiplicadores vigentes. Permite validar un cambio
-    // de cobertura sobre plata real sin ejecutarlo hasta confirmar la mejora.
-    shadowMode: process.env.DELTA_NEUTRAL_SHADOW_MODE === 'true',
-    shadowZoneHedgeMultiplierCenter: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_CENTER) || 1,
-    shadowZoneHedgeMultiplierTransition: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_TRANSITION) || 1,
-    shadowZoneHedgeMultiplierEdge: parseFloat(process.env.DELTA_NEUTRAL_SHADOW_ZONE_MULT_EDGE) || 1,
     // Allowlist de hooks v4 auditados: addresses (coma-separadas) de hooks que
     // devuelven deltas (normalmente UNSAFE) pero que se revisaron a mano y se
     // habilitan para cobertura. Default vacío = sólo se cubren pools cuya
