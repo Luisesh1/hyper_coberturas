@@ -93,19 +93,12 @@ class ProtectedPoolDeltaNeutralService {
     // arriba para inyectarlo en vez de leer `config` en el punto de uso.
     this.centerDeadZonePct = deps.centerDeadZonePct
       ?? config.deltaNeutral.centerDeadZonePct;
-    // Multiplicadores del hedge ratio por zona (configurables). El "vigente" es
-    // el que se ejecuta; el "shadow" es el propuesto que se loguea sin ejecutar
-    // cuando `shadowMode` está activo. Ver config.deltaNeutral.zoneHedge*.
+    // Multiplicadores del hedge ratio por zona (configurables). Los usa la
+    // politica legacy, este viva o en sombra. Ver config.deltaNeutral.zoneHedge*.
     this.zoneHedgeMultipliers = deps.zoneHedgeMultipliers || {
       center: config.deltaNeutral.zoneHedgeMultiplierCenter,
       transition: config.deltaNeutral.zoneHedgeMultiplierTransition,
       edge: config.deltaNeutral.zoneHedgeMultiplierEdge,
-    };
-    this.shadowMode = deps.shadowMode != null ? deps.shadowMode : config.deltaNeutral.shadowMode;
-    this.shadowZoneHedgeMultipliers = deps.shadowZoneHedgeMultipliers || {
-      center: config.deltaNeutral.shadowZoneHedgeMultiplierCenter,
-      transition: config.deltaNeutral.shadowZoneHedgeMultiplierTransition,
-      edge: config.deltaNeutral.shadowZoneHedgeMultiplierEdge,
     };
     this.bandTightening = deps.bandTightening || {
       intervalTightenFactor: config.deltaNeutral.bandIntervalTightenFactor,
@@ -129,6 +122,9 @@ class ProtectedPoolDeltaNeutralService {
     // tras una ejecución, no de forma continua.
     this.userFillsCache = new Map();
     this.evaluationLocks = new Map();
+    // Estado de las politicas en sombra, indexado por `protectionId:politica`.
+    // Vive en memoria durante la sesion y se rehidrata desde
+    // `strategy_state_json.shadowSnapshots` al arrancar.
     this.shadowStates = new Map();
     this.hybridStats = {
       marketTicks: 0,

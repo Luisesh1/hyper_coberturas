@@ -32,9 +32,7 @@ const {
 const {
   NET_PROFIT_V1,
   NET_PROFIT_V2,
-  createShadowState,
   decideNetProfitV1,
-  simulateShadowFill,
 } = require('../net-profit-policy.service');
 const {
   NEAR_ZERO_TARGET_QTY,
@@ -42,6 +40,12 @@ const {
   decideLegacyZones,
   isCenterDeadZoneBlocking,
 } = require('../legacy-zones-policy.service');
+const {
+  SHADOW_SNAPSHOT_THROTTLE_MS,
+  resolveLivePolicy,
+  runShadowPolicies,
+  buildShadowSnapshots,
+} = require('./shadow-policies');
 
 const evaluateMethods = {
   async _evaluateProtectionUnlocked(protection, options = {}) {
@@ -331,7 +335,11 @@ const evaluateMethods = {
       lastDeltaQty: metrics.deltaQty,
       lastGamma: metrics.gamma,
       lastTargetQty: metrics.targetQty,
-      lastShadowTargetQty: metrics.shadowTargetQty ?? null,
+      // Ya no hay UN target de sombra: hay uno por politica no viva, y cada uno
+      // vive en `shadowSnapshots`. Se anula en vez de dejarse de escribir para
+      // que una fila migrada no arrastre para siempre el ultimo valor del
+      // mecanismo viejo como si siguiera midiendose.
+      lastShadowTargetQty: null,
       lastActualQty: actualQty,
       monitorHeartbeatAt: Date.now(),
       coverageRatioPct: Number(metrics.targetQty) > NEAR_ZERO_TARGET_QTY
@@ -720,75 +728,6 @@ const evaluateMethods = {
       tickUpper: rawSnapshot.tickUpper ?? null,
     });
 
-    // Shadow mode: registra el residual sin cubrir hoy (deltaQty − targetQty)
-    // vs el que dejaría el target propuesto (deltaQty − shadowTargetQty), sin
-    // ejecutar. Permite cuantificar la mejora de cobertura sobre plata real
-    // antes de adoptar los nuevos multiplicadores. Ver KPIs del plan.
-    if ((this.shadowMode || [NET_PROFIT_V1, NET_PROFIT_V2].includes(metrics.shadowPolicyVersion)) && metrics.shadowTargetQty != null) {
-      // El estado vive en memoria durante la sesión: no consulta HL ni muta el
-      // hedge real, y nunca se usa para reconciliar. Pero al arrancar hay que
-      // recuperarlo del snapshot persistido: sin esto cada reinicio ponía a
-      // cero el PnL, las comisiones y el funding acumulados de la sombra y 30 s
-      // después sobrescribía el snapshot bueno. La evidencia que justifica
-      // promover la política no puede depender de cuánto lleva el proceso vivo.
-      const previousShadow = this.shadowStates.get(activeProtection.id)
-        || (strategyState.shadowSnapshot
-          ? createShadowState(strategyState.shadowSnapshot)
-          : createShadowState({ actualQty, markPrice: currentPrice }));
-      const shadowDecision = [NET_PROFIT_V1, NET_PROFIT_V2].includes(metrics.shadowPolicyVersion)
-        ? decideNetProfitV1({
-          policyVersion: metrics.shadowPolicyVersion,
-          deltaQty: Number(metrics.deltaQty),
-          actualQty: previousShadow.actualQty,
-          currentPrice,
-          rangeLowerPrice: activeProtection.rangeLowerPrice,
-          rangeUpperPrice: activeProtection.rangeUpperPrice,
-          lpValueUsd: Number(metrics.poolValueUsd),
-          expectedCostUsd: Math.max(0.0005 * currentPrice * Math.abs(Number(metrics.deltaQty) - previousShadow.actualQty), 0),
-          state: nextState.shadowPolicyState || {},
-        })
-        : { decision: 'rebalance', targetQty: Number(metrics.shadowTargetQty), adjustQty: Number(metrics.shadowTargetQty) - previousShadow.actualQty };
-      const shadowTargetQty = shadowDecision.decision === 'rebalance'
-        ? previousShadow.actualQty + Number(shadowDecision.adjustQty || 0)
-        : previousShadow.actualQty;
-      const shadow = simulateShadowFill(previousShadow, {
-        targetQty: shadowTargetQty,
-        bid: Number(liveMarket?.bbo?.bid ?? currentPrice),
-        ask: Number(liveMarket?.bbo?.ask ?? currentPrice),
-        feeRate: Number(liveMarket?.assetContext?.takerFeeRate) || 0.0005,
-        fundingUsd: Number(position?.cumFunding?.sinceOpen) - Number(strategyState.shadowFundingSourceUsd || 0),
-      });
-      this.shadowStates.set(activeProtection.id, shadow);
-      nextState.shadowPolicyState = shadowDecision.nextState || nextState.shadowPolicyState || {};
-      if (!nextState.lastShadowSnapshotAt || Date.now() - Number(nextState.lastShadowSnapshotAt) >= 30_000) {
-        nextState.shadowSnapshot = shadow;
-        nextState.lastShadowSnapshotAt = Date.now();
-      }
-      nextState.shadowFundingSourceUsd = Number(position?.cumFunding?.sinceOpen) || 0;
-      const liveResidualUsd = (Number(metrics.deltaQty) - Number(metrics.targetQty)) * currentPrice;
-      const shadowResidualUsd = (Number(metrics.deltaQty) - Number(metrics.shadowTargetQty)) * currentPrice;
-      this.logger.info?.('delta_neutral_shadow_hedge', {
-        protectionId: activeProtection.id,
-        accountId: activeProtection.accountId,
-        asset: activeProtection.inferredAsset,
-        zoneState: metrics.zoneState,
-        deltaQty: Number(metrics.deltaQty),
-        targetQty: Number(metrics.targetQty),
-        shadowTargetQty: Number(metrics.shadowTargetQty),
-        shadowDecision: shadowDecision.decision,
-        shadowGate: shadowDecision.gate || null,
-        actualQty,
-        liveResidualUsd,
-        shadowResidualUsd,
-        residualReductionUsd: Math.abs(liveResidualUsd) - Math.abs(shadowResidualUsd),
-        currentPrice,
-        shadowExecutionFeesUsd: shadow.executionFeesUsd,
-        shadowSlippageUsd: shadow.slippageUsd,
-        shadowSlippageEwmaBps: shadow.slippageEwmaBps,
-        shadowFundingUsd: shadow.fundingUsd,
-        shadowMtmUsd: shadow.realizedPnlUsd + shadow.unrealizedPnlUsd,
-      });
-    }
     const minDwellActive = Number.isFinite(Number(nextState.minDwellUntil)) && Date.now() < Number(nextState.minDwellUntil);
     const confidenceBlocksIncrease = nextState.modelConfidence === 'low' && driftQty > 0;
     // Porcentaje del valor VIVO del LP, no un absoluto congelado al crear la
@@ -856,6 +795,71 @@ const evaluateMethods = {
     const shouldRebalance = isNetProfitLive
       ? !centerDeadZoneBlocks && netProfitDecision.decision === 'rebalance'
       : legacyDecision.decision === 'rebalance';
+
+    // Comparativa de coberturas: la viva ya decidio arriba y es la unica que
+    // ejecuta; aqui se simulan las OTRAS DOS sobre los mismos datos de este
+    // tick. `runShadowPolicies` es aritmetica pura mas un Map en memoria: no
+    // anade ni una llamada de red ni una consulta de base al tick de 2 s.
+    const shadowResults = runShadowPolicies({
+      protectionId: activeProtection.id,
+      memory: this.shadowStates,
+      strategyState,
+      declaredPolicy: policyVersion || null,
+      livePolicy: resolveLivePolicy({
+        policyVersion,
+        executionIntent: activeProtection.strategyState?.executionIntent || strategyState.executionIntent,
+      }),
+      liveActualQty: actualQty,
+      deltaQty: Number(metrics.deltaQty),
+      currentPrice,
+      bid: Number(liveMarket?.bbo?.bid ?? currentPrice),
+      ask: Number(liveMarket?.bbo?.ask ?? currentPrice),
+      feeRate: Number(liveMarket?.assetContext?.takerFeeRate) || 0.0005,
+      realFundingUsd: Number(position?.cumFunding?.sinceOpen),
+      now: Date.now(),
+      rangeLowerPrice: activeProtection.rangeLowerPrice,
+      rangeUpperPrice: activeProtection.rangeUpperPrice,
+      lpValueUsd: Number(metrics.poolValueUsd),
+      // La sombra legacy recibe delta + zona + multiplicadores y DERIVA su
+      // target. No se le pasa `metrics.targetQty` a proposito: bajo net_profit
+      // ese target va al 100% del delta y sin escalones de zona, asi que la
+      // sombra legacy simularia a la politica viva y la comparativa saldria
+      // empatada por construccion.
+      targetHedgeRatio: activeProtection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO,
+      zoneState,
+      multipliers: this.zoneHedgeMultipliers,
+      effectiveBandPct: band.effectiveBandPct,
+      intervalSec: band.intervalSec,
+      minRebalanceNotionalUsd,
+      urgentMinNotionalUsd,
+      centerDeadZone,
+      forceReason,
+      forceRebalance,
+    });
+    if (shadowResults.length) {
+      const snapshotDue = !nextState.lastShadowSnapshotAt
+        || Date.now() - Number(nextState.lastShadowSnapshotAt) >= SHADOW_SNAPSHOT_THROTTLE_MS;
+      if (snapshotDue) {
+        nextState.shadowSnapshots = buildShadowSnapshots(shadowResults);
+        nextState.lastShadowSnapshotAt = Date.now();
+        // El formato singular ya se migro dentro de `shadowSnapshots`. Se borra
+        // en el mismo momento en que se escribe el nuevo (nunca antes) para que
+        // un reinicio a mitad de camino no pierda lo ya medido.
+        delete nextState.shadowSnapshot;
+        delete nextState.shadowPolicyState;
+        delete nextState.shadowFundingSourceUsd;
+      }
+      for (const shadow of shadowResults) {
+        this.logger.info?.('delta_neutral_shadow_policy', {
+          protectionId: activeProtection.id,
+          accountId: activeProtection.accountId,
+          asset: activeProtection.inferredAsset,
+          liveTargetQty: Number(metrics.targetQty),
+          liveActualQty: actualQty,
+          ...shadow.log,
+        });
+      }
+    }
 
     if (centerDeadZoneBlocks) {
       this.logger.info?.('delta_neutral_rebalance_skipped_center_dead_zone', {
