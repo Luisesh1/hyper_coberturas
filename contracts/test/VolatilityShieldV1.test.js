@@ -4,6 +4,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const solc = require('solc');
+const { createHookHarness, LP_FEE_OVERRIDE_FLAG } = require('./helpers/evm.js');
 
 const root = path.resolve(__dirname, '..');
 const sourcePath = path.join(root, 'src', 'VolatilityShieldV1.sol');
@@ -41,15 +42,48 @@ test('Volatility Shield V1 compila y declara únicamente beforeSwap', () => {
   assert.ok(artifact.evm.bytecode.object.length > 0, 'debe producir bytecode reproducible');
 });
 
-test('Volatility Shield V1 conserva los límites y guardrails de tarifa', () => {
-  const source = fs.readFileSync(sourcePath, 'utf8');
-  assert.match(source, /FLOOR_FEE\s*=\s*500/);
-  assert.match(source, /BASE_FEE\s*=\s*3000/);
-  assert.match(source, /CAP_FEE\s*=\s*6000/);
-  assert.match(source, /UPDATE_INTERVAL\s*=\s*5 minutes/);
-  assert.match(source, /MAX_FEE_STEP\s*=\s*500/);
-  assert.match(source, /BeforeSwapDelta\.wrap\(0\)/);
-  assert.match(source, /LPFeeLibrary\.OVERRIDE_FEE_FLAG\s*\|\s*fee/);
+test('Volatility Shield V1 conserva los límites y guardrails de tarifa', async () => {
+  const harness = await createHookHarness();
+
+  assert.equal(await harness.readConstant('FLOOR_FEE'), 500n);
+  assert.equal(await harness.readConstant('BASE_FEE'), 3000n);
+  assert.equal(await harness.readConstant('CAP_FEE'), 6000n);
+  assert.equal(await harness.readConstant('UPDATE_INTERVAL'), 5n * 60n);
+  assert.equal(await harness.readConstant('MAX_FEE_STEP'), 500n);
+
+  const key = {
+    currency0: '0x0000000000000000000000000000000000000001',
+    currency1: '0x0000000000000000000000000000000000000002',
+    fee: 0x800000,
+    tickSpacing: 60,
+    hooks: harness.hookAddress,
+  };
+  const params = { zeroForOne: true, amountSpecified: -1_000_000n, sqrtPriceLimitX96: 0n };
+
+  let timestamp = 1_000n;
+  let tick = 0;
+  await harness.setSlot0({ key, tick });
+  const first = await harness.beforeSwap({ key, params, timestamp });
+  assert.equal(first.delta, 0n, 'el hook no debe modificar el accounting del swap');
+  assert.equal(first.fee & LP_FEE_OVERRIDE_FLAG, LP_FEE_OVERRIDE_FLAG, 'debe activar el flag de override de fee');
+
+  // De BASE_FEE (3000) a CAP_FEE (6000) en pasos de MAX_FEE_STEP (500) son 6
+  // intervalos con la señal de volatilidad saturada; encadenamos 7 saltos de
+  // tick grandes para tocar el techo de verdad y confirmar que un intervalo
+  // adicional con la misma señal no lo perfora.
+  let last = first;
+  for (let i = 0; i < 7; i += 1) {
+    const previousRawFee = last.fee - LP_FEE_OVERRIDE_FLAG;
+    tick += 500_000;
+    timestamp += 5n * 60n + 1n;
+    await harness.setSlot0({ key, tick });
+    last = await harness.beforeSwap({ key, params, timestamp });
+    const rawFee = last.fee - LP_FEE_OVERRIDE_FLAG;
+    assert.ok(rawFee >= 500n && rawFee <= 6000n, 'la tarifa debe permanecer en [FLOOR_FEE, CAP_FEE]');
+    assert.ok(rawFee - previousRawFee <= 500n, 'la tarifa no puede subir más de MAX_FEE_STEP por intervalo');
+  }
+
+  assert.equal(last.fee - LP_FEE_OVERRIDE_FLAG, 6000n, 'tras suficientes intervalos saturados debe tocar exactamente CAP_FEE');
 });
 
 test('el compilador genera un artefacto reproducible para registrar el hook', () => {

@@ -11,7 +11,8 @@ import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-/// @notice Fee dinámica conservadora para pools V4, basada únicamente en ticks on-chain.
+/// @notice Fee dinámica conservadora para pools V4, basada únicamente en el TWAP
+///         de ticks del propio pool: sin oráculos externos, volumen ni profundidad.
 /// @dev Debe desplegarse mediante CREATE2 en una dirección con el flag BEFORE_SWAP.
 contract VolatilityShieldV1 is BaseHook {
     using StateLibrary for IPoolManager;
@@ -30,7 +31,14 @@ contract VolatilityShieldV1 is BaseHook {
     uint64 public constant FEE_PER_TICK = 15;
 
     struct PoolState {
-        int24 lastTick;
+        // Acumulador del oráculo: suma de tick * segundos que ese tick estuvo
+        // vigente. int56 es el mismo ancho que usa el oráculo de Uniswap v3 y
+        // le sobra: |tick| <= 887272 (MAX_TICK) por 2^32 segundos de vida del
+        // pool da 3,8e15, frente a los 3,6e16 que cabe en int56.
+        int56 tickCumulative;
+        int56 checkpointTickCumulative;
+        int24 lastTwapTick;
+        uint32 lastObservedAt;
         uint32 lastUpdatedAt;
         uint64 shortEwma;
         uint64 longEwma;
@@ -72,30 +80,60 @@ contract VolatilityShieldV1 is BaseHook {
         uint24 fee = state.fee;
 
         if (!state.initialized) {
+            // Primer swap del pool: no hay ventana previa que promediar. El
+            // acumulador abre en cero y la referencia se siembra con el tick
+            // actual, el único dato que existe. Es un punto instantáneo, pero
+            // sólo interviene en la comparación de la primera ventana.
             state.initialized = true;
-            state.lastTick = tick;
+            state.lastTwapTick = tick;
+            state.lastObservedAt = uint32(block.timestamp);
             state.lastUpdatedAt = uint32(block.timestamp);
             fee = BASE_FEE;
             state.fee = fee;
-        } else if (block.timestamp >= uint256(state.lastUpdatedAt) + UPDATE_INTERVAL) {
-            uint24 absoluteMove = tick >= state.lastTick
-                ? uint24(tick - state.lastTick)
-                : uint24(state.lastTick - tick);
+        } else {
+            // Acumulación al estilo del oráculo de Uniswap v3: el tick que se
+            // lee aquí es el que dejó el swap anterior, así que ha regido
+            // durante todo el hueco hasta ahora y se pondera por ese hueco.
+            // Dos swaps en el mismo bloque dan hueco cero: ahí muere la
+            // manipulación intra-bloque, porque su tick pesa literalmente nada.
+            uint256 sinceObservation = block.timestamp - state.lastObservedAt;
+            if (sinceObservation > 0) {
+                state.tickCumulative += int56(tick) * int56(uint56(sinceObservation));
+                state.lastObservedAt = uint32(block.timestamp);
+            }
 
-            state.shortEwma = _ewma(state.shortEwma, absoluteMove, SHORT_ALPHA_BPS);
-            state.longEwma = _ewma(state.longEwma, absoluteMove, LONG_ALPHA_BPS);
+            if (block.timestamp >= uint256(state.lastUpdatedAt) + UPDATE_INTERVAL) {
+                // elapsed >= UPDATE_INTERVAL por la condición de arriba, así que
+                // la división nunca ve un divisor cero.
+                int56 elapsed = int56(uint56(block.timestamp - state.lastUpdatedAt));
+                int56 windowCumulative = state.tickCumulative - state.checkpointTickCumulative;
+                int56 twap = windowCumulative / elapsed;
+                // La división con signo trunca hacia cero: redondear hacia abajo
+                // da a un pool en ticks negativos el mismo trato que a su reflejo
+                // en positivos, igual que hace OracleLibrary.consult de Uniswap.
+                if (windowCumulative < 0 && windowCumulative % elapsed != 0) twap -= 1;
+                int24 twapTick = int24(twap);
 
-            uint64 signal = state.shortEwma > state.longEwma
-                ? state.shortEwma - state.longEwma
-                : 0;
-            uint256 target = BASE_FEE;
-            if (signal > VOL_THRESHOLD) target += uint256(signal - VOL_THRESHOLD) * FEE_PER_TICK;
-            if (target > CAP_FEE) target = CAP_FEE;
+                uint24 absoluteMove = twapTick >= state.lastTwapTick
+                    ? uint24(twapTick - state.lastTwapTick)
+                    : uint24(state.lastTwapTick - twapTick);
 
-            fee = _stepToward(fee, uint24(target));
-            state.lastTick = tick;
-            state.lastUpdatedAt = uint32(block.timestamp);
-            state.fee = fee;
+                state.shortEwma = _ewma(state.shortEwma, absoluteMove, SHORT_ALPHA_BPS);
+                state.longEwma = _ewma(state.longEwma, absoluteMove, LONG_ALPHA_BPS);
+
+                uint64 signal = state.shortEwma > state.longEwma
+                    ? state.shortEwma - state.longEwma
+                    : 0;
+                uint256 target = BASE_FEE;
+                if (signal > VOL_THRESHOLD) target += uint256(signal - VOL_THRESHOLD) * FEE_PER_TICK;
+                if (target > CAP_FEE) target = CAP_FEE;
+
+                fee = _stepToward(fee, uint24(target));
+                state.lastTwapTick = twapTick;
+                state.checkpointTickCumulative = state.tickCumulative;
+                state.lastUpdatedAt = uint32(block.timestamp);
+                state.fee = fee;
+            }
         }
 
         // ZERO_DELTA: el hook no modifica el accounting de los swaps.
