@@ -74,10 +74,17 @@ test('dos pools distintos mantienen su propia tarifa: no comparten el slot0 simu
   await harness.beforeSwap({ key: keyA, params: swapParams, timestamp: 1_000n });
   await harness.beforeSwap({ key: keyB, params: swapParams, timestamp: 1_000n });
 
+  // Cada pool gasta una primera ventana en fijar su referencia de TWAP; hasta
+  // que no cierra, ninguno mueve tarifa (ver twap-manipulation.test.js).
+  const referencia = 1_000n + UPDATE_INTERVAL_SECONDS;
+  await harness.beforeSwap({ key: keyA, params: swapParams, timestamp: referencia });
+  await harness.beforeSwap({ key: keyB, params: swapParams, timestamp: referencia });
+
   // Solo el pool A sufre un salto de tick grande tras el intervalo.
   await harness.setSlot0({ key: keyA, tick: 900_000 });
-  const afterA = await harness.beforeSwap({ key: keyA, params: swapParams, timestamp: 1_000n + UPDATE_INTERVAL_SECONDS + 1n });
-  const afterB = await harness.beforeSwap({ key: keyB, params: swapParams, timestamp: 1_000n + UPDATE_INTERVAL_SECONDS + 1n });
+  const medida = referencia + UPDATE_INTERVAL_SECONDS + 1n;
+  const afterA = await harness.beforeSwap({ key: keyA, params: swapParams, timestamp: medida });
+  const afterB = await harness.beforeSwap({ key: keyB, params: swapParams, timestamp: medida });
 
   assert.notEqual(afterA.fee, afterB.fee, 'el pool B no debió heredar el movimiento de tarifa del pool A');
   assert.equal(afterB.fee, LP_FEE_OVERRIDE_FLAG | BASE_FEE, 'el pool B, sin su propio salto de tick, sigue en BASE_FEE');
@@ -98,7 +105,12 @@ test('una llamada antes de UPDATE_INTERVAL no modifica la tarifa ni adelanta el 
   const key = buildPoolKey(harness.hookAddress);
 
   await harness.setSlot0({ key, tick: 100 });
-  const first = await harness.beforeSwap({ key, params: swapParams, timestamp: 1_000n });
+  await harness.beforeSwap({ key, params: swapParams, timestamp: 1_000n });
+
+  // Primera ventana: sólo fija la referencia del TWAP (100, el tick donde el
+  // pool estuvo de verdad). A partir de aquí ya se puede medir movimiento.
+  const referencia = 1_000n + UPDATE_INTERVAL_SECONDS;
+  const first = await harness.beforeSwap({ key, params: swapParams, timestamp: referencia });
 
   // Movimiento de tick grande, pero todavía dentro del mismo UPDATE_INTERVAL:
   // no debe afectar la tarifa vigente.
@@ -106,20 +118,27 @@ test('una llamada antes de UPDATE_INTERVAL no modifica la tarifa ni adelanta el 
   const second = await harness.beforeSwap({
     key,
     params: swapParams,
-    timestamp: 1_000n + UPDATE_INTERVAL_SECONDS - 1n,
+    timestamp: referencia + UPDATE_INTERVAL_SECONDS - 1n,
   });
   assert.equal(second.fee, first.fee);
 
   // Prueba de que la llamada sub-intervalo observó pero no cerró la ventana:
   // si hubiera movido el checkpoint, la ventana siguiente arrancaría con la
   // referencia ya en 900 y no habría movimiento que medir. Como el checkpoint
-  // sigue en la referencia original (100) y el TWAP de la ventana [1000, 1301]
-  // sale 900 (el tick 900 rigió 299 de esos 301 s), al cruzar el intervalo la
-  // tarifa SÍ debe subir, y saturada contra MAX_FEE_STEP.
+  // sigue en la referencia original (100), al cruzar el intervalo la tarifa SÍ
+  // debe subir, saturada contra MAX_FEE_STEP.
+  //
+  // El TWAP de esa ventana sale exactamente 900, y conviene ser preciso sobre
+  // por qué: por la convención del contrato, la observación sub-intervalo lee
+  // 900 y se lo acredita a los 299 s anteriores, y la del cierre le acredita
+  // los 2 s restantes (900*299 + 900*2 sobre 301 s). Se le acreditan los 301 s
+  // completos, no 299. El arnés mueve slot0 sin swap de por medio y el hook no
+  // puede saber en qué instante se movió el precio; en un pool real ese cambio
+  // de tick habría sido un swap, y por tanto una observación.
   const third = await harness.beforeSwap({
     key,
     params: swapParams,
-    timestamp: 1_000n + UPDATE_INTERVAL_SECONDS + 1n,
+    timestamp: referencia + UPDATE_INTERVAL_SECONDS + 1n,
   });
   const secondRawFee = second.fee - LP_FEE_OVERRIDE_FLAG;
   const thirdRawFee = third.fee - LP_FEE_OVERRIDE_FLAG;
@@ -165,14 +184,18 @@ test('tras UPDATE_INTERVAL la tarifa puede moverse, pero nunca más de MAX_FEE_S
   const key = buildPoolKey(harness.hookAddress);
 
   await harness.setSlot0({ key, tick: 0 });
-  const first = await harness.beforeSwap({ key, params: swapParams, timestamp: 1_000n });
+  await harness.beforeSwap({ key, params: swapParams, timestamp: 1_000n });
+
+  // Primera ventana: sólo fija la referencia del TWAP, no mueve tarifa.
+  const referencia = 1_000n + UPDATE_INTERVAL_SECONDS;
+  const first = await harness.beforeSwap({ key, params: swapParams, timestamp: referencia });
 
   // Salto de tick enorme para forzar la saturación del paso hacia arriba.
   await harness.setSlot0({ key, tick: 5000 });
   const second = await harness.beforeSwap({
     key,
     params: swapParams,
-    timestamp: 1_000n + UPDATE_INTERVAL_SECONDS + 1n,
+    timestamp: referencia + UPDATE_INTERVAL_SECONDS + 1n,
   });
 
   const firstRawFee = first.fee - LP_FEE_OVERRIDE_FLAG;
@@ -188,11 +211,15 @@ test('los ticks negativos fluyen correctamente por el encoder de slot0 y por el 
   const first = await harness.beforeSwap({ key, params: swapParams, timestamp: 1_000n });
   assert.equal(first.fee, LP_FEE_OVERRIDE_FLAG | BASE_FEE);
 
+  // Primera ventana: fija la referencia en -1000, el TWAP real del periodo.
+  const referencia = 1_000n + UPDATE_INTERVAL_SECONDS;
+  await harness.beforeSwap({ key, params: swapParams, timestamp: referencia });
+
   await harness.setSlot0({ key, tick: -1500 });
   const second = await harness.beforeSwap({
     key,
     params: swapParams,
-    timestamp: 1_000n + UPDATE_INTERVAL_SECONDS + 1n,
+    timestamp: referencia + UPDATE_INTERVAL_SECONDS + 1n,
   });
   assert.equal(second.fee - LP_FEE_OVERRIDE_FLAG, BASE_FEE + MAX_FEE_STEP);
 });
@@ -207,9 +234,10 @@ test('la tarifa toca CAP_FEE tras suficientes intervalos saturados y nunca lo su
   let result = await harness.beforeSwap({ key, params: swapParams, timestamp });
 
   // De BASE_FEE (3000) a CAP_FEE (6000) en pasos de MAX_FEE_STEP (500) son 6
-  // intervalos; iteramos 7 para confirmar que, una vez tocado el techo, un
-  // intervalo adicional con la misma señal saturada no lo perfora.
-  for (let i = 0; i < 7; i += 1) {
+  // intervalos, más uno que se va en fijar la referencia del TWAP: iteramos 8
+  // para confirmar que, una vez tocado el techo, un intervalo adicional con la
+  // misma señal saturada no lo perfora.
+  for (let i = 0; i < 8; i += 1) {
     tick += 5000;
     timestamp += UPDATE_INTERVAL_SECONDS + 1n;
     await harness.setSlot0({ key, tick });
