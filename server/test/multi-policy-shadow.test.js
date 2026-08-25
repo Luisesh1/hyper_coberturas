@@ -412,6 +412,46 @@ test('la banda de coste NO se aplica a las sombras net_profit', () => {
   }
 });
 
+// La banda de coste tiene TRES escapes en vivo, no dos. El tercero es el
+// cierre a cero (`evaluate.js` asciende la decision a `rebalance_full` cuando
+// `forceReduceNearZero`, y el preflight lo remata con `isFullCloseReduce`).
+// Sin el, una sombra que baja a polvo por fills legitimos no puede cerrar
+// NUNCA: el drift de liquidar el residuo no supera el piso de $11, y arrastra
+// funding y latente abiertos justo en `legacy_zones_v1`.
+test('la sombra legacy cierra el residuo aunque no supere la banda de coste', () => {
+  const memory = new Map();
+  const t0 = 1_800_000_000_000;
+  const base = shadowArgs({
+    // Arranca plana: la sombra abre en t0 y de ahi baja a polvo.
+    memory, livePolicy: V1, declaredPolicy: V1, zoneState: 'edge',
+    liveActualQty: 0, intervalSec: 60, effectiveBandPct: 1,
+    minRebalanceNotionalUsd: 11, urgentMinNotionalUsd: 11, minOrderNotionalUsd: 11,
+  });
+  const tick = (now, deltaQty) => runShadowPolicies({ ...base, now, deltaQty })
+    .find((r) => r.policyVersion === LEGACY);
+
+  // El LP sale de rango: el delta se desploma y el target acaba en cero.
+  const abre = tick(t0, 1);
+  assert.equal(abre.decision, 'rebalance');
+  assert.equal(abre.state.actualQty, 1);
+
+  const baja = tick(t0 + 300_000, 0.001);
+  assert.equal(baja.decision, 'rebalance');
+  assert.ok(Math.abs(baja.state.actualQty - 0.001) < 1e-12, 'queda polvo tras el fill legitimo');
+
+  // Cerrar $2,50 de residuo no supera el piso de $11: sin el escape la sombra
+  // se queda atrapada aqui para siempre.
+  const cierra = tick(t0 + 600_000, 0);
+  assert.equal(cierra.gate, 'reduce_near_zero');
+  assert.equal(cierra.decision, 'rebalance');
+  assert.equal(cierra.state.actualQty, 0, 'el residuo tiene que quedar cerrado');
+
+  // Y sigue cerrada dos horas despues, sin reabrir ni arrastrar latente.
+  const despues = tick(t0 + 7_200_000, 0);
+  assert.equal(despues.state.actualQty, 0);
+  assert.equal(despues.state.unrealizedPnlUsd, 0);
+});
+
 // ── Funding proporcional a la posicion contrafactual ──────────────────────
 
 test('el funding se reparte por tamano de posicion, no integro a cada sombra', () => {
@@ -489,6 +529,24 @@ test('la contabilidad sigue leyendo la sombra despues del cambio de formato', ()
   // Y el baseline sobrevive: es lo que impide que el acumulado se descarte.
   const { shadowBaseline } = accounting.applyShadowStateDelta({}, null, leido);
   assert.ok(shadowBaseline, 'un baseline nulo tira el acumulado de toda la ventana');
+});
+
+test('la politica declarada se resuelve como en el motor, no solo desde el estado', () => {
+  const accounting = require('../src/services/lp-orchestrator/accounting');
+  // Fila vieja: `policy_version` vive en la COLUMNA, no en el blob de estado.
+  // El motor resuelve `protection.policyVersion || strategyState.policyVersion`,
+  // asi que escribe en `shadowSnapshots[net_profit_v1]`; leer solo el estado
+  // buscaria `shadowSnapshots[undefined]` y devolveria el cero silencioso.
+  const protection = {
+    policyVersion: V1,
+    strategyState: {
+      shadowSnapshots: { [V1]: { realizedPnlUsd: 8, unrealizedPnlUsd: 2 } },
+    },
+  };
+
+  const leido = accounting.readShadowStateFromProtection(protection);
+  assert.ok(leido, 'la columna de base tiene que contar como politica declarada');
+  assert.equal(leido.realizedPnlUsd, 8);
 });
 
 // ── Integracion contra el motor real ──────────────────────────────────────
