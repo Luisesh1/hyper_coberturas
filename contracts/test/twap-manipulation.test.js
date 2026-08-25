@@ -249,7 +249,7 @@ test('el acumulador soporta ticks negativos y redondea el TWAP hacia abajo', asy
   assert.equal(state.lastTwapTick, -2_336n);
 });
 
-test('inicializar el pool en un tick extremo no infla la tarifa: la primera ventana sólo fija la referencia', async () => {
+test('un tick extremo presente sólo en el instante del primer swap no infla la tarifa', async () => {
   const harness = await createHookHarness();
   const key = buildPoolKey(harness.hookAddress);
 
@@ -257,6 +257,13 @@ test('inicializar el pool en un tick extremo no infla la tarifa: la primera vent
   // rango, es el primer swapper, y a partir de ahí el pool se queda
   // absolutamente quieto en el tick 0. No hay ni un tick de volatilidad real en
   // toda la secuencia, así que la tarifa no debe moverse de BASE_FEE ni una vez.
+  //
+  // OJO con el alcance de este test: cubre el caso de duración CERO, el que era
+  // gratis. Si el LP sostiene el tick extremo aunque sea un bloque dentro de la
+  // primera ventana, la excursión vuelve entera (medido: pico 5500 con 12 s), y
+  // eso NO está cerrado. El residuo está documentado en el reporte de la tarea;
+  // no vive aquí porque cerrarlo exige tocar la fórmula, que es decisión del
+  // dueño del producto.
   await swapAt(harness, key, MIN_TICK, 1_000n);
 
   const tarifas = [];
