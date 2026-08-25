@@ -20,10 +20,10 @@
  *   totalNetPnlUsd         - sum/diff de todos los anteriores (ver recomputeNetPnl)
  *   lpCount                - número total de LPs creados a lo largo de la vida
  *
- * La pata `shadow*` es el mismo desglose para la cobertura **contrafactual**
- * que el motor delta-neutral simula en paralelo (política `net_profit_v1`).
- * Se acumula igual que la real —sobrevive al kill+recreate del LP— pero
- * queda FUERA de `totalNetPnlUsd`: es plata que nunca se movió.
+ * `shadowPolicies` contiene el mismo desglose para cada cobertura
+ * **contrafactual** que el motor delta-neutral simula en paralelo. Se acumula
+ * igual que la real —sobrevive al kill+recreate del LP— pero queda FUERA de
+ * `totalNetPnlUsd`: es plata que nunca se movió.
  */
 
 const DEFAULT_ACCOUNTING = Object.freeze({
@@ -51,6 +51,9 @@ const DEFAULT_ACCOUNTING = Object.freeze({
   shadowSlippageUsd: 0,
   // Derivado (ver recomputeNetPnl); no se suma al neto total.
   shadowNetPnlUsd: 0,
+  // Desglose contrafactual por policyVersion. Los campos shadow* planos se
+  // conservan únicamente para leer series históricas previas a la comparativa.
+  shadowPolicies: Object.freeze({}),
   totalNetPnlUsd: 0,
   lpCount: 0,
 });
@@ -58,6 +61,33 @@ const DEFAULT_ACCOUNTING = Object.freeze({
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeShadowPolicyAccounting(accounting) {
+  const base = accounting || {};
+  const normalized = {
+    realizedPnlUsd: num(base.realizedPnlUsd),
+    unrealizedPnlUsd: num(base.unrealizedPnlUsd),
+    fundingUsd: num(base.fundingUsd),
+    executionFeesUsd: num(base.executionFeesUsd),
+    slippageUsd: num(base.slippageUsd),
+    netPnlUsd: num(base.netPnlUsd),
+  };
+  normalized.netPnlUsd = normalized.realizedPnlUsd
+    + normalized.unrealizedPnlUsd
+    + normalized.fundingUsd
+    - normalized.executionFeesUsd
+    - normalized.slippageUsd;
+  return normalized;
+}
+
+function normalizeShadowPolicies(shadowPolicies) {
+  if (!shadowPolicies || typeof shadowPolicies !== 'object' || Array.isArray(shadowPolicies)) return {};
+  return Object.fromEntries(
+    Object.entries(shadowPolicies)
+      .filter(([policyVersion, state]) => policyVersion && state && typeof state === 'object' && !Array.isArray(state))
+      .map(([policyVersion, state]) => [policyVersion, normalizeShadowPolicyAccounting(state)]),
+  );
 }
 
 function normalizeAccounting(accounting) {
@@ -79,6 +109,7 @@ function normalizeAccounting(accounting) {
     shadowExecutionFeesUsd: num(base.shadowExecutionFeesUsd),
     shadowSlippageUsd: num(base.shadowSlippageUsd),
     shadowNetPnlUsd: num(base.shadowNetPnlUsd),
+    shadowPolicies: normalizeShadowPolicies(base.shadowPolicies),
     totalNetPnlUsd: num(base.totalNetPnlUsd),
     lpCount: num(base.lpCount),
   };
@@ -120,6 +151,7 @@ function recomputeNetPnl(accounting) {
     + a.shadowFundingUsd
     - a.shadowExecutionFeesUsd
     - a.shadowSlippageUsd;
+  a.shadowPolicies = normalizeShadowPolicies(a.shadowPolicies);
   return a;
 }
 
@@ -279,6 +311,40 @@ function readShadowStateFromProtection(protection) {
 }
 
 /**
+ * Lee todos los snapshots contrafactuales producidos por el motor. La clave
+ * es la policyVersion y no la política viva: en un mismo tick hay dos
+ * políticas sombra comparables de forma independiente.
+ */
+function readShadowStatesFromProtection(protection) {
+  if (!protection) return {};
+  const state = protection.strategyState || protection.strategy_state_json || null;
+  if (!state || typeof state !== 'object') return {};
+
+  const snapshots = state.shadowSnapshots && typeof state.shadowSnapshots === 'object'
+    ? state.shadowSnapshots
+    : null;
+  if (snapshots) {
+    return Object.fromEntries(
+      Object.entries(snapshots)
+        .filter(([policyVersion, shadow]) => policyVersion && shadow && typeof shadow === 'object')
+        .map(([policyVersion, shadow]) => [policyVersion, {
+          realizedPnlUsd: num(shadow.realizedPnlUsd),
+          unrealizedPnlUsd: num(shadow.unrealizedPnlUsd),
+          fundingUsd: num(shadow.fundingUsd),
+          executionFeesUsd: num(shadow.executionFeesUsd),
+          slippageUsd: num(shadow.slippageUsd),
+        }]),
+    );
+  }
+
+  // Migración de snapshots escritos antes de la comparativa multi-política.
+  const singular = readShadowStateFromProtection(protection);
+  if (!singular) return {};
+  const policyVersion = protection.policyVersion || state.policyVersion || 'legacy_zones_v1';
+  return { [policyVersion]: singular };
+}
+
+/**
  * Espejo de `applyHedgeStateDelta` para la pata sombra: acumuladores por
  * diferencia contra el baseline, latente por asignación absoluta, y sin
  * baseline no se acumula nada (el snapshot actual pasa a ser el inicio).
@@ -312,6 +378,57 @@ function applyShadowStateDelta(currentAccounting, prevShadowState, currentShadow
   }
 
   return { accounting: recomputeNetPnl(a), shadowBaseline: currentShadowState };
+}
+
+/**
+ * Variante multi-política de applyShadowStateDelta. Cada política mantiene
+ * su propio baseline para que un kill+recreate no mezcle sus acumuladores ni
+ * duplique los resultados del primer snapshot del LP nuevo.
+ */
+function applyShadowStatesDelta(currentAccounting, prevShadowStates, currentShadowStates) {
+  const a = normalizeAccounting(currentAccounting);
+  const previous = prevShadowStates && typeof prevShadowStates === 'object' ? prevShadowStates : {};
+  const current = currentShadowStates && typeof currentShadowStates === 'object' ? currentShadowStates : {};
+  const policyVersions = new Set([
+    ...Object.keys(a.shadowPolicies),
+    ...Object.keys(previous),
+    ...Object.keys(current),
+  ]);
+  const shadowBaselines = {};
+
+  for (const policyVersion of policyVersions) {
+    const existing = normalizeShadowPolicyAccounting(a.shadowPolicies[policyVersion]);
+    const snapshot = current[policyVersion];
+    if (!snapshot || typeof snapshot !== 'object') {
+      existing.unrealizedPnlUsd = 0;
+      existing.netPnlUsd = existing.realizedPnlUsd
+        + existing.fundingUsd
+        - existing.executionFeesUsd
+        - existing.slippageUsd;
+      a.shadowPolicies[policyVersion] = existing;
+      continue;
+    }
+
+    const normalizedSnapshot = {
+      realizedPnlUsd: num(snapshot.realizedPnlUsd),
+      unrealizedPnlUsd: num(snapshot.unrealizedPnlUsd),
+      fundingUsd: num(snapshot.fundingUsd),
+      executionFeesUsd: num(snapshot.executionFeesUsd),
+      slippageUsd: num(snapshot.slippageUsd),
+    };
+    const baseline = previous[policyVersion];
+    existing.unrealizedPnlUsd = normalizedSnapshot.unrealizedPnlUsd;
+    if (baseline && typeof baseline === 'object') {
+      existing.realizedPnlUsd += normalizedSnapshot.realizedPnlUsd - num(baseline.realizedPnlUsd);
+      existing.fundingUsd += normalizedSnapshot.fundingUsd - num(baseline.fundingUsd);
+      existing.executionFeesUsd += normalizedSnapshot.executionFeesUsd - num(baseline.executionFeesUsd);
+      existing.slippageUsd += normalizedSnapshot.slippageUsd - num(baseline.slippageUsd);
+    }
+    a.shadowPolicies[policyVersion] = normalizeShadowPolicyAccounting(existing);
+    shadowBaselines[policyVersion] = normalizedSnapshot;
+  }
+
+  return { accounting: recomputeNetPnl(a), shadowBaselines };
 }
 
 /**
@@ -357,4 +474,6 @@ module.exports = {
   readHedgeStateFromProtection,
   applyShadowStateDelta,
   readShadowStateFromProtection,
+  applyShadowStatesDelta,
+  readShadowStatesFromProtection,
 };

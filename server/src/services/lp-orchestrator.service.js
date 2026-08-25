@@ -294,7 +294,7 @@ class LpOrchestratorService {
         strategyState: {
           ...orch.strategyState,
           hedgeBaseline: null,
-          shadowBaseline: null,
+          shadowBaselines: {},
           timeTracking: null,
           protectionRetry: null,
         },
@@ -941,20 +941,19 @@ class LpOrchestratorService {
             const result = this.accounting.applyHedgeStateDelta(newAccounting, prevBaseline, finalHedgeState);
             newAccounting = result.accounting;
           }
-          // Mismo flush para el contrafactual: el snapshot de sombra muere
-          // con la protección, así que lo que no se acumule ahora se pierde.
-          const finalShadowState = this.accounting.readShadowStateFromProtection(protection);
-          if (finalShadowState) {
-            const prevShadowBaseline = orch.strategyState?.shadowBaseline || null;
-            const shadowResult = this.accounting.applyShadowStateDelta(
-              newAccounting, prevShadowBaseline, finalShadowState
-            );
-            newAccounting = shadowResult.accounting;
-          }
+          // Mismo flush para cada contrafactual: sus snapshots mueren con la
+          // protección y cada política conserva un baseline independiente.
+          const finalShadowStates = this.accounting.readShadowStatesFromProtection(protection);
+          const shadowResult = this.accounting.applyShadowStatesDelta(
+            newAccounting, orch.strategyState?.shadowBaselines || {}, finalShadowStates
+          );
+          newAccounting = shadowResult.accounting;
           // Zeroize unrealized ya que el hedge se está cerrando
           const zeroResult = this.accounting.applyHedgeStateDelta(newAccounting, null, null);
           newAccounting = zeroResult.accounting;
-          newAccounting = this.accounting.applyShadowStateDelta(newAccounting, null, null).accounting;
+          // Igual para cada contrafactual: el acumulado queda, el mark del LP
+          // que acaba de cerrarse no.
+          newAccounting = this.accounting.applyShadowStatesDelta(newAccounting, {}, {}).accounting;
         } catch (err) {
           this.logger.warn('lp_orchestrator_final_hedge_flush_failed', {
             orchestratorId: orch.id, protectedPoolId: orch.activeProtectedPoolId, error: err.message,
@@ -974,7 +973,7 @@ class LpOrchestratorService {
         // attachLp empezará un hedge fresco y un nuevo conteo de tiempo en rango.
         await this.repo.updateStrategyState(userId, orchestratorId, {
           strategyState: {
-            ...orch.strategyState, hedgeBaseline: null, shadowBaseline: null, timeTracking: null,
+            ...orch.strategyState, hedgeBaseline: null, shadowBaselines: {}, timeTracking: null,
           },
         }, client);
       });
@@ -1750,7 +1749,7 @@ class LpOrchestratorService {
     //     execution fees, slippage, realized + unrealized PnL) y aplicamos
     //     la diferencia contra el baseline guardado en el orquestador.
     let newHedgeBaseline = orch.strategyState?.hedgeBaseline || null;
-    let newShadowBaseline = orch.strategyState?.shadowBaseline || null;
+    let newShadowBaselines = orch.strategyState?.shadowBaselines || {};
     if (orch.activeProtectedPoolId) {
       try {
         const protection = await this.protectedPoolRepo.getById(orch.userId, orch.activeProtectedPoolId);
@@ -1764,18 +1763,14 @@ class LpOrchestratorService {
           newAccounting = result.accounting;
           newHedgeBaseline = result.hedgeBaseline;
         }
-        // Misma protección, misma query: la pata contrafactual de
-        // `net_profit_v1`. Devuelve null si la sombra no está corriendo.
-        const currentShadowState = this.accounting.readShadowStateFromProtection(protection);
-        if (currentShadowState) {
-          const shadowResult = this.accounting.applyShadowStateDelta(
-            newAccounting,
-            newShadowBaseline,
-            currentShadowState
-          );
-          newAccounting = shadowResult.accounting;
-          newShadowBaseline = shadowResult.shadowBaseline;
-        }
+        // Misma protección, misma query: cada política no viva aporta su
+        // contrafactual y su baseline, sin mezclar P&L entre ellas.
+        const currentShadowStates = this.accounting.readShadowStatesFromProtection(protection);
+        const shadowResult = this.accounting.applyShadowStatesDelta(
+          newAccounting, newShadowBaselines, currentShadowStates
+        );
+        newAccounting = shadowResult.accounting;
+        newShadowBaselines = shadowResult.shadowBaselines;
       } catch (err) {
         this.logger.warn('lp_orchestrator_hedge_state_load_failed', {
           orchestratorId: orch.id,
@@ -1789,8 +1784,9 @@ class LpOrchestratorService {
       const result = this.accounting.applyHedgeStateDelta(newAccounting, null, null);
       newAccounting = result.accounting;
       newHedgeBaseline = null;
-      newAccounting = this.accounting.applyShadowStateDelta(newAccounting, null, null).accounting;
-      newShadowBaseline = null;
+      const shadowResult = this.accounting.applyShadowStatesDelta(newAccounting, newShadowBaselines, {});
+      newAccounting = shadowResult.accounting;
+      newShadowBaselines = {};
     }
 
     // 3) Range eval
@@ -1916,7 +1912,7 @@ class LpOrchestratorService {
         lastDecision: decision,
         lastReason: reason,
         hedgeBaseline: newHedgeBaseline,
-        shadowBaseline: newShadowBaseline,
+        shadowBaselines: newShadowBaselines,
         timeTracking: newTimeTracking,
       },
       lastEvaluation: {
