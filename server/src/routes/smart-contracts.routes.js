@@ -6,8 +6,10 @@ const { requireIntParam } = require('../middleware/parse-params');
 const repository = require('../repositories/smart-contract-registry.repository');
 const { SmartContractRegistryService, hookSafetyFor } = require('../services/smart-contract-registry.workflow.service');
 const { selectVerifiedHookVersions } = require('../services/smart-contract-registry.service');
+const { HookDeploymentService } = require('../services/hook-deployment.workflow.service');
 const {
   createContractSchema, createVersionSchema, recordDeploymentSchema, verifyVersionSchema,
+  catalogNetworkSchema, adoptSchema,
 } = require('../schemas/smart-contract-registry.schema');
 
 const router = Router();
@@ -20,6 +22,33 @@ router.get('/verified-hooks', asyncHandler(async (req, res) => {
     await repository.listVerifiedHooks(req.user.userId, network),
     { network }
   );
+  res.json({ success: true, data });
+}));
+
+// El catalogo de contratos desplegables del proyecto. Va antes de la ruta
+// generica `/` para que Express no se coma `/catalog`.
+router.get('/catalog', asyncHandler(async (req, res) => {
+  const parsed = catalogNetworkSchema.safeParse({ network: String(req.query.network || '').trim() });
+  if (!parsed.success) return res.status(400).json({ success: false, error: 'network no soportada' });
+  const data = await new HookDeploymentService().describeCatalog({ network: parsed.data.network });
+  res.json({ success: true, data });
+}));
+
+router.post('/catalog/:name/plan', validate(catalogNetworkSchema), asyncHandler(async (req, res) => {
+  const data = await new HookDeploymentService().buildDeploymentPlan({
+    name: req.params.name,
+    network: req.body.network,
+  });
+  res.json({ success: true, data });
+}));
+
+router.post('/catalog/:name/adopt', validate(adoptSchema), asyncHandler(async (req, res) => {
+  const data = await new HookDeploymentService().adopt({
+    userId: req.user.userId,
+    name: req.params.name,
+    network: req.body.network,
+    txHash: req.body.txHash || null,
+  });
   res.json({ success: true, data });
 }));
 

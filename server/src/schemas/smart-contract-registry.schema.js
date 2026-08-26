@@ -30,9 +30,24 @@ const verifyVersionSchema = z.object({
   network: z.string().min(1).max(80),
 });
 
+// Redes que cubre el catalogo de contratos desplegables del proyecto.
+const SUPPORTED_CATALOG_NETWORKS = ['ethereum', 'arbitrum', 'base', 'base-sepolia', 'optimism', 'polygon'];
+
+const catalogNetworkSchema = z.object({
+  network: z.enum(SUPPORTED_CATALOG_NETWORKS),
+});
+
+const adoptSchema = z.object({
+  network: z.enum(SUPPORTED_CATALOG_NETWORKS),
+  txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'txHash invalido').optional(),
+});
+
 module.exports = {
   createContractSchema,
   createVersionSchema,
   recordDeploymentSchema,
   verifyVersionSchema,
+  catalogNetworkSchema,
+  adoptSchema,
+  SUPPORTED_CATALOG_NETWORKS,
 };
