@@ -130,9 +130,8 @@ export default function SmartContractsPage() {
       <ProjectContractsPanel onAdopted={() => { load().catch(() => setError('No se pudo recargar el registro.')); }} />
 
       <section className={styles.flow} aria-label="Flujo de seguridad">
-        <span>Catálogo del proyecto</span><b>→</b>
-        <span>Si ya está en cadena: registrar sin gas</span><b>·</b>
-        <span>Si no: desplegar y firmar</span><b>→</b>
+        <span>Catálogo</span><b>→</b>
+        <span>Registrar sin gas · o desplegar y firmar</span><b>→</b>
         <span>Verificación on-chain</span><b>→</b>
         <span>Uso en el orquestador</span>
       </section>
