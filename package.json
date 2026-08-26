@@ -10,12 +10,14 @@
     "optimize:strategy:sqzmom": "npm --prefix server run optimize:strategy:sqzmom",
     "check:architecture": "node scripts/check-architecture-boundaries.mjs",
     "check:hotspots": "node scripts/check-hotspot-sizes.mjs",
+    "sync:artifacts": "node scripts/sync-hook-catalog.mjs",
+    "check:catalog": "node scripts/check-hook-catalog.mjs",
     "lint": "npm --prefix server run lint && npm --prefix client run lint",
     "test": "npm --prefix server run test",
     "test:client": "npm --prefix client run test",
     "test:contracts": "npm --prefix contracts run compile && npm --prefix contracts run test",
     "test:e2e": "playwright test",
-    "check": "npm run check:architecture && npm run check:hotspots && npm run lint && npm run test && npm run test:client && npm run test:contracts && npm --prefix client run build"
+    "check": "npm run check:architecture && npm run check:hotspots && npm run check:catalog && npm run lint && npm run test && npm run test:client && npm run test:contracts && npm --prefix client run build"
   },
   "engines": {
     "node": ">=20.19.0"
