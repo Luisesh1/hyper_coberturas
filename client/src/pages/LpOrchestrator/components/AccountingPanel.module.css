@@ -5,7 +5,7 @@
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--uni-border);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--uni-wash-soft);
 }
 
 .header {
@@ -88,19 +88,19 @@
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid var(--uni-border);
-  background: rgba(255, 255, 255, 0.012);
+  background: var(--uni-wash-soft);
 }
 
 .section_cyan {
-  border-left: 3px solid rgba(102, 225, 219, 0.6);
+  border-left: 3px solid rgba(var(--uni-cyan-rgb), 0.6);
 }
 
 .section_amber {
-  border-left: 3px solid rgba(255, 191, 95, 0.6);
+  border-left: 3px solid rgba(var(--uni-amber-rgb), 0.6);
 }
 
 .section_violet {
-  border-left: 3px solid rgba(176, 155, 255, 0.6);
+  border-left: 3px solid rgba(var(--uni-violet-rgb), 0.6);
 }
 
 .sectionTitle {
@@ -163,8 +163,8 @@
   gap: 10px;
   padding: 9px 14px;
   border-radius: 10px;
-  background: rgba(102, 225, 219, 0.05);
-  border: 1px solid rgba(102, 225, 219, 0.22);
+  background: rgba(var(--uni-cyan-rgb), 0.05);
+  border: 1px solid rgba(var(--uni-cyan-rgb), 0.22);
   font-size: 0.78rem;
   color: var(--uni-text-2);
 }

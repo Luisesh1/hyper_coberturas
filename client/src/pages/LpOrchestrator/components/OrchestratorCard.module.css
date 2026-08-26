@@ -5,7 +5,7 @@
   padding: 16px 18px 18px;
   border-radius: 18px;
   border: 1px solid var(--uni-border);
-  background: linear-gradient(180deg, rgba(11, 18, 26, 0.96), rgba(8, 13, 19, 0.94));
+  background: var(--uni-surface-card);
   box-shadow: var(--uni-shadow);
   position: relative;
   transition: border-color 0.18s ease, transform 0.12s ease;
@@ -16,12 +16,12 @@
 }
 
 .card.urgent {
-  border-color: rgba(255, 125, 125, 0.55);
-  box-shadow: 0 0 0 1px rgba(255, 125, 125, 0.18), var(--uni-shadow);
+  border-color: rgba(var(--uni-red-rgb), 0.55);
+  box-shadow: 0 0 0 1px rgba(var(--uni-red-rgb), 0.18), var(--uni-shadow);
 }
 
 .card.warn {
-  border-color: rgba(255, 191, 95, 0.5);
+  border-color: rgba(var(--uni-amber-rgb), 0.5);
 }
 
 /* ───────── Header ───────── */
@@ -86,10 +86,10 @@
   white-space: nowrap;
 }
 
-.badge_ok      { color: var(--uni-green); border-color: rgba(61, 217, 145, 0.4); }
-.badge_warn    { color: var(--uni-amber); border-color: rgba(255, 191, 95, 0.5); }
-.badge_urgent  { color: var(--uni-red); border-color: rgba(255, 125, 125, 0.6); animation: pulse 2s ease-in-out infinite; }
-.badge_info    { color: var(--uni-cyan); border-color: rgba(102, 225, 219, 0.4); }
+.badge_ok      { color: var(--uni-green); border-color: rgba(var(--uni-green-rgb), 0.4); }
+.badge_warn    { color: var(--uni-amber); border-color: rgba(var(--uni-amber-rgb), 0.5); }
+.badge_urgent  { color: var(--uni-red); border-color: rgba(var(--uni-red-rgb), 0.6); animation: pulse 2s ease-in-out infinite; }
+.badge_info    { color: var(--uni-cyan); border-color: rgba(var(--uni-cyan-rgb), 0.4); }
 .badge_muted   { color: var(--uni-text-3); }
 
 .issueChip {
@@ -122,24 +122,24 @@
   font-size: 0.7rem;
   font-weight: 900;
   background: currentColor;
-  color: #081019;
+  color: var(--uni-on-accent);
 }
 
 .issueChip_urgent {
   color: var(--uni-red);
-  background: rgba(255, 125, 125, 0.12);
-  box-shadow: 0 0 0 1px rgba(255, 125, 125, 0.14);
+  background: rgba(var(--uni-red-rgb), 0.12);
+  box-shadow: 0 0 0 1px rgba(var(--uni-red-rgb), 0.14);
 }
 
 .issueChip_warn {
   color: var(--uni-amber);
-  background: rgba(255, 191, 95, 0.12);
-  box-shadow: 0 0 0 1px rgba(255, 191, 95, 0.12);
+  background: rgba(var(--uni-amber-rgb), 0.12);
+  box-shadow: 0 0 0 1px rgba(var(--uni-amber-rgb), 0.12);
 }
 
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 125, 125, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(255, 125, 125, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--uni-red-rgb), 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(var(--uni-red-rgb), 0); }
 }
 
 /* ───────── Banner ───────── */
@@ -153,20 +153,20 @@
 }
 
 .banner_urgent {
-  background: rgba(255, 125, 125, 0.12);
-  border: 1px solid rgba(255, 125, 125, 0.4);
+  background: rgba(var(--uni-red-rgb), 0.12);
+  border: 1px solid rgba(var(--uni-red-rgb), 0.4);
   color: var(--uni-red);
 }
 
 .banner_warn {
-  background: rgba(255, 191, 95, 0.10);
-  border: 1px solid rgba(255, 191, 95, 0.35);
+  background: rgba(var(--uni-amber-rgb), 0.10);
+  border: 1px solid rgba(var(--uni-amber-rgb), 0.35);
   color: var(--uni-amber);
 }
 
 .banner_info {
-  background: rgba(102, 225, 219, 0.10);
-  border: 1px solid rgba(102, 225, 219, 0.35);
+  background: rgba(var(--uni-cyan-rgb), 0.10);
+  border: 1px solid rgba(var(--uni-cyan-rgb), 0.35);
   color: var(--uni-cyan);
 }
 
@@ -185,8 +185,8 @@
   gap: 14px;
   padding: 14px 16px;
   border-radius: 12px;
-  background: rgba(102, 225, 219, 0.04);
-  border: 1px dashed rgba(102, 225, 219, 0.28);
+  background: rgba(var(--uni-cyan-rgb), 0.04);
+  border: 1px dashed rgba(var(--uni-cyan-rgb), 0.28);
 }
 
 .idleIcon {
@@ -233,7 +233,7 @@
   font-family: 'JetBrains Mono', monospace;
   padding: 2px 8px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--uni-wash);
 }
 
 .delta_positive { color: var(--uni-green); }
@@ -244,7 +244,7 @@
 .strategyBlock {
   border: 1px solid var(--uni-border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--uni-wash-soft);
   overflow: hidden;
 }
 
@@ -266,7 +266,7 @@
 }
 
 .strategySummary:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--uni-wash-soft);
 }
 
 .strategyHint {
@@ -307,6 +307,14 @@
   font-family: 'JetBrains Mono', monospace;
 }
 
+/* Valor que la estrategia está moviendo ahora mismo. Antes iba en un style
+   inline que leía un token inexistente con fallback ámbar hardcodeado, así
+   que el color se quedaba fijo también en tema claro. */
+.strategyCellValueHighlight {
+  color: var(--uni-amber);
+  font-weight: 600;
+}
+
 /* ───────── Meta row ───────── */
 .meta {
   display: flex;
@@ -330,7 +338,7 @@
   height: 6px;
   border-radius: 50%;
   background: var(--uni-cyan);
-  box-shadow: 0 0 6px rgba(102, 225, 219, 0.5);
+  box-shadow: 0 0 6px rgba(var(--uni-cyan-rgb), 0.5);
   animation: dotPulse 3s ease-in-out infinite;
 }
 
@@ -368,7 +376,7 @@
 
 .metaBtnBusy {
   color: var(--uni-cyan);
-  border-color: rgba(102, 225, 219, 0.4);
+  border-color: rgba(var(--uni-cyan-rgb), 0.4);
 }
 
 /* ───────── Actions ───────── */
@@ -413,53 +421,53 @@
 }
 
 .actionPrimary {
-  background: rgba(102, 225, 219, 0.16);
-  border-color: rgba(102, 225, 219, 0.5);
+  background: rgba(var(--uni-cyan-rgb), 0.16);
+  border-color: rgba(var(--uni-cyan-rgb), 0.5);
   color: var(--uni-cyan);
 }
 
 .actionPrimary:hover:not(:disabled) {
-  background: rgba(102, 225, 219, 0.24);
+  background: rgba(var(--uni-cyan-rgb), 0.24);
 }
 
 .action_urgent {
-  background: rgba(255, 125, 125, 0.14);
-  border-color: rgba(255, 125, 125, 0.55);
+  background: rgba(var(--uni-red-rgb), 0.14);
+  border-color: rgba(var(--uni-red-rgb), 0.55);
   color: var(--uni-red);
   animation: pulse 2s ease-in-out infinite;
 }
 
 .action_warn {
-  background: rgba(255, 191, 95, 0.14);
-  border-color: rgba(255, 191, 95, 0.5);
+  background: rgba(var(--uni-amber-rgb), 0.14);
+  border-color: rgba(var(--uni-amber-rgb), 0.5);
   color: var(--uni-amber);
 }
 
 .action_info {
-  background: rgba(102, 225, 219, 0.14);
-  border-color: rgba(102, 225, 219, 0.45);
+  background: rgba(var(--uni-cyan-rgb), 0.14);
+  border-color: rgba(var(--uni-cyan-rgb), 0.45);
   color: var(--uni-cyan);
 }
 
 .killBtn {
-  border-color: rgba(255, 125, 125, 0.4);
+  border-color: rgba(var(--uni-red-rgb), 0.4);
   color: var(--uni-red);
 }
 
 .killBtn:hover:not(:disabled) {
-  background: rgba(255, 125, 125, 0.08);
+  background: rgba(var(--uni-red-rgb), 0.08);
 }
 
 .killArchiveBtn {
-  border-color: rgba(255, 125, 125, 0.55);
-  background: rgba(255, 125, 125, 0.06);
+  border-color: rgba(var(--uni-red-rgb), 0.55);
+  background: rgba(var(--uni-red-rgb), 0.06);
   color: var(--uni-red);
   font-weight: 800;
 }
 
 .killArchiveBtn:hover:not(:disabled) {
-  background: rgba(255, 125, 125, 0.14);
-  border-color: rgba(255, 125, 125, 0.75);
+  background: rgba(var(--uni-red-rgb), 0.14);
+  border-color: rgba(var(--uni-red-rgb), 0.75);
 }
 
 .archiveBtn {

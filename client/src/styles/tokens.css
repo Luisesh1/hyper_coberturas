@@ -180,6 +180,48 @@
   --uni-red: #ff7d7d;
   --uni-violet: #b09bff;      /* contrafactual: sombra / simulaciones */
   --uni-shadow: 0 24px 60px rgba(3, 9, 16, 0.34);
+
+  /* ── Canales RGB de los acentos LP ──────────────────────
+     Las superficies del orquestador tiñen fondo, borde y sombra con el MISMO
+     acento a una docena de opacidades distintas (0.04 … 0.85). Exponer el
+     canal permite `rgba(var(--uni-red-rgb), 0.12)` sin clonar un token por
+     cada opacidad, y el tema claro sólo tiene que cambiar el canal: las
+     opacidades se quedan donde están, en el componente.
+     Invariante (lo verifica tokens.test.js): `--uni-X-rgb` son EXACTAMENTE
+     los canales de `--uni-X` en ese mismo tema. */
+  --uni-cyan-rgb: 102, 225, 219;
+  --uni-blue-rgb: 92, 163, 255;
+  --uni-green-rgb: 61, 217, 145;
+  --uni-amber-rgb: 255, 191, 95;
+  --uni-orange-rgb: 255, 143, 77;
+  --uni-red-rgb: 255, 125, 125;
+  --uni-violet-rgb: 176, 155, 255;
+
+  /* ── Superficies LP (tarjetas, paneles, barra de rango) ──
+     Antes vivían hardcodeadas en los .module.css del orquestador, que es
+     justo lo que dejaba las tarjetas negras al pasar a claro. */
+  --uni-surface-card: linear-gradient(180deg, rgba(11, 18, 26, 0.96), rgba(8, 13, 19, 0.94));
+  --uni-surface-panel: rgba(11, 18, 26, 0.78);
+  --uni-surface-panel-soft: rgba(10, 16, 24, 0.68);
+  --uni-surface-sunken: rgba(7, 12, 18, 0.78);
+  --uni-surface-track: rgba(11, 18, 26, 0.92);
+  --uni-track-border: rgba(93, 115, 137, 0.28);
+  --uni-track-hatch: rgba(255, 255, 255, 0.55);
+  --uni-marker-ring: rgba(7, 12, 18, 0.96);
+  --uni-divider: rgba(93, 115, 137, 0.12);
+  --uni-cyan-surface: rgba(20, 60, 68, 0.4);
+
+  /* Texto que va ENCIMA de un acento sólido (badge ámbar, icono de chip). */
+  --uni-on-accent: #081019;
+  --uni-blue-pastel: #b5dcff;
+
+  /* Velos de realce sobre la superficie. En oscuro aclaran; en claro tienen
+     que oscurecer, o el estado hover desaparece (mismo motivo que
+     --overlay-soft). Los tres niveles absorben los 0.012/0.015/0.02/0.03/0.05
+     sueltos que había: la diferencia entre ellos era invisible. */
+  --uni-wash-soft: rgba(255, 255, 255, 0.02);
+  --uni-wash: rgba(255, 255, 255, 0.03);
+  --uni-wash-strong: rgba(255, 255, 255, 0.05);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -328,12 +370,45 @@
   --uni-text-1: #1e293b;
   --uni-text-2: #47607a;
   --uni-text-3: #5f7285;
-  --uni-cyan: #0e9c95;
+  --uni-cyan: #0e7d76;
   --uni-blue: #2563eb;
-  --uni-green: #12945f;
-  --uni-amber: #b06a00;
+  --uni-green: #0f7a4e;
+  --uni-amber: #a05f00;
   --uni-orange: #c2410c;
   --uni-red: #c92a2a;
   --uni-violet: #6d4aff;
   --uni-shadow: 0 16px 40px rgba(15, 23, 42, 0.10);
+
+  /* ── Canales RGB de los acentos LP ──────────────────────
+     Mismos canales que los hex de arriba. Al cambiar sólo esto, cada tinte
+     `rgba(var(--uni-X-rgb), α)` del orquestador pasa de pastel-sobre-negro a
+     saturado-sobre-blanco conservando su jerarquía. */
+  --uni-cyan-rgb: 14, 125, 118;
+  --uni-blue-rgb: 37, 99, 235;
+  --uni-green-rgb: 15, 122, 78;
+  --uni-amber-rgb: 160, 95, 0;
+  --uni-orange-rgb: 194, 65, 12;
+  --uni-red-rgb: 201, 42, 42;
+  --uni-violet-rgb: 109, 74, 255;
+
+  /* ── Superficies LP ─────────────────────────────────────
+     La tarjeta deja de ser un degradado casi negro y pasa a blanco con una
+     caída mínima, que es lo que separa la tarjeta del fondo de página. */
+  --uni-surface-card: linear-gradient(180deg, #ffffff, #f7f9fd);
+  --uni-surface-panel: rgba(255, 255, 255, 0.92);
+  --uni-surface-panel-soft: rgba(255, 255, 255, 0.78);
+  --uni-surface-sunken: rgba(226, 233, 243, 0.72);
+  --uni-surface-track: rgba(226, 233, 243, 0.90);
+  --uni-track-border: rgba(51, 78, 104, 0.30);
+  --uni-track-hatch: rgba(15, 23, 42, 0.45);
+  --uni-marker-ring: rgba(255, 255, 255, 0.96);
+  --uni-divider: rgba(51, 78, 104, 0.14);
+  --uni-cyan-surface: rgba(14, 125, 118, 0.12);
+
+  --uni-on-accent: #ffffff;
+  --uni-blue-pastel: #1d4ed8;
+
+  --uni-wash-soft: rgba(15, 23, 42, 0.028);
+  --uni-wash: rgba(15, 23, 42, 0.04);
+  --uni-wash-strong: rgba(15, 23, 42, 0.06);
 }

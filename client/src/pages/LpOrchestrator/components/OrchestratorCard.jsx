@@ -398,8 +398,7 @@ function StrategyCell({ label, value, highlight = false }) {
     <div className={styles.strategyCell}>
       <span className={styles.strategyCellLabel}>{label}</span>
       <span
-        className={styles.strategyCellValue}
-        style={highlight ? { color: 'var(--accent, #f5a623)', fontWeight: 600 } : undefined}
+        className={`${styles.strategyCellValue}${highlight ? ` ${styles.strategyCellValueHighlight}` : ''}`}
       >
         {value}
       </span>
