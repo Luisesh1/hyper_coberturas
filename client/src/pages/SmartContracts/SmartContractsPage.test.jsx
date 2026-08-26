@@ -9,10 +9,23 @@ const { smartContractRegistryApi } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../services/api', () => ({ smartContractRegistryApi }));
+vi.mock('./components/ProjectContractsPanel', () => ({
+  default: () => <div data-testid="panel-catalogo" />,
+}));
 
 import SmartContractsPage from './SmartContractsPage';
 
 describe('SmartContractsPage', () => {
+  it('muestra el catálogo del proyecto y separa el registro de terceros', async () => {
+    smartContractRegistryApi.list.mockResolvedValue([]);
+
+    render(<SmartContractsPage />);
+
+    expect(await screen.findByTestId('panel-catalogo')).toBeTruthy();
+    expect(screen.getByText(/Hooks de terceros/i)).toBeTruthy();
+    expect(screen.queryByText('Firma y despliegue')).toBeNull();
+  });
+
   it('muestra al operador qué versiones siguen en verificación y cuáles están verificadas', async () => {
     smartContractRegistryApi.list.mockResolvedValue([
       { id: 1, name: 'Volatility Shield', version: '1.0.0', status: 'verification', deployment: null },

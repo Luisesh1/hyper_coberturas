@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { smartContractRegistryApi } from '../../services/api';
+import ProjectContractsPanel from './components/ProjectContractsPanel';
 import styles from './SmartContractsPage.module.css';
 
 function statusLabel(status) {
@@ -126,15 +127,25 @@ export default function SmartContractsPage() {
         <div className={styles.guardrail}>Solo versiones verificadas aparecen al crear un LP V4.</div>
       </header>
 
+      <ProjectContractsPanel onAdopted={() => { load().catch(() => setError('No se pudo recargar el registro.')); }} />
+
       <section className={styles.flow} aria-label="Flujo de seguridad">
-        <span>Código</span><b>→</b><span>Firma y despliegue</span><b>→</b><span>Verificación on-chain</span><b>→</b><span>Uso en orquestador</span>
+        <span>Catálogo del proyecto</span><b>→</b>
+        <span>Si ya está en cadena: registrar sin gas</span><b>·</b>
+        <span>Si no: desplegar y firmar</span><b>→</b>
+        <span>Verificación on-chain</span><b>→</b>
+        <span>Uso en el orquestador</span>
       </section>
 
       <section className={styles.register} aria-labelledby="register-title">
         <div>
-          <span className={styles.eyebrow}>Nueva versión</span>
-          <h2 id="register-title">Registrar código para verificación</h2>
-          <p>El registro conserva el código y la versión. Aún no habilita el hook ni envía una transacción.</p>
+          <span className={styles.eyebrow}>Hooks de terceros</span>
+          <h2 id="register-title">Registrar un hook que no es del proyecto</h2>
+          <p>
+            Para hooks ajenos que ya estén desplegados. Aquí la dirección la aportas tú y el servidor solo
+            comprueba el bytecode que encuentre en ella: es una garantía menor que la del catálogo de arriba,
+            donde el código sale de este repositorio y su hash se calcula solo.
+          </p>
         </div>
         <form onSubmit={registerVersion} className={styles.form}>
           <label>Nombre del contrato<input required value={draft.name} onChange={updateDraft('name')} /></label>
@@ -143,7 +154,7 @@ export default function SmartContractsPage() {
           <label>Compilador<input placeholder="solc 0.8.26" value={draft.compilerVersion} onChange={updateDraft('compilerVersion')} /></label>
           <label className={styles.wide}>Código fuente<textarea required rows="7" value={draft.sourceCode} onChange={updateDraft('sourceCode')} /></label>
           <div className={styles.formFooter}>
-            <small>Después se registra el despliegue firmado y se contrasta su bytecode on-chain.</small>
+            <small>Después anotas la dirección donde lo desplegaste y el servidor contrasta su bytecode on-chain.</small>
             <button type="submit" disabled={saving}>{saving ? 'Registrando…' : 'Registrar versión'}</button>
           </div>
         </form>
@@ -152,9 +163,12 @@ export default function SmartContractsPage() {
       {versions.some((version) => version.status === 'verification' && !version.deployment) && (
         <section className={styles.register} aria-labelledby="deployment-title">
           <div>
-            <span className={styles.eyebrow}>Despliegue firmado</span>
-            <h2 id="deployment-title">Registrar evidencia de despliegue</h2>
-            <p>La firma ocurre desde la wallet. Registra después la dirección y el hash de la transacción para iniciar la verificación.</p>
+            <span className={styles.eyebrow}>Despliegue externo</span>
+            <h2 id="deployment-title">Registrar evidencia de un despliegue hecho fuera</h2>
+            <p>
+              Este paso no firma nada: el despliegue lo hiciste tú por tu cuenta. Anota aquí la dirección y el
+              hash de la transacción para que el servidor pueda leer el bytecode en cadena y verificarlo.
+            </p>
           </div>
           <form onSubmit={registerDeployment} className={styles.form}>
             <label>Versión a desplegar<select required value={deploymentDraft.versionId} onChange={updateDeployment('versionId')}>
@@ -181,7 +195,7 @@ export default function SmartContractsPage() {
       {!loading && !error && versions.length === 0 && (
         <div className={styles.empty}>
           <strong>Aún no hay contratos registrados.</strong>
-          <p>Registra una versión de hook, despliega desde tu wallet y verifica el bytecode antes de habilitarla.</p>
+          <p>Empieza por el catálogo del proyecto, arriba: elige la red y el panel te dirá si el hook ya está en cadena.</p>
         </div>
       )}
       <div className={styles.grid}>
