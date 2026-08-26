@@ -29,14 +29,6 @@ const FUNDING_CACHE_TTL_MS = 60_000;
 
 const HOUR_MS = 60 * 60_000;
 
-function hedgeNet(accounting) {
-  return Number(accounting.hedgeRealizedPnlUsd || 0)
-    + Number(accounting.hedgeUnrealizedPnlUsd || 0)
-    + Number(accounting.hedgeFundingUsd || 0)
-    - Number(accounting.hedgeExecutionFeesUsd || 0)
-    - Number(accounting.hedgeSlippageUsd || 0);
-}
-
 function policyFields(source) {
   if (!source || typeof source !== 'object') return null;
   return {
