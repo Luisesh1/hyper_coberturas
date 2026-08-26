@@ -6,6 +6,7 @@ import { PricePanel } from './components/PricePanel/PricePanel';
 import { TradingPanel } from './components/TradingPanel/TradingPanel';
 import { HedgePanel } from './components/HedgePanel/HedgePanel';
 import { Notifications } from './components/Layout/Notifications';
+import { ThemeToggle } from './components/Layout/ThemeToggle';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { useTradingContext } from './context/TradingContext';
 import LoginPage from './pages/LoginPage';
@@ -147,6 +148,7 @@ function AppContent() {
 
         <div className={styles.headerRight}>
           <StatusBadge isConnected={isConnected} isPriceStale={isPriceStale} />
+          <ThemeToggle />
           <span className={styles.userBadge} title={`Rol: ${user?.role}`}>
             {user?.name || user?.username}
             {isSuperuser && <span className={styles.roleBadge}>SU</span>}

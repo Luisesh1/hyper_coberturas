@@ -134,6 +134,19 @@
   --sp-6: 32px;
   --sp-7: 48px;
 
+  /* ── Interacción (hover/estado) y primitives compartidos ──
+     Estos tokens existen porque `components.css` hardcodeaba overlays
+     blancos: aclarar funciona en oscuro y desaparece en claro. Los valores
+     de aquí son EXACTAMENTE los que había, para no mover el tema oscuro. */
+  --overlay-soft: rgba(255, 255, 255, 0.04);
+  --overlay-strong: rgba(255, 255, 255, 0.08);
+
+  --btn-primary-bg: linear-gradient(180deg, rgba(102, 225, 219, 0.22), rgba(92, 163, 255, 0.18));
+  --btn-primary-bg-hover: linear-gradient(180deg, rgba(102, 225, 219, 0.32), rgba(92, 163, 255, 0.26));
+  --btn-primary-border: rgba(102, 225, 219, 0.4);
+  --btn-primary-border-hover: rgba(102, 225, 219, 0.6);
+  --input-focus-border: rgba(102, 225, 219, 0.55);
+
   /* ── Focus ring (a11y) ────────────────────────────────── */
   --focus-ring: 0 0 0 3px rgba(102, 225, 219, 0.35);
   --focus-ring-danger: 0 0 0 3px rgba(239, 68, 68, 0.35);
@@ -167,4 +180,160 @@
   --uni-red: #ff7d7d;
   --uni-violet: #b09bff;      /* contrafactual: sombra / simulaciones */
   --uni-shadow: 0 24px 60px rgba(3, 9, 16, 0.34);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MODO CLARO
+   ═══════════════════════════════════════════════════════════════════
+   El tema vive en `data-theme` sobre <html> (lo pone ThemeContext). Aquí
+   sólo se redefinen los tokens de COLOR: radios, tipografía, espaciado y
+   z-index son iguales en ambos temas, así que no se repiten.
+
+   Regla para quien añada tokens nuevos: si es un color, necesita su
+   contraparte en este bloque. Los componentes que hardcodean hex en su
+   .module.css seguirán viéndose oscuros — migrarlos a tokens es la vía.
+
+   Los nombres se mantienen semánticos, no literales: `--green-dark-bg` es
+   "el fondo verde más sólido", que en claro es un tinte pastel, no negro.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* ── Backgrounds ──────────────────────────────────────── */
+  --bg-primary: #f6f7fb;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #eef1f7;
+  --bg-deep: #e9edf4;
+  --bg-surface: #fbfcfe;
+
+  /* ── Borders ──────────────────────────────────────────── */
+  --border: #ccd4e1;
+  --border-subtle: #e4e9f1;
+  --border-strong: #a9b4c6;
+
+  /* ── Text (rampa invertida: bright = el más oscuro) ───── */
+  --text-bright: #0b1220;
+  --text-primary: #1e293b;
+  --text-muted: #334155;
+  --text-secondary: #475569;
+  --text-tertiary: #64748b;
+  --text-hint: #94a3b8;
+  --text-disabled: #cbd5e1;
+
+  /* ── Green ────────────────────────────────────────────── */
+  --green: #15803d;
+  --green-hover: #14532d;
+  --green-light: #166534;
+  --green-pastel: #14532d;
+  --green-bg: rgba(22, 163, 74, 0.10);
+  --green-border: rgba(22, 163, 74, 0.28);
+  --green-dark-bg: #dcfce7;
+  --green-dark-border: #86efac;
+
+  /* ── Red ──────────────────────────────────────────────── */
+  --red: #dc2626;
+  --red-hover: #991b1b;
+  --red-light: #b91c1c;
+  --red-pastel: #991b1b;
+  --red-bg: rgba(220, 38, 38, 0.10);
+  --red-border: rgba(220, 38, 38, 0.28);
+  --red-dark-bg: #fee2e2;
+  --red-dark-border: #fecaca;
+
+  /* ── Amber ────────────────────────────────────────────── */
+  --amber: #b45309;
+  --amber-pastel: #92400e;
+  --amber-bg: rgba(180, 83, 9, 0.10);
+  --amber-border: rgba(180, 83, 9, 0.28);
+  --amber-dark-bg: #fef3c7;
+  --amber-dark-border: #fcd34d;
+
+  /* ── Orange ───────────────────────────────────────────── */
+  --orange: #c2410c;
+
+  /* ── Indigo ───────────────────────────────────────────── */
+  --indigo: #4f46e5;
+  --indigo-hover: #4338ca;
+  --indigo-bg: rgba(79, 70, 229, 0.10);
+  --indigo-border: rgba(79, 70, 229, 0.26);
+  --indigo-dark-bg: #e0e7ff;
+
+  /* ── Cyan ─────────────────────────────────────────────── */
+  --cyan: #0e7490;
+  --cyan-bg: rgba(8, 145, 178, 0.10);
+  --cyan-border: rgba(8, 145, 178, 0.26);
+
+  /* ── Blue ─────────────────────────────────────────────── */
+  --blue: #2563eb;
+  --blue-pastel: #1e40af;
+  --blue-bg: rgba(37, 99, 235, 0.10);
+  --blue-light: #1d4ed8;
+
+  /* ── Teal ─────────────────────────────────────────────── */
+  --teal: #0f766e;
+  --teal-hover: #115e59;
+  --teal-bg: rgba(13, 148, 136, 0.10);
+  --teal-border: rgba(13, 148, 136, 0.26);
+
+  /* ── Status badges (texto oscuro sobre tinte claro) ───── */
+  --status-ok: #15803d;
+  --status-ok-bg: rgba(22, 163, 74, 0.12);
+  --status-warn: #92400e;
+  --status-warn-bg: rgba(234, 179, 8, 0.18);
+  --status-error: #b91c1c;
+  --status-error-bg: rgba(220, 38, 38, 0.12);
+  --status-idle: #475569;
+  --status-idle-bg: rgba(100, 116, 139, 0.14);
+  --status-info: #1d4ed8;
+  --status-info-bg: rgba(37, 99, 235, 0.12);
+
+  /* ── Shadows (más sutiles: sobre blanco delatan mucho) ── */
+  --shadow-card: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --shadow-dropdown: 0 8px 28px rgba(15, 23, 42, 0.14);
+
+  /* ── Interacción (hover/estado) y primitives compartidos ──
+     Los overlays se INVIERTEN: en claro un velo blanco no se ve, así que
+     el estado hover oscurece en vez de aclarar. El botón primario conserva
+     su lenguaje (tinte cian→azul con texto de alto contraste), sólo baja el
+     brillo del tinte para que se distinga sobre fondo blanco. */
+  --overlay-soft: rgba(15, 23, 42, 0.04);
+  --overlay-strong: rgba(15, 23, 42, 0.08);
+
+  --btn-primary-bg: linear-gradient(180deg, rgba(14, 116, 144, 0.16), rgba(29, 78, 216, 0.12));
+  --btn-primary-bg-hover: linear-gradient(180deg, rgba(14, 116, 144, 0.26), rgba(29, 78, 216, 0.20));
+  --btn-primary-border: rgba(14, 116, 144, 0.45);
+  --btn-primary-border-hover: rgba(14, 116, 144, 0.65);
+  --input-focus-border: rgba(14, 116, 144, 0.65);
+
+  /* ── Focus ring ───────────────────────────────────────── */
+  /* El cian del tema oscuro casi desaparece sobre blanco: aquí el anillo
+     pasa a azul, que mantiene el contraste exigido por WCAG 2.2 (1.4.11). */
+  --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.35);
+  --focus-ring-danger: 0 0 0 3px rgba(220, 38, 38, 0.32);
+
+  /* ── Uniswap/LP accent palette ────────────────────────── */
+  --uni-bg-0: #f4f7fb;
+  --uni-bg-1: #ffffff;
+  --uni-bg-2: #f0f4f9;
+  --uni-bg-3: #e7edf5;
+  --uni-border: rgba(51, 78, 104, 0.16);
+  --uni-border-strong: rgba(51, 78, 104, 0.28);
+  --uni-text-0: #0b1220;
+  --uni-text-1: #1e293b;
+  --uni-text-2: #47607a;
+  --uni-text-3: #5f7285;
+  --uni-cyan: #0e9c95;
+  --uni-blue: #2563eb;
+  --uni-green: #12945f;
+  --uni-amber: #b06a00;
+  --uni-orange: #c2410c;
+  --uni-red: #c92a2a;
+  --uni-violet: #6d4aff;
+  --uni-shadow: 0 16px 40px rgba(15, 23, 42, 0.10);
 }

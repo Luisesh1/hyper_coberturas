@@ -73,24 +73,24 @@ textarea:focus-visible {
 }
 
 .btn-primary {
-  background: linear-gradient(180deg, rgba(102, 225, 219, 0.22), rgba(92, 163, 255, 0.18));
-  border-color: rgba(102, 225, 219, 0.4);
+  background: var(--btn-primary-bg);
+  border-color: var(--btn-primary-border);
   color: var(--uni-text-0);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, rgba(102, 225, 219, 0.32), rgba(92, 163, 255, 0.26));
-  border-color: rgba(102, 225, 219, 0.6);
+  background: var(--btn-primary-bg-hover);
+  border-color: var(--btn-primary-border-hover);
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--overlay-soft);
   border-color: var(--border);
   color: var(--text-primary);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--overlay-strong);
   border-color: var(--border-strong);
 }
 
@@ -116,7 +116,7 @@ textarea:focus-visible {
 }
 
 .btn-ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--overlay-soft);
   color: var(--text-primary);
 }
 
@@ -168,7 +168,7 @@ textarea:focus-visible {
 
 .input-base:focus,
 .select-base:focus {
-  border-color: rgba(102, 225, 219, 0.55);
+  border-color: var(--input-focus-border);
 }
 
 /* ── Texto auxiliar ──────────────────────────────────────── */
