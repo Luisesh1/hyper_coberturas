@@ -342,6 +342,16 @@ export const smartContractRegistryApi = {
     'GET',
     `/smart-contracts/verified-hooks?network=${encodeURIComponent(network)}`
   ),
+  listCatalog: (network) => request(
+    'GET',
+    `/smart-contracts/catalog?network=${encodeURIComponent(network)}`
+  ),
+  planDeployment: (name, network) => request('POST', `/smart-contracts/catalog/${encodeURIComponent(name)}/plan`, { network }),
+  adoptDeployment: (name, network, txHash) => request(
+    'POST',
+    `/smart-contracts/catalog/${encodeURIComponent(name)}/adopt`,
+    txHash ? { network, txHash } : { network }
+  ),
   createContract: (payload) => request('POST', '/smart-contracts', payload),
   createVersion: (contractId, payload) => request('POST', `/smart-contracts/${contractId}/versions`, payload),
   recordDeployment: (versionId, payload) => request('POST', `/smart-contracts/versions/${versionId}/deployments`, payload),
