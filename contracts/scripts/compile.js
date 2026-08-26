@@ -2,10 +2,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const solc = require('solc');
 const { keccak256 } = require('ethers');
+const { POOL_MANAGERS } = require('./pool-managers');
+const {
+  parseHookPermissions, flagsForPermissions, buildInitcode, mineSalt,
+} = require('./hook-address');
 
 const root = path.resolve(__dirname, '..');
 const sourceName = 'VolatilityShieldV1.sol';
 const sourcePath = path.join(root, 'src', sourceName);
+
+// Subela a mano si cambia el codigo: las versiones del registro son inmutables.
+const CONTRACT_VERSION = '1.0.0';
 
 function findImports(importPath) {
   try {
@@ -15,12 +22,23 @@ function findImports(importPath) {
   }
 }
 
+const source = fs.readFileSync(sourcePath, 'utf8');
+
 const input = {
   language: 'Solidity',
-  sources: { [sourceName]: { content: fs.readFileSync(sourcePath, 'utf8') } },
+  sources: { [sourceName]: { content: source } },
   settings: {
     optimizer: { enabled: true, runs: 200 },
-    outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] } },
+    outputSelection: {
+      '*': {
+        '*': [
+          'abi',
+          'evm.bytecode.object',
+          'evm.deployedBytecode.object',
+          'evm.deployedBytecode.immutableReferences',
+        ],
+      },
+    },
   },
 };
 const output = JSON.parse(solc.compile(JSON.stringify(input), { import: findImports }));
@@ -30,13 +48,33 @@ if (errors.length > 0) throw new Error(errors.map((item) => item.formattedMessag
 const compiled = output.contracts[sourceName].VolatilityShieldV1;
 const creationBytecode = `0x${compiled.evm.bytecode.object}`;
 const runtimeBytecode = `0x${compiled.evm.deployedBytecode.object}`;
+const permissions = parseHookPermissions(source);
+const hookFlags = flagsForPermissions(permissions);
+
+// La salt se mina AQUI, en build, y se commitea: son ~16.384 intentos de media
+// y hacerlo en caliente bloquearia el event loop del servidor varios segundos.
+const networks = {};
+for (const [network, poolManager] of Object.entries(POOL_MANAGERS)) {
+  const initcodeHash = keccak256(buildInitcode(creationBytecode, poolManager));
+  const { salt, address, attempts } = mineSalt(initcodeHash, hookFlags);
+  networks[network] = { poolManager, salt, initcodeHash, predictedAddress: address };
+  console.log(`  ${network}: ${address} (salt minada en ${attempts} intentos)`);
+}
+
 const artifact = {
   contractName: 'VolatilityShieldV1',
+  version: CONTRACT_VERSION,
   compiler: `solc ${solc.version()}`,
   abi: compiled.abi,
+  sourceCode: source,
+  sourceHash: keccak256(Buffer.from(source, 'utf8')),
   creationBytecode,
   runtimeBytecode,
   runtimeBytecodeHash: keccak256(runtimeBytecode),
+  immutableReferences: compiled.evm.deployedBytecode.immutableReferences || {},
+  permissions,
+  hookFlags: `0x${hookFlags.toString(16)}`,
+  networks,
 };
 
 const outputDir = path.join(root, 'artifacts');
