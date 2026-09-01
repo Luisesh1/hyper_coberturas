@@ -38,8 +38,10 @@ const FALLBACK_TAKER_FEE_RATE = 0.0005;
  * intencion `shadow` sigue ejecutando con la logica legacy: la viva es legacy
  * y su propia net_profit es una de las dos sombras.
  */
+const SELECTABLE_LIVE_POLICIES = [...NET_PROFIT_POLICIES, RANGE_EXIT_V1];
+
 function resolveLivePolicy({ policyVersion, executionIntent } = {}) {
-  return NET_PROFIT_POLICIES.includes(policyVersion) && executionIntent === 'live'
+  return SELECTABLE_LIVE_POLICIES.includes(policyVersion) && executionIntent === 'live'
     ? policyVersion
     : LEGACY_ZONES_V1;
 }

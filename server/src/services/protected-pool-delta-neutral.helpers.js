@@ -319,6 +319,24 @@ function isCooldownActive(protection, strategyState, now = Date.now()) {
   return Number.isFinite(nextEligibleAttemptAt) && nextEligibleAttemptAt > now;
 }
 
+/**
+ * Politicas que viven sobre el 100% del delta y NO heredan los escalones de
+ * zona legacy.
+ *
+ * Importa que esto sea UNA sola lista: si una politica corre viva sin estar
+ * aca, `pricing.js` le aplica `zoneMultiplier` y la sub-cubre en silencio —
+ * hasta un 40% en centro con los defaults historicos. El selector diria una
+ * cosa y el hedge haria otra, que es el peor modo de fallo posible.
+ *
+ * Lista de literales a proposito: `range-exit-policy.service.js` importa de
+ * este modulo, asi que importar de vuelta cerraria un ciclo.
+ */
+const FULL_DELTA_POLICIES = ['net_profit_v1', 'net_profit_v2', 'range_exit_v1'];
+
+function policyOwnsFullDelta(policyVersion, executionIntent) {
+  return FULL_DELTA_POLICIES.includes(policyVersion) && executionIntent === 'live';
+}
+
 function estimateExecutionCostUsd(qty, currentPrice) {
   const size = Math.abs(Number(qty) || 0);
   const price = Number(currentPrice) || 0;
@@ -578,6 +596,8 @@ module.exports = {
   DEFAULT_MARGIN_TOP_UP_LIQ_DISTANCE_PCT,
   EXCHANGE_MIN_NOTIONAL_USD,
   ESTIMATED_TAKER_FEE_RATE,
+  FULL_DELTA_POLICIES,
+  policyOwnsFullDelta,
   MARGIN_COOLDOWN_MS,
   BELOW_NOTIONAL_COOLDOWN_MS,
   clampNonNegative,

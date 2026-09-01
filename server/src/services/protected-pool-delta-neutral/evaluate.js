@@ -34,6 +34,7 @@ const {
   NET_PROFIT_V2,
   decideNetProfitV1,
 } = require('../net-profit-policy.service');
+const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.service');
 const {
   NEAR_ZERO_TARGET_QTY,
   ORPHAN_TARGET_QTY,
@@ -412,6 +413,23 @@ const evaluateMethods = {
         state: strategyState.netProfitPolicyState || {},
       })
       : null;
+
+    // `range_exit_v1` viva. Se rutea explicitamente: sin esta rama caeria en
+    // `resolveRebalanceDecision` y ejecutaria LEGACY mientras el selector dice
+    // "borde de rango". Ese silencio es peor que no ofrecer la politica.
+    const isRangeExitLive = policyVersion === RANGE_EXIT_V1
+      && (activeProtection.strategyState?.executionIntent || strategyState.executionIntent) === 'live';
+    const rangeExitDecision = isRangeExitLive
+      ? decideRangeExitV1({
+        deltaQty: Number(metrics.deltaQty),
+        actualQty,
+        currentPrice,
+        rangeLowerPrice: activeProtection.rangeLowerPrice,
+        rangeUpperPrice: activeProtection.rangeUpperPrice,
+        state: strategyState.rangeExitPolicyState || {},
+        forceRebalance,
+      })
+      : null;
     // No modificamos el record para ejecutar: esta vista efímera aplica los
     // límites aprobados a cada IOC y a todos sus reintentos. Riesgo >=15% del
     // LP puede usar 30 bps, pero sigue pasando los mismos gates de snapshot,
@@ -458,14 +476,42 @@ const evaluateMethods = {
           estimatedCostUsd: expectedPolicyCostUsd,
         },
       }
-      : resolveRebalanceDecision({
-        protection: activeProtection,
-        metrics,
-        actualQty,
-        currentPrice,
-        forceReason,
-        forceRebalance,
-      });
+      : isRangeExitLive
+        ? {
+          // A diferencia de net_profit, esta politica NO corrige parcialmente:
+          // cuando decide, va al delta completo. Por eso `metrics` se usa tal
+          // cual y no hace falta remapear `executionMetrics`.
+          decision: rangeExitDecision.decision === 'rebalance' ? 'range_exit_rebalance' : 'hold',
+          tracking: {
+            trackingErrorQty: Number(metrics.deltaQty) - actualQty,
+            trackingErrorUsd: Math.abs(Number(metrics.deltaQty) - actualQty) * currentPrice,
+          },
+          // Su piso economico no es un notional sino el corrimiento del
+          // trigger, que ya se aplico dentro de la politica: reportar un
+          // `holdBandUsd` aqui se leeria como un umbral que nunca consulto.
+          bands: {
+            holdBandUsd: null,
+            estimatedCostUsd: expectedPolicyCostUsd,
+          },
+        }
+        : resolveRebalanceDecision({
+          protection: activeProtection,
+          metrics,
+          actualQty,
+          currentPrice,
+          forceReason,
+          forceRebalance,
+        });
+    if (isRangeExitLive) {
+      // El estado de la maquina (ancla del rango, zona y cruce a medio
+      // confirmar) solo avanza cuando la politica decide; en `hold` se
+      // conserva el `nextState` que ella misma devuelve, que es como sostiene
+      // la confirmacion temporal entre ticks.
+      nextState.rangeExitPolicyState = rangeExitDecision.nextState
+        || strategyState.rangeExitPolicyState
+        || {};
+      nextState.rangeExitPolicyGate = rangeExitDecision.gate;
+    }
     if (isNetProfitLive) {
       // El presupuesto de V2 se consume únicamente cuando el IOC/TWAP termina
       // correctamente. Esta evaluación persiste antes del preflight para que
@@ -791,10 +837,17 @@ const evaluateMethods = {
         hasPosition: Boolean(position),
         targetQty: Number(metrics.targetQty),
       })
-      : legacyDecision.centerDeadZoneBlocks;
+      : isRangeExitLive
+        // La zona muerta central es un concepto de las zonas legacy y aqui
+        // seria redundante: esta politica ya se queda quieta DENTRO del rango
+        // por diseno, y cuando decide es en el borde, que nunca es centro.
+        ? false
+        : legacyDecision.centerDeadZoneBlocks;
     const shouldRebalance = isNetProfitLive
       ? !centerDeadZoneBlocks && netProfitDecision.decision === 'rebalance'
-      : legacyDecision.decision === 'rebalance';
+      : isRangeExitLive
+        ? rangeExitDecision.decision === 'rebalance'
+        : legacyDecision.decision === 'rebalance';
 
     // Comparativa de coberturas: la viva ya decidio arriba y es la unica que
     // ejecuta; aqui se simulan las OTRAS DOS sobre los mismos datos de este

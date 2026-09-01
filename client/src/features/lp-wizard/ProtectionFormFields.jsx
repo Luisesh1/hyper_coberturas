@@ -23,6 +23,12 @@ const DELTA_NEUTRAL_PRESETS = [
 // cobertura la sigue haciendo el motor legacy y net profit calcula en paralelo
 // lo que habría hecho. Por eso se elige entre dos opciones con nombre y no con
 // una casilla "operación real" cuyo estado apagado no se explica solo.
+// Politicas que tienen modo sombra. Legacy no lo tiene (es la que ejecuta por
+// defecto), asi que elegirla vuelve el intent a `live`. Mantener esta lista
+// junto al selector: si una politica nueva entra al <select> sin entrar aca,
+// se ofreceria directamente en operacion real.
+const SHADOW_CAPABLE_POLICIES = ['net_profit_v1', 'net_profit_v2', 'range_exit_v1'];
+
 const EXECUTION_INTENTS = [
   {
     id: 'shadow',
@@ -369,13 +375,14 @@ export default function ProtectionFormFields({
     });
   };
 
-  // Cambiar de política nunca deja una combinación a medias: net profit entra
-  // siempre en sombra y legacy no tiene modo sombra, así que vuelve a `live`.
+  // Cambiar de política nunca deja una combinación a medias: las políticas con
+  // modo sombra entran siempre en sombra y legacy no lo tiene, así que vuelve
+  // a `live`.
   const handlePolicyChange = (policyVersion) => {
     onChange({
       ...v,
       policyVersion,
-      executionIntent: ['net_profit_v1', 'net_profit_v2'].includes(policyVersion) ? 'shadow' : 'live',
+      executionIntent: SHADOW_CAPABLE_POLICIES.includes(policyVersion) ? 'shadow' : 'live',
       activationConfirmed: false,
     });
   };
@@ -400,6 +407,7 @@ export default function ProtectionFormFields({
   };
 
   const isNetProfit = ['net_profit_v1', 'net_profit_v2'].includes(v.policyVersion);
+  const isRangeExit = v.policyVersion === 'range_exit_v1';
   const isLiveNetProfit = isNetProfit && v.executionIntent === 'live';
   const isAutoTuned = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) === Number(rangeWidthPct);
   const tunedDrifted = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) !== Number(rangeWidthPct);
@@ -529,13 +537,25 @@ export default function ProtectionFormFields({
                 <option value="legacy_zones_v1">Zonas legacy — motor en producción</option>
                 <option value="net_profit_v1">Net profit — bandas por coste neto</option>
                 <option value="net_profit_v2">Net profit V2 — ajuste parcial y límites de rotación</option>
+                <option value="range_exit_v1">Borde de rango — cubre al abrir y sólo reajusta al salir/entrar</option>
               </select>
             </div>
 
-            {!isNetProfit && (
+            {!isNetProfit && !isRangeExit && (
               <p className={styles.hint}>
                 Cubre por zonas respecto al borde del rango: en el centro deja ~40% del delta
                 descubierto a propósito, y los umbrales de zona no escalan con el ancho del rango.
+              </p>
+            )}
+
+            {isRangeExit && (
+              <p className={styles.hint}>
+                Cubre el 100% del delta al abrir y no vuelve a tocar el hedge mientras el precio
+                siga dentro del rango: sólo reajusta al salir y al volver a entrar, con el disparo
+                corrido lo justo para pagar comisiones. Gasta mucho menos en ejecución, y a cambio
+                acepta quedar descubierta dentro del rango — gana si el precio revierte y pierde
+                si se va en tendencia. Aún no tiene un tramo tendencial medido:
+                <strong> déjala en sombra hasta tenerlo</strong>.
               </p>
             )}
 

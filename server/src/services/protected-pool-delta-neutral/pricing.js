@@ -10,7 +10,7 @@ const {
   DEFAULT_TARGET_HEDGE_RATIO,
   safeJsonClone,
 } = require('../protected-pool-delta-neutral.helpers');
-const { NET_PROFIT_V1, NET_PROFIT_V2 } = require('../net-profit-policy.service');
+const { policyOwnsFullDelta } = require('../protected-pool-delta-neutral.helpers');
 
 // Un snapshot del pool más viejo que esto deja de valer como fallback cuando
 // la verdad on-chain falla. Espeja la constante del servicio.
@@ -96,13 +96,14 @@ const pricingMethods = {
 
     const zoneState = this._deriveZoneState(protection, baseTwin.syntheticPriceCurrent);
     const policyVersion = protection.policyVersion || protection.strategyState?.policyVersion;
-    const isNetProfitPolicy = [NET_PROFIT_V1, NET_PROFIT_V2].includes(policyVersion);
-    const liveNetProfit = isNetProfitPolicy && protection.strategyState?.executionIntent === 'live';
-    const baseRatio = liveNetProfit ? 1 : Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
-    // Las políticas net profit viven sobre el 100% del delta y no heredan los escalones
-    // de zona legacy. Es crucial también en live: de otro modo el selector
-    // "Operación real" conservaría una subcobertura de hasta 40% en centro.
-    const targetHedgeRatioApplied = liveNetProfit
+    const liveFullDelta = policyOwnsFullDelta(policyVersion, protection.strategyState?.executionIntent);
+    const baseRatio = liveFullDelta ? 1 : Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
+    // Las políticas net profit y range_exit viven sobre el 100% del delta y no
+    // heredan los escalones de zona legacy. Es crucial también en live: de otro
+    // modo el selector "Operación real" conservaría una subcobertura de hasta
+    // 40% en centro. La lista vive en `policyOwnsFullDelta` para que dar de
+    // alta una política nueva sea un solo cambio y no tres.
+    const targetHedgeRatioApplied = liveFullDelta
       ? 1
       : baseRatio * this._zoneMultiplier(zoneState);
     const tunedTwin = buildSyntheticLpState(snapshot, {

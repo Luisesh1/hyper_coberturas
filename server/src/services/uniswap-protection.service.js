@@ -11,6 +11,7 @@ const { formatPrice } = require('../utils/format');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
 const { getTradingService } = require('./trading.factory');
+const { policyOwnsFullDelta } = require('./protected-pool-delta-neutral.helpers');
 const {
   computeDeltaNeutralMetrics,
   resolveDeltaNeutralOrientation,
@@ -885,11 +886,18 @@ async function createDeltaNeutralProtectedPool({
   const normalizedBaseBandPct = normalizeBaseRebalancePriceMovePct(baseRebalancePriceMovePct);
   const normalizedRebalanceIntervalSec = normalizeRebalanceIntervalSec(rebalanceIntervalSec);
   const isNetProfitPolicy = ['net_profit_v1', 'net_profit_v2'].includes(policyVersion);
-  if (isNetProfitPolicy && executionIntent === 'live' && activationConfirmed !== true) {
-    throw new ValidationError('Confirma la operación real antes de activar net_profit.');
+  const isRangeExitPolicy = policyVersion === 'range_exit_v1';
+  if ((isNetProfitPolicy || isRangeExitPolicy) && executionIntent === 'live' && activationConfirmed !== true) {
+    throw new ValidationError('Confirma la operación real antes de activar esta política.');
   }
+  // `liveNetProfit` conserva su nombre porque manda sobre los limites de
+  // ejecucion mas estrictos (slippage/spread) que se afinaron para net_profit.
+  // El ratio al 100% del delta, en cambio, lo decide `policyOwnsFullDelta`:
+  // range_exit tambien vive sobre el delta completo y sin el saldria
+  // sub-cubierta por los escalones de zona.
   const liveNetProfit = isNetProfitPolicy && executionIntent === 'live';
-  const normalizedTargetHedgeRatio = liveNetProfit ? 1 : normalizeTargetHedgeRatio(targetHedgeRatio);
+  const liveFullDelta = policyOwnsFullDelta(policyVersion, executionIntent);
+  const normalizedTargetHedgeRatio = liveFullDelta ? 1 : normalizeTargetHedgeRatio(targetHedgeRatio);
   const normalizedMinRebalanceNotionalPct = normalizeMinRebalanceNotionalPct(minRebalanceNotionalPct);
   const normalizedCenterDeadZonePct = normalizeCenterDeadZonePct(centerDeadZonePct);
   const normalizedMaxSlippageBps = normalizeMaxSlippageBps(maxSlippageBps);
