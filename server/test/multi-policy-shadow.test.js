@@ -68,10 +68,13 @@ test('la viva es legacy salvo que una net_profit este declarada como live', () =
   assert.equal(resolveLivePolicy({}), LEGACY);
 });
 
-test('sea cual sea la viva, siempre quedan exactamente las otras dos en sombra', () => {
+test('sea cual sea la viva, quedan en sombra todas las demas y solo esas', () => {
+  // La cantidad se DERIVA del registro en vez de fijarse a mano: al dar de alta
+  // una politica nueva (`range_exit_v1` fue la cuarta) el invariante que importa
+  // sigue siendo "todas menos la viva", no un numero concreto.
   for (const live of ALL_POLICIES) {
     const shadows = resolveShadowPolicies(live);
-    assert.equal(shadows.length, 2, `con ${live} viva deben quedar dos sombras`);
+    assert.equal(shadows.length, ALL_POLICIES.length - 1, `con ${live} viva deben quedar el resto en sombra`);
     assert.ok(!shadows.includes(live));
     assert.deepEqual([...shadows, live].sort(), [...ALL_POLICIES].sort());
   }
@@ -140,18 +143,18 @@ test('la sombra legacy mide el movimiento de precio contra SU propio ultimo reba
 
 // ── Acumulacion independiente por politica ────────────────────────────────
 
-test('con cualquier politica viva, las otras dos acumulan estado propio e independiente', () => {
+test('con cualquier politica viva, las demas acumulan estado propio e independiente', () => {
   for (const live of ALL_POLICIES) {
     const memory = new Map();
     const base = shadowArgs({
       memory, livePolicy: live, declaredPolicy: live, liveActualQty: 0, deltaQty: 1,
     });
     const primero = runShadowPolicies(base);
-    assert.equal(primero.length, 2);
+    assert.equal(primero.length, ALL_POLICIES.length - 1);
 
     // Segundo tick: mismo estado de mercado, media hora despues.
     const segundo = runShadowPolicies({ ...base, now: base.now + 1_800_000 });
-    assert.equal(segundo.length, 2);
+    assert.equal(segundo.length, ALL_POLICIES.length - 1);
 
     const claves = segundo.map((r) => r.policyVersion).sort();
     assert.deepEqual(claves, resolveShadowPolicies(live).sort());
@@ -159,7 +162,7 @@ test('con cualquier politica viva, las otras dos acumulan estado propio e indepe
     for (const result of segundo) {
       assert.ok(memory.has(`77:${result.policyVersion}`));
     }
-    assert.equal(memory.size, 2, `con ${live} viva solo se guardan las dos sombras`);
+    assert.equal(memory.size, ALL_POLICIES.length - 1, `con ${live} viva solo se guardan las sombras`);
   }
 });
 
@@ -248,9 +251,9 @@ test('buildShadowSnapshots indexa por politica con su policyState y su funding',
     liveActualQty: 2, deltaQty: 2,
   })));
 
-  assert.deepEqual(Object.keys(snapshots).sort(), [LEGACY, V1].sort());
+  assert.deepEqual(Object.keys(snapshots).sort(), [...resolveShadowPolicies(V2)].sort());
   assert.equal(snapshots[V2], undefined, 'la politica viva no se simula: ya se midio');
-  for (const policy of [LEGACY, V1]) {
+  for (const policy of resolveShadowPolicies(V2)) {
     assert.ok('shadowPolicyState' in snapshots[policy]);
     assert.equal(snapshots[policy].shadowFundingSourceUsd, -3);
     assert.equal(snapshots[policy].fundingUsd, -3);
@@ -296,7 +299,7 @@ test('evaluar las sombras no hace ninguna llamada de red', () => {
   }
 
   assert.deepEqual(intentos, [], `la sombra intento salir a red: ${intentos.join(', ')}`);
-  assert.equal(resultados.length, 2);
+  assert.equal(resultados.length, ALL_POLICIES.length - 1);
   // Sincrono por construccion: si algo hiciera IO habria que esperarlo, asi que
   // devolver un array y no una promesa es la prueba estructural de que no lo hay.
   assert.ok(!(resultados instanceof Promise), 'runShadowPolicies no puede ser asincrona');
@@ -663,7 +666,7 @@ function buildService(protection, { onOrder, actualQty = 0.0001 } = {}) {
   return service;
 }
 
-test('el motor acumula sombra para las DOS politicas no vivas y persiste indexado', async () => {
+test('el motor acumula sombra para todas las politicas no vivas y persiste indexado', async () => {
   const protection = buildProtection();
   const service = buildService(protection);
   let ejecutado = null;
@@ -676,7 +679,7 @@ test('el motor acumula sombra para las DOS politicas no vivas y persiste indexad
 
   const snapshots = protection.strategyState.shadowSnapshots;
   assert.ok(snapshots, 'el motor tiene que persistir shadowSnapshots');
-  assert.deepEqual(Object.keys(snapshots).sort(), [V1, V2].sort());
+  assert.deepEqual(Object.keys(snapshots).sort(), [...resolveShadowPolicies(LEGACY)].sort());
   assert.equal(snapshots[LEGACY], undefined, 'legacy es la viva: no se simula');
   assert.equal(protection.strategyState.shadowSnapshot, undefined, 'el formato singular desaparece');
   assert.ok(ejecutado, 'la politica viva si ejecuta');
@@ -699,7 +702,7 @@ test('con net_profit viva, la sombra legacy se acumula y no copia al target vivo
   await service.evaluateProtection(protection);
 
   const snapshots = protection.strategyState.shadowSnapshots;
-  assert.deepEqual(Object.keys(snapshots).sort(), [LEGACY, V2].sort());
+  assert.deepEqual(Object.keys(snapshots).sort(), [...resolveShadowPolicies(V1)].sort());
   // 2500 sobre 2000-3000 cae en zona 'center': el escalon legacy (0.6) tiene
   // que separar a la sombra del target vivo, que va al 100% del delta.
   assert.equal(protection.strategyState.zoneState, 'center');

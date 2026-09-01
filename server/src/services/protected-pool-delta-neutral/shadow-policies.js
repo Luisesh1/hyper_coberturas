@@ -19,12 +19,13 @@ const {
   simulateShadowFill,
 } = require('../net-profit-policy.service');
 const { decideLegacyZones } = require('../legacy-zones-policy.service');
+const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.service');
 const {
   estimateExecutionCostUsd,
   resolveMinOrderNotionalUsd,
 } = require('../protected-pool-delta-neutral.helpers');
 
-const ALL_POLICIES = [LEGACY_ZONES_V1, NET_PROFIT_V1, NET_PROFIT_V2];
+const ALL_POLICIES = [LEGACY_ZONES_V1, NET_PROFIT_V1, NET_PROFIT_V2, RANGE_EXIT_V1];
 const NET_PROFIT_POLICIES = [NET_PROFIT_V1, NET_PROFIT_V2];
 // Mismo throttle de escritura que tenia el snapshot unico.
 const SHADOW_SNAPSHOT_THROTTLE_MS = 30_000;
@@ -90,6 +91,22 @@ function decideShadow(policy, {
   forceReason,
   forceRebalance,
 }) {
+  if (policy === RANGE_EXIT_V1) {
+    // No recibe banda, temporizador ni zona muerta: esta politica no los
+    // consulta. Su unica entrada es donde esta el precio respecto al rango,
+    // que es exactamente lo que la hace barata de evaluar y de auditar.
+    return decideRangeExitV1({
+      deltaQty,
+      actualQty: previous.actualQty,
+      currentPrice,
+      rangeLowerPrice,
+      rangeUpperPrice,
+      state: policyState,
+      now,
+      forceRebalance,
+    });
+  }
+
   if (NET_PROFIT_POLICIES.includes(policy)) {
     return decideNetProfitV1({
       policyVersion: policy,
