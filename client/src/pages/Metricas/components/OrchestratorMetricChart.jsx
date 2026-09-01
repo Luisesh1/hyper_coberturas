@@ -13,11 +13,17 @@ const COLOR_TOTAL = '#38bdf8';
 const COLOR_WALLET = '#a78bfa';
 const COLOR_LP = '#22c55e';
 const COLOR_HL = '#f59e0b';
-const POLICY_OPTIONS = [
+export const POLICY_OPTIONS = [
   { value: 'live', label: 'Política viva (real)' },
   { value: 'legacy_zones_v1', label: 'Zonas legacy v1' },
   { value: 'net_profit_v1', label: 'Net profit v1' },
   { value: 'net_profit_v2', label: 'Net profit v2' },
+  // `range_exit_v1` solo existe como sombra: no se puede elegir al crear una
+  // proteccion (no esta en el enum del servidor), pero SI hay que poder
+  // compararla aca — para eso corre. Los snapshots anteriores a su alta no la
+  // traen, y `selectPolicySnapshot` ya los descarta por `hlAccountUsd` no
+  // finito, asi que la serie arranca el dia que se desplego.
+  { value: 'range_exit_v1', label: 'Borde de rango v1' },
 ];
 
 function fmtUsd(value) {
