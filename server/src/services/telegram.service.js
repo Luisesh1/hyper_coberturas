@@ -15,9 +15,31 @@ const logger = require('./logger.service');
 const {
   computeBackoffMs,
   extractTelegramRetryAfterMs,
+  describeTelegramError,
   isTelegramRetryableError,
   sleep,
 } = require('./external-service-helpers');
+
+/**
+ * Escapa texto libre antes de meterlo en un mensaje con `parse_mode: 'HTML'`.
+ *
+ * Sin esto, cualquier `<`, `>` o `&` que venga de un motivo, un error o una
+ * etiqueta rompe el parser de Telegram y el mensaje NO se envia. Es lo que
+ * tuvo mudo al canal de alertas: `execution.js` arma el motivo
+ * `"Drift $2.99 < minimo $11"` y ese `<` suelto hacia que Telegram contestara
+ * `can't parse entities: Unsupported start tag "" at byte offset 127`. 24 de
+ * 24 envios fallidos en 40 h, justo mientras una cobertura estaba rota.
+ *
+ * Regla: TODO lo que no sea markup escrito a mano en el propio template pasa
+ * por aca. Los valores numericos ya formateados no lo necesitan, pero
+ * escaparlos igual no cuesta nada y evita tener que razonar caso por caso.
+ */
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
 
 // ------------------------------------------------------------------
 // Alert ring buffer (compartido entre todas las instancias)
@@ -223,9 +245,18 @@ class TelegramService {
           const retryable = isTelegramRetryableError(err);
           const lastAttempt = attempt >= maxAttempts - 1;
           if (!retryable || lastAttempt) {
+            const detail = describeTelegramError(err);
             logger.error('telegram_api_error', {
               method,
+              // `error` era lo UNICO que se logueaba y es el texto generico de
+              // axios; `description` es lo que de verdad dice que paso.
               error: err.message,
+              errorCode: detail.errorCode,
+              description: detail.description,
+              httpStatus: detail.status,
+              // Sin el chat objetivo un "chat not found" no se puede perseguir.
+              chatId: payload?.chat_id ?? null,
+              parseMode: payload?.parse_mode ?? null,
               retryAfterMs: retryAfterMs || null,
               attempt: attempt + 1,
             });
@@ -244,6 +275,7 @@ class TelegramService {
             delayMs,
             retryAfterMs: retryAfterMs || null,
             error: err.message,
+            description: describeTelegramError(err).description,
           });
           await sleep(delayMs);
         }
@@ -329,8 +361,8 @@ class TelegramService {
     const wallet = account.shortAddress
       || (account.address ? `${account.address.slice(0, 6)}...${account.address.slice(-4)}` : '');
     return wallet && alias !== wallet
-      ? `Cuenta: <b>${alias}</b> (${wallet})`
-      : `Cuenta: <b>${alias}</b>`;
+      ? `Cuenta: <b>${escapeHtml(alias)}</b> (${escapeHtml(wallet)})`
+      : `Cuenta: <b>${escapeHtml(alias)}</b>`;
   }
 
   // ------------------------------------------------------------------
@@ -348,7 +380,7 @@ class TelegramService {
       `${entryRule} $${this._fmtPrice(hedge.entryPrice)}`,
       `${exitRule} $${this._fmtPrice(hedge.exitPrice)}`,
       `Tamaño: ${hedge.size} ${hedge.asset}`,
-      hedge.label ? `Etiqueta: ${hedge.label}` : null,
+      hedge.label ? `Etiqueta: ${escapeHtml(hedge.label)}` : null,
     ];
     return this._dispatch(
       { category: 'hedge', severity: 'medium', title: 'Cobertura creada' },
@@ -366,7 +398,7 @@ class TelegramService {
       `Activo: <b>${hedge.asset}</b> | ${hedge.leverage}x isolated`,
       `Precio entrada: $${this._fmtPrice(hedge.openPrice)}`,
       `Tamaño: ${hedge.size} ${hedge.asset} (~$${notional})`,
-      hedge.label ? `Cobertura: ${hedge.label}` : null,
+      hedge.label ? `Cobertura: ${escapeHtml(hedge.label)}` : null,
     ];
     return this._dispatch(
       { category: 'hedge', severity: 'high', title: `${side} activado` },
@@ -382,8 +414,8 @@ class TelegramService {
       `Esperado: ${payload.expectedSize} ${hedge.asset}`,
       `Abierto: ${payload.actualSize} ${hedge.asset}`,
       `Faltante: ${payload.missingSize} ${hedge.asset}`,
-      payload.message ? `Detalle: ${payload.message}` : null,
-      hedge.label ? `Etiqueta: ${hedge.label}` : null,
+      payload.message ? `Detalle: ${escapeHtml(payload.message)}` : null,
+      hedge.label ? `Etiqueta: ${escapeHtml(hedge.label)}` : null,
     ];
     return this._dispatch(
       { category: 'hedge', severity: 'high', title: 'Cobertura parcial' },
@@ -407,7 +439,7 @@ class TelegramService {
       `Apertura: $${this._fmtPrice(hedge.openPrice)}`,
       `Cierre:   $${this._fmtPrice(hedge.closePrice)}`,
       pnl ? `PnL: ${pnl}` : null,
-      hedge.label ? `Cobertura: ${hedge.label}` : null,
+      hedge.label ? `Cobertura: ${escapeHtml(hedge.label)}` : null,
     ];
     return this._dispatch(
       { category: 'hedge', severity: 'high', title: 'Cobertura completada' },
@@ -420,7 +452,7 @@ class TelegramService {
       `🚫 <b>Cobertura cancelada</b> #${hedge.id}`,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b>`,
-      hedge.label ? `Etiqueta: ${hedge.label}` : null,
+      hedge.label ? `Etiqueta: ${escapeHtml(hedge.label)}` : null,
     ];
     return this._dispatch(
       { category: 'hedge', severity: 'medium', title: 'Cobertura cancelada' },
@@ -433,8 +465,8 @@ class TelegramService {
       `❌ <b>Error en cobertura</b> #${hedge.id}`,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | Estado: ${hedge.status}`,
-      `Error: ${err.message}`,
-      hedge.label ? `Etiqueta: ${hedge.label}` : null,
+      `Error: ${escapeHtml(err.message)}`,
+      hedge.label ? `Etiqueta: ${escapeHtml(hedge.label)}` : null,
     ];
     return this._dispatch(
       { category: 'hedge', severity: 'critical', title: 'Error en cobertura' },
@@ -504,9 +536,9 @@ class TelegramService {
       `${meta.emoji} <b>${meta.title}</b>`,
       bot?.account ? this._fmtAccount(bot.account) : null,
       `Bot: <b>#${bot?.id || '?'}</b> | ${bot?.asset || 'N/A'} | estado ${bot?.status || 'N/A'}`,
-      payload.stage ? `Etapa: ${payload.stage}` : null,
-      payload.message ? `Error: ${payload.message}` : null,
-      payload.actionTaken ? `Medida: ${payload.actionTaken}` : null,
+      payload.stage ? `Etapa: ${escapeHtml(payload.stage)}` : null,
+      payload.message ? `Error: ${escapeHtml(payload.message)}` : null,
+      payload.actionTaken ? `Medida: ${escapeHtml(payload.actionTaken)}` : null,
       payload.nextRetryAt ? `Proximo reintento: ${new Date(payload.nextRetryAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}` : null,
       `Fecha: ${when}`,
     ];
@@ -546,17 +578,17 @@ class TelegramService {
       below_min_order_notional:  { emoji: '📏', title: 'Orden por debajo del minimo del exchange' },
     };
     const meta = labels[blockType] || { emoji: '⚠️', title: 'Bloqueo delta-neutral' };
-    const pair = `${protection.token0Symbol || '?'}/${protection.token1Symbol || '?'}`;
+    const pair = escapeHtml(`${protection.token0Symbol || '?'}/${protection.token1Symbol || '?'}`);
     const when = new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
 
     const lines = [
       `${meta.emoji} <b>${meta.title}</b>`,
       `Proteccion: <b>#${protection.id}</b> | ${pair}`,
-      `Activo: <b>${protection.inferredAsset || 'N/A'}</b>`,
-      reason ? `Motivo: ${reason}` : null,
-      detail ? `Detalle: ${detail}` : null,
+      `Activo: <b>${escapeHtml(protection.inferredAsset || 'N/A')}</b>`,
+      reason ? `Motivo: ${escapeHtml(reason)}` : null,
+      detail ? `Detalle: ${escapeHtml(detail)}` : null,
       extra.positionObserved != null ? `Posicion detectada: ${extra.positionObserved ? 'si' : 'no'}` : null,
-      extra.positionReadSource ? `Lectura posicion: ${extra.positionReadSource}` : null,
+      extra.positionReadSource ? `Lectura posicion: ${escapeHtml(extra.positionReadSource)}` : null,
       extra.actualQty != null ? `Actual qty: ${Number(extra.actualQty).toFixed(6)}` : null,
       extra.targetQty != null ? `Target qty: ${Number(extra.targetQty).toFixed(6)}` : null,
       extra.withdrawable != null ? `Disponible: $${this._fmtPrice(extra.withdrawable)}` : null,
@@ -566,7 +598,7 @@ class TelegramService {
       extra.estimatedCost != null ? `Costo estimado: $${this._fmtPrice(extra.estimatedCost)}` : null,
       extra.maxCost != null ? `Limite costo: $${this._fmtPrice(extra.maxCost)}` : null,
       extra.liquidationDistancePct != null ? `Distancia a liquidacion: ${Number(extra.liquidationDistancePct).toFixed(1)}%` : null,
-      extra.cooldownReason ? `Cooldown por: ${extra.cooldownReason}` : null,
+      extra.cooldownReason ? `Cooldown por: ${escapeHtml(extra.cooldownReason)}` : null,
       extra.driftUsd != null ? `Drift: $${Number(extra.driftUsd).toFixed(2)}` : null,
       extra.minNotionalUsd != null ? `Minimo requerido: $${Number(extra.minNotionalUsd).toFixed(2)}` : null,
       `Fecha: ${when}`,
@@ -582,6 +614,7 @@ class TelegramService {
   }
 }
 
+TelegramService.escapeHtml = escapeHtml;
 TelegramService.recordAlert = recordAlert;
 TelegramService.listRecentAlerts = listRecentAlerts;
 

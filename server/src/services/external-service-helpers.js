@@ -39,6 +39,29 @@ function messageIncludes(err, ...patterns) {
   return patterns.some((pattern) => message.includes(String(pattern).toLowerCase()));
 }
 
+/**
+ * Desglosa el motivo REAL de un fallo de la API de Telegram.
+ *
+ * `err.message` de axios es siempre "Request failed with status code 400": no
+ * dice nada. La causa vive en el cuerpo de la respuesta, que Telegram devuelve
+ * como `{ ok:false, error_code:400, description:"Bad Request: chat not found" }`.
+ * Sin `description` un 400 es indistinguible de otro y no hay por donde
+ * empezar a arreglarlo — que es exactamente lo que paso con las coberturas: 24
+ * envios fallidos en 40 h, todos logueados con el mismo texto generico y
+ * ninguno accionable.
+ */
+function describeTelegramError(err) {
+  const data = err?.response?.data;
+  return {
+    status: Number(err?.response?.status) || null,
+    errorCode: Number(data?.error_code) || null,
+    // `description` es el campo canonico de Telegram; los otros dos son por si
+    // el fallo viene de un proxy que responde con otra forma.
+    description: data?.description || data?.error || data?.message || null,
+    retryAfterSec: Number(data?.parameters?.retry_after) || null,
+  };
+}
+
 function isTelegramRetryableError(err) {
   const status = Number(err?.response?.status || 0);
   return status === 429
@@ -82,6 +105,7 @@ module.exports = {
   computeBackoffMs,
   parseRetryAfterMs,
   extractTelegramRetryAfterMs,
+  describeTelegramError,
   isTelegramRetryableError,
   isAlchemyRateLimitError,
   isHyperliquidRetryableError,
