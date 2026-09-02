@@ -100,6 +100,51 @@
   margin: 0 2px;
 }
 
+/* Chip de cobertura viva. Vive en la línea de identidad y toma su tono de la
+   distancia entre lo elegido y lo que ejecuta: verde cuando coinciden, ámbar
+   cuando la elegida quedó en sombra, rojo cuando no hay hedge cubriendo. */
+.hedgeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 5px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.hedgeChipIcon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.hedgeChip_ok {
+  color: var(--uni-green);
+  border-color: rgba(var(--uni-green-rgb), 0.35);
+  background: rgba(var(--uni-green-rgb), 0.08);
+}
+
+.hedgeChip_warn {
+  color: var(--uni-amber);
+  border-color: rgba(var(--uni-amber-rgb), 0.45);
+  background: rgba(var(--uni-amber-rgb), 0.1);
+}
+
+.hedgeChip_urgent {
+  color: var(--uni-red);
+  border-color: rgba(var(--uni-red-rgb), 0.5);
+  background: rgba(var(--uni-red-rgb), 0.1);
+}
+
+.hedgeChip_muted {
+  color: var(--uni-text-3);
+  border-color: var(--uni-border);
+}
+
 .badge {
   flex-shrink: 0;
   padding: 5px 11px;

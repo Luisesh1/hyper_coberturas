@@ -2,7 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { RANGE_EXIT_V1 } = require('../src/services/range-exit-policy.service');
-const { policyOwnsFullDelta, FULL_DELTA_POLICIES } = require('../src/services/protected-pool-delta-neutral.helpers');
+const {
+  policyOwnsFullDelta,
+  FULL_DELTA_POLICIES,
+  resolveProtectionLivePolicy,
+} = require('../src/services/protected-pool-delta-neutral.helpers');
 const { resolveLivePolicy, resolveShadowPolicies, ALL_POLICIES } = require('../src/services/protected-pool-delta-neutral/shadow-policies');
 const { protectionConfigSchema } = require('../src/schemas/lp-orchestrator.schema');
 
@@ -49,4 +53,31 @@ test('el schema acepta range_exit_v1 y sigue rechazando lo que no existe', () =>
   // El enum sigue siendo un enum: una politica inventada no entra.
   const malo = protectionConfigSchema.safeParse({ ...PROTECCION_BASE, policyVersion: 'range_exit_v9' });
   assert.equal(malo.success, false);
+});
+
+// `resolveProtectionLivePolicy` es lo que el encabezado del orquestador lee
+// para decir que cobertura corre. Tiene que responder igual que el tick, que
+// resuelve `activeProtection.policyVersion || strategyState.policyVersion`.
+test('la politica viva de una proteccion se lee con la misma precedencia que el tick', () => {
+  assert.equal(resolveProtectionLivePolicy({
+    policyVersion: RANGE_EXIT_V1,
+    strategyState: { executionIntent: 'live' },
+  }), RANGE_EXIT_V1);
+
+  // Registros anteriores a la columna: la seleccion solo vive en el estado.
+  assert.equal(resolveProtectionLivePolicy({
+    policyVersion: null,
+    strategyState: { policyVersion: 'net_profit_v1', executionIntent: 'live' },
+  }), 'net_profit_v1');
+
+  // Declarada pero en sombra: quien rebalancea es legacy, y eso es lo que
+  // tiene que mostrar la tarjeta.
+  assert.equal(resolveProtectionLivePolicy({
+    policyVersion: 'net_profit_v1',
+    strategyState: { executionIntent: 'shadow' },
+  }), 'legacy_zones_v1');
+
+  // Proteccion vieja sin nada declarado: legacy, que es lo que corre.
+  assert.equal(resolveProtectionLivePolicy({ policyVersion: null, strategyState: null }), 'legacy_zones_v1');
+  assert.equal(resolveProtectionLivePolicy(null), null);
 });

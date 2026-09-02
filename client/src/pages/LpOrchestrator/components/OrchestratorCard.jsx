@@ -8,6 +8,7 @@ import { formatNumber } from '../../../utils/formatters';
 import { getOrchestratorIssue } from './orchestratorIssueState';
 import { getOrchestratorSeverity } from './orchestratorSeverity';
 import { computeAccountingSummary, buildVerdictSentence } from './accountingSummary';
+import { getHedgePolicyBadge } from './hedgePolicyBadge';
 import styles from './OrchestratorCard.module.css';
 
 const PHASE_LABELS = {
@@ -98,6 +99,18 @@ export default function OrchestratorCard({
   ), [pool]);
 
   const issue = useMemo(() => getOrchestratorIssue(orchestrator), [orchestrator]);
+
+  // Qué motor de cobertura está moviendo el hedge ahora mismo. Va en la línea
+  // de identidad porque es lo que ESTE orquestador es, igual que la red o el
+  // fee tier — y no en los badges, que son el canal de alarma.
+  //
+  // Cuando la incidencia ya grita "Sin cobertura" no se repite dos veces en
+  // el mismo encabezado: el chip aporta el nombre de la política, y ahí no
+  // hay ninguna corriendo que nombrar.
+  const hedgeBadge = useMemo(
+    () => (issue?.kind === 'unprotected' ? null : getHedgePolicyBadge(orchestrator)),
+    [orchestrator, issue],
+  );
   const severity = useMemo(() => getOrchestratorSeverity(orchestrator), [orchestrator]);
 
   const summary = useMemo(
@@ -181,6 +194,18 @@ export default function OrchestratorCard({
                 <>
                   <span className={styles.dot}>·</span>
                   {formatFeeTier(orchestrator.feeTier)}
+                </>
+              )}
+              {hedgeBadge && (
+                <>
+                  <span className={styles.dot}>·</span>
+                  <span
+                    className={`${styles.hedgeChip} ${styles[`hedgeChip_${hedgeBadge.tone}`]}`}
+                    title={hedgeBadge.title}
+                  >
+                    <ShieldIcon className={styles.hedgeChipIcon} />
+                    {hedgeBadge.text}
+                  </span>
                 </>
               )}
             </span>
@@ -489,6 +514,15 @@ function ChevronIcon({ className }) {
     <svg className={className} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function ShieldIcon({ className }) {
+  return (
+    <svg className={className} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3 5 6v5.5c0 4.3 2.9 8.2 7 9.5 4.1-1.3 7-5.2 7-9.5V6z" />
     </svg>
   );
 }

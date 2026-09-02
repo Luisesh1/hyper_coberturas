@@ -6,6 +6,7 @@
  */
 
 const db = require('../db');
+const { resolveLivePolicy } = require('../services/protected-pool-delta-neutral.helpers');
 
 function exec(executor) {
   return executor || db;
@@ -41,6 +42,38 @@ const DEFAULT_ACCOUNTING = Object.freeze({
   lpCount: 0,
 });
 
+/**
+ * La cobertura tal como esta corriendo, no como se pidio.
+ *
+ * `protectionConfig` es la INTENCION guardada en el orquestador: editarla no
+ * toca la proteccion ya creada, asi que puede llevar horas diciendo algo que
+ * el hedge no hace. Lo que manda es la fila de `protected_uniswap_pools`
+ * vinculada, con la misma precedencia que usa el tick en `evaluate.js`
+ * (columna sobre estado) y la misma regla de `resolveLivePolicy`: declarada
+ * en sombra, la que ejecuta es legacy.
+ *
+ * Solo viaja en las consultas que hacen el JOIN (`getById`, `listForUser`);
+ * en el resto queda `null` y ningun consumidor lo confunde con "sin
+ * cobertura", que es `activeProtectedPoolId === null`.
+ */
+function mapActiveHedge(row) {
+  if (row.active_protected_pool_id == null) return null;
+  // Sin `status` no hay fila: o la consulta no hizo el JOIN, o el vinculo
+  // quedo colgado apuntando a una proteccion borrada. En los dos casos la
+  // respuesta honesta es "no se", no "legacy".
+  if (row.active_protection_status == null) return null;
+  const state = parseJsonSafe(row.active_protection_state_json, {}) || {};
+  const declaredPolicy = row.active_protection_policy_version || state.policyVersion || null;
+  const executionIntent = state.executionIntent || null;
+  return {
+    protectedPoolId: Number(row.active_protected_pool_id),
+    status: row.active_protection_status || null,
+    declaredPolicy,
+    executionIntent,
+    livePolicy: resolveLivePolicy({ policyVersion: declaredPolicy, executionIntent }),
+  };
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
@@ -64,6 +97,7 @@ function mapRow(row) {
     activeProtectedPoolId: row.active_protected_pool_id != null
       ? Number(row.active_protected_pool_id)
       : null,
+    activeHedge: mapActiveHedge(row),
     initialTotalUsd: Number(row.initial_total_usd),
     strategyConfig: parseJsonSafe(row.strategy_config_json, {}),
     protectionConfig: parseJsonSafe(row.protection_config_json, null),
@@ -153,7 +187,13 @@ async function create(record, executor) {
 
 async function getById(userId, id, executor) {
   const { rows } = await exec(executor).query(
-    `SELECT * FROM lp_orchestrators WHERE user_id = $1 AND id = $2`,
+    `SELECT o.*,
+            p.policy_version      AS active_protection_policy_version,
+            p.status              AS active_protection_status,
+            p.strategy_state_json AS active_protection_state_json
+       FROM lp_orchestrators o
+       LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id
+       WHERE o.user_id = $1 AND o.id = $2`,
     [userId, id]
   );
   return mapRow(rows[0]);
@@ -161,10 +201,15 @@ async function getById(userId, id, executor) {
 
 async function listForUser(userId, { includeArchived = false } = {}, executor) {
   const { rows } = await exec(executor).query(
-    `SELECT * FROM lp_orchestrators
-       WHERE user_id = $1
-         AND ($2::boolean OR status <> 'archived')
-       ORDER BY updated_at DESC, id DESC`,
+    `SELECT o.*,
+            p.policy_version      AS active_protection_policy_version,
+            p.status              AS active_protection_status,
+            p.strategy_state_json AS active_protection_state_json
+       FROM lp_orchestrators o
+       LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id
+       WHERE o.user_id = $1
+         AND ($2::boolean OR o.status <> 'archived')
+       ORDER BY o.updated_at DESC, o.id DESC`,
     [userId, includeArchived]
   );
   return rows.map(mapRow);

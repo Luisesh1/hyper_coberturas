@@ -18,11 +18,11 @@ export const POLICY_OPTIONS = [
   { value: 'legacy_zones_v1', label: 'Zonas legacy v1' },
   { value: 'net_profit_v1', label: 'Net profit v1' },
   { value: 'net_profit_v2', label: 'Net profit v2' },
-  // `range_exit_v1` solo existe como sombra: no se puede elegir al crear una
-  // proteccion (no esta en el enum del servidor), pero SI hay que poder
-  // compararla aca — para eso corre. Los snapshots anteriores a su alta no la
-  // traen, y `selectPolicySnapshot` ya los descarta por `hlAccountUsd` no
-  // finito, asi que la serie arranca el dia que se desplego.
+  // Ya se puede elegir al crear una proteccion, pero aqui sigue apareciendo
+  // como serie porque tambien corre en sombra en las que no la eligieron: para
+  // eso existe la comparativa. Los snapshots anteriores a su alta no la traen,
+  // y `selectPolicySnapshot` ya los descarta por `hlAccountUsd` no finito, asi
+  // que la serie arranca el dia que se desplego.
   { value: 'range_exit_v1', label: 'Borde de rango v1' },
 ];
 

@@ -47,7 +47,17 @@ function orchestrator(over = {}) {
       reinvestThresholdUsd: 25,
       urgentAlertRepeatMinutes: 30,
     },
-    protectionConfig: { enabled: true, accountId: 1, configuredNotionalUsd: 50 },
+    protectionConfig: { enabled: true, accountId: 1, configuredNotionalUsd: 50, policyVersion: 'net_profit_v1' },
+    // Lo que el servidor deriva de la proteccion vinculada: la eligio
+    // net_profit pero quedo en sombra, asi que el hedge lo mueve legacy. Es el
+    // caso que el chip del encabezado existe para no esconder.
+    activeHedge: {
+      protectedPoolId: 18,
+      status: 'active',
+      declaredPolicy: 'net_profit_v1',
+      executionIntent: 'shadow',
+      livePolicy: 'legacy_zones_v1',
+    },
     strategyState: {},
     lastEvaluation: {
       timeInRangePct: 96.3,
