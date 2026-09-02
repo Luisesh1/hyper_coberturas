@@ -219,9 +219,15 @@ class HyperliquidService {
         });
         const data = response.data;
 
-        // Hyperliquid devuelve errores de aplicacion con HTTP 200 y status "err"
+        // Hyperliquid devuelve errores de aplicacion con HTTP 200 y status "err".
+        // Se MARCA el error en vez de confiar en su texto: el mensaje es el que
+        // manda HL, en ingles y sin contrato estable, asi que clasificarlo por
+        // patrones deja pasar todo lo que no se anticipo (ver el comentario de
+        // `exchangeShouldRetry`).
         if (data?.status === 'err') {
-          throw new Error(data.response || 'Error en Hyperliquid API');
+          const appErr = new Error(data.response || 'Error en Hyperliquid API');
+          appErr.hlApplicationError = true;
+          throw appErr;
         }
         if (isExchangeRequest) _exchangeBreakerOnSuccess();
         endPostTimer();
@@ -234,15 +240,26 @@ class HyperliquidService {
         // pero con err.message setmanual arriba). Detectamos el caso "no response"
         // o status de servidor como señal de "desconocemos el resultado".
         const httpStatus = Number(err?.response?.status || 0);
-        const looksTransient = !err.response
-          || httpStatus === 429
-          || httpStatus >= 500
-          || /econnreset|socket hang up|timeout|etimedout|network/i.test(String(err?.message || ''));
-        const exchangeShouldRetry = exchangeRetryable
-          && looksTransient
-          // Si el error viene de nuestro propio throw de "status === 'err'" (rechazo aplicativo),
-          // err.response es undefined pero no es timeout: la comprobación de patrón en message lo descarta.
-          && !/Error en Hyperliquid API|Orden rechazada|Stop entry rechazada|SL rechazado|TP rechazado|updateIsolatedMargin rechazado/i.test(String(err?.message || ''));
+        // Un rechazo aplicativo NUNCA es transitorio: HL ya proceso el request y
+        // dijo que no. Se mira la bandera, no el mensaje.
+        const looksTransient = !err.hlApplicationError
+          && (!err.response
+            || httpStatus === 429
+            || httpStatus >= 500
+            || /econnreset|socket hang up|timeout|etimedout|network/i.test(String(err?.message || '')));
+        // Antes esto se decidia con un regex sobre el mensaje, y la lista era de
+        // textos EN ESPANOL que arma este servicio ("Orden rechazada", etc.).
+        // Pero el throw de `status === 'err'` propaga el texto CRUDO de HL, en
+        // ingles: "Position does not have sufficient margin for reduction." no
+        // matcheaba nada, y como es un throw propio `err.response` es undefined,
+        // asi que `looksTransient` daba true y se reintentaba.
+        //
+        // El reintento repite el MISMO payload y por lo tanto el mismo nonce, asi
+        // que HL siempre contestaba "Invalid nonce: duplicate nonce". No podia
+        // funcionar nunca, y ademas PISABA la causa real: el 31 ago quedaron
+        // >1300 filas de `protection_decision_log` culpando al nonce cuando el
+        // problema era margen.
+        const exchangeShouldRetry = exchangeRetryable && looksTransient;
 
         if ((infoRetryable || exchangeShouldRetry) && attempt < safeMaxRetries) {
           const retryAfterHeader = err.response?.headers?.['retry-after'];
@@ -421,6 +438,14 @@ class HyperliquidService {
       throw new Error('Wallet no configurada. Configura la clave privada en Settings.');
     }
     const now = Date.now();
+    // El nonce se fija UNA vez por accion y `_post` reintenta el mismo payload
+    // a proposito: si el primer intento si llego a HL, el reintento choca con
+    // "duplicate nonce" y NO se ejecuta dos veces. O sea, reusar el nonce es el
+    // mecanismo de deduplicacion para fallos de red, no un descuido.
+    //
+    // Por eso el arreglo del bug de reintentos fue dejar de clasificar los
+    // rechazos aplicativos como transitorios, y NO refirmar con nonce nuevo:
+    // refirmar convertiria un timeout en una posible doble ejecucion.
     const nonce = Math.max(now, this._lastNonce + 1);
     this._lastNonce = nonce;
     const signature = await this._signAction(action, nonce, vaultAddress);
