@@ -160,24 +160,6 @@ export default function OrchestratorRangeBar({
         )}
       </div>
 
-      {/* Corchete rotulado: la zona de la cobertura lleva su nombre escrito
-          encima, en vez de depender de que alguien ate una textura a una
-          leyenda tres líneas más abajo. */}
-      {deadZone && (
-        <div className={styles.bracketRow}>
-          <div
-            className={styles.bracket}
-            style={{ left: `${deadZone.leftPct}%`, width: `${deadZone.widthPct}%` }}
-          />
-          <span
-            className={styles.bracketLabel}
-            style={{ left: `${deadZone.leftPct + deadZone.widthPct / 2}%` }}
-          >
-            Cobertura congelada
-          </span>
-        </div>
-      )}
-
       <div className={styles.track}>
         {/* Borde inferior (warning zone) */}
         <div
@@ -202,17 +184,15 @@ export default function OrchestratorRangeBar({
         <div className={styles.centralEdge} style={{ left: `${centralLowPct}%` }} />
         <div className={styles.centralEdge} style={{ left: `${centralHighPct}%` }} />
 
-        {/* Zona muerta de la COBERTURA: la ÚNICA región del track con relleno
-            propio. Las zonas del LP quedan de fondo tenue (ver .zoneEdge /
-            .zoneCentral): con las dos al mismo peso, dos bandas centradas de
-            anchos distintos se leían como una sola mal dibujada. */}
+        {/* Zona muerta de la COBERTURA. Va rayada y sin color propio: un fondo
+            plano se confundiria con las zonas del LP que ya pinta el track, y
+            son dos cosas distintas —aquellas gobiernan el rebalanceo del LP,
+            esta el del hedge. */}
         {deadZone && (
           <div
             className={`${styles.deadZone} ${frozenNow ? styles.deadZoneActive : ''}`}
             style={{ left: `${deadZone.leftPct}%`, width: `${deadZone.widthPct}%` }}
-            title={deadZone.kind === 'full_range'
-              ? 'La cobertura no rebalancea mientras el precio siga dentro del rango'
-              : `La cobertura no rebalancea entre ${formatCompactPrice(deadZone.lowerPrice)} y ${formatCompactPrice(deadZone.upperPrice)} — el ${formatNumber(deadZone.pct, 0)}% central del rango`}
+            title={`La cobertura no rebalancea entre ${formatCompactPrice(deadZone.lowerPrice)} y ${formatCompactPrice(deadZone.upperPrice)}`}
           />
         )}
 
@@ -252,19 +232,20 @@ export default function OrchestratorRangeBar({
 
       {deadZone && (
         <div className={styles.deadZoneLegend}>
-          <span className={styles.legendChip}>
-            <span className={styles.deadZoneSwatch} aria-hidden="true" />
+          <span className={styles.deadZoneSwatch} aria-hidden="true" />
+          <span>
             {deadZone.kind === 'full_range' ? (
-              <>todo el rango: sólo reajusta al salir y al volver a entrar</>
+              <>
+                Cobertura congelada en <strong>todo el rango</strong>: sólo reajusta al salir y al
+                volver a entrar
+              </>
             ) : (
-              <strong className={styles.legendRange}>
-                {formatCompactPrice(deadZone.lowerPrice)}–{formatCompactPrice(deadZone.upperPrice)}
-              </strong>
+              <>
+                Cobertura congelada entre <strong>{formatCompactPrice(deadZone.lowerPrice)}</strong> y{' '}
+                <strong>{formatCompactPrice(deadZone.upperPrice)}</strong>{' '}
+                ({formatNumber(deadZone.pct, 0)}% central del rango)
+              </>
             )}
-          </span>
-          <span className={styles.legendChip}>
-            <span className={styles.centralSwatch} aria-hidden="true" />
-            centro del LP
           </span>
           <span className={frozenNow ? styles.deadZoneNowFrozen : styles.deadZoneNowLive}>
             {frozenNow ? 'ahora no rebalancea' : 'ahora sí rebalancea'}
