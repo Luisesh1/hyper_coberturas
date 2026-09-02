@@ -8,6 +8,8 @@ import OrchestratorCard from './components/OrchestratorCard';
 import EditOrchestratorConfigModal from './components/EditOrchestratorConfigModal';
 import ActionLogDrawer from './components/ActionLogDrawer';
 import OrchestratorIssueModal from './components/OrchestratorIssueModal';
+import ActionQueue from './components/ActionQueue';
+import { buildActionQueue } from './components/orchestratorSeverity';
 import PositionActionModal from '../UniswapPools/components/PositionActionModal';
 import UnifiedLpWizard from '../../features/lp-wizard/UnifiedLpWizard';
 import SmartAddLiquidityModal from '../UniswapPools/components/SmartAddLiquidityModal';
@@ -502,6 +504,20 @@ export default function LpOrchestratorPage() {
     });
   }, [orchestrators, showInactive, filter, searchTerm]);
 
+  // Cola de trabajo: se arma sobre lo VISIBLE, no sobre la lista completa. Si
+  // el usuario filtró o buscó, la cola tiene que hablar de lo que está mirando;
+  // una cola que contradice el filtro activo es ruido, no ayuda.
+  const actionQueue = useMemo(
+    () => buildActionQueue(visibleOrchestrators.filter((o) => o.status === 'active')),
+    [visibleOrchestrators],
+  );
+
+  const focusOrchestrator = useCallback((orch) => {
+    const node = document.getElementById(`orchestrator-${orch.id}`);
+    if (!node) return;
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
   const positionActionDefaults = useMemo(() => {
     if (!activeAction) return {};
     const orch = activeAction.orchestrator;
@@ -660,10 +676,16 @@ export default function LpOrchestratorPage() {
         />
       )}
 
+      <ActionQueue
+        items={actionQueue}
+        onFocus={focusOrchestrator}
+        onResolve={(orch) => setIssueModalFor(orch)}
+      />
+
       <div className={styles.grid}>
         {visibleOrchestrators.map((orch) => (
+          <div key={orch.id} id={`orchestrator-${orch.id}`} className={styles.gridItem}>
           <OrchestratorCard
-            key={orch.id}
             orchestrator={orch}
             isEvaluating={evaluatingId === orch.id}
             walletConnected={walletConn.isConnected}
@@ -678,6 +700,7 @@ export default function LpOrchestratorPage() {
             onShowIssue={setIssueModalFor}
             onEditConfig={setEditConfigFor}
           />
+          </div>
         ))}
       </div>
 

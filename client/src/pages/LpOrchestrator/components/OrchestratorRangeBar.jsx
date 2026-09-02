@@ -3,11 +3,6 @@ import { formatCompactPrice } from '../../UniswapPools/utils/pool-formatters';
 import { formatNumber, formatDuration } from '../../../utils/formatters';
 import styles from './OrchestratorRangeBar.module.css';
 
-function clampPct(value) {
-  if (!Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(100, value));
-}
-
 function getBoundedPinLeft(pct) {
   if (pct == null) return undefined;
   return `clamp(40px, ${pct}%, calc(100% - 40px))`;
@@ -27,7 +22,6 @@ export default function OrchestratorRangeBar({
   pool,
   edgeMarginPct = 40,
   activeForMs = null,
-  timeInRangePct = null,
 }) {
   const rangeBar = getRangeBarData(pool);
   if (!rangeBar) return null;
@@ -147,31 +141,6 @@ export default function OrchestratorRangeBar({
         <span className={styles.edgeValue}>{formatCompactPrice(upperPrice)}</span>
       </div>
 
-      {(activeForMs != null || timeInRangePct != null) && (
-        <div className={styles.metricsRow}>
-          {activeForMs != null && (
-            <div className={styles.metric}>
-              <span className={styles.metricLabel}>Tiempo abierto</span>
-              <span className={styles.metricValue}>{formatDuration(activeForMs)}</span>
-            </div>
-          )}
-          {timeInRangePct != null && (
-            <div className={styles.metric}>
-              <span className={styles.metricLabel}>En rango</span>
-              <span className={`${styles.metricValue} ${styles[`metric_${rangeBarTone(timeInRangePct)}`]}`}>
-                {formatNumber(timeInRangePct, 1)}%
-              </span>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
-}
-
-function rangeBarTone(pct) {
-  if (pct == null) return 'neutral';
-  if (pct >= 80) return 'ok';
-  if (pct >= 50) return 'warn';
-  return 'urgent';
 }

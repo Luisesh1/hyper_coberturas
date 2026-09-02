@@ -1,0 +1,40 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--uni-border);
+  background: var(--uni-surface-panel-soft);
+  color: var(--uni-text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  max-width: 100%;
+}
+
+.chip:hover {
+  color: var(--uni-text-1);
+  border-color: var(--uni-border-strong);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--uni-cyan);
+  outline-offset: 2px;
+}
+
+.address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* El icono de copiar se mantiene tenue hasta el hover: es una comodidad, no
+   una acción que deba competir con el resto del encabezado. */
+.action {
+  display: inline-flex;
+  opacity: 0.55;
+}
+.chip:hover .action { opacity: 1; }

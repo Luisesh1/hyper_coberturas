@@ -1,14 +1,40 @@
 .card {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px 18px 18px;
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
   border-radius: 18px;
+  overflow: hidden;
   border: 1px solid var(--uni-border);
   background: var(--uni-surface-card);
   box-shadow: var(--uni-shadow);
   position: relative;
   transition: border-color 0.18s ease, transform 0.12s ease;
+}
+
+/* Riel de severidad: 4px de color a la izquierda dicen si la tarjeta pide algo
+   antes de leer una sola palabra. Es lo que permite escanear una flota. */
+.rail {
+  width: 4px;
+  flex: none;
+  align-self: stretch;
+}
+.rail_urgent { background: var(--uni-red); }
+.rail_warn { background: var(--uni-amber); }
+.rail_ok { background: rgba(var(--uni-green-rgb), 0.5); }
+.rail_idle { background: var(--uni-border-strong); }
+
+.card_urgent { border-color: rgba(var(--uni-red-rgb), 0.4); }
+.card_warn { border-color: rgba(var(--uni-amber-rgb), 0.34); }
+.card_idle { opacity: 0.86; }
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 18px;
+  flex: 1;
+  min-width: 0;
 }
 
 .card:hover {
@@ -494,4 +520,288 @@
     flex: 1;
     justify-content: flex-end;
   }
+}
+
+
+/* ═══════════ Veredicto ═══════════
+   El neto en dólares y en porcentaje, con la frase que hace la suma por el
+   usuario. Antes esto era una fila chica al final de doce celdas. */
+.verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 15px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--uni-border);
+  background: var(--uni-surface-panel-soft);
+}
+.verdict_negative {
+  background: rgba(var(--uni-red-rgb), 0.06);
+  border-color: rgba(var(--uni-red-rgb), 0.2);
+}
+.verdict_positive {
+  background: rgba(var(--uni-green-rgb), 0.06);
+  border-color: rgba(var(--uni-green-rgb), 0.2);
+}
+
+.verdictHead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.verdictLabel {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--uni-text-2);
+  width: 100%;
+}
+.verdictValue {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.verdictUsd {
+  font-family: var(--font-mono);
+  font-size: 1.75rem;
+  font-weight: var(--fw-bold);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.verdictPct {
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+}
+.verdict_negative .verdictUsd,
+.verdict_negative .verdictPct { color: var(--uni-red); }
+.verdict_positive .verdictUsd,
+.verdict_positive .verdictPct { color: var(--uni-green); }
+.verdictBase {
+  font-size: var(--fs-xs);
+  color: var(--uni-text-3);
+}
+.verdictSentence {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--uni-text-1);
+}
+
+/* ═══════════ Patas plegadas ═══════════ */
+.legs {
+  border: 1px solid var(--uni-border);
+  border-radius: var(--radius-lg);
+  background: var(--uni-surface-panel);
+  overflow: hidden;
+}
+.legsSummary {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 11px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.legsSummary::-webkit-details-marker { display: none; }
+.legsSummary:hover { background: var(--overlay-soft); }
+.legsSummary:focus-visible { outline: 2px solid var(--uni-cyan); outline-offset: -2px; }
+
+.leg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.legChevron {
+  color: var(--uni-text-3);
+  flex: none;
+  transition: transform var(--transition-fast);
+}
+.legs[open] .legChevron { transform: rotate(90deg); }
+.legLabel {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--uni-text-1);
+}
+.legValue {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  margin-left: auto;
+}
+.legDivider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--uni-border);
+  margin: 0 14px;
+  flex: none;
+}
+.legsDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--uni-border);
+  padding-top: 14px;
+}
+.positive { color: var(--uni-green); }
+.negative { color: var(--uni-red); }
+
+/* ═══════════ Chips de salud ═══════════ */
+.healthRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.healthChip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  background: var(--uni-surface-panel-soft);
+  border: 1px solid var(--uni-border);
+}
+.healthLabel {
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--uni-text-3);
+}
+.healthValue {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  color: var(--uni-text-1);
+}
+.health_ok { color: var(--uni-green); }
+.health_warn { color: var(--uni-amber); }
+.health_urgent { color: var(--uni-red); }
+.health_neutral { color: var(--uni-text-1); }
+
+/* ═══════════ Pie: meta + acciones ═══════════ */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--uni-border);
+}
+.footerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ghostBtn,
+.primaryBtn {
+  padding: 7px 13px;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.ghostBtn {
+  border: 1px solid var(--uni-border-strong);
+  background: transparent;
+  color: var(--uni-text-2);
+}
+.ghostBtn:hover:not(:disabled) { background: var(--overlay-soft); color: var(--uni-text-1); }
+.ghostBtnBusy { opacity: 0.7; }
+.primaryBtn {
+  border: 1px solid rgba(var(--uni-cyan-rgb), 0.32);
+  background: var(--btn-primary-bg);
+  color: var(--uni-text-0);
+}
+.primaryBtn:hover:not(:disabled) { background: var(--btn-primary-bg-hover); }
+.primaryBtn_urgent {
+  border-color: rgba(var(--uni-red-rgb), 0.45);
+  background: rgba(var(--uni-red-rgb), 0.16);
+  color: var(--uni-red);
+}
+.primaryBtn_warn {
+  border-color: rgba(var(--uni-amber-rgb), 0.45);
+  background: rgba(var(--uni-amber-rgb), 0.14);
+  color: var(--uni-amber);
+}
+.ghostBtn:disabled,
+.primaryBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ═══════════ Menú de acciones ═══════════ */
+.menuWrap { position: relative; }
+.menuBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--uni-border-strong);
+  background: transparent;
+  color: var(--uni-text-3);
+  cursor: pointer;
+}
+.menuBtn:hover { background: var(--overlay-soft); color: var(--uni-text-1); }
+
+/* Capa invisible que cierra el menú al hacer clic fuera, sin listeners
+   globales que se olviden de desmontarse. */
+.menuScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  border: none;
+  background: transparent;
+  cursor: default;
+}
+.menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 41;
+  min-width: 208px;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--uni-border-strong);
+  background: var(--uni-bg-2);
+  box-shadow: var(--shadow-dropdown);
+}
+.menuItem {
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--uni-text-1);
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menuItem:hover:not(:disabled) { background: var(--overlay-strong); }
+.menuItem:disabled { opacity: 0.4; cursor: not-allowed; }
+.menuItemDanger { color: var(--uni-red); }
+.menuItemDanger:hover:not(:disabled) { background: rgba(var(--uni-red-rgb), 0.12); }
+.menuSep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--uni-border);
+}
+
+@media (max-width: 560px) {
+  .footer { align-items: flex-start; }
+  .footerActions { width: 100%; }
+  .primaryBtn { flex: 1; }
+  .legsSummary { flex-direction: column; align-items: stretch; gap: 8px; }
+  .legDivider { width: auto; height: 1px; margin: 0; }
+  .verdictUsd { font-size: var(--fs-xl); }
 }

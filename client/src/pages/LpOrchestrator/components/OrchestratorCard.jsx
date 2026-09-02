@@ -2,8 +2,12 @@ import { useMemo, useState } from 'react';
 import OrchestratorRangeBar from './OrchestratorRangeBar';
 import AccountingPanel from './AccountingPanel';
 import ProtectionOpsPanel from './ProtectionOpsPanel';
+import OrchestratorWallet from './OrchestratorWallet';
 import { formatUsd, formatRelativeTimestamp } from '../../UniswapPools/utils/pool-formatters';
+import { formatNumber } from '../../../utils/formatters';
 import { getOrchestratorIssue } from './orchestratorIssueState';
+import { getOrchestratorSeverity } from './orchestratorSeverity';
+import { computeAccountingSummary, buildVerdictSentence } from './accountingSummary';
 import styles from './OrchestratorCard.module.css';
 
 const PHASE_LABELS = {
@@ -53,6 +57,18 @@ function formatPriceDelta(currentPrice, openPrice) {
   };
 }
 
+function formatSignedUsd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return `${n >= 0 ? '+' : '-'}${formatUsd(Math.abs(n))}`;
+}
+
+function formatSignedPct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return `${n >= 0 ? '+' : '-'}${Math.abs(n).toFixed(2)}%`;
+}
+
 export default function OrchestratorCard({
   orchestrator,
   isEvaluating,
@@ -69,339 +85,418 @@ export default function OrchestratorCard({
   onEditConfig,
 }) {
   const phaseInfo = PHASE_LABELS[orchestrator.phase] || { label: orchestrator.phase, tone: 'muted' };
-  const evaluation = orchestrator.lastEvaluation?.evaluation;
   const costEstimate = orchestrator.lastEvaluation?.costEstimate;
   const netEarnings = orchestrator.lastEvaluation?.netEarnings;
   const recommendCollect = orchestrator.lastEvaluation?.recommendCollect;
   const pool = useMemo(() => buildPoolFromOrchestrator(orchestrator), [orchestrator]);
   const hasActiveLp = !!orchestrator.activePositionIdentifier;
   const [showStrategy, setShowStrategy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const priceDelta = useMemo(() => (
     pool ? formatPriceDelta(pool.priceCurrent, pool.priceAtOpen) : null
   ), [pool]);
 
+  const issue = useMemo(() => getOrchestratorIssue(orchestrator), [orchestrator]);
+  const severity = useMemo(() => getOrchestratorSeverity(orchestrator), [orchestrator]);
+
+  const summary = useMemo(
+    () => computeAccountingSummary(orchestrator.accounting, orchestrator.initialTotalUsd),
+    [orchestrator.accounting, orchestrator.initialTotalUsd],
+  );
+  const verdictSentence = useMemo(() => buildVerdictSentence(summary), [summary]);
+  const netTone = summary.totalNetUsd == null
+    ? 'neutral'
+    : summary.totalNetUsd >= 0 ? 'positive' : 'negative';
+
+  const timeInRangePct = orchestrator.lastEvaluation?.timeInRangePct ?? null;
+
+  // El banner sólo sobrevive cuando aporta algo que el chip de incidencia no
+  // dice ya. Antes la fase, el chip y el banner repetían el mismo mensaje
+  // pegados uno debajo del otro.
   const banner = useMemo(() => {
-    if (orchestrator.phase === 'urgent_adjust') {
+    if (orchestrator.phase === 'failed' && !issue) {
       return {
         tone: 'urgent',
-        title: '🚨 Precio fuera de rango — ajustar AHORA',
-        body: evaluation?.outOfRangeSide === 'below'
-          ? 'Precio por debajo del rango.'
-          : 'Precio por encima del rango.',
+        title: 'Error en última verificación',
+        body: orchestrator.lastError || 'El estado on-chain no coincide con lo esperado. Revisa la bitácora.',
       };
     }
-    if (orchestrator.phase === 'needs_rebalance') {
+    if (orchestrator.phase === 'needs_rebalance' && costEstimate && netEarnings) {
       return {
         tone: 'warn',
-        title: '⚠ Rebalanceo recomendado',
-        body: costEstimate && netEarnings
-          ? `Coste estimado ${formatUsd(costEstimate.totalCostUsd)} vs ganancias netas ${formatUsd(netEarnings)} (ratio ${(costEstimate.totalCostUsd / Math.max(netEarnings, 1e-9)).toFixed(2)}).`
-          : null,
-      };
-    }
-    if (orchestrator.phase === 'failed') {
-      return {
-        tone: 'urgent',
-        title: '❌ Error en última verificación',
-        body: orchestrator.lastError || 'El estado on-chain no coincide con lo esperado. Revisa la bitácora.',
+        title: 'Rebalanceo recomendado',
+        body: `Coste estimado ${formatUsd(costEstimate.totalCostUsd)} vs ganancias netas ${formatUsd(netEarnings)} (ratio ${(costEstimate.totalCostUsd / Math.max(netEarnings, 1e-9)).toFixed(2)}).`,
       };
     }
     if (recommendCollect) {
       return {
         tone: 'info',
-        title: '💰 Fees listas para cobrar',
+        title: 'Fees listas para cobrar',
         body: `Fees acumuladas: ${formatUsd(orchestrator.lastEvaluation?.unclaimedFeesUsd)}.`,
       };
     }
     return null;
-  }, [orchestrator, evaluation, costEstimate, netEarnings, recommendCollect]);
+  }, [orchestrator, issue, costEstimate, netEarnings, recommendCollect]);
 
-  // Construye lista priorizada de acciones según el estado actual del orquestador.
-  // El "primary" se renderiza primero y con tono destacado; el resto va detrás.
-  const lpActions = useMemo(() => {
-    const baseActions = [
-      { id: 'modify-range', label: 'Ajustar rango', icon: '🎯' },
-      { id: 'rebalance', label: 'Rebalancear', icon: '⚖' },
-      { id: 'collect-fees', label: 'Cobrar fees', icon: '💰' },
-      { id: 'reinvest-fees', label: 'Reinvertir fees', icon: '♻' },
-      { id: 'increase-liquidity', label: 'Agregar liquidez', icon: '➕' },
-      { id: 'decrease-liquidity', label: 'Reducir liquidez', icon: '➖' },
+  // Acciones del LP: una primaria a la vista, el resto detrás del menú. Antes
+  // las seis competían en la misma fila con las dos destructivas.
+  const { primaryAction, secondaryActions } = useMemo(() => {
+    const base = [
+      { id: 'modify-range', label: 'Ajustar rango' },
+      { id: 'rebalance', label: 'Rebalancear' },
+      { id: 'collect-fees', label: 'Cobrar fees' },
+      { id: 'reinvest-fees', label: 'Reinvertir fees' },
+      { id: 'increase-liquidity', label: 'Agregar liquidez' },
+      { id: 'decrease-liquidity', label: 'Reducir liquidez' },
     ];
-    const ordered = [...baseActions];
-    let primaryId = null;
-    let primaryTone = null;
-    if (orchestrator.phase === 'urgent_adjust') {
-      primaryId = 'modify-range'; primaryTone = 'urgent';
-    } else if (orchestrator.phase === 'needs_rebalance') {
-      primaryId = 'modify-range'; primaryTone = 'warn';
-    } else if (recommendCollect) {
-      primaryId = 'collect-fees'; primaryTone = 'info';
-    }
-    if (primaryId) {
-      const idx = ordered.findIndex((a) => a.id === primaryId);
-      if (idx > 0) {
-        const [primary] = ordered.splice(idx, 1);
-        ordered.unshift({ ...primary, primary: true, tone: primaryTone });
-      } else if (idx === 0) {
-        ordered[0] = { ...ordered[0], primary: true, tone: primaryTone };
-      }
-    }
-    return ordered;
+    let primaryId = 'modify-range';
+    let tone = null;
+    if (orchestrator.phase === 'urgent_adjust') tone = 'urgent';
+    else if (orchestrator.phase === 'needs_rebalance') tone = 'warn';
+    else if (recommendCollect) { primaryId = 'collect-fees'; tone = 'info'; }
+
+    const idx = base.findIndex((a) => a.id === primaryId);
+    const [primary] = base.splice(idx, 1);
+    return { primaryAction: { ...primary, tone }, secondaryActions: base };
   }, [orchestrator.phase, recommendCollect]);
 
   const strategyConfig = orchestrator.strategyConfig || {};
-  const issue = useMemo(() => getOrchestratorIssue(orchestrator), [orchestrator]);
+  const runAction = (id) => { setMenuOpen(false); onAction(id, orchestrator, pool); };
 
   return (
-    <article className={`${styles.card} ${styles[phaseInfo.tone]}`}>
-      <header className={styles.header}>
-        <div className={styles.headerInfo}>
-          <h3 className={styles.name}>{orchestrator.name}</h3>
-          <span className={styles.subtitle}>
-            <strong className={styles.pair}>{orchestrator.token0Symbol}/{orchestrator.token1Symbol}</strong>
-            <span className={styles.dot}>·</span>
-            {orchestrator.network} · {orchestrator.version}
-            {orchestrator.feeTier != null && (
-              <>
-                <span className={styles.dot}>·</span>
-                {formatFeeTier(orchestrator.feeTier)}
-              </>
+    <article className={`${styles.card} ${styles[`card_${severity}`]}`}>
+      {/* Riel de severidad: dice si esta tarjeta pide algo antes de leer nada. */}
+      <span className={`${styles.rail} ${styles[`rail_${severity}`]}`} aria-hidden="true" />
+
+      <div className={styles.body}>
+        <header className={styles.header}>
+          <div className={styles.headerInfo}>
+            <h3 className={styles.name}>{orchestrator.name}</h3>
+            <span className={styles.subtitle}>
+              <strong className={styles.pair}>{orchestrator.token0Symbol}/{orchestrator.token1Symbol}</strong>
+              <span className={styles.dot}>·</span>
+              {orchestrator.network} · {orchestrator.version}
+              {orchestrator.feeTier != null && (
+                <>
+                  <span className={styles.dot}>·</span>
+                  {formatFeeTier(orchestrator.feeTier)}
+                </>
+              )}
+            </span>
+            <OrchestratorWallet address={orchestrator.walletAddress} />
+          </div>
+          <div className={styles.headerBadges}>
+            {issue ? (
+              <button
+                type="button"
+                className={`${styles.issueChip} ${styles[`issueChip_${issue.tone}`]}`}
+                onClick={() => onShowIssue?.(orchestrator)}
+                title="Ver detalle del problema del orquestador"
+              >
+                {issue.chipLabel}
+              </button>
+            ) : (
+              <span className={`${styles.badge} ${styles[`badge_${phaseInfo.tone}`]}`}>
+                {phaseInfo.label}
+              </span>
             )}
-          </span>
-        </div>
-        <div className={styles.headerBadges}>
-          {issue && (
-            <button
-              type="button"
-              className={`${styles.issueChip} ${styles[`issueChip_${issue.tone}`]}`}
-              onClick={() => onShowIssue?.(orchestrator)}
-              title="Ver detalle del problema del orquestador"
-            >
-              <span className={styles.issueChipIcon}>{issue.icon}</span>
-              {issue.chipLabel}
-            </button>
-          )}
-          <span className={`${styles.badge} ${styles[`badge_${phaseInfo.tone}`]}`}>
-            {phaseInfo.label}
-          </span>
-        </div>
-      </header>
+          </div>
+        </header>
 
-      {banner && (
-        <div className={`${styles.banner} ${styles[`banner_${banner.tone}`]}`}>
-          <strong>{banner.title}</strong>
-          {banner.body && <span>{banner.body}</span>}
-        </div>
-      )}
+        {banner && (
+          <div className={`${styles.banner} ${styles[`banner_${banner.tone}`]}`}>
+            <strong>{banner.title}</strong>
+            {banner.body && <span>{banner.body}</span>}
+          </div>
+        )}
 
-      {hasActiveLp ? (
-        pool && (
-          <>
+        {hasActiveLp ? (
+          pool && (
             <OrchestratorRangeBar
               pool={pool}
               edgeMarginPct={Number(strategyConfig.edgeMarginPct) || 40}
               activeForMs={pool.activeForMs ?? null}
-              timeInRangePct={orchestrator.lastEvaluation?.timeInRangePct ?? null}
             />
+          )
+        ) : (
+          <div className={styles.idleState}>
+            <div className={styles.idleText}>
+              <strong>Sin LP activo</strong>
+              <span>Crea el primer LP para que el orquestador empiece a evaluarlo cada 30 s.</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── VEREDICTO ── Lo primero que se lee, y lo único grande. */}
+        {summary.totalNetUsd != null && (
+          <div className={`${styles.verdict} ${styles[`verdict_${netTone}`]}`}>
+            <div className={styles.verdictHead}>
+              <span className={styles.verdictLabel}>P&amp;L neto</span>
+              <div className={styles.verdictValue}>
+                <span className={styles.verdictUsd}>{formatSignedUsd(summary.totalNetUsd)}</span>
+                {summary.netPct != null && (
+                  <span className={styles.verdictPct}>{formatSignedPct(summary.netPct)}</span>
+                )}
+              </div>
+              {orchestrator.initialTotalUsd != null && (
+                <span className={styles.verdictBase}>sobre {formatUsd(orchestrator.initialTotalUsd)} de capital</span>
+              )}
+            </div>
+            {verdictSentence && <p className={styles.verdictSentence}>{verdictSentence}</p>}
+          </div>
+        )}
+
+        {/* Las dos patas, plegadas. El detalle vive detrás del disclosure. */}
+        {summary.totalNetUsd != null && (
+          <details className={styles.legs}>
+            <summary className={styles.legsSummary}>
+              <span className={styles.leg}>
+                <ChevronIcon className={styles.legChevron} />
+                <span className={styles.legLabel}>Posición LP</span>
+                <span className={`${styles.legValue} ${summary.lpNetUsd >= 0 ? styles.positive : styles.negative}`}>
+                  {formatSignedUsd(summary.lpNetUsd)}
+                </span>
+              </span>
+              <span className={styles.legDivider} aria-hidden="true" />
+              <span className={styles.leg}>
+                <span className={styles.legLabel}>Cobertura</span>
+                <span className={`${styles.legValue} ${summary.hedgeNetUsd >= 0 ? styles.positive : styles.negative}`}>
+                  {formatSignedUsd(summary.hedgeNetUsd)}
+                </span>
+              </span>
+            </summary>
+            <div className={styles.legsDetail}>
+              <AccountingPanel
+                accounting={orchestrator.accounting}
+                createdAt={orchestrator.createdAt}
+                initialTotalUsd={orchestrator.initialTotalUsd}
+                unclaimedFeesUsd={
+                  orchestrator.lastEvaluation?.unclaimedFeesUsd
+                  ?? orchestrator.lastEvaluation?.poolSnapshot?.unclaimedFeesUsd
+                  ?? null
+                }
+              />
+              <ProtectionOpsPanel
+                orchestratorId={orchestrator.id}
+                hasProtection={!!orchestrator.activeProtectedPoolId}
+              />
+            </div>
+          </details>
+        )}
+
+        {/* Salud: sólo métricas que EXISTEN en el payload. Un hueco es
+            preferible a un número inventado. */}
+        {(timeInRangePct != null || priceDelta) && (
+          <div className={styles.healthRow}>
+            {timeInRangePct != null && (
+              <div className={styles.healthChip}>
+                <span className={styles.healthLabel}>Tiempo en rango</span>
+                <span className={`${styles.healthValue} ${styles[`health_${tirTone(timeInRangePct)}`]}`}>
+                  {formatNumber(timeInRangePct, 1)}%
+                </span>
+              </div>
+            )}
             {priceDelta && (
-              <div className={styles.priceDeltaRow}>
-                <span className={styles.priceDeltaLabel}>vs apertura</span>
-                <span className={`${styles.priceDeltaValue} ${styles[`delta_${priceDelta.tone}`]}`}>
+              <div className={styles.healthChip}>
+                <span className={styles.healthLabel}>Precio vs apertura</span>
+                <span className={`${styles.healthValue} ${styles[`delta_${priceDelta.tone}`]}`}>
                   {priceDelta.text}
                 </span>
               </div>
             )}
-          </>
-        )
-      ) : (
-        <div className={styles.idleState}>
-          <span className={styles.idleIcon}>🌱</span>
-          <div className={styles.idleText}>
-            <strong>Sin LP activo</strong>
-            <span>Crea el primer LP para que el orquestador empiece a evaluarlo cada 30 s.</span>
           </div>
-        </div>
-      )}
+        )}
 
-      <AccountingPanel
-        accounting={orchestrator.accounting}
-        createdAt={orchestrator.createdAt}
-        initialTotalUsd={orchestrator.initialTotalUsd}
-        unclaimedFeesUsd={
-          orchestrator.lastEvaluation?.unclaimedFeesUsd
-          ?? orchestrator.lastEvaluation?.poolSnapshot?.unclaimedFeesUsd
-          ?? null
-        }
-      />
+        <details
+          className={styles.strategyBlock}
+          open={showStrategy}
+          onToggle={(e) => setShowStrategy(e.currentTarget.open)}
+        >
+          <summary className={styles.strategySummary}>
+            <span>Estrategia</span>
+            <span className={styles.strategyHint}>
+              ±{strategyConfig.rangeWidthPct ?? '?'}% · borde {strategyConfig.edgeMarginPct ?? '?'}%
+            </span>
+          </summary>
+          <div className={styles.strategyGrid}>
+            <StrategyCell label="Ancho rango" value={`±${strategyConfig.rangeWidthPct ?? '?'}%`} />
+            {(() => {
+              const rec = orchestrator.lastEvaluation?.rangeRecommendation;
+              const recW = rec?.recommendedWidthPct;
+              const curW = Number(strategyConfig.rangeWidthPct);
+              if (recW == null || !Number.isFinite(curW) || Math.abs(recW - curW) <= 0.5) return null;
+              const dir = recW > curW ? '↑ ensanchar' : '↓ angostar';
+              return <StrategyCell label="Ancho sugerido" value={`±${recW}% (${dir})`} highlight />;
+            })()}
+            <StrategyCell label="Margen borde" value={`${strategyConfig.edgeMarginPct ?? '?'}%`} />
+            <StrategyCell
+              label="Banda central"
+              value={strategyConfig.edgeMarginPct != null
+                ? `${(100 - 2 * Number(strategyConfig.edgeMarginPct)).toFixed(0)}%`
+                : '?'}
+            />
+            <StrategyCell label="Coste/recompensa" value={strategyConfig.costToRewardThreshold ?? '?'} />
+            <StrategyCell label="Reinvest umbral" value={`$${strategyConfig.reinvestThresholdUsd ?? 0}`} />
+            <StrategyCell label="Alerta repite" value={`${strategyConfig.urgentAlertRepeatMinutes ?? 30}m`} />
+          </div>
+        </details>
 
-      <ProtectionOpsPanel
-        orchestratorId={orchestrator.id}
-        hasProtection={!!orchestrator.activeProtectedPoolId}
-      />
-
-      <details
-        className={styles.strategyBlock}
-        open={showStrategy}
-        onToggle={(e) => setShowStrategy(e.currentTarget.open)}
-      >
-        <summary className={styles.strategySummary}>
-          <span>⚙ Estrategia</span>
-          <span className={styles.strategyHint}>
-            ±{strategyConfig.rangeWidthPct ?? '?'}% · borde {strategyConfig.edgeMarginPct ?? '?'}%
+        {/* ── ACCIONES ── Una primaria. El resto y lo destructivo, en el menú. */}
+        <div className={styles.footer}>
+          <span className={styles.metaInfo}>
+            <span className={styles.evalDot} />
+            evaluado {formatRelativeTimestamp(orchestrator.lastEvaluationAt)}
           </span>
-        </summary>
-        <div className={styles.strategyGrid}>
-          <StrategyCell label="Ancho rango" value={`±${strategyConfig.rangeWidthPct ?? '?'}%`} />
-          {(() => {
-            const rec = orchestrator.lastEvaluation?.rangeRecommendation;
-            const recW = rec?.recommendedWidthPct;
-            const curW = Number(strategyConfig.rangeWidthPct);
-            // Solo mostramos la sugerencia si difiere de forma accionable (>0.5%)
-            // del ancho actual — evita ruido cuando ya está bien calibrado.
-            if (recW == null || !Number.isFinite(curW) || Math.abs(recW - curW) <= 0.5) {
-              return null;
-            }
-            const dir = recW > curW ? '↑ ensanchar' : '↓ angostar';
-            return (
-              <StrategyCell
-                label="Ancho sugerido"
-                value={`±${recW}% (${dir})`}
-                highlight
-              />
-            );
-          })()}
-          <StrategyCell label="Margen borde" value={`${strategyConfig.edgeMarginPct ?? '?'}%`} />
-          <StrategyCell
-            label="Banda central"
-            value={strategyConfig.edgeMarginPct != null
-              ? `${(100 - 2 * Number(strategyConfig.edgeMarginPct)).toFixed(0)}%`
-              : '?'}
-          />
-          <StrategyCell label="Coste/recompensa" value={strategyConfig.costToRewardThreshold ?? '?'} />
-          <StrategyCell label="Reinvest umbral" value={`$${strategyConfig.reinvestThresholdUsd ?? 0}`} />
-          <StrategyCell label="Alerta repite" value={`${strategyConfig.urgentAlertRepeatMinutes ?? 30}m`} />
-        </div>
-      </details>
 
-      <div className={styles.meta}>
-        <span className={styles.metaInfo}>
-          <span className={styles.evalDot} />
-          Última evaluación: {formatRelativeTimestamp(orchestrator.lastEvaluationAt)}
-        </span>
-        <div className={styles.metaActions}>
-          <button
-            type="button"
-            className={styles.metaBtn}
-            onClick={() => onShowLog?.(orchestrator)}
-            title="Ver bitácora de decisiones"
-          >
-            📋 Bitácora
-          </button>
-          <button
-            type="button"
-            className={styles.metaBtn}
-            onClick={() => onEditConfig?.(orchestrator)}
-            disabled={!onEditConfig}
-            title="Editar estrategia y protección del orquestador"
-          >
-            ⚙ Editar config
-          </button>
-          <button
-            type="button"
-            className={`${styles.metaBtn} ${isEvaluating ? styles.metaBtnBusy : ''}`}
-            onClick={() => onEvaluate(orchestrator)}
-            disabled={isEvaluating}
-            title="Forzar evaluación inmediata"
-          >
-            {isEvaluating ? '⟳ Evaluando…' : '⟳ Refrescar'}
-          </button>
-        </div>
-      </div>
+          <div className={styles.footerActions}>
+            <button
+              type="button"
+              className={`${styles.ghostBtn} ${isEvaluating ? styles.ghostBtnBusy : ''}`}
+              onClick={() => onEvaluate(orchestrator)}
+              disabled={isEvaluating}
+              title="Forzar evaluación inmediata"
+            >
+              {isEvaluating ? 'Evaluando…' : 'Refrescar'}
+            </button>
 
-      <div className={styles.actions}>
-        {hasActiveLp ? (
-          <>
-            {lpActions.map((action) => (
+            {hasActiveLp ? (
               <button
-                key={action.id}
                 type="button"
-                className={`${styles.actionBtn} ${action.primary ? styles.actionPrimary : ''} ${action.tone ? styles[`action_${action.tone}`] : ''}`}
-                onClick={() => onAction(action.id, orchestrator, pool)}
+                className={`${styles.primaryBtn} ${primaryAction.tone ? styles[`primaryBtn_${primaryAction.tone}`] : ''}`}
+                onClick={() => runAction(primaryAction.id)}
                 disabled={!walletConnected}
                 title={!walletConnected ? 'Conecta una wallet para firmar' : ''}
               >
-                <span className={styles.actionIcon}>{action.icon}</span>
-                {action.label}
+                {primaryAction.label}
               </button>
-            ))}
-            <button
-              type="button"
-              className={`${styles.actionBtn} ${styles.killBtn}`}
-              onClick={() => onKill(orchestrator)}
-              disabled={!walletConnected}
-              title="Cierra el LP activo. La contabilidad del orquestador se conserva."
-            >
-              <span className={styles.actionIcon}>🔪</span>
-              Matar LP
-            </button>
-            <button
-              type="button"
-              className={`${styles.actionBtn} ${styles.killArchiveBtn}`}
-              onClick={() => onKillAndArchive?.(orchestrator)}
-              disabled={!walletConnected || !onKillAndArchive}
-              title="Cierra el LP conservando los tokens (sin convertir a stable) y archiva el orquestador. Irreversible."
-            >
-              <span className={styles.actionIcon}>💀</span>
-              Cerrar y archivar
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              className={`${styles.actionBtn} ${styles.actionPrimary}`}
-              onClick={() => onCreateNewLp(orchestrator)}
-              disabled={!walletConnected}
-            >
-              <span className={styles.actionIcon}>＋</span>
-              Crear nuevo LP
-            </button>
-            <button
-              type="button"
-              className={styles.actionBtn}
-              onClick={() => onAdoptLp?.(orchestrator)}
-              disabled={!walletConnected || !onAdoptLp}
-              title="Vincula un LP que ya existe en tu wallet (mismo par y red) al orquestador. Útil cuando un LP recién creado no quedó vinculado por un error transitorio."
-            >
-              <span className={styles.actionIcon}>🔗</span>
-              Adoptar LP existente
-            </button>
-            <button
-              type="button"
-              className={`${styles.actionBtn} ${styles.archiveBtn}`}
-              onClick={() => onArchive(orchestrator)}
-              title="Archiva el orquestador. Solo si no hay LP activo."
-            >
-              <span className={styles.actionIcon}>📦</span>
-              Archivar
-            </button>
-          </>
-        )}
+            ) : (
+              <button
+                type="button"
+                className={styles.primaryBtn}
+                onClick={() => onCreateNewLp(orchestrator)}
+                disabled={!walletConnected}
+                title={!walletConnected ? 'Conecta una wallet para firmar' : ''}
+              >
+                Crear nuevo LP
+              </button>
+            )}
+
+            <div className={styles.menuWrap}>
+              <button
+                type="button"
+                className={styles.menuBtn}
+                onClick={() => setMenuOpen((v) => !v)}
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                aria-label="Más acciones"
+              >
+                <DotsIcon />
+              </button>
+              {menuOpen && (
+                <>
+                  <button
+                    type="button"
+                    className={styles.menuScrim}
+                    onClick={() => setMenuOpen(false)}
+                    aria-label="Cerrar menú de acciones"
+                    tabIndex={-1}
+                  />
+                  <div className={styles.menu} role="menu">
+                    <button type="button" role="menuitem" className={styles.menuItem}
+                      onClick={() => { setMenuOpen(false); onShowLog?.(orchestrator); }}>
+                      Bitácora
+                    </button>
+                    <button type="button" role="menuitem" className={styles.menuItem}
+                      onClick={() => { setMenuOpen(false); onEditConfig?.(orchestrator); }}
+                      disabled={!onEditConfig}>
+                      Editar configuración
+                    </button>
+
+                    {hasActiveLp ? (
+                      <>
+                        <span className={styles.menuSep} role="separator" />
+                        {secondaryActions.map((action) => (
+                          <button key={action.id} type="button" role="menuitem" className={styles.menuItem}
+                            onClick={() => runAction(action.id)} disabled={!walletConnected}>
+                            {action.label}
+                          </button>
+                        ))}
+                        {/* Lo irreversible vive detrás de su propio separador y
+                            con su propio color: ya no compite con lo primario. */}
+                        <span className={styles.menuSep} role="separator" />
+                        <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`}
+                          onClick={() => { setMenuOpen(false); onKill(orchestrator); }}
+                          disabled={!walletConnected}
+                          title="Cierra el LP activo. La contabilidad del orquestador se conserva.">
+                          Matar LP
+                        </button>
+                        <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`}
+                          onClick={() => { setMenuOpen(false); onKillAndArchive?.(orchestrator); }}
+                          disabled={!walletConnected || !onKillAndArchive}
+                          title="Cierra el LP conservando los tokens y archiva el orquestador. Irreversible.">
+                          Cerrar y archivar
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className={styles.menuSep} role="separator" />
+                        <button type="button" role="menuitem" className={styles.menuItem}
+                          onClick={() => { setMenuOpen(false); onAdoptLp?.(orchestrator); }}
+                          disabled={!walletConnected || !onAdoptLp}
+                          title="Vincula un LP que ya existe en tu wallet al orquestador.">
+                          Adoptar LP existente
+                        </button>
+                        <span className={styles.menuSep} role="separator" />
+                        <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`}
+                          onClick={() => { setMenuOpen(false); onArchive(orchestrator); }}
+                          title="Archiva el orquestador. Solo si no hay LP activo.">
+                          Archivar
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </article>
   );
+}
+
+function tirTone(pct) {
+  if (pct == null) return 'neutral';
+  if (pct >= 80) return 'ok';
+  if (pct >= 50) return 'warn';
+  return 'urgent';
 }
 
 function StrategyCell({ label, value, highlight = false }) {
   return (
     <div className={styles.strategyCell}>
       <span className={styles.strategyCellLabel}>{label}</span>
-      <span
-        className={`${styles.strategyCellValue}${highlight ? ` ${styles.strategyCellValueHighlight}` : ''}`}
-      >
+      <span className={`${styles.strategyCellValue}${highlight ? ` ${styles.strategyCellValueHighlight}` : ''}`}>
         {value}
       </span>
     </div>
+  );
+}
+
+function ChevronIcon({ className }) {
+  return (
+    <svg className={className} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
+    </svg>
   );
 }

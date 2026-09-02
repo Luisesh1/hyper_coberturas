@@ -349,3 +349,16 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Ancla para llevar el foco a una tarjeta desde la cola de acciones.
+   NO usa `display: contents`: un elemento sin caja no tiene posición, y
+   `scrollIntoView` sobre él no haría nada — falla en silencio. Es una celda
+   flex real y la tarjeta la llena, así la grilla queda igual que antes. */
+.gridItem {
+  display: flex;
+  min-width: 0;
+}
+.gridItem > * {
+  flex: 1;
+  min-width: 0;
+}
