@@ -337,6 +337,47 @@ function policyOwnsFullDelta(policyVersion, executionIntent) {
   return FULL_DELTA_POLICIES.includes(policyVersion) && executionIntent === 'live';
 }
 
+/**
+ * Politicas que se pueden ELEGIR para operar de verdad. Todo lo demas —una
+ * politica desconocida, o una elegida con intencion `shadow`— sigue ejecutando
+ * con las zonas legacy.
+ *
+ * Misma lista de literales y por el mismo motivo que `FULL_DELTA_POLICIES`:
+ * importar las constantes desde los modulos de politica cerraria un ciclo.
+ */
+const SELECTABLE_LIVE_POLICIES = ['net_profit_v1', 'net_profit_v2', 'range_exit_v1'];
+
+/**
+ * La politica que EJECUTA, que no es siempre la declarada. Una proteccion
+ * creada como net_profit pero con intencion `shadow` sigue rebalanceando con
+ * la logica legacy: la viva es legacy y su net_profit es una de las sombras.
+ *
+ * Es la unica definicion: el motor de sombra, la persistencia, las metricas y
+ * el encabezado del orquestador la comparten. Dos criterios distintos para
+ * "que politica corre" es como la UI termina diciendo una cosa y el hedge
+ * haciendo otra.
+ */
+function resolveLivePolicy({ policyVersion, executionIntent } = {}) {
+  return SELECTABLE_LIVE_POLICIES.includes(policyVersion) && executionIntent === 'live'
+    ? policyVersion
+    : 'legacy_zones_v1';
+}
+
+/**
+ * Lo mismo, pero leyendo una fila de `protected_uniswap_pools` tal cual sale
+ * del repositorio. Replica el orden de precedencia de `evaluate.js`: la
+ * columna manda sobre el estado, y el estado sobre nada. Los registros
+ * anteriores a la columna solo tienen `strategyState.policyVersion`.
+ */
+function resolveProtectionLivePolicy(protection) {
+  if (!protection) return null;
+  const state = protection.strategyState || null;
+  return resolveLivePolicy({
+    policyVersion: protection.policyVersion || state?.policyVersion || null,
+    executionIntent: state?.executionIntent || null,
+  });
+}
+
 function estimateExecutionCostUsd(qty, currentPrice) {
   const size = Math.abs(Number(qty) || 0);
   const price = Number(currentPrice) || 0;
@@ -598,6 +639,9 @@ module.exports = {
   ESTIMATED_TAKER_FEE_RATE,
   FULL_DELTA_POLICIES,
   policyOwnsFullDelta,
+  SELECTABLE_LIVE_POLICIES,
+  resolveLivePolicy,
+  resolveProtectionLivePolicy,
   MARGIN_COOLDOWN_MS,
   BELOW_NOTIONAL_COOLDOWN_MS,
   clampNonNegative,

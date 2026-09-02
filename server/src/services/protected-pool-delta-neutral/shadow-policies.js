@@ -23,6 +23,7 @@ const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.servi
 const {
   estimateExecutionCostUsd,
   resolveMinOrderNotionalUsd,
+  resolveLivePolicy,
 } = require('../protected-pool-delta-neutral.helpers');
 
 const ALL_POLICIES = [LEGACY_ZONES_V1, NET_PROFIT_V1, NET_PROFIT_V2, RANGE_EXIT_V1];
@@ -33,18 +34,9 @@ const SHADOW_SNAPSHOT_THROTTLE_MS = 30_000;
 const RESIDUAL_ACTUAL_QTY = 1e-8;
 const FALLBACK_TAKER_FEE_RATE = 0.0005;
 
-/**
- * La politica que EJECUTA. Una proteccion creada como net_profit pero con
- * intencion `shadow` sigue ejecutando con la logica legacy: la viva es legacy
- * y su propia net_profit es una de las dos sombras.
- */
-const SELECTABLE_LIVE_POLICIES = [...NET_PROFIT_POLICIES, RANGE_EXIT_V1];
-
-function resolveLivePolicy({ policyVersion, executionIntent } = {}) {
-  return SELECTABLE_LIVE_POLICIES.includes(policyVersion) && executionIntent === 'live'
-    ? policyVersion
-    : LEGACY_ZONES_V1;
-}
+// `resolveLivePolicy` vive en los helpers: la persistencia y el encabezado del
+// orquestador necesitan la misma respuesta que este motor, y tenerla dos veces
+// es como la UI y el hedge terminan discrepando.
 
 function resolveShadowPolicies(livePolicy) {
   return ALL_POLICIES.filter((policy) => policy !== livePolicy);

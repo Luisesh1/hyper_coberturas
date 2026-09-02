@@ -18,6 +18,7 @@ const {
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
 } = require('../src/services/uniswap-protection.service');
+const { resolveLivePolicy } = require('../src/services/protected-pool-delta-neutral.helpers');
 
 function buildPool(overrides = {}) {
   return {
@@ -529,6 +530,83 @@ test('net_profit_v2 live conserva los mismos límites de ejecución y la versió
   assert.equal(protectionWrites[0].executionMode, 'ioc');
   assert.equal(protectionWrites[0].maxSpreadBps, 10);
   assert.equal(protectionWrites[0].maxSlippageBps, 15);
+});
+
+function rangeExitDeps(protectionWrites) {
+  return {
+    availableAssets: [{ name: 'ETH', maxLeverage: 25 }],
+    mids: { ETH: '2500' },
+    hyperliquidAccountsService: { resolveAccount: async () => ({ id: 5, alias: 'Cuenta test', address: '0xabc' }) },
+    protectedPoolRepository: {
+      findReusableByIdentity: async () => null,
+      listActiveByUser: async () => [],
+      create: async (record) => { protectionWrites.push(record); return 123; },
+      updateSnapshot: async () => 123,
+      getById: async () => ({ id: 123, userId: 1, accountId: 5, status: 'active', poolSnapshot: buildDeltaNeutralPool() }),
+    },
+    protectedPoolDeltaNeutralService: { bootstrapProtection: async () => {} },
+    timeInRangeService: buildTimeInRangeService(),
+  };
+}
+
+test('range_exit_v1 live se persiste como la politica de la proteccion, no como legacy', async () => {
+  // La persistencia solo conocia net_profit: range_exit caia en la rama
+  // `else` y se guardaba `policyVersion: null` + `strategyState.policyVersion:
+  // legacy_zones_v1`. Como el tick resuelve la politica leyendo justamente
+  // esos dos campos, el selector decia "borde de rango" y el hedge
+  // rebalanceaba con las zonas legacy — sin un solo error en el camino.
+  const protectionWrites = [];
+  await createProtectedPool({
+    userId: 1,
+    pool: buildDeltaNeutralPool(),
+    accountId: 5,
+    leverage: 10,
+    configuredNotionalUsd: 2500,
+    protectionMode: 'delta_neutral',
+    policyVersion: 'range_exit_v1',
+    executionIntent: 'live',
+    activationConfirmed: true,
+  }, rangeExitDeps(protectionWrites));
+
+  assert.equal(protectionWrites[0].policyVersion, 'range_exit_v1');
+  assert.equal(protectionWrites[0].strategyState.policyVersion, 'range_exit_v1');
+  assert.equal(protectionWrites[0].strategyState.executionIntent, 'live');
+  // Viva no puede estar ademas como sombra: se mediria dos veces.
+  assert.equal(protectionWrites[0].strategyState.shadowPolicyVersion, null);
+  // Y vive sobre el 100% del delta: `policyOwnsFullDelta` fuerza el ratio en
+  // vez de dejarlo en el default configurable.
+  assert.equal(protectionWrites[0].targetHedgeRatio, 1);
+  assert.equal(
+    resolveLivePolicy({
+      policyVersion: protectionWrites[0].policyVersion,
+      executionIntent: protectionWrites[0].strategyState.executionIntent,
+    }),
+    'range_exit_v1'
+  );
+});
+
+test('range_exit_v1 en sombra se guarda como sombra y deja viva a legacy', async () => {
+  const protectionWrites = [];
+  await createProtectedPool({
+    userId: 1,
+    pool: buildDeltaNeutralPool(),
+    accountId: 5,
+    leverage: 10,
+    configuredNotionalUsd: 2500,
+    protectionMode: 'delta_neutral',
+    policyVersion: 'range_exit_v1',
+    executionIntent: 'shadow',
+  }, rangeExitDeps(protectionWrites));
+
+  assert.equal(protectionWrites[0].strategyState.executionIntent, 'shadow');
+  assert.equal(protectionWrites[0].strategyState.shadowPolicyVersion, 'range_exit_v1');
+  assert.equal(
+    resolveLivePolicy({
+      policyVersion: protectionWrites[0].policyVersion,
+      executionIntent: protectionWrites[0].strategyState.executionIntent,
+    }),
+    'legacy_zones_v1'
+  );
 });
 
 test('createProtectedPool delta-neutral deja snapshot_invalid y no bootstrappea si el snapshot no es operativo', async () => {

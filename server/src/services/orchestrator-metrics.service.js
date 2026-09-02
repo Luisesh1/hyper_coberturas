@@ -479,7 +479,14 @@ class OrchestratorMetricsService {
         fundingRateHourly: finite(fundingRateHourly),
         projectedDailyFundingUsd: finite(projectedDailyFundingUsd),
         fundingHeadwind: Number.isFinite(projectedDailyFundingUsd) ? projectedDailyFundingUsd < 0 : null,
-        livePolicy: resolveLivePolicy(protection),
+        // La intencion NO es columna: vive en el estado de estrategia, que
+        // aqui ya viene parseado. Pasar la fila cruda dejaba
+        // `executionIntent` en undefined y toda medicion salia atribuida a
+        // legacy, incluso con net_profit operando de verdad.
+        livePolicy: resolveLivePolicy({
+          policyVersion: protection?.policyVersion || parsed.policyVersion || null,
+          executionIntent: parsed.executionIntent || null,
+        }),
       };
     } catch (err) {
       logger.warn('orchestrator_metrics_hedge_tracking_failed', {

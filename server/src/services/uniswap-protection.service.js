@@ -11,7 +11,10 @@ const { formatPrice } = require('../utils/format');
 const { ValidationError, NotFoundError } = require('../errors/app-error');
 const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
 const { getTradingService } = require('./trading.factory');
-const { policyOwnsFullDelta } = require('./protected-pool-delta-neutral.helpers');
+const {
+  policyOwnsFullDelta,
+  SELECTABLE_LIVE_POLICIES,
+} = require('./protected-pool-delta-neutral.helpers');
 const {
   computeDeltaNeutralMetrics,
   resolveDeltaNeutralOrientation,
@@ -886,6 +889,12 @@ async function createDeltaNeutralProtectedPool({
   const normalizedBaseBandPct = normalizeBaseRebalancePriceMovePct(baseRebalancePriceMovePct);
   const normalizedRebalanceIntervalSec = normalizeRebalanceIntervalSec(rebalanceIntervalSec);
   const isNetProfitPolicy = ['net_profit_v1', 'net_profit_v2'].includes(policyVersion);
+  // Toda politica elegible para operar de verdad se persiste igual. Sin esto,
+  // `range_exit_v1` caia en la rama `else` de mas abajo: se guardaba
+  // `policy_version = NULL` y `strategyState.policyVersion = legacy_zones_v1`,
+  // asi que el selector decia "borde de rango" y el tick rebalanceaba con las
+  // zonas legacy — el modo de fallo que la politica se cableo para evitar.
+  const isSelectableLivePolicy = SELECTABLE_LIVE_POLICIES.includes(policyVersion);
   const isRangeExitPolicy = policyVersion === 'range_exit_v1';
   if ((isNetProfitPolicy || isRangeExitPolicy) && executionIntent === 'live' && activationConfirmed !== true) {
     throw new ValidationError('Confirma la operación real antes de activar esta política.');
@@ -970,9 +979,11 @@ async function createDeltaNeutralProtectedPool({
   strategyState.cooldownReason = null;
   // La selección vive junto a su estado operativo para que shadow sea
   // recuperable tras restart sin leer ni resincronizar la posición simulada.
-  strategyState.policyVersion = isNetProfitPolicy ? policyVersion : 'legacy_zones_v1';
-  strategyState.executionIntent = isNetProfitPolicy ? (executionIntent || 'shadow') : 'live';
-  strategyState.shadowPolicyVersion = isNetProfitPolicy && !liveNetProfit ? policyVersion : null;
+  strategyState.policyVersion = isSelectableLivePolicy ? policyVersion : 'legacy_zones_v1';
+  strategyState.executionIntent = isSelectableLivePolicy ? (executionIntent || 'shadow') : 'live';
+  strategyState.shadowPolicyVersion = isSelectableLivePolicy && executionIntent !== 'live'
+    ? policyVersion
+    : null;
   strategyState.trackingErrorQty = Number(deltaMetrics.targetQty);
   strategyState.trackingErrorUsd = Number(deltaMetrics.targetQty) * Number(snapshot.priceCurrent || deltaMetrics.volatilePriceUsd || 0);
   const baseRecord = {
@@ -1021,7 +1032,7 @@ async function createDeltaNeutralProtectedPool({
     minOrderNotionalUsd: DEFAULT_MIN_ORDER_NOTIONAL_USD,
     twapSlices: DEFAULT_TWAP_SLICES,
     twapDurationSec: DEFAULT_TWAP_DURATION_SEC,
-    policyVersion: isNetProfitPolicy ? policyVersion : null,
+    policyVersion: isSelectableLivePolicy ? policyVersion : null,
     halfWidthPct: ((snapshot.rangeUpperPrice - snapshot.rangeLowerPrice) / 2 / snapshot.priceCurrent) * 100,
     strategyState,
     valueMode: 'usd',
