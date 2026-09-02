@@ -624,8 +624,32 @@
 .verdict_positive .verdictUsd,
 .verdict_positive .verdictPct { color: var(--uni-green); }
 .verdictBase {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
   font-size: var(--fs-xs);
   color: var(--uni-text-3);
+}
+
+/* El capital y la antigüedad son la misma línea de contexto del P&L: mismo
+   tamaño y mismo tono, con las cifras un punto más presentes. Subirle el peso
+   sólo a una de las dos las convertiría en dos datos distintos. */
+.verdictBase strong {
+  color: var(--uni-text-1);
+  font-weight: 800;
+}
+
+.verdictAge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: help;
+}
+
+.verdictAgeIcon {
+  flex-shrink: 0;
+  opacity: 0.8;
 }
 .verdictSentence {
   margin: 0;

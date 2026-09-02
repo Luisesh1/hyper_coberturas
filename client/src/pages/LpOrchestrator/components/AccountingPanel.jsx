@@ -1,4 +1,5 @@
 import { formatUsd, formatSignedUsd } from '../../UniswapPools/utils/pool-formatters';
+import { formatOrchestratorAge } from './orchestratorAge';
 import styles from './AccountingPanel.module.css';
 
 /** Number() a secas convierte los ausentes en NaN, y `NaN !== 0` es true:
@@ -21,27 +22,6 @@ function signTone(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n === 0) return 'neutral';
   return n > 0 ? 'positive' : 'negative';
-}
-
-/**
- * Formato detallado para edades del orquestador (días/horas/minutos), más
- * informativo que `formatDuration` para vidas largas.
- */
-function formatOrchestratorAge(ms) {
-  const numeric = Number(ms);
-  if (!Number.isFinite(numeric) || numeric <= 0) return '—';
-  const totalMinutes = Math.floor(numeric / 60_000);
-  if (totalMinutes < 1) return '< 1m';
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-  if (days > 0) {
-    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-  }
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-  return `${minutes}m`;
 }
 
 export default function AccountingPanel({

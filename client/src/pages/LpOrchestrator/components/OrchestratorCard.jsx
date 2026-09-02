@@ -8,6 +8,7 @@ import { formatNumber } from '../../../utils/formatters';
 import { getOrchestratorIssue } from './orchestratorIssueState';
 import { getOrchestratorSeverity } from './orchestratorSeverity';
 import { computeAccountingSummary, buildVerdictSentence } from './accountingSummary';
+import { formatOrchestratorAge, orchestratorAgeMs } from './orchestratorAge';
 import { getHedgePolicyBadge } from './hedgePolicyBadge';
 import styles from './OrchestratorCard.module.css';
 
@@ -123,6 +124,12 @@ export default function OrchestratorCard({
     : summary.totalNetUsd >= 0 ? 'positive' : 'negative';
 
   const timeInRangePct = orchestrator.lastEvaluation?.timeInRangePct ?? null;
+
+  // La antigüedad acompaña al P&L en vez de vivir sólo dentro del plegable:
+  // un −2% significa una cosa en seis horas y otra en seis días, y el número
+  // grande se lee antes que nada. Sigue apareciendo completa en el panel de
+  // contabilidad, con el mismo formato, para que no se lean como dos datos.
+  const ageMs = useMemo(() => orchestratorAgeMs(orchestrator.createdAt), [orchestrator.createdAt]);
 
   // El banner sólo sobrevive cuando aporta algo que el chip de incidencia no
   // dice ya. Antes la fase, el chip y el banner repetían el mismo mensaje
@@ -265,8 +272,21 @@ export default function OrchestratorCard({
                   <span className={styles.verdictPct}>{formatSignedPct(summary.netPct)}</span>
                 )}
               </div>
-              {orchestrator.initialTotalUsd != null && (
-                <span className={styles.verdictBase}>sobre {formatUsd(orchestrator.initialTotalUsd)} de capital</span>
+              {(orchestrator.initialTotalUsd != null || ageMs != null) && (
+                <span className={styles.verdictBase}>
+                  {orchestrator.initialTotalUsd != null && (
+                    <>sobre <strong>{formatUsd(orchestrator.initialTotalUsd)}</strong> de capital</>
+                  )}
+                  {orchestrator.initialTotalUsd != null && ageMs != null && (
+                    <span className={styles.dot}>·</span>
+                  )}
+                  {ageMs != null && (
+                    <span className={styles.verdictAge} title="Tiempo activo del orquestador, sumando todos sus LPs">
+                      <ClockIcon className={styles.verdictAgeIcon} />
+                      <strong>{formatOrchestratorAge(ageMs)}</strong> activo
+                    </span>
+                  )}
+                </span>
               )}
             </div>
             {verdictSentence && <p className={styles.verdictSentence}>{verdictSentence}</p>}
@@ -515,6 +535,16 @@ function ChevronIcon({ className }) {
     <svg className={className} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function ClockIcon({ className }) {
+  return (
+    <svg className={className} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
     </svg>
   );
 }
