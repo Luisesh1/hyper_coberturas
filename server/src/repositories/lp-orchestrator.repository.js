@@ -6,7 +6,10 @@
  */
 
 const db = require('../db');
-const { resolveLivePolicy } = require('../services/protected-pool-delta-neutral.helpers');
+const {
+  resolveLivePolicy,
+  resolveNoOpZone,
+} = require('../services/protected-pool-delta-neutral.helpers');
 
 function exec(executor) {
   return executor || db;
@@ -42,6 +45,15 @@ const DEFAULT_ACCOUNTING = Object.freeze({
   lpCount: 0,
 });
 
+function firstFinite(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 /**
  * La cobertura tal como esta corriendo, no como se pidio.
  *
@@ -65,12 +77,24 @@ function mapActiveHedge(row) {
   const state = parseJsonSafe(row.active_protection_state_json, {}) || {};
   const declaredPolicy = row.active_protection_policy_version || state.policyVersion || null;
   const executionIntent = state.executionIntent || null;
+  const livePolicy = resolveLivePolicy({ policyVersion: declaredPolicy, executionIntent });
   return {
     protectedPoolId: Number(row.active_protected_pool_id),
     status: row.active_protection_status || null,
     declaredPolicy,
     executionIntent,
-    livePolicy: resolveLivePolicy({ policyVersion: declaredPolicy, executionIntent }),
+    livePolicy,
+    // Tramo del rango donde la cobertura no opera. La zona muerta se lee
+    // RESUELTA: la columna nace NULL en toda proteccion migrada y en ese caso
+    // manda el default del servicio, que solo el tick conoce. Se prefiere el
+    // valor que persistio y se cae a la columna mientras la proteccion todavia
+    // no corrio ningun tick; sin ninguno de los dos queda `null` y la tarjeta
+    // no dibuja nada — inventar un 40% es dibujar una restriccion que no se
+    // sabe si existe.
+    noOpZone: resolveNoOpZone(
+      livePolicy,
+      firstFinite(state.centerDeadZonePct, row.active_protection_center_dead_zone_pct),
+    ),
   };
 }
 
@@ -188,9 +212,10 @@ async function create(record, executor) {
 async function getById(userId, id, executor) {
   const { rows } = await exec(executor).query(
     `SELECT o.*,
-            p.policy_version      AS active_protection_policy_version,
-            p.status              AS active_protection_status,
-            p.strategy_state_json AS active_protection_state_json
+            p.policy_version       AS active_protection_policy_version,
+            p.status               AS active_protection_status,
+            p.center_dead_zone_pct AS active_protection_center_dead_zone_pct,
+            p.strategy_state_json  AS active_protection_state_json
        FROM lp_orchestrators o
        LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id
        WHERE o.user_id = $1 AND o.id = $2`,
@@ -202,9 +227,10 @@ async function getById(userId, id, executor) {
 async function listForUser(userId, { includeArchived = false } = {}, executor) {
   const { rows } = await exec(executor).query(
     `SELECT o.*,
-            p.policy_version      AS active_protection_policy_version,
-            p.status              AS active_protection_status,
-            p.strategy_state_json AS active_protection_state_json
+            p.policy_version       AS active_protection_policy_version,
+            p.status               AS active_protection_status,
+            p.center_dead_zone_pct AS active_protection_center_dead_zone_pct,
+            p.strategy_state_json  AS active_protection_state_json
        FROM lp_orchestrators o
        LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id
        WHERE o.user_id = $1

@@ -6,6 +6,8 @@ const {
   policyOwnsFullDelta,
   FULL_DELTA_POLICIES,
   resolveProtectionLivePolicy,
+  policyHonorsCenterDeadZone,
+  resolveNoOpZone,
 } = require('../src/services/protected-pool-delta-neutral.helpers');
 const { resolveLivePolicy, resolveShadowPolicies, ALL_POLICIES } = require('../src/services/protected-pool-delta-neutral/shadow-policies');
 const { protectionConfigSchema } = require('../src/schemas/lp-orchestrator.schema');
@@ -80,4 +82,31 @@ test('la politica viva de una proteccion se lee con la misma precedencia que el 
   // Proteccion vieja sin nada declarado: legacy, que es lo que corre.
   assert.equal(resolveProtectionLivePolicy({ policyVersion: null, strategyState: null }), 'legacy_zones_v1');
   assert.equal(resolveProtectionLivePolicy(null), null);
+});
+
+// La tarjeta dibuja la zona muerta a partir de esto. Si dijera que si para
+// range_exit, pintaria una restriccion que esa politica no tiene: el hedge se
+// quedaria quieto en el centro segun el dibujo y en realidad cruzaria el borde
+// sin mirar el centro para nada.
+test('range_exit_v1 no respeta la zona muerta central; las demas si', () => {
+  assert.equal(policyHonorsCenterDeadZone(RANGE_EXIT_V1), false);
+  assert.equal(policyHonorsCenterDeadZone('legacy_zones_v1'), true);
+  assert.equal(policyHonorsCenterDeadZone('net_profit_v1'), true);
+  assert.equal(policyHonorsCenterDeadZone('net_profit_v2'), true);
+  // Sin politica no hay nada corriendo, asi que no hay banda que dibujar.
+  assert.equal(policyHonorsCenterDeadZone(null), false);
+});
+
+test('la zona sin operacion de range_exit_v1 es el rango entero, no una banda central', () => {
+  // Su zona muerta persistida es irrelevante: dentro del rango no toca el
+  // hedge en ningun caso. Dibujarle el 40% central seria pintar una
+  // restriccion que no tiene y esconder la que si tiene.
+  assert.deepEqual(resolveNoOpZone(RANGE_EXIT_V1, 40), { kind: 'full_range', pct: 100 });
+  assert.deepEqual(resolveNoOpZone('legacy_zones_v1', 40), { kind: 'center', pct: 40 });
+  assert.deepEqual(resolveNoOpZone('net_profit_v2', 0), { kind: 'none', pct: 0 });
+  // Se recorta al tope que la columna acepta.
+  assert.deepEqual(resolveNoOpZone('legacy_zones_v1', 500), { kind: 'center', pct: 90 });
+  // Sin zona resuelta todavia (proteccion recien creada) no se inventa una.
+  assert.equal(resolveNoOpZone('legacy_zones_v1', null), null);
+  assert.equal(resolveNoOpZone(null, 40), null);
 });

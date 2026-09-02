@@ -242,6 +242,7 @@ export default function OrchestratorCard({
               pool={pool}
               edgeMarginPct={Number(strategyConfig.edgeMarginPct) || 40}
               activeForMs={pool.activeForMs ?? null}
+              hedge={orchestrator.activeHedge}
             />
           )
         ) : (

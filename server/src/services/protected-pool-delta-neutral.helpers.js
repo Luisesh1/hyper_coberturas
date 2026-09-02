@@ -364,6 +364,45 @@ function resolveLivePolicy({ policyVersion, executionIntent } = {}) {
 }
 
 /**
+ * Politicas que respetan la zona muerta central.
+ *
+ * `range_exit_v1` no la usa —espeja la rama de `evaluate.js` que la fija en
+ * `false`: esa politica ya se queda quieta DENTRO del rango por diseno, y
+ * cuando decide es en el borde, que nunca es centro.
+ */
+function policyHonorsCenterDeadZone(livePolicy) {
+  return livePolicy != null && livePolicy !== 'range_exit_v1';
+}
+
+/**
+ * El tramo del rango donde la cobertura NO opera, tal como lo produce la
+ * politica que esta corriendo. Es lo que dibuja la tarjeta del orquestador.
+ *
+ *   center     -> banda central de `pct`% del rango (zonas legacy y net profit)
+ *   full_range -> el rango entero (`range_exit_v1`: dentro del rango no toca
+ *                 el hedge; solo reajusta al salir y al volver a entrar)
+ *   none       -> la cobertura sigue al delta en todo el rango
+ *
+ * Se decide aca y no en el cliente porque es la misma pregunta que
+ * `resolveLivePolicy`: que hace el motor que esta corriendo. Un `kind` en vez
+ * de un booleano evita que la vista tenga que conocer los nombres de las
+ * politicas para saber que dibujar.
+ */
+function resolveNoOpZone(livePolicy, centerDeadZonePct) {
+  if (livePolicy == null) return null;
+  if (!policyHonorsCenterDeadZone(livePolicy)) return { kind: 'full_range', pct: 100 };
+  // La misma trampa que documenta `resolveCenterDeadZone`: `Number(null)` da 0,
+  // que es finito. Sin este corte, una proteccion que todavia no resolvio su
+  // zona se dibujaria como "sin zona muerta" —una configuracion deliberada y
+  // distinta— en vez de no dibujar nada.
+  if (centerDeadZonePct == null) return null;
+  const pct = Number(centerDeadZonePct);
+  if (!Number.isFinite(pct)) return null;
+  if (pct <= 0) return { kind: 'none', pct: 0 };
+  return { kind: 'center', pct: Math.min(MAX_CENTER_DEAD_ZONE_PCT, pct) };
+}
+
+/**
  * Lo mismo, pero leyendo una fila de `protected_uniswap_pools` tal cual sale
  * del repositorio. Replica el orden de precedencia de `evaluate.js`: la
  * columna manda sobre el estado, y el estado sobre nada. Los registros
@@ -642,6 +681,8 @@ module.exports = {
   SELECTABLE_LIVE_POLICIES,
   resolveLivePolicy,
   resolveProtectionLivePolicy,
+  policyHonorsCenterDeadZone,
+  resolveNoOpZone,
   MARGIN_COOLDOWN_MS,
   BELOW_NOTIONAL_COOLDOWN_MS,
   clampNonNegative,

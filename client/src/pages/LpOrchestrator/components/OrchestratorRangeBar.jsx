@@ -8,6 +8,67 @@ function getBoundedPinLeft(pct) {
   return `clamp(40px, ${pct}%, calc(100% - 40px))`;
 }
 
+// Tope del servidor (`MAX_CENTER_DEAD_ZONE_PCT`). Un valor mayor no se puede
+// persistir, y recortar aca evita dibujar una banda mas ancha que el rango si
+// llegara uno viejo o corrupto.
+const MAX_DEAD_ZONE_PCT = 90;
+
+/**
+ * Tramo del rango donde la COBERTURA no opera, en coordenadas del track.
+ *
+ * `zone` es el `noOpZone` que arma el servidor a partir de la politica viva:
+ * `center` (banda central de pct% — zonas legacy y net profit), `full_range`
+ * (`range_exit_v1`: dentro del rango no toca el hedge) o `none`.
+ *
+ * La banda central se centra en el medio GEOMETRICO, no en el aritmetico: el
+ * motor ubica el precio dentro del rango en escala logaritmica
+ * (`rangePositionFraction`), mientras que este track es lineal en precio.
+ * Centrarla en el 50% del ancho dibujaria una zona corrida respecto de la que
+ * el hedge realmente usa — poco en un rango del 5%, cada vez mas a medida que
+ * el rango se ensancha.
+ */
+export function computeNoOpBand({
+  zone, lowerPrice, upperPrice, rangeLowPct, rangeHighPct,
+}) {
+  const lower = Number(lowerPrice);
+  const upper = Number(upperPrice);
+  if (!zone || zone.kind === 'none') return null;
+  if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower <= 0 || upper <= lower) return null;
+
+  const toTrackPct = (price) => (
+    rangeLowPct + ((price - lower) / (upper - lower)) * (rangeHighPct - rangeLowPct)
+  );
+
+  if (zone.kind === 'full_range') {
+    return {
+      kind: 'full_range',
+      leftPct: rangeLowPct,
+      widthPct: rangeHighPct - rangeLowPct,
+      lowerPrice: lower,
+      upperPrice: upper,
+      pct: 100,
+    };
+  }
+
+  const width = Number(zone.pct);
+  if (!Number.isFinite(width) || width <= 0) return null;
+
+  const half = Math.min(width, MAX_DEAD_ZONE_PCT) / 200;
+  const ratio = upper / lower;
+  const priceAt = (fraction) => lower * (ratio ** fraction);
+  const lowPrice = priceAt(0.5 - half);
+  const highPrice = priceAt(0.5 + half);
+
+  return {
+    kind: 'center',
+    leftPct: toTrackPct(lowPrice),
+    widthPct: toTrackPct(highPrice) - toTrackPct(lowPrice),
+    lowerPrice: lowPrice,
+    upperPrice: highPrice,
+    pct: Math.min(width, MAX_DEAD_ZONE_PCT),
+  };
+}
+
 /**
  * Range bar específico del orquestador. A diferencia de RangeTrack, divide
  * visualmente el rango del LP en TRES zonas controladas por la estrategia:
@@ -22,6 +83,7 @@ export default function OrchestratorRangeBar({
   pool,
   edgeMarginPct = 40,
   activeForMs = null,
+  hedge = null,
 }) {
   const rangeBar = getRangeBarData(pool);
   if (!rangeBar) return null;
@@ -51,6 +113,21 @@ export default function OrchestratorRangeBar({
   const rangeWidthPct = Number.isFinite(lowerPrice) && lowerPrice > 0 && Number.isFinite(upperPrice)
     ? ((upperPrice - lowerPrice) / lowerPrice) * 100
     : null;
+
+  // Zona sin operacion de la cobertura. Sale de la politica que ESTA
+  // corriendo, no de lo que pida el formulario: describe lo que el motor hace.
+  const deadZone = computeNoOpBand({
+    zone: hedge?.noOpZone, lowerPrice, upperPrice, rangeLowPct, rangeHighPct,
+  });
+  const noOpNone = hedge?.noOpZone?.kind === 'none';
+  // El estado "ahora congelada" se deriva del MISMO precio que se dibuja, no
+  // del flag que persistio el tick: asi la frase no puede contradecir a la
+  // figura que esta encima.
+  const frozenNow = Boolean(deadZone)
+    && inRange
+    && Number.isFinite(currentPrice)
+    && currentPrice >= deadZone.lowerPrice
+    && currentPrice <= deadZone.upperPrice;
 
   const openPinLeft = getBoundedPinLeft(openPct);
   const currentPinLeft = getBoundedPinLeft(currentPct);
@@ -107,6 +184,18 @@ export default function OrchestratorRangeBar({
         <div className={styles.centralEdge} style={{ left: `${centralLowPct}%` }} />
         <div className={styles.centralEdge} style={{ left: `${centralHighPct}%` }} />
 
+        {/* Zona muerta de la COBERTURA. Va rayada y sin color propio: un fondo
+            plano se confundiria con las zonas del LP que ya pinta el track, y
+            son dos cosas distintas —aquellas gobiernan el rebalanceo del LP,
+            esta el del hedge. */}
+        {deadZone && (
+          <div
+            className={`${styles.deadZone} ${frozenNow ? styles.deadZoneActive : ''}`}
+            style={{ left: `${deadZone.leftPct}%`, width: `${deadZone.widthPct}%` }}
+            title={`La cobertura no rebalancea entre ${formatCompactPrice(deadZone.lowerPrice)} y ${formatCompactPrice(deadZone.upperPrice)}`}
+          />
+        )}
+
         {/* Marker de precio de apertura */}
         {openPct != null && (
           <div className={`${styles.marker} ${styles.markerOpen}`} style={{ left: `${openPct}%` }} />
@@ -140,6 +229,38 @@ export default function OrchestratorRangeBar({
         </span>
         <span className={styles.edgeValue}>{formatCompactPrice(upperPrice)}</span>
       </div>
+
+      {deadZone && (
+        <div className={styles.deadZoneLegend}>
+          <span className={styles.deadZoneSwatch} aria-hidden="true" />
+          <span>
+            {deadZone.kind === 'full_range' ? (
+              <>
+                Cobertura congelada en <strong>todo el rango</strong>: sólo reajusta al salir y al
+                volver a entrar
+              </>
+            ) : (
+              <>
+                Cobertura congelada entre <strong>{formatCompactPrice(deadZone.lowerPrice)}</strong> y{' '}
+                <strong>{formatCompactPrice(deadZone.upperPrice)}</strong>{' '}
+                ({formatNumber(deadZone.pct, 0)}% central del rango)
+              </>
+            )}
+          </span>
+          <span className={frozenNow ? styles.deadZoneNowFrozen : styles.deadZoneNowLive}>
+            {frozenNow ? 'ahora no rebalancea' : 'ahora sí rebalancea'}
+          </span>
+        </div>
+      )}
+
+      {/* Que NO haya zona muerta también hay que decirlo: sin esta línea, la
+          ausencia de banda se lee como "no me fijé" y no como "sigue al delta
+          en todo el rango", que es una configuración distinta y deliberada. */}
+      {noOpNone && (
+        <div className={styles.deadZoneLegend}>
+          <span>Sin zona muerta: la cobertura sigue al delta en todo el rango.</span>
+        </div>
+      )}
 
     </div>
   );

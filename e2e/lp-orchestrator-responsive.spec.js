@@ -57,6 +57,7 @@ function orchestrator(over = {}) {
       declaredPolicy: 'net_profit_v1',
       executionIntent: 'shadow',
       livePolicy: 'legacy_zones_v1',
+      noOpZone: { kind: 'center', pct: 40 },
     },
     strategyState: {},
     lastEvaluation: {
