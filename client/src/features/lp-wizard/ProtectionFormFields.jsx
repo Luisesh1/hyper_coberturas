@@ -19,28 +19,20 @@ const DELTA_NEUTRAL_PRESETS = [
   { id: 'conservative', label: 'Conservative', bandMode: 'fixed', baseRebalancePriceMovePct: 5, rebalanceIntervalSec: 43200, hint: 'Menos rebalanceo, más drift tolerado.' },
 ];
 
-// Sombra no es "la política apagada", es un modo con resultado propio: la
-// cobertura la sigue haciendo el motor legacy y net profit calcula en paralelo
-// lo que habría hecho. Por eso se elige entre dos opciones con nombre y no con
-// una casilla "operación real" cuyo estado apagado no se explica solo.
-// Politicas que tienen modo sombra. Legacy no lo tiene (es la que ejecuta por
-// defecto), asi que elegirla vuelve el intent a `live`. Mantener esta lista
-// junto al selector: si una politica nueva entra al <select> sin entrar aca,
-// se ofreceria directamente en operacion real.
-const SHADOW_CAPABLE_POLICIES = ['net_profit_v1', 'net_profit_v2', 'range_exit_v1'];
-
-const EXECUTION_INTENTS = [
-  {
-    id: 'shadow',
-    label: 'Sombra',
-    hint: 'Cubre con el motor legacy y mide la política nueva en paralelo (BBO, costes y funding). No manda órdenes propias.',
-  },
-  {
-    id: 'live',
-    label: 'Operación real',
-    hint: 'La política nueva decide y ejecuta. Sustituye por completo a las zonas legacy.',
-  },
-];
+// El selector de sombra/real ya no existe: la politica que se elige es la que
+// opera. Elegir una cosa y que el hedge hiciera otra era el peor modo de fallo
+// posible, y "sombra" en el formulario lo volvia el estado por defecto.
+//
+// La comparativa no se pierde: el motor simula EN CADA TICK las politicas que
+// no se eligieron, sobre los mismos datos de mercado y sin IO extra
+// (`shadow-policies.js`), y esas series alimentan /metricas. La sombra pasa a
+// ser lo que siempre debio ser —observabilidad automatica— en vez de una
+// decision que el usuario tenia que tomar sin datos.
+//
+// `executionIntent: 'live'` y `activationConfirmed: true` se siguen mandando
+// porque el servidor los exige para activar una politica no-legacy. El guard
+// sigue vivo para quien llame la API a mano; desde aqui, elegirla en el
+// desplegable ES el acto explicito que pedia.
 
 const DEFAULT_PROTECTION = Object.freeze({
   enabled: false,
@@ -58,7 +50,7 @@ const DEFAULT_PROTECTION = Object.freeze({
   preset: 'adaptive',
   policyVersion: 'legacy_zones_v1',
   executionIntent: 'live',
-  activationConfirmed: false,
+  activationConfirmed: true,
   autoTunedFor: null,
   // El notional se dimensiona solo desde el delta del rango salvo que el
   // usuario lo desactive. `capital/2` sólo acierta con el precio centrado.
@@ -340,8 +332,8 @@ export default function ProtectionFormFields({
   };
 
   // La política de cobertura no es un parámetro de tuning: la elige el par
-  // (el wizard recomienda net_profit_v2 en sombra para ETH/USDC) o el usuario
-  // a mano. Reconstruir los defaults por apagar y encender la protección o por
+  // (el wizard recomienda net_profit_v2 para ETH/USDC) o el usuario a mano.
+  // Reconstruir los defaults por apagar y encender la protección o por
   // re-aplicar el auto-tune la devolvía a legacy en silencio, y como el cambio
   // marca la protección como "sucia", la recomendación ya no volvía nunca.
   const policySelection = {
@@ -375,23 +367,13 @@ export default function ProtectionFormFields({
     });
   };
 
-  // Cambiar de política nunca deja una combinación a medias: las políticas con
-  // modo sombra entran siempre en sombra y legacy no lo tiene, así que vuelve
-  // a `live`.
+  // La politica elegida opera. No hay combinacion a medias que resolver.
   const handlePolicyChange = (policyVersion) => {
     onChange({
       ...v,
       policyVersion,
-      executionIntent: SHADOW_CAPABLE_POLICIES.includes(policyVersion) ? 'shadow' : 'live',
-      activationConfirmed: false,
-    });
-  };
-
-  const handleIntentChange = (executionIntent) => {
-    onChange({
-      ...v,
-      executionIntent,
-      activationConfirmed: executionIntent === 'live' ? v.activationConfirmed : false,
+      executionIntent: 'live',
+      activationConfirmed: true,
     });
   };
 
@@ -408,7 +390,6 @@ export default function ProtectionFormFields({
 
   const isNetProfit = ['net_profit_v1', 'net_profit_v2'].includes(v.policyVersion);
   const isRangeExit = v.policyVersion === 'range_exit_v1';
-  const isLiveNetProfit = isNetProfit && v.executionIntent === 'live';
   const isAutoTuned = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) === Number(rangeWidthPct);
   const tunedDrifted = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) !== Number(rangeWidthPct);
 
@@ -553,63 +534,19 @@ export default function ProtectionFormFields({
                 Cubre el 100% del delta al abrir y no vuelve a tocar el hedge mientras el precio
                 siga dentro del rango: sólo reajusta al salir y al volver a entrar, con el disparo
                 corrido lo justo para pagar comisiones. Gasta mucho menos en ejecución, y a cambio
-                acepta quedar descubierta dentro del rango — gana si el precio revierte y pierde
-                si se va en tendencia. Aún no tiene un tramo tendencial medido:
-                <strong> déjala en sombra hasta tenerlo</strong>.
+                acepta quedar descubierta dentro del rango — <strong>gana si el precio revierte y
+                pierde si se va en tendencia</strong>, y todavía no tiene un tramo tendencial medido.
               </p>
             )}
 
-            {isNetProfit && (
-              <>
-                {/* Segmented control, no una rejilla de tarjetas: compartir la
-                    clase `.presets` con el preset de rebalanceo hacía que dos
-                    decisiones opuestas — "¿opera con dinero real?" y "¿cada
-                    cuánto rebalanceo?" — tuvieran la misma forma. El color
-                    carga el significado: cian mide, ámbar arriesga. */}
-                <div className={styles.segmented} role="group" aria-label="Modo de ejecución">
-                  {EXECUTION_INTENTS.map((intent) => (
-                    <button
-                      key={intent.id}
-                      type="button"
-                      aria-pressed={v.executionIntent === intent.id}
-                      className={[
-                        styles.segment,
-                        v.executionIntent === intent.id ? styles.segmentActive : '',
-                        v.executionIntent === intent.id && intent.id === 'live' ? styles.segmentLive : '',
-                      ].filter(Boolean).join(' ')}
-                      onClick={() => handleIntentChange(intent.id)}
-                    >
-                      {intent.label}
-                    </button>
-                  ))}
-                </div>
-                <p className={styles.hint}>
-                  {EXECUTION_INTENTS.find((i) => i.id === v.executionIntent)?.hint}
-                </p>
-
-                {isLiveNetProfit && (
-                  <label className={`${styles.toggleRow} ${styles.riskGate}`}>
-                    <input
-                      type="checkbox"
-                      checked={!!v.activationConfirmed}
-                      onChange={(e) => handleField('activationConfirmed', e.target.checked)}
-                    />
-                    <span>
-                      <strong>Confirmo activar órdenes reales con net profit</strong>
-                      <br />
-                      <span className={styles.muted}>
-                        El servidor rechaza la creación sin esta confirmación, y además exige que el
-                        feature gate de net profit esté habilitado.
-                      </span>
-                    </span>
-                  </label>
-                )}
-
-                {isLiveNetProfit && !v.activationConfirmed && (
-                  <p className={styles.error}>Marca la confirmación o vuelve a modo sombra para continuar.</p>
-                )}
-              </>
-            )}
+            {/* Que la elegida opera y las demás se miden va escrito una sola
+                vez, debajo del selector: es la regla del sistema, no un
+                atributo de una política concreta. */}
+            <p className={styles.hint}>
+              La política elegida <strong>opera con dinero real</strong>. Las otras tres se siguen
+              simulando en sombra en cada tick, sobre los mismos datos, para la comparativa de
+              Métricas — no mandan órdenes.
+            </p>
           </div>
 
           <div className={styles.field}>
@@ -631,10 +568,17 @@ export default function ProtectionFormFields({
 
           <details className={styles.advanced}>
             <summary>Configuración avanzada</summary>
-            {isLiveNetProfit && (
+            {isNetProfit && (
               <p className={styles.hint}>
-                Con net profit en operación real el motor ignora <strong>target hedge ratio</strong> (fija 1,
+                Con net profit el motor ignora <strong>target hedge ratio</strong> (fija 1,
                 cobertura del 100% del delta) y recorta el slippage a un máximo de 15 bps.
+              </p>
+            )}
+            {isRangeExit && (
+              <p className={styles.hint}>
+                Borde de rango también cubre el 100% del delta, así que ignora
+                <strong> target hedge ratio</strong>. Conserva en cambio tus límites de ejecución:
+                no aplica el recorte de slippage de net profit.
               </p>
             )}
             <div className={styles.row}>
@@ -751,8 +695,13 @@ export function buildProtectionPayload(formValue) {
     maxSlippageBps: Number(formValue.maxSlippageBps),
     twapMinNotionalUsd: Number(formValue.twapMinNotionalUsd),
     policyVersion: formValue.policyVersion || 'legacy_zones_v1',
-    executionIntent: formValue.executionIntent || 'live',
-    ...(formValue.activationConfirmed ? { activationConfirmed: true } : {}),
+    // Fijos a proposito: el formulario ya no ofrece sombra, asi que lo
+    // seleccionado es lo que opera. Leerlos del formValue dejaria que un
+    // `executionIntent: 'shadow'` viejo —persistido antes de este cambio, o
+    // arrastrado por el estado del wizard— siguiera degradando la seleccion a
+    // legacy sin que nada en pantalla lo dijera.
+    executionIntent: 'live',
+    activationConfirmed: true,
   };
 }
 
@@ -787,11 +736,6 @@ export function validateProtectionForm(formValue) {
   const deadZone = Number(formValue.centerDeadZonePct);
   if (!Number.isFinite(deadZone) || deadZone < 0 || deadZone > MAX_CENTER_DEAD_ZONE_PCT) {
     return `La zona central sin rebalanceo debe estar entre 0 y ${MAX_CENTER_DEAD_ZONE_PCT}%.`;
-  }
-  if (['net_profit_v1', 'net_profit_v2'].includes(formValue.policyVersion)
-    && formValue.executionIntent === 'live'
-    && formValue.activationConfirmed !== true) {
-    return 'Confirma la operación real de net profit o vuelve a modo sombra.';
   }
   return null;
 }

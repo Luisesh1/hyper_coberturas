@@ -27,22 +27,29 @@ export default function useEthUsdcRangeRecommendation({
   // la protección siga intacta desde el valor recomendado.
   useEffect(() => {
     if (!isOrchestrated || protectionDirtyRef.current) return;
+    // La recomendacion es una POLITICA, no un modo de ejecucion: ya no entra
+    // en sombra, porque el formulario dejo de ofrecer sombra y lo que se ve
+    // seleccionado es lo que opera. El usuario la ve en el desplegable y la
+    // puede cambiar; dejarla recomendada pero corriendo legacy seria otra vez
+    // la UI diciendo una cosa y el hedge haciendo otra.
     setProtectionState((current) => {
       if (isEthUsdcPair) {
-        if (current.policyVersion === 'net_profit_v2' && current.executionIntent === 'shadow') return current;
+        if (current.policyVersion === 'net_profit_v2') return current;
         return {
           ...current,
           policyVersion: 'net_profit_v2',
-          executionIntent: 'shadow',
-          activationConfirmed: false,
+          executionIntent: 'live',
+          activationConfirmed: true,
         };
       }
-      if (current.policyVersion !== 'net_profit_v2' || current.executionIntent !== 'shadow') return current;
+      // Al salir del par solo se deshace la recomendacion, no una eleccion
+      // manual: si el usuario ya habia elegido otra, no se toca.
+      if (current.policyVersion !== 'net_profit_v2') return current;
       return {
         ...current,
         policyVersion: 'legacy_zones_v1',
         executionIntent: 'live',
-        activationConfirmed: false,
+        activationConfirmed: true,
       };
     });
   }, [isOrchestrated, isEthUsdcPair, protectionDirtyRef, setProtectionState]);

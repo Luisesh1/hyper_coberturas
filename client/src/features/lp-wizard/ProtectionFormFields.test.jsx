@@ -152,22 +152,22 @@ describe('buildProtectionPayload', () => {
 });
 
 describe('política de cobertura', () => {
-  const netProfitShadow = () => ({
+  const netProfit = () => ({
     ...buildDefaultProtection(1000, null, { enabled: true, leverage: '10' }),
     accountId: 1,
     policyVersion: 'net_profit_v1',
-    executionIntent: 'shadow',
+    executionIntent: 'live',
+    activationConfirmed: true,
   });
 
   it('conserva la política al apagar y volver a encender la protección', () => {
     const onChange = vi.fn();
-    render(<ProtectionFormFields value={netProfitShadow()} onChange={onChange} accounts={[{ id: 1 }]} />);
+    render(<ProtectionFormFields value={netProfit()} onChange={onChange} accounts={[{ id: 1 }]} />);
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Activar protección delta-neutral/i }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
       enabled: false,
       policyVersion: 'net_profit_v1',
-      executionIntent: 'shadow',
     }));
   });
 
@@ -175,7 +175,7 @@ describe('política de cobertura', () => {
     const onChange = vi.fn();
     render(
       <ProtectionFormFields
-        value={{ ...netProfitShadow(), autoTunedFor: 3 }}
+        value={{ ...netProfit(), autoTunedFor: 3 }}
         onChange={onChange}
         accounts={[{ id: 1 }]}
         rangeWidthPct={9}
@@ -185,39 +185,52 @@ describe('política de cobertura', () => {
     fireEvent.click(screen.getByRole('button', { name: /Re-aplicar/i }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
       policyVersion: 'net_profit_v1',
-      executionIntent: 'shadow',
     }));
   });
 
-  it('pasar a operación real limpia la confirmación previa y volver a sombra la descarta', () => {
+  it('no ofrece modo sombra: la política elegida es la que opera', () => {
     const onChange = vi.fn();
-    const { rerender } = render(
-      <ProtectionFormFields value={netProfitShadow()} onChange={onChange} accounts={[{ id: 1 }]} />
-    );
+    render(<ProtectionFormFields value={netProfit()} onChange={onChange} accounts={[{ id: 1 }]} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Operación real/i }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ executionIntent: 'live' }));
+    // El selector sombra/real y su casilla de confirmación ya no existen. Su
+    // efecto real era que lo elegido NO se aplicara, que es justo lo que este
+    // formulario no puede volver a permitir.
+    expect(screen.queryByRole('group', { name: /Modo de ejecución/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Sombra$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Operación real/i })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Confirmo activar órdenes reales/i })).toBeNull();
+  });
 
-    onChange.mockClear();
-    rerender(
-      <ProtectionFormFields
-        value={{ ...netProfitShadow(), executionIntent: 'live', activationConfirmed: true }}
-        onChange={onChange}
-        accounts={[{ id: 1 }]}
-      />
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Sombra/i }));
+  it('elegir una política la deja operando, no midiendo', () => {
+    const onChange = vi.fn();
+    render(<ProtectionFormFields value={netProfit()} onChange={onChange} accounts={[{ id: 1 }]} />);
+
+    const policySelect = screen.getByRole('option', { name: /Borde de rango/i }).closest('select');
+    fireEvent.change(policySelect, { target: { value: 'range_exit_v1' } });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      policyVersion: 'range_exit_v1',
+      executionIntent: 'live',
+      activationConfirmed: true,
+    }));
+  });
+
+  it('el payload manda siempre la política elegida en operación real', () => {
+    // Aunque el estado arrastre un `shadow` viejo persistido antes del cambio:
+    // el servidor lo degradaría a legacy y la UI seguiría diciendo otra cosa.
+    const payload = buildProtectionPayload({
+      ...netProfit(),
+      policyVersion: 'range_exit_v1',
       executionIntent: 'shadow',
       activationConfirmed: false,
-    }));
+    });
+    expect(payload.policyVersion).toBe('range_exit_v1');
+    expect(payload.executionIntent).toBe('live');
+    expect(payload.activationConfirmed).toBe(true);
   });
 
-  it('validateProtectionForm bloquea net profit en real sin confirmar', () => {
-    const live = { ...netProfitShadow(), executionIntent: 'live' };
-    expect(validateProtectionForm(live)).toMatch(/Confirma la operación real/);
-    expect(validateProtectionForm({ ...live, activationConfirmed: true })).toBeNull();
-    expect(validateProtectionForm({ ...netProfitShadow() })).toBeNull();
+  it('validateProtectionForm ya no exige confirmar la operación real', () => {
+    expect(validateProtectionForm(netProfit())).toBeNull();
+    expect(validateProtectionForm({ ...netProfit(), activationConfirmed: false })).toBeNull();
   });
 });
 

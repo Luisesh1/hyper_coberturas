@@ -550,16 +550,16 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
     expect(otherPair.result.current.ethUsdcRangeRecommendation).toBe(null);
   });
 
-  it('recomienda sombra para ETH/USDC sin reemplazar una elección legacy explícita', () => {
+  it('recomienda net_profit_v2 para ETH/USDC —operando, no en sombra— sin pisar una elección explícita', () => {
     const { result } = renderFlow();
     expect(result.current.protection.policyVersion).toBe('net_profit_v2');
-    expect(result.current.protection.executionIntent).toBe('shadow');
+    // Ya no entra en sombra: lo que el desplegable muestra es lo que opera.
+    expect(result.current.protection.executionIntent).toBe('live');
 
     act(() => result.current.setProtection({
       ...result.current.protection,
       policyVersion: 'legacy_zones_v1',
       executionIntent: 'live',
-      activationConfirmed: false,
     }));
     expect(result.current.buildPlan().protection.policyVersion).toBe('legacy_zones_v1');
   });

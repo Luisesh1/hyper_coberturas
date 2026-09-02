@@ -33,6 +33,10 @@ function protectionConfigToFormValue(cfg) {
       : String(DEFAULT_CENTER_DEAD_ZONE_PCT),
     maxSlippageBps: cfg.maxSlippageBps != null ? String(cfg.maxSlippageBps) : '20',
     twapMinNotionalUsd: cfg.twapMinNotionalUsd != null ? String(cfg.twapMinNotionalUsd) : '10000',
+    // La politica tiene que viajar: sin esto el formulario abria en
+    // `legacy_zones_v1` (el default) y guardar cualquier otro campo reescribia
+    // la seleccion a legacy en silencio.
+    policyVersion: cfg.policyVersion || 'legacy_zones_v1',
     preset: 'adaptive',
     autoTunedFor: null,
   };
