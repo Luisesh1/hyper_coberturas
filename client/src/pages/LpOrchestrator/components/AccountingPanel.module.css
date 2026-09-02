@@ -180,3 +180,12 @@
   font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
   font-weight: 800;
 }
+
+/* El porcentaje acompana al importe sin competir con el: hereda el color del
+   signo (que ya lo pone `.netRow strong`) y baja un escalon de tamano. */
+.netPct {
+  margin-left: 0.45rem;
+  font-size: 0.82em;
+  font-weight: 600;
+  opacity: 0.85;
+}

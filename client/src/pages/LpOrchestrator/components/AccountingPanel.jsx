@@ -9,6 +9,14 @@ function num(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Porcentaje con signo explicito. El `+` importa: sin el, un `0.84%` al lado
+ *  de un importe negativo se lee como si fueran de signos distintos. */
+function formatSignedPct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return `${n >= 0 ? '+' : '-'}${Math.abs(n).toFixed(2)}%`;
+}
+
 function signTone(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n === 0) return 'neutral';
@@ -68,6 +76,15 @@ export default function AccountingPanel({
   const lpFees = Number(a.lpFeesUsd) || 0;
   const feesYieldPct = Number.isFinite(initial) && initial > 0
     ? (lpFees / initial) * 100
+    : null;
+
+  // El neto total tambien como % del capital inicial. Los dolares solos no
+  // dicen si un resultado es bueno: -$7 es distinto en un LP de $300 que en uno
+  // de $1000. Mismo denominador que `feesYieldPct` para que las dos cifras del
+  // panel se puedan comparar entre si.
+  const netPnl = Number(a.totalNetPnlUsd);
+  const netPnlPct = Number.isFinite(initial) && initial > 0 && Number.isFinite(netPnl)
+    ? (netPnl / initial) * 100
     : null;
 
   const pendingFees = Number(unclaimedFeesUsd);
@@ -149,6 +166,9 @@ export default function AccountingPanel({
         <span>P&L neto total</span>
         <strong className={signTone(a.totalNetPnlUsd) === 'negative' ? styles.negative : styles.positive}>
           {formatSignedUsd(a.totalNetPnlUsd)}
+          {netPnlPct != null && (
+            <span className={styles.netPct}>{formatSignedPct(netPnlPct)}</span>
+          )}
         </strong>
       </div>
     </div>
