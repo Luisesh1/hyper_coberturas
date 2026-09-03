@@ -7,177 +7,55 @@ import {
   createChart,
 } from 'lightweight-charts';
 import { metricsApi } from '../../../services/api';
+import { fmtDateTime, fmtSignedUsd, fmtUsd } from '../lib/format';
+import { POLICY_OPTIONS, buildPnlTooltip, selectPolicySnapshot } from '../lib/policySnapshot';
 import styles from '../MetricasPage.module.css';
 
 const COLOR_TOTAL = '#38bdf8';
 const COLOR_WALLET = '#a78bfa';
 const COLOR_LP = '#22c55e';
 const COLOR_HL = '#f59e0b';
-export const POLICY_OPTIONS = [
-  { value: 'live', label: 'Política viva (real)' },
-  { value: 'legacy_zones_v1', label: 'Zonas legacy v1' },
-  { value: 'net_profit_v1', label: 'Net profit v1' },
-  { value: 'net_profit_v2', label: 'Net profit v2' },
-  // Ya se puede elegir al crear una proteccion, pero aqui sigue apareciendo
-  // como serie porque tambien corre en sombra en las que no la eligieron: para
-  // eso existe la comparativa. Los snapshots anteriores a su alta no la traen,
-  // y `selectPolicySnapshot` ya los descarta por `hlAccountUsd` no finito, asi
-  // que la serie arranca el dia que se desplego.
-  { value: 'range_exit_v1', label: 'Borde de rango v1' },
-];
 
-function fmtUsd(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
-  return n.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
+const SERIES = [
+  { key: 'total', label: 'Total acumulado', color: COLOR_TOTAL, field: 'totalUsd' },
+  { key: 'wallet', label: 'Wallet Arbitrum', color: COLOR_WALLET, field: 'walletUsd' },
+  { key: 'lp', label: 'LP Uniswap', color: COLOR_LP, field: 'lpUsd' },
+  { key: 'hl', label: 'Hyperliquid', color: COLOR_HL, field: 'hlAccountUsd' },
+];
 
 function toChartTime(ms) {
   // lightweight-charts acepta segundos UTC como `time`
   return Math.floor(Number(ms) / 1000);
 }
 
-function fmtDateTime(ms) {
-  const d = new Date(Number(ms));
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-function fmtSignedUsd(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
-  return `${n >= 0 ? '+' : '-'}${fmtUsd(Math.abs(n))}`;
-}
-
-// Componentes del PnL neto, en el mismo orden y con el mismo signo con que
-// `server/src/services/lp-orchestrator/accounting.js` los suma en
-// recomputeNetPnl(). `sign` es la contribucion al total (los costos restan).
-const LP_PNL_COMPONENTS = [
-  { key: 'lpFeesUsd', label: 'Fees LP', sign: 1 },
-  { key: 'priceDriftUsd', label: 'Deriva de precio LP', sign: 1 },
-  { key: 'gasSpentUsd', label: 'Gas', sign: -1 },
-  { key: 'swapSlippageUsd', label: 'Slippage swaps', sign: -1 },
-];
-const HEDGE_PNL_COMPONENTS = [
-  { key: 'hedgeRealizedPnlUsd', label: 'Hedge realizado', sign: 1 },
-  { key: 'hedgeUnrealizedPnlUsd', label: 'Hedge no realizado', sign: 1 },
-  { key: 'hedgeFundingUsd', label: 'Funding', sign: 1 },
-  { key: 'hedgeExecutionFeesUsd', label: 'Fees ejecucion hedge', sign: -1 },
-  { key: 'hedgeSlippageUsd', label: 'Slippage hedge', sign: -1 },
-];
-
-function netPnl(accounting) {
-  return Number(accounting.lpFeesUsd || 0) + Number(accounting.priceDriftUsd || 0)
-    - Number(accounting.gasSpentUsd || 0) - Number(accounting.swapSlippageUsd || 0)
-    + Number(accounting.hedgeRealizedPnlUsd || 0) + Number(accounting.hedgeUnrealizedPnlUsd || 0)
-    + Number(accounting.hedgeFundingUsd || 0) - Number(accounting.hedgeExecutionFeesUsd || 0)
-    - Number(accounting.hedgeSlippageUsd || 0);
-}
-
-/** Selecciona una política sin fabricar datos para snapshots anteriores. */
-export function selectPolicySnapshot(snapshot, selectedPolicy = 'live') {
-  if (!snapshot) return null;
-  const policies = snapshot.breakdown?.policies;
-  if (!policies) return selectedPolicy === 'live' ? snapshot : null;
-  const policy = selectedPolicy === 'live'
-    ? Object.values(policies).find((candidate) => candidate?.isLive)
-    : policies[selectedPolicy];
-  if (!policy || !Number.isFinite(Number(policy.hlAccountUsd))) return null;
-  const accounting = snapshot.breakdown?.accounting;
-  if (!accounting) return null;
-  const selectedAccounting = {
-    ...accounting,
-    hedgeRealizedPnlUsd: policy.hedgeRealizedPnlUsd,
-    hedgeUnrealizedPnlUsd: policy.hedgeUnrealizedPnlUsd,
-    hedgeFundingUsd: policy.hedgeFundingUsd,
-    hedgeExecutionFeesUsd: policy.hedgeExecutionFeesUsd,
-    hedgeSlippageUsd: policy.hedgeSlippageUsd,
-  };
-  if (!Object.values(HEDGE_PNL_COMPONENTS).every(({ key }) => Number.isFinite(Number(selectedAccounting[key])))) return null;
-  selectedAccounting.totalNetPnlUsd = netPnl(selectedAccounting);
-  const hlAccountUsd = Number(policy.hlAccountUsd);
-  return {
-    ...snapshot,
-    hlAccountUsd,
-    totalUsd: Number(snapshot.walletUsd || 0) + Number(snapshot.lpUsd || 0) + hlAccountUsd,
-    accounting: selectedAccounting,
-    breakdown: { ...snapshot.breakdown, accounting: selectedAccounting, selectedPolicy: selectedPolicy === 'live'
-      ? Object.entries(policies).find(([, candidate]) => candidate?.isLive)?.[0] : selectedPolicy },
-  };
-}
-
 /**
- * Desglose legible del PnL para el tooltip nativo del stat. Incluye los
- * ajustes de capital (depositos/retiros al LP) como nota aparte: NO son PnL,
- * pero explican por que "Δ rango" y "PnL total" pueden diferir.
+ * Detalle de un orquestador. Ya no pide sus propios snapshots: los recibe de
+ * la pagina, que los trae una vez para toda la tabla. Solo se monta cuando su
+ * fila esta abierta, asi que hay como maximo un chart vivo.
  */
-function buildPnlTooltip(accounting, rangeDeltaUsd, rangeLabel) {
-  if (!accounting) return 'Sin contabilidad disponible';
-  const lines = ['PnL neto acumulado (vida del orquestador)', ''];
-  for (const { key, label, sign } of [...LP_PNL_COMPONENTS, ...HEDGE_PNL_COMPONENTS]) {
-    const raw = Number(accounting[key]);
-    if (!Number.isFinite(raw) || raw === 0) continue;
-    lines.push(`${label}: ${fmtSignedUsd(sign * raw)}`);
-  }
-  lines.push('', `Total: ${fmtSignedUsd(accounting.totalNetPnlUsd)}`);
-  if (Number.isFinite(rangeDeltaUsd)) {
-    lines.push(`PnL en ${rangeLabel}: ${fmtSignedUsd(rangeDeltaUsd)}`);
-  }
-  const capital = Number(accounting.capitalAdjustmentsUsd);
-  if (Number.isFinite(capital) && capital !== 0) {
-    lines.push('', `Capital agregado/retirado (no es PnL): ${fmtSignedUsd(capital)}`);
-  }
-  return lines.join('\n');
-}
-
-export default function OrchestratorMetricChart({ orchestrator, range }) {
+export default function OrchestratorMetricChart({ orchestrator, range, snapshots = [], error: fetchError = null }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const tooltipRef = useRef(null);
-  const [snapshots, setSnapshots] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const seriesRef = useRef({});
   const [error, setError] = useState(null);
   // Valores live on-chain — fetcheados on-demand via boton de refresh.
   // NO se persisten (no crean snapshot), solo sobrescriben el header.
   const [liveStats, setLiveStats] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedPolicy, setSelectedPolicy] = useState('live');
+  const [hidden, setHidden] = useState(() => new Set());
 
-  // Load historical snapshots
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    const now = Date.now();
-    const startAt = range?.ms ? now - range.ms : null;
-
-    metricsApi.getSnapshots(orchestrator.id, {
-      startAt,
-      endAt: now,
-      limit: 5000,
-    }).then((data) => {
-      if (cancelled) return;
-      setSnapshots(Array.isArray(data) ? data : []);
-    }).catch((err) => {
-      if (cancelled) return;
-      setError(err?.message || 'Error cargando metricas');
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-
-    return () => { cancelled = true; };
-  }, [orchestrator.id, range?.id, range?.ms]);
+  // El handler del crosshair se crea una vez por serie y sobrevive a los
+  // clics en la leyenda: lee la seleccion por referencia, no por captura.
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
 
   // Cambiar de orchestrator o rango descarta el override live.
   useEffect(() => {
     setLiveStats(null);
     setSelectedPolicy('live');
+    setError(null);
   }, [orchestrator.id, range?.id, range?.ms]);
 
   const policySnapshots = useMemo(
@@ -232,6 +110,7 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
+    setError(null);
     try {
       const data = await metricsApi.getCurrent(orchestrator.id);
       if (data && data.totalUsd != null) {
@@ -253,16 +132,27 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
     }
   };
 
+  const toggleSeries = (key) => {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      // Apagar la ultima serie visible dejaria el chart vacio sin explicacion.
+      if (next.size === SERIES.length) return prev;
+      return next;
+    });
+  };
+
   // Render chart
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current) return undefined;
     if (!policySnapshots.length) {
       // Clean any previous chart when data disappears
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
+        seriesRef.current = {};
       }
-      return;
+      return undefined;
     }
 
     const chart = createChart(containerRef.current, {
@@ -281,11 +171,6 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
     });
     chartRef.current = chart;
 
-    const totalData = policySnapshots.map((s) => ({
-      time: toChartTime(s.capturedAt),
-      value: Number(s.totalUsd) || 0,
-    }));
-
     // Area de fondo = total acumulado
     const area = chart.addSeries(AreaSeries, {
       lineColor: COLOR_TOTAL,
@@ -293,33 +178,25 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
       bottomColor: 'rgba(56, 189, 248, 0.02)',
       lineWidth: 3,
       priceLineVisible: true,
+      visible: !hiddenRef.current.has('total'),
     });
-    area.setData(totalData);
+    area.setData(policySnapshots.map((s) => ({
+      time: toChartTime(s.capturedAt),
+      value: Number(s.totalUsd) || 0,
+    })));
+    seriesRef.current = { total: area };
 
     // Lineas desglosadas superpuestas
-    const walletSeries = chart.addSeries(LineSeries, {
-      color: COLOR_WALLET, lineWidth: 2, priceLineVisible: false,
-    });
-    walletSeries.setData(policySnapshots.map((s) => ({
-      time: toChartTime(s.capturedAt),
-      value: Number(s.walletUsd) || 0,
-    })));
-
-    const lpSeries = chart.addSeries(LineSeries, {
-      color: COLOR_LP, lineWidth: 2, priceLineVisible: false,
-    });
-    lpSeries.setData(policySnapshots.map((s) => ({
-      time: toChartTime(s.capturedAt),
-      value: Number(s.lpUsd) || 0,
-    })));
-
-    const hlSeries = chart.addSeries(LineSeries, {
-      color: COLOR_HL, lineWidth: 2, priceLineVisible: false,
-    });
-    hlSeries.setData(policySnapshots.map((s) => ({
-      time: toChartTime(s.capturedAt),
-      value: Number(s.hlAccountUsd) || 0,
-    })));
+    for (const { key, color, field } of SERIES.slice(1)) {
+      const line = chart.addSeries(LineSeries, {
+        color, lineWidth: 2, priceLineVisible: false, visible: !hiddenRef.current.has(key),
+      });
+      line.setData(policySnapshots.map((s) => ({
+        time: toChartTime(s.capturedAt),
+        value: Number(s[field]) || 0,
+      })));
+      seriesRef.current[key] = line;
+    }
 
     chart.timeScale().fitContent();
 
@@ -351,24 +228,18 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
         return;
       }
 
+      const rows = SERIES
+        .filter(({ key }) => !hiddenRef.current.has(key))
+        .map(({ label, color, field }) => `
+        <div class="${styles.tooltipRow}">
+          <span><span class="${styles.legendSwatch}" style="background:${color}"></span>${label}</span>
+          <strong>${fmtUsd(snap[field])}</strong>
+        </div>
+      `).join('');
+
       tooltipEl.innerHTML = `
         <div class="${styles.tooltipDate}">${fmtDateTime(snap.capturedAt)}</div>
-        <div class="${styles.tooltipRow}">
-          <span><span class="${styles.legendSwatch}" style="background:${COLOR_TOTAL}"></span>Total</span>
-          <strong>${fmtUsd(snap.totalUsd)}</strong>
-        </div>
-        <div class="${styles.tooltipRow}">
-          <span><span class="${styles.legendSwatch}" style="background:${COLOR_WALLET}"></span>Wallet</span>
-          <strong>${fmtUsd(snap.walletUsd)}</strong>
-        </div>
-        <div class="${styles.tooltipRow}">
-          <span><span class="${styles.legendSwatch}" style="background:${COLOR_LP}"></span>LP</span>
-          <strong>${fmtUsd(snap.lpUsd)}</strong>
-        </div>
-        <div class="${styles.tooltipRow}">
-          <span><span class="${styles.legendSwatch}" style="background:${COLOR_HL}"></span>HL</span>
-          <strong>${fmtUsd(snap.hlAccountUsd)}</strong>
-        </div>
+        ${rows}
       `;
       tooltipEl.style.display = 'block';
 
@@ -396,9 +267,17 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
       chart.unsubscribeCrosshairMove(handleCrosshair);
       chart.remove();
       chartRef.current = null;
+      seriesRef.current = {};
       if (tooltipEl) tooltipEl.style.display = 'none';
     };
   }, [policySnapshots]);
+
+  // Aislar una serie no reconstruye el chart, solo cambia su visibilidad.
+  useEffect(() => {
+    for (const { key } of SERIES) {
+      seriesRef.current[key]?.applyOptions({ visible: !hidden.has(key) });
+    }
+  }, [hidden]);
 
   const deltaClass = stats.deltaUsd >= 0 ? styles.statDeltaPos : styles.statDeltaNeg;
   const deltaSign = stats.deltaUsd >= 0 ? '+' : '';
@@ -414,20 +293,6 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
     <div className={styles.card}>
       <div className={styles.cardHeader}>
         <div className={styles.cardHeaderLeft}>
-          <h3 className={styles.cardTitle}>
-            {orchestrator.name} · {orchestrator.token0Symbol}/{orchestrator.token1Symbol}
-          </h3>
-          <span className={styles.cardMeta}>
-            {orchestrator.network} · {orchestrator.version}
-            {orchestrator.accountId != null ? ' · hedge activo' : ' · sin hedge'}
-            {' · '}
-            {orchestrator.status}
-            {stats.isLive && (
-              <span className={styles.liveBadge} title={`Datos live de ${fmtDateTime(stats.current?.capturedAt)}`}>
-                {' · live'}
-              </span>
-            )}
-          </span>
           <label className={styles.policyPicker}>
             Cobertura mostrada
             <select value={selectedPolicy} onChange={(event) => setSelectedPolicy(event.target.value)}>
@@ -437,6 +302,11 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
           {selectedPolicyIsLive != null && (
             <span className={selectedPolicyIsLive ? styles.policyReal : styles.policySimulated}>
               {selectedPolicyIsLive ? 'Medición real' : 'Simulación contrafactual'}
+            </span>
+          )}
+          {stats.isLive && (
+            <span className={styles.liveBadge} title={`Datos live de ${fmtDateTime(stats.current?.capturedAt)}`}>
+              live · {fmtDateTime(stats.current?.capturedAt)}
             </span>
           )}
         </div>
@@ -450,12 +320,6 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
           >
             {refreshing ? '⟳ Refrescando…' : '⟳ Refrescar'}
           </button>
-          <div className={styles.stat}>
-            <span className={styles.statLabel}>Total actual</span>
-            <span className={styles.statValue}>
-              {stats.current ? fmtUsd(stats.current.totalUsd) : '—'}
-            </span>
-          </div>
           <div className={styles.stat}>
             <span className={styles.statLabel}>Wallet Arb</span>
             <span className={styles.statValue} style={{ color: COLOR_WALLET }}>
@@ -510,18 +374,28 @@ export default function OrchestratorMetricChart({ orchestrator, range }) {
         </div>
       </div>
 
+      {(error || fetchError) && (
+        <div className={styles.cardError}>Error: {error || fetchError}</div>
+      )}
+
       <div className={styles.legend}>
-        <span><span className={styles.legendSwatch} style={{ background: COLOR_TOTAL }} />Total acumulado</span>
-        <span><span className={styles.legendSwatch} style={{ background: COLOR_WALLET }} />Wallet Arbitrum</span>
-        <span><span className={styles.legendSwatch} style={{ background: COLOR_LP }} />LP Uniswap</span>
-        <span><span className={styles.legendSwatch} style={{ background: COLOR_HL }} />Hyperliquid</span>
+        {SERIES.map(({ key, label, color }) => (
+          <button
+            key={key}
+            type="button"
+            className={`${styles.legendItem} ${hidden.has(key) ? styles.legendItemOff : ''}`}
+            aria-pressed={!hidden.has(key)}
+            onClick={() => toggleSeries(key)}
+          >
+            <span className={styles.legendSwatch} style={{ background: color }} />
+            {label}
+          </button>
+        ))}
       </div>
 
       <div className={styles.chartContainer} ref={containerRef}>
         <div ref={tooltipRef} className={styles.chartTooltip} style={{ display: 'none' }} />
-        {loading && <div className={styles.loading}>Cargando…</div>}
-        {error && <div className={styles.empty}>Error: {error}</div>}
-        {!loading && !error && !snapshots.length && (
+        {!fetchError && !snapshots.length && (
           <div className={styles.empty}>
             Aun no hay snapshots para este orquestador. El primero se capturara en la
             proxima hora en punto.

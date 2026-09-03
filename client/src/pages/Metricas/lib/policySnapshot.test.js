@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { POLICY_OPTIONS, selectPolicySnapshot } from './OrchestratorMetricChart';
+import { POLICY_OPTIONS, selectPolicySnapshot } from './policySnapshot';
 
 const snapshot = {
   capturedAt: 1,
