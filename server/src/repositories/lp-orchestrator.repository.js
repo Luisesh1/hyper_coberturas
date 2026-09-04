@@ -84,16 +84,22 @@ function mapActiveHedge(row) {
     declaredPolicy,
     executionIntent,
     livePolicy,
-    // Tramo del rango donde la cobertura no opera. La zona muerta se lee
-    // RESUELTA: la columna nace NULL en toda proteccion migrada y en ese caso
-    // manda el default del servicio, que solo el tick conoce. Se prefiere el
-    // valor que persistio y se cae a la columna mientras la proteccion todavia
-    // no corrio ningun tick; sin ninguno de los dos queda `null` y la tarjeta
-    // no dibuja nada — inventar un 40% es dibujar una restriccion que no se
-    // sabe si existe.
+    // Tramo del rango donde la cobertura no opera, con la MISMA precedencia
+    // que `resolveCenterDeadZone` usa en el tick: manda la columna, y el valor
+    // que el tick dejo en el estado solo cubre el caso de columna NULL (toda
+    // proteccion migrada), donde el efectivo es el default del servicio y solo
+    // el tick lo conoce.
+    //
+    // Estaba al reves. Con el estado primero, un reajuste de la zona muerta no
+    // se veia hasta que un tick reescribiera el estado — y si la proteccion
+    // estaba en cooldown, no se veia nunca. La tarjeta contradecia al motor
+    // usando el dato que el propio motor ya habia descartado.
+    //
+    // Sin ninguno de los dos queda `null` y no se dibuja nada: inventar un 40%
+    // es dibujar una restriccion que no se sabe si existe.
     noOpZone: resolveNoOpZone(
       livePolicy,
-      firstFinite(state.centerDeadZonePct, row.active_protection_center_dead_zone_pct),
+      firstFinite(row.active_protection_center_dead_zone_pct, state.centerDeadZonePct),
     ),
   };
 }

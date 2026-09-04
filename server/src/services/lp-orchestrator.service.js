@@ -1088,6 +1088,25 @@ class LpOrchestratorService {
       strategyConfig: nextStrategy,
       protectionConfig: nextProtection,
     });
+
+    // El JSON del orquestador es la INTENCION; quien rebalancea es la
+    // proteccion vinculada, que se lee entera en cada tick. Sin esta
+    // propagacion, editar la zona muerta (o el slippage, o las bandas) movia
+    // el formulario y dejaba el hedge operando con los valores viejos: ningun
+    // error, ninguna traza, y la tarjeta mostrando lo que el motor si hacia.
+    //
+    // Solo el subconjunto reajustable en caliente. El resto (apalancamiento,
+    // notional, cuenta, politica) no se puede cambiar bajo una cobertura viva
+    // y se informa como pendiente en vez de aplicarse a medias.
+    let appliedToHedge = null;
+    if (nextProtection && nextProtection.enabled !== false && orch.activeProtectedPoolId) {
+      const patch = this.uniswapProtectionService.normalizeLiveTunables(nextProtection);
+      if (Object.keys(patch).length) {
+        await this.protectedPoolRepo.updateTunables(userId, orch.activeProtectedPoolId, patch);
+        appliedToHedge = Object.keys(patch);
+      }
+    }
+
     await this.repo.appendActionLog({
       orchestratorId,
       kind: 'config_updated',
@@ -1095,6 +1114,11 @@ class LpOrchestratorService {
       payload: {
         changedStrategy: nextStrategy ? Object.keys(strategyConfig) : [],
         changedProtection: nextProtection !== undefined,
+        // Que se aplico al hedge vivo y que se quedo solo en la intencion: sin
+        // esto, la bitacora no distingue una edicion que cambio el
+        // comportamiento de una que no.
+        appliedToHedge,
+        protectedPoolId: orch.activeProtectedPoolId ?? null,
       },
       createdAt: Date.now(),
     });

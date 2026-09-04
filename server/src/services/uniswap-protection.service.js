@@ -14,6 +14,12 @@ const { getTradingService } = require('./trading.factory');
 const {
   policyOwnsFullDelta,
   SELECTABLE_LIVE_POLICIES,
+  // Viven en los helpers y NO se re-exportan desde
+  // `protected-pool-delta-neutral.service`: importarlas de alli las dejaba en
+  // `undefined`, y con eso `parsed > MAX_CENTER_DEAD_ZONE_PCT` era siempre
+  // false — el tope de la zona muerta no se validaba en ningun alta.
+  DEFAULT_CENTER_DEAD_ZONE_PCT,
+  MAX_CENTER_DEAD_ZONE_PCT,
 } = require('./protected-pool-delta-neutral.helpers');
 const {
   computeDeltaNeutralMetrics,
@@ -30,8 +36,6 @@ const {
   DEFAULT_REBALANCE_INTERVAL_SEC,
   DEFAULT_TARGET_HEDGE_RATIO,
   DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
-  DEFAULT_CENTER_DEAD_ZONE_PCT,
-  MAX_CENTER_DEAD_ZONE_PCT,
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   buildInitialStrategyState,
@@ -1733,6 +1737,38 @@ async function diagnoseDeltaNeutral(userId, protectionId, deps = {}) {
   return diagnostics;
 }
 
+/**
+ * Normaliza el subconjunto de la configuracion que se puede reajustar sobre
+ * una proteccion viva. Devuelve SOLO las claves presentes en la entrada: una
+ * ausente no se toca, y por eso no se rellena con defaults.
+ *
+ * Comparte los normalizadores con la creacion a proposito — un tope que se
+ * aplica al crear y no al editar es una forma silenciosa de saltarselo.
+ */
+function normalizeLiveTunables(config = {}) {
+  const patch = {};
+  if (config.bandMode !== undefined) patch.bandMode = normalizeBandMode(config.bandMode);
+  if (config.baseRebalancePriceMovePct !== undefined) {
+    patch.baseRebalancePriceMovePct = normalizeBaseRebalancePriceMovePct(config.baseRebalancePriceMovePct);
+  }
+  if (config.rebalanceIntervalSec !== undefined) {
+    patch.rebalanceIntervalSec = normalizeRebalanceIntervalSec(config.rebalanceIntervalSec);
+  }
+  if (config.minRebalanceNotionalPct !== undefined) {
+    patch.minRebalanceNotionalPct = normalizeMinRebalanceNotionalPct(config.minRebalanceNotionalPct);
+  }
+  if (config.centerDeadZonePct !== undefined) {
+    patch.centerDeadZonePct = normalizeCenterDeadZonePct(config.centerDeadZonePct);
+  }
+  if (config.maxSlippageBps !== undefined) {
+    patch.maxSlippageBps = normalizeMaxSlippageBps(config.maxSlippageBps);
+  }
+  if (config.twapMinNotionalUsd !== undefined) {
+    patch.twapMinNotionalUsd = normalizeTwapMinNotionalUsd(config.twapMinNotionalUsd);
+  }
+  return patch;
+}
+
 module.exports = {
   ACTIVE_HEDGE_STATUSES,
   SHORTCUT_MULTIPLIERS,
@@ -1748,11 +1784,13 @@ module.exports = {
   DEFAULT_MAX_SLIPPAGE_BPS,
   DEFAULT_TWAP_MIN_NOTIONAL_USD,
   DEFAULT_EXECUTION_MODE,
+  MAX_CENTER_DEAD_ZONE_PCT,
   annotatePoolsWithProtection,
   buildProtectionCandidate,
   buildProtectionKey,
   buildDeltaNeutralCandidate,
   createProtectedPool,
+  normalizeLiveTunables,
   deactivateProtectedPool,
   listProtectedPools,
   diagnoseDeltaNeutral,

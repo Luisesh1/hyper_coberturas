@@ -8,6 +8,7 @@ const {
   resolveProtectionLivePolicy,
   policyHonorsCenterDeadZone,
   resolveNoOpZone,
+  resolveCenterDeadZone,
 } = require('../src/services/protected-pool-delta-neutral.helpers');
 const { resolveLivePolicy, resolveShadowPolicies, ALL_POLICIES } = require('../src/services/protected-pool-delta-neutral/shadow-policies');
 const { protectionConfigSchema } = require('../src/schemas/lp-orchestrator.schema');
@@ -109,4 +110,16 @@ test('la zona sin operacion de range_exit_v1 es el rango entero, no una banda ce
   // Sin zona resuelta todavia (proteccion recien creada) no se inventa una.
   assert.equal(resolveNoOpZone('legacy_zones_v1', null), null);
   assert.equal(resolveNoOpZone(null, 40), null);
+});
+
+// La tarjeta tiene que resolver la zona muerta con la MISMA precedencia que el
+// tick: manda la columna, el estado solo cubre la columna NULL. Al reves, un
+// reajuste no se veia hasta que un tick reescribiera el estado —y con la
+// proteccion en cooldown, no se veia nunca.
+test('la zona muerta que muestra la tarjeta prefiere la columna, igual que el motor', () => {
+  const conColumna = { centerDeadZonePct: 55, rangeLowerPrice: 2000, rangeUpperPrice: 3000 };
+  // El motor: la columna gana sobre el default del servicio.
+  assert.equal(resolveCenterDeadZone(conColumna, 2449.5, 40).pct, 55);
+  // Columna NULL: manda el default, que es lo que el tick deja en el estado.
+  assert.equal(resolveCenterDeadZone({ ...conColumna, centerDeadZonePct: null }, 2449.5, 40).pct, 40);
 });

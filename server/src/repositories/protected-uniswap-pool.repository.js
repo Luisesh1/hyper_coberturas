@@ -800,6 +800,56 @@ async function updateDynamicState(userId, id, {
   return rows[0]?.id || null;
 }
 
+/**
+ * Reajuste EN CALIENTE de los parametros que el tick relee de la fila en cada
+ * iteracion (zona muerta, bandas, umbrales y limites de ejecucion).
+ *
+ * Existe porque editar la configuracion del orquestador no tocaba la
+ * proteccion ya creada: el JSON del orquestador cambiaba y el hedge seguia
+ * rebalanceando con los valores viejos, sin un solo error. Un `undefined` deja
+ * la columna como esta —el llamador manda solo lo que cambio—, y por eso NO se
+ * usa COALESCE: un `null` explicito significa "vuelve al default del
+ * servicio", que es un valor distinto de "no lo toques".
+ *
+ * Deliberadamente NO incluye leverage, notional, cuenta, politica ni
+ * `targetHedgeRatio`: los primeros no se releen en caliente, mueven margen y
+ * ordenes, o cambian el motor con su estado a media vida; el ratio redimensiona
+ * la posicion, asi que un ajuste "de configuracion" acabaria mandando ordenes.
+ * Todos exigen recrear la cobertura.
+ */
+async function updateTunables(userId, id, patch = {}, executor) {
+  const COLUMNS = {
+    bandMode: 'band_mode',
+    baseRebalancePriceMovePct: 'base_rebalance_price_move_pct',
+    rebalanceIntervalSec: 'rebalance_interval_sec',
+    minRebalanceNotionalPct: 'min_rebalance_notional_pct',
+    centerDeadZonePct: 'center_dead_zone_pct',
+    maxSlippageBps: 'max_slippage_bps',
+    twapMinNotionalUsd: 'twap_min_notional_usd',
+  };
+
+  const sets = [];
+  const values = [userId, id];
+  for (const [key, column] of Object.entries(COLUMNS)) {
+    if (patch[key] === undefined) continue;
+    values.push(patch[key]);
+    sets.push(`${column} = $${values.length}`);
+  }
+  if (!sets.length) return null;
+
+  values.push(patch.updatedAt ?? Date.now());
+  sets.push(`updated_at = $${values.length}`);
+
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET ${sets.join(',\n            ')}
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    values
+  );
+  return rows[0]?.id ?? null;
+}
+
 async function updateStrategyState(userId, id, {
   strategyState,
   priceCurrent,
@@ -1025,5 +1075,6 @@ module.exports = {
   updateOnchainOperation,
   updateDynamicState,
   updateStrategyState,
+  updateTunables,
   updateSnapshot,
 };
