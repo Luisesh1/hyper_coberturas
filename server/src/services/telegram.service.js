@@ -599,7 +599,11 @@ class TelegramService {
       extra.maxCost != null ? `Limite costo: $${this._fmtPrice(extra.maxCost)}` : null,
       extra.liquidationDistancePct != null ? `Distancia a liquidacion: ${Number(extra.liquidationDistancePct).toFixed(1)}%` : null,
       extra.cooldownReason ? `Cooldown por: ${escapeHtml(extra.cooldownReason)}` : null,
-      extra.driftUsd != null ? `Drift: $${Number(extra.driftUsd).toFixed(2)}` : null,
+      extra.driftUsd != null ? `Orden: $${Number(extra.driftUsd).toFixed(2)}` : null,
+      // Bajo net_profit la orden es una correccion parcial del drift. Sin las
+      // dos cifras, el mensaje parece contradecirse: la orden queda por debajo
+      // del minimo aunque el drift lo supere.
+      extra.fullDriftUsd != null ? `Drift total: $${Number(extra.fullDriftUsd).toFixed(2)} (correccion parcial)` : null,
       extra.minNotionalUsd != null ? `Minimo requerido: $${Number(extra.minNotionalUsd).toFixed(2)}` : null,
       `Fecha: ${when}`,
     ];

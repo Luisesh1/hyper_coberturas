@@ -181,6 +181,34 @@ function decideNetProfitV1({
   if (adjustAbsQty <= 0) {
     return { decision: 'hold', gate: 'inner', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
   }
+  // El minimo se mide sobre la ORDEN, no sobre el drift.
+  //
+  // El gate de arriba compara el drift COMPLETO contra el minimo, pero esta
+  // politica corrige solo una parte (hasta el 75% en V2, 50% en V1, y menos si
+  // manda el recorte por `innerPct`). Con drift de $11.50 la orden sale de
+  // $8.63: pasaba el gate, decidia rebalancear, y el exchange la rechazaba
+  // abajo por debajo del minimo — un tick perdido y una alerta de Telegram en
+  // cada iteracion mientras el drift siguiera en esa franja. Para el 75% de V2
+  // esa franja es todo el tramo [minimo, minimo/0.75), o sea $11-$14.67 con
+  // los defaults: ahi la orden NUNCA podia salir.
+  //
+  // Se sostiene quieto hasta que el drift crezca lo suficiente para que su
+  // correccion parcial supere el minimo. No cambia lo que se ejecuta —esa
+  // orden no se enviaba igual—, solo deja de decidir lo imposible.
+  const adjustNotionalUsd = adjustAbsQty * price;
+  if (adjustNotionalUsd < minNotionalUsd && !isTerminalClose) {
+    return {
+      decision: 'hold',
+      gate: 'min_notional_adjust',
+      targetQty,
+      errorQty,
+      errorUsd,
+      minNotionalUsd,
+      adjustNotionalUsd,
+      fillTimestamps: fills,
+      ...thresholds,
+    };
+  }
   return {
     decision: 'rebalance',
     gate: riskToInner ? 'risk_to_inner' : 'outside_outer',

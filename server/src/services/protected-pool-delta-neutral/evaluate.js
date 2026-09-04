@@ -1176,8 +1176,16 @@ const evaluateMethods = {
         preflightExtra.cooldownReason = preflight.executionSkippedBecause;
       }
       if (preflight.reason === 'below_min_order_notional') {
-        preflightExtra.driftUsd = tracking.trackingErrorUsd;
+        // Lo que se imprime tiene que ser lo que la compuerta JUZGO. El
+        // preflight recibe `executionTracking || tracking`: bajo net_profit la
+        // orden es una correccion parcial, mas chica que el drift. Imprimir el
+        // drift completo daba mensajes que se contradecian solos —"Drift
+        // $11.50 / Minimo $11.00" y aun asi bloqueado— porque eran dos
+        // cantidades distintas presentadas como la misma.
+        const judged = executionTracking || tracking;
+        preflightExtra.driftUsd = judged.trackingErrorUsd;
         preflightExtra.minNotionalUsd = resolveMinOrderNotionalUsd(activeProtection);
+        if (executionTracking) preflightExtra.fullDriftUsd = tracking.trackingErrorUsd;
       }
       this._notifyBlock(activeProtection, {
         blockType: preflight.reason === 'estimated_execution_fee_too_high' ? 'execution_fee_too_high' : preflight.reason,
