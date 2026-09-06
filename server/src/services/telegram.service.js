@@ -119,6 +119,12 @@ class TelegramService {
     this.userId = options.userId != null ? Number(options.userId) : null;
     this.notificationPrefs = options.notificationPrefs || null;
     this.getPrefs = typeof options.getPrefs === 'function' ? options.getPrefs : null;
+    // Resolutor inyectado (protectedPoolId -> { id, name } del orquestador).
+    // Se inyecta desde la registry para que este servicio no dependa de la BD:
+    // sin resolutor las notificaciones salen igual, solo que sin la etiqueta.
+    this.resolveOrchestratorTag = typeof options.resolveOrchestratorTag === 'function'
+      ? options.resolveOrchestratorTag
+      : null;
   }
 
   /**
@@ -136,6 +142,11 @@ class TelegramService {
     }
     if (options.getPrefs !== undefined) {
       this.getPrefs = typeof options.getPrefs === 'function' ? options.getPrefs : null;
+    }
+    if (options.resolveOrchestratorTag !== undefined) {
+      this.resolveOrchestratorTag = typeof options.resolveOrchestratorTag === 'function'
+        ? options.resolveOrchestratorTag
+        : null;
     }
   }
 
@@ -365,16 +376,49 @@ class TelegramService {
       : `Cuenta: <b>${escapeHtml(alias)}</b>`;
   }
 
+  /**
+   * Linea de identidad del orquestador dueno del LP del que habla el mensaje.
+   *
+   * Todo lo que se dispara por un LP orquestado (coberturas y bloqueos
+   * delta-neutral) pasa por aca: con varios orquestadores vivos, "Proteccion
+   * #19 / ETH" no dice cual tarjeta hay que abrir, y el id del orquestador es
+   * el mismo que se lee en la UI.
+   *
+   * Devuelve `null` cuando el LP no es de ningun orquestador (cobertura
+   * manual) o cuando no hay resolutor inyectado.
+   */
+  async _orchestratorLine({ protectedPoolId, orchestratorId, orchestratorName } = {}) {
+    if (orchestratorId != null) {
+      const label = orchestratorName
+        ? `#${orchestratorId} · ${escapeHtml(orchestratorName)}`
+        : `#${orchestratorId}`;
+      return `Orquestador: <b>${label}</b>`;
+    }
+    if (!this.resolveOrchestratorTag || protectedPoolId == null || this.userId == null) return null;
+    try {
+      const tag = await this.resolveOrchestratorTag(this.userId, protectedPoolId);
+      if (!tag || tag.id == null) return null;
+      const label = tag.name
+        ? `#${tag.id} · ${escapeHtml(tag.name)}`
+        : `#${tag.id}`;
+      return `Orquestador: <b>${label}</b>`;
+    } catch {
+      return null;
+    }
+  }
+
   // ------------------------------------------------------------------
   // Coberturas automaticas (hedge events)
   // ------------------------------------------------------------------
 
-  notifyHedgeCreated(hedge) {
+  async notifyHedgeCreated(hedge) {
+    const orchestratorLine = await this._orchestratorLine(hedge);
     const side = (hedge.direction || 'short').toUpperCase();
     const entryRule = side === 'LONG' ? 'Entrada si precio ≥' : 'Entrada si precio ≤';
     const exitRule = side === 'LONG' ? 'SL si precio ≤' : 'SL si precio ≥';
     const lines = [
       `🟡 <b>Cobertura creada</b>`,
+      orchestratorLine,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | ${side} | ${hedge.leverage}x`,
       `${entryRule} $${this._fmtPrice(hedge.entryPrice)}`,
@@ -388,12 +432,14 @@ class TelegramService {
     );
   }
 
-  notifyHedgeOpened(hedge) {
+  async notifyHedgeOpened(hedge) {
+    const orchestratorLine = await this._orchestratorLine(hedge);
     const side = (hedge.direction || 'short').toUpperCase();
     const emoji = side === 'LONG' ? '🟢' : '🔴';
     const notional = (parseFloat(hedge.size) * parseFloat(hedge.openPrice)).toFixed(2);
     const lines = [
       `${emoji} <b>${side} activado</b>`,
+      orchestratorLine,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | ${hedge.leverage}x isolated`,
       `Precio entrada: $${this._fmtPrice(hedge.openPrice)}`,
@@ -406,9 +452,11 @@ class TelegramService {
     );
   }
 
-  notifyHedgePartialCoverage(hedge, payload = {}) {
+  async notifyHedgePartialCoverage(hedge, payload = {}) {
+    const orchestratorLine = await this._orchestratorLine(hedge);
     const lines = [
       `🟠 <b>Cobertura parcial</b> #${hedge.id}`,
+      orchestratorLine,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | Estado: ${hedge.status}`,
       `Esperado: ${payload.expectedSize} ${hedge.asset}`,
@@ -423,7 +471,8 @@ class TelegramService {
     );
   }
 
-  notifyHedgeClosed(hedge) {
+  async notifyHedgeClosed(hedge) {
+    const orchestratorLine = await this._orchestratorLine(hedge);
     const isShort = (hedge.direction || 'short') !== 'long';
     const pnl = this._resolveTradePnl({
       pnl: hedge.netPnl ?? hedge.closedPnl,
@@ -434,6 +483,7 @@ class TelegramService {
     });
     const lines = [
       `✅ <b>Cobertura completada</b>`,
+      orchestratorLine,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b>`,
       `Apertura: $${this._fmtPrice(hedge.openPrice)}`,
@@ -447,9 +497,11 @@ class TelegramService {
     );
   }
 
-  notifyHedgeCancelled(hedge) {
+  async notifyHedgeCancelled(hedge) {
+    const orchestratorLine = await this._orchestratorLine(hedge);
     const lines = [
       `🚫 <b>Cobertura cancelada</b> #${hedge.id}`,
+      orchestratorLine,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b>`,
       hedge.label ? `Etiqueta: ${escapeHtml(hedge.label)}` : null,
@@ -460,9 +512,11 @@ class TelegramService {
     );
   }
 
-  notifyHedgeError(hedge, err) {
+  async notifyHedgeError(hedge, err) {
+    const orchestratorLine = await this._orchestratorLine(hedge);
     const lines = [
       `❌ <b>Error en cobertura</b> #${hedge.id}`,
+      orchestratorLine,
       this._fmtAccount(hedge.account),
       `Activo: <b>${hedge.asset}</b> | Estado: ${hedge.status}`,
       `Error: ${escapeHtml(err.message)}`,
@@ -561,7 +615,7 @@ class TelegramService {
   // Bloqueos de proteccion delta-neutral
   // ------------------------------------------------------------------
 
-  notifyDeltaNeutralBlock({ protection, blockType, reason, detail, extra = {} }) {
+  async notifyDeltaNeutralBlock({ protection, blockType, reason, detail, extra = {} }) {
     const labels = {
       insufficient_margin:       { emoji: '💸', title: 'Margen insuficiente' },
       spread_too_wide:           { emoji: '📊', title: 'Spread demasiado amplio' },
@@ -581,8 +635,16 @@ class TelegramService {
     const pair = escapeHtml(`${protection.token0Symbol || '?'}/${protection.token1Symbol || '?'}`);
     const when = new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
 
+    // La proteccion ES el protected pool, asi que su id resuelve el orquestador.
+    const orchestratorLine = await this._orchestratorLine({
+      protectedPoolId: protection.id,
+      orchestratorId: protection.orchestratorId,
+      orchestratorName: protection.orchestratorName,
+    });
+
     const lines = [
       `${meta.emoji} <b>${meta.title}</b>`,
+      orchestratorLine,
       `Proteccion: <b>#${protection.id}</b> | ${pair}`,
       `Activo: <b>${escapeHtml(protection.inferredAsset || 'N/A')}</b>`,
       reason ? `Motivo: ${escapeHtml(reason)}` : null,

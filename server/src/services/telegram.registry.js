@@ -7,6 +7,7 @@
 
 const TelegramService = require('./telegram.service');
 const settingsService = require('./settings.service');
+const orchestratorTag = require('./orchestrator-tag.service');
 const { createRegistry } = require('./registry.factory');
 
 async function resolvePrefs(userId) {
@@ -26,6 +27,11 @@ const registry = createRegistry({
       userId,
       notificationPrefs: cfg.notificationPrefs,
       getPrefs: (id) => resolvePrefs(id),
+      // Inyectado aca, no importado dentro de TelegramService: asi el servicio
+      // de mensajes sigue sin tocar la BD y los tests lo construyen a secas.
+      resolveOrchestratorTag: (id, protectedPoolId) => (
+        orchestratorTag.resolveByProtectedPoolId(id, protectedPoolId)
+      ),
     });
   },
 });

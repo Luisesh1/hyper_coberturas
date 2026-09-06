@@ -43,9 +43,14 @@ class LpOrchestratorNotifier {
     }
   }
 
+  // El id va delante del nombre y no al final: es lo que identifica al
+  // orquestador sin ambiguedad (dos pueden llamarse igual) y es el mismo
+  // numero que se lee en su tarjeta, asi que sirve para saltar de la alerta
+  // a la UI sin adivinar.
   _header(orchestrator) {
     const pair = `${orchestrator.token0Symbol}/${orchestrator.token1Symbol}`;
-    return `<b>🎛 ${escapeHtml(orchestrator.name)}</b>\n${pair} · ${orchestrator.network}/${orchestrator.version}`;
+    const id = orchestrator.id != null ? `#${orchestrator.id} · ` : '';
+    return `<b>🎛 ${id}${escapeHtml(orchestrator.name)}</b>\n${pair} · ${orchestrator.network}/${orchestrator.version}`;
   }
 
   async urgentOutOfRange(orchestrator, evaluation, { repeat = false } = {}) {

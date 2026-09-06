@@ -486,6 +486,26 @@ async function findActiveByProtectedPoolId(userId, protectedPoolId, executor) {
   return mapRow(rows[0]);
 }
 
+/**
+ * Identidad minima (id + nombre) del orquestador dueno de un protected pool.
+ *
+ * A diferencia de `findActiveByProtectedPoolId`, no filtra por status: sirve
+ * para etiquetar notificaciones de un LP que ya se detuvo o archivo, donde lo
+ * que importa es poder decir "esto era del #12" y no si sigue corriendo.
+ */
+async function findIdentityByProtectedPoolId(userId, protectedPoolId, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT id, name FROM lp_orchestrators
+      WHERE user_id = $1
+        AND active_protected_pool_id = $2
+      ORDER BY (status = 'active') DESC, id ASC
+      LIMIT 1`,
+    [userId, protectedPoolId]
+  );
+  if (!rows[0]) return null;
+  return { id: Number(rows[0].id), name: rows[0].name };
+}
+
 // ---------- action_log -----------------------------------------------------
 
 async function appendActionLog(entry, executor) {
@@ -643,6 +663,7 @@ module.exports = {
   remove,
   removeOwnedByOperation,
   findActiveByProtectedPoolId,
+  findIdentityByProtectedPoolId,
   appendActionLog,
   listActionLog,
   findLastNotification,

@@ -192,7 +192,16 @@ export default function OrchestratorCard({
       <div className={styles.body}>
         <header className={styles.header}>
           <div className={styles.headerInfo}>
-            <h3 className={styles.name}>{orchestrator.name}</h3>
+            {/* El id encabeza la tarjeta porque es la única identidad que no
+                se repite: dos orquestadores pueden llamarse igual y correr el
+                mismo par. Es además el número que llega en las notificaciones
+                de Telegram, así que es el puente entre la alerta y esta vista. */}
+            <h3 className={styles.name}>
+              <span className={styles.orchId} title="ID del orquestador — es el que aparece en las notificaciones de Telegram">
+                #{orchestrator.id}
+              </span>
+              {orchestrator.name}
+            </h3>
             <span className={styles.subtitle}>
               <strong className={styles.pair}>{orchestrator.token0Symbol}/{orchestrator.token1Symbol}</strong>
               <span className={styles.dot}>·</span>
