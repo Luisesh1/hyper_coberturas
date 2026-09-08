@@ -18,6 +18,7 @@ const {
   normalizeProtectionSnapshot,
   validateNormalizedProtectionSnapshot,
 } = require('./delta-neutral-snapshot.service');
+const { computeExtractableSlotSurplusUsd } = require('../utils/isolated-margin');
 const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
 const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
 const POSITION_MISSING_CONFIRMATION_COUNT = 2;
@@ -864,11 +865,14 @@ class ProtectedPoolDeltaNeutralService {
     const extraMarginNeededUsd = Math.max(0, newTotalRequiredMarginUsd - existingMarginUsd);
     // HL exige margen del `withdrawable` para el INCREMENTO; el excedente
     // del slot isolated no se auto-usa. Por eso aquí calculamos la capacidad
-    // total disponible = withdrawable + surplus extraíble del slot
-    // (rawUsd − marginUsed × safetyBuffer). `_ensureIsolatedMarginBuffer`
-    // ejecuta la extracción antes del placeOrder cuando hace falta.
-    const SAFETY_BUFFER_FACTOR = 1.2;
-    const slotSurplusExtractableUsd = Math.max(0, slotRawUsd - existingMarginUsd * SAFETY_BUFFER_FACTOR);
+    // total disponible = withdrawable + surplus extraíble del slot.
+    // `_ensureIsolatedMarginBuffer` ejecuta la extracción antes del placeOrder
+    // cuando hace falta. Ver `utils/isolated-margin.js` para por qué el
+    // excedente se mide sobre `marginUsed` y no sobre `rawUsd`.
+    const slotSurplusExtractableUsd = computeExtractableSlotSurplusUsd(positionEntry, {
+      leverage,
+      price: currentPrice,
+    });
     const incrementMarginUsd = (targetIncreaseQty * currentPrice) / leverage;
     const availableForIncrementUsd = withdrawable + slotSurplusExtractableUsd;
 

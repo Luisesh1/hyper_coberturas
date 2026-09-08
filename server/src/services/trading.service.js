@@ -12,6 +12,7 @@ const config = require('../config');
 const { placePositionProtection } = require('./protection.service');
 const balanceCacheService = require('./balance-cache.service');
 const { formatPrice, formatSize } = require('../utils/format');
+const { computeExtractableSlotSurplusUsd } = require('../utils/isolated-margin');
 const logger = require('./logger.service');
 const leverageMutex = require('./leverage.mutex');
 const crypto = require('node:crypto');
@@ -90,7 +91,6 @@ class TradingService {
     );
     const existingMarginUsd = Number(positionEntry?.position?.marginUsed || 0);
     const existingSzi = parseFloat(positionEntry?.position?.szi || 0);
-    const slotRawUsd = Number(positionEntry?.position?.leverage?.rawUsd || 0);
     const hasExistingPosition = Number.isFinite(existingSzi) && existingSzi !== 0;
     const existingIsLong = existingSzi > 0;
     const sameSide = isBuy ? existingSzi > 0 : existingSzi < 0;
@@ -103,8 +103,10 @@ class TradingService {
       // hacer antes del `placeOrder` es extraer el excedente del slot de
       // vuelta a cross (updateIsolatedMargin con ntli negativo). Por eso
       // aquí sumamos `availableForIncrement = withdrawable + slotSurplus`.
-      const SAFETY_BUFFER_FACTOR = 1.2;
-      const slotSurplusExtractable = Math.max(0, slotRawUsd - existingMarginUsd * SAFETY_BUFFER_FACTOR);
+      const slotSurplusExtractable = computeExtractableSlotSurplusUsd(positionEntry, {
+        leverage: lev,
+        price: midPrice,
+      });
       const availableForIncrement = withdrawable + slotSurplusExtractable;
       const incrementMargin = requiredMarginValue; // = size*price/lev para el increment
       marginShortfall = incrementMargin > availableForIncrement ? incrementMargin : 0;

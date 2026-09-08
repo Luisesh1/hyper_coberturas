@@ -15,6 +15,7 @@ const {
   DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
   clampNonNegative,
 } = require('../protected-pool-delta-neutral.helpers');
+const { computeExtractableSlotSurplusUsd } = require('../../utils/isolated-margin');
 
 const marginMethods = {
   async _ensureIsolatedMarginBuffer(protection, hl, currentPrice, qtyToAdd, actualQty = 0) {
@@ -48,8 +49,13 @@ const marginMethods = {
     //         no cubre el margen incremental → extraer el exceso de vuelta
     //         a cross. HL admite `ntli` negativo para esto.
     // --------------------------------------------------------------------
-    const SAFETY_BUFFER_FACTOR = 1.2; // deja 20% sobre marginUsed en el slot
-    const slotSurplusUsd = Math.max(0, slotRawUsd - existingMarginUsd * SAFETY_BUFFER_FACTOR);
+    // El excedente se mide sobre el COLATERAL del slot (`marginUsed`) contra
+    // el margen que el tamaño vivo todavía necesita — no sobre `rawUsd`, que
+    // incluye el notional. Ver `utils/isolated-margin.js`.
+    const slotSurplusUsd = computeExtractableSlotSurplusUsd(positionEntry, {
+      leverage,
+      price: currentPrice,
+    });
     const withdrawableGapUsd = Math.max(0, incrementMarginUsd * 1.1 - withdrawable);
     if (withdrawableGapUsd > 0 && slotSurplusUsd > 0) {
       const toExtractUsd = Math.min(slotSurplusUsd, withdrawableGapUsd);
