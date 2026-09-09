@@ -24,6 +24,11 @@ server/dist/
 server/data/
 backups/
 
+# ── Salida de tests (Playwright) ─────────────────────────────────────────────
+test-results/
+client/test-results/
+playwright-report/
+
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 npm-debug.log*
