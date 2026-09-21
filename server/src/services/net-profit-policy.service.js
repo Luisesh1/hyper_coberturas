@@ -18,6 +18,15 @@ const FALLBACK_FEE_RATE = 0.0005;
 const UPPER_HYSTERESIS_CONFIRM_MS = 120_000;
 const DAY_MS = 24 * 60 * 60_000;
 const V2_MAX_REBALANCES_PER_DAY = 4;
+// Mismos umbrales que usa la politica legacy para su `forceReduceNearZero`:
+// por debajo de esto el LP no tiene delta que cubrir, y por encima de aquello
+// lo que queda en el exchange es una posicion, no polvo de redondeo.
+const NEAR_ZERO_TARGET_QTY = 1e-6;
+const RESIDUAL_ACTUAL_QTY = 1e-8;
+// El cero tiene que sostenerse antes de creerle. Mismo tramo que la histeresis
+// superior usa para confirmar una salida: un mal snapshot dura un tick, una
+// salida de rango dura.
+const ZERO_TARGET_CONFIRM_MS = UPPER_HYSTERESIS_CONFIRM_MS;
 
 function finite(value, fallback = null) {
   if (value == null) return fallback;
@@ -127,7 +136,14 @@ function decideNetProfitV1({
     ? resolveUpperHysteresis({ currentPrice: price, rangeLowerPrice, rangeUpperPrice, now, state })
     : null;
 
-  if (upperHysteresis?.gate) {
+  // `upper_exit_latched` ya NO frena.
+  //
+  // Sostener el hedge al confirmar la salida por arriba es lo que convirtio la
+  // cobertura de pp27 en un short direccional: el delta del LP cayo a ~0 y el
+  // short se quedo en 0.0226 ETH, $53.90 desnudos durante ~72 h. El `hold` se
+  // conserva solo en los dos tramos de CONFIRMACION —que es para lo que existe
+  // la histeresis— y no despues: confirmada la salida, se redimensiona.
+  if (upperHysteresis?.gate && upperHysteresis.gate !== 'upper_exit_latched') {
     return {
       decision: 'hold',
       gate: upperHysteresis.gate,
@@ -141,27 +157,127 @@ function decideNetProfitV1({
   }
   const stateAfterHysteresis = upperHysteresis?.nextState || state;
 
-  if (targetQty <= 0 && !isTerminalClose) {
-    return { decision: 'hold', gate: 'normal_zero_target', targetQty, errorQty, errorUsd, minNotionalUsd, ...thresholds };
+  // Desarme por objetivo agotado.
+  //
+  // Cuando el LP se queda sin delta, el short deja de cubrir nada y pasa a ser
+  // una posicion direccional. Las compuertas porcentuales de mas abajo no
+  // pueden verlo: con `targetQty` en 0 el `errorPct` es 0 y TODO parece dentro
+  // de banda, por grande que sea el short. Por eso el desarme va aqui arriba y
+  // se expresa en cantidad, no en porcentaje.
+  //
+  // Se conserva la desconfianza original ante una lectura puntual de 0 —tirar
+  // el hedge entero por un mal snapshot seria peor— pero con reloj: pasado el
+  // tiempo de confirmacion, el cero es real. Eso es lo que le faltaba al viejo
+  // `normal_zero_target`, que holdeaba para siempre sin caducidad.
+  const targetExhausted = targetQty <= NEAR_ZERO_TARGET_QTY && actual > RESIDUAL_ACTUAL_QTY;
+  if (targetExhausted && !isTerminalClose) {
+    const zeroSince = finite(stateAfterHysteresis?.zeroTargetSince);
+    if (zeroSince == null) {
+      return {
+        decision: 'hold',
+        gate: 'zero_target_confirming',
+        targetQty,
+        errorQty,
+        errorUsd,
+        minNotionalUsd,
+        nextState: { ...stateAfterHysteresis, zeroTargetSince: now },
+        ...thresholds,
+      };
+    }
+    if (now - zeroSince < ZERO_TARGET_CONFIRM_MS) {
+      return {
+        decision: 'hold',
+        gate: 'zero_target_confirming',
+        targetQty,
+        errorQty,
+        errorUsd,
+        minNotionalUsd,
+        nextState: stateAfterHysteresis,
+        ...thresholds,
+      };
+    }
+    // Dwell y cooldown se respetan tambien aqui: si el exchange deja polvo, el
+    // reintento no puede volverse un martilleo por tick.
+    const unwindFills = activeFillTimestamps(stateAfterHysteresis, now);
+    const unwindLastFillAt = finite(stateAfterHysteresis?.lastFillAt);
+    if (unwindLastFillAt != null && now - unwindLastFillAt < DWELL_MS) {
+      return {
+        decision: 'hold', gate: 'dwell', targetQty, errorQty, errorUsd, minNotionalUsd,
+        fillTimestamps: unwindFills, nextState: stateAfterHysteresis, ...thresholds,
+      };
+    }
+    const unwindCooldownUntil = finite(stateAfterHysteresis?.cooldownUntil);
+    if (unwindCooldownUntil != null && unwindCooldownUntil > now) {
+      return {
+        decision: 'hold', gate: 'cooldown', targetQty, errorQty, errorUsd, minNotionalUsd,
+        fillTimestamps: unwindFills, nextState: stateAfterHysteresis, ...thresholds,
+      };
+    }
+    return {
+      decision: 'rebalance',
+      gate: 'zero_target_unwind',
+      targetQty,
+      errorQty,
+      errorUsd,
+      minNotionalUsd,
+      // Cierre COMPLETO, no la correccion parcial del 75%: lo que se desmonta
+      // ya no es un desvio de cobertura, es exposicion pura.
+      adjustQty: round(-actual),
+      fillTimestamps: unwindFills,
+      nextState: {
+        ...stateAfterHysteresis,
+        zeroTargetSince: null,
+        fillTimestamps: [...unwindFills, now],
+        lastFillAt: now,
+        cooldownUntil: now + COOLDOWN_MS,
+      },
+      ...thresholds,
+    };
   }
+
+  if (targetQty <= 0 && !isTerminalClose) {
+    // Sin posicion que desmontar no hay nada que hacer: el caso de arriba ya
+    // se ocupo de la que si existe.
+    return {
+      decision: 'hold',
+      gate: 'normal_zero_target',
+      targetQty,
+      errorQty,
+      errorUsd,
+      minNotionalUsd,
+      nextState: { ...stateAfterHysteresis, zeroTargetSince: null },
+      ...thresholds,
+    };
+  }
+  // Estado que TODA compuerta de aqui en adelante debe devolver.
+  //
+  // Antes estos `hold` retornaban sin `nextState`, y el motor hace
+  // `netProfitDecision.nextState || estadoPrevio`: cualquier actualizacion que
+  // `resolveUpperHysteresis` acabara de hacer —por ejemplo limpiar
+  // `upperExitStartedAt` porque el precio volvio dentro— se perdia al salir por
+  // una de ellas. Una mecha que amagaba con salir y retrocedia dejaba el
+  // marcador puesto, y el cruce siguiente confirmaba al instante con una marca
+  // de tiempo vieja. Tambien es lo que limpia `zeroTargetSince`.
+  const baseState = { ...stateAfterHysteresis, zeroTargetSince: null };
+
   if (errorPct <= thresholds.outerPct) {
-    return { decision: 'hold', gate: 'inside_outer', targetQty, errorQty, errorUsd, minNotionalUsd, ...thresholds };
+    return { decision: 'hold', gate: 'inside_outer', targetQty, errorQty, errorUsd, minNotionalUsd, nextState: baseState, ...thresholds };
   }
 
   const fills = activeFillTimestamps(stateAfterHysteresis, now);
   if (fills.length >= MAX_FILLS_PER_WINDOW) {
-    return { decision: 'hold', gate: 'fill_cap', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
+    return { decision: 'hold', gate: 'fill_cap', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, nextState: baseState, ...thresholds };
   }
   const lastFillAt = finite(stateAfterHysteresis?.lastFillAt);
   if (lastFillAt != null && now - lastFillAt < DWELL_MS) {
-    return { decision: 'hold', gate: 'dwell', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
+    return { decision: 'hold', gate: 'dwell', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, nextState: baseState, ...thresholds };
   }
   const cooldownUntil = finite(stateAfterHysteresis?.cooldownUntil);
   if (cooldownUntil != null && cooldownUntil > now) {
-    return { decision: 'hold', gate: 'cooldown', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
+    return { decision: 'hold', gate: 'cooldown', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, nextState: baseState, ...thresholds };
   }
   if (errorUsd < minNotionalUsd && !isTerminalClose) {
-    return { decision: 'hold', gate: 'min_notional', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
+    return { decision: 'hold', gate: 'min_notional', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, nextState: baseState, ...thresholds };
   }
 
   const lpValue = finite(lpValueUsd, 0);
@@ -170,7 +286,7 @@ function decideNetProfitV1({
   const sameBudgetDay = Number(stateAfterHysteresis?.rotationBudgetDay) === budgetDay;
   const rotationBudgetCount = sameBudgetDay ? Math.max(0, finite(stateAfterHysteresis?.rotationBudgetCount, 0)) : 0;
   if (policyVersion === NET_PROFIT_V2 && !riskToInner && rotationBudgetCount >= V2_MAX_REBALANCES_PER_DAY) {
-    return { decision: 'hold', gate: 'daily_rotation_budget', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
+    return { decision: 'hold', gate: 'daily_rotation_budget', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, nextState: baseState, ...thresholds };
   }
   const adjustAbsQty = riskToInner
     ? Math.max(0, errorAbsQty - (targetQty * thresholds.innerPct))
@@ -179,7 +295,7 @@ function decideNetProfitV1({
       errorAbsQty * (policyVersion === NET_PROFIT_V2 ? 0.75 : 0.5),
     );
   if (adjustAbsQty <= 0) {
-    return { decision: 'hold', gate: 'inner', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, ...thresholds };
+    return { decision: 'hold', gate: 'inner', targetQty, errorQty, errorUsd, minNotionalUsd, fillTimestamps: fills, nextState: baseState, ...thresholds };
   }
   // El minimo se mide sobre la ORDEN, no sobre el drift.
   //
@@ -206,6 +322,7 @@ function decideNetProfitV1({
       minNotionalUsd,
       adjustNotionalUsd,
       fillTimestamps: fills,
+      nextState: baseState,
       ...thresholds,
     };
   }
@@ -220,7 +337,7 @@ function decideNetProfitV1({
     riskToInner,
     fillTimestamps: fills,
     nextState: {
-      ...stateAfterHysteresis,
+      ...baseState,
       fillTimestamps: [...fills, now], lastFillAt: now, cooldownUntil: now + COOLDOWN_MS,
       ...(policyVersion === NET_PROFIT_V2 ? { rotationBudgetDay: budgetDay, rotationBudgetCount: rotationBudgetCount + 1 } : {}),
     },

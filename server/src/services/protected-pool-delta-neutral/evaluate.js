@@ -26,6 +26,7 @@ const {
   resolveCenterDeadZone,
   resolveMinRebalanceNotionalUsd,
   resolveNakedExposure,
+  resolveNakedNotionalBreach,
   resolveRebalanceDecision,
   resolveUrgentMinRebalanceNotionalUsd,
   safeJsonClone,
@@ -970,6 +971,35 @@ const evaluateMethods = {
       rebalanceDecision.decision = 'rebalance_full';
     }
 
+    const nakedExposure = resolveNakedExposure({
+      nakedNotionalUsd: tracking.trackingErrorUsd,
+      poolValueUsd: metrics.poolValueUsd,
+      priorSince: strategyState.nakedExposureSince,
+      priorTier: strategyState.nakedExposureTier,
+    });
+    nextState.nakedExposureSince = nakedExposure.since;
+    nextState.nakedExposureTier = nakedExposure.tier;
+    nextState.nakedNotionalUsd = nakedExposure.material
+      ? Math.abs(Number(tracking.trackingErrorUsd) || 0)
+      : 0;
+
+    // Tope de exposicion direccional: limite de RIESGO, por encima de la
+    // politica. Ninguna de las tres lo tenia, y por eso `upper_exit_latched`
+    // pudo sostener $53.90 desnudos sin que nada lo contradijera.
+    //
+    // Sobrescribe el `hold` de la politica, pero NO los gates de riesgo
+    // (risk_paused / margin_pending), ni el min-dwell, ni el preflight, ni el
+    // bloqueo por baja confianza del modelo: crecer la cobertura sobre datos
+    // en los que no confiamos seria cambiar un riesgo por otro.
+    const nakedBreach = resolveNakedNotionalBreach({
+      nakedNotionalUsd: tracking.trackingErrorUsd,
+      poolValueUsd: metrics.poolValueUsd,
+      tier: nakedExposure.tier,
+      protection: activeProtection,
+    });
+    nextState.nakedNotionalCapUsd = nakedBreach.capUsd;
+    const capOverridesPolicy = nakedBreach.breached && rebalanceDecision.decision === 'hold';
+
     const preflight = await this._buildPreflight({
       protection: executionProtection,
       hl,
@@ -986,7 +1016,10 @@ const evaluateMethods = {
       positionReadSource: positionObservation.lastPositionReadSource,
       positionMissingUnconfirmed: positionObservation.positionMissingUnconfirmed,
     });
-    const effectiveShouldRebalance = shouldRebalance && !minDwellActive && !confidenceBlocksIncrease;
+    // El tope se suma como razon para actuar, sin desactivar los frenos que
+    // protegen la ejecucion en si (dwell y confianza del modelo).
+    const effectiveShouldRebalance = (shouldRebalance || capOverridesPolicy)
+      && !minDwellActive && !confidenceBlocksIncrease;
 
     this.logger.info?.('delta_neutral_preflight_result', {
       protectionId: activeProtection.id,
@@ -1035,17 +1068,6 @@ const evaluateMethods = {
       });
     }
 
-    const nakedExposure = resolveNakedExposure({
-      nakedNotionalUsd: tracking.trackingErrorUsd,
-      poolValueUsd: metrics.poolValueUsd,
-      priorSince: strategyState.nakedExposureSince,
-      priorTier: strategyState.nakedExposureTier,
-    });
-    nextState.nakedExposureSince = nakedExposure.since;
-    nextState.nakedExposureTier = nakedExposure.tier;
-    nextState.nakedNotionalUsd = nakedExposure.material
-      ? Math.abs(Number(tracking.trackingErrorUsd) || 0)
-      : 0;
 
     nextState.status = normalizeEvaluationStatus({
       nakedExposureSustained: nakedExposure.tier >= 0,
@@ -1061,6 +1083,10 @@ const evaluateMethods = {
       ? netProfitDecision.gate
       : forceReason
         || (rebalanceDecision.decision === 'hold' ? 'within_cost_aware_band' : 'drift_exceeds_cost_aware_band');
+    if (capOverridesPolicy) {
+      nextState.lastDecision = 'naked_notional_cap';
+      nextState.lastDecisionReason = 'naked_notional_cap_exceeded';
+    }
     if (confidenceBlocksIncrease) {
       nextState.lastDecision = 'refresh_snapshot';
       nextState.lastDecisionReason = 'low_confidence_model';
@@ -1318,17 +1344,39 @@ const evaluateMethods = {
     if (riskPausedCanReduce) {
       if (!preflight.ok) return nextState;
       // Reduce permitido — fall through a _executeRebalance
-    } else if (forcedStatus || !effectiveShouldRebalance || rebalanceDecision.decision === 'hold' || !preflight.ok) {
+    } else if (forcedStatus
+      || !effectiveShouldRebalance
+      || (rebalanceDecision.decision === 'hold' && !capOverridesPolicy)
+      || !preflight.ok) {
       return nextState;
     }
 
-    const reason = isNetProfitLive
-      ? policyVersion
-      : forceReason
-        || (!position && metrics.targetQty > ORPHAN_TARGET_QTY ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
+    const reason = capOverridesPolicy
+      ? 'naked_notional_cap'
+      : isNetProfitLive
+        ? policyVersion
+        : forceReason
+          || (!position && metrics.targetQty > ORPHAN_TARGET_QTY ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');
     // La senal pendiente se cobra aqui: se ejecuta con su motivo original y no
     // debe sobrevivir a su propia ejecucion.
     nextState.pendingForceReason = null;
+    // El preflight puede haber recortado el incremento a lo que el colateral
+    // aguanta. Entrar parcial y completar en el tick siguiente domina a no
+    // entrar: es la diferencia entre el 60% y el 0% de cobertura.
+    const clampedMetrics = Number(preflight.maxIncreaseQty) > 0
+      ? { ...executionMetrics, targetQty: actualQty + Number(preflight.maxIncreaseQty) }
+      : executionMetrics;
+    if (clampedMetrics !== executionMetrics) {
+      this.logger.info?.('delta_neutral_increase_clamped_to_margin', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        requestedIncreaseQty: Number(preflight.clampedFromQty) || null,
+        grantedIncreaseQty: Number(preflight.maxIncreaseQty),
+        affordableNotionalUsd: Number(preflight.affordableNotionalUsd) || null,
+        withdrawable: preflight.withdrawable ?? null,
+      });
+    }
     return this._executeRebalance({
       protection: executionProtection,
       tradingService,
@@ -1336,7 +1384,7 @@ const evaluateMethods = {
       position,
       actualQty,
       currentPrice,
-      metrics: executionMetrics,
+      metrics: clampedMetrics,
       band,
       strategyState: nextState,
       reason,

@@ -615,6 +615,129 @@ function resolveNakedExposure({
   };
 }
 
+// Tope de exposicion direccional. Es un limite de RIESGO, no una decision de
+// cobertura: vive por encima de las politicas y las sobrescribe.
+//
+// Por que ademas de magnitud exige DURACION. Una divergencia grande no es por
+// si sola una anomalia: `range_exit_v1` paga divergencia a proposito para no
+// pagar comisiones, y dentro del rango puede apartarse bastante del delta antes
+// de que el cruce de borde la cierre. Recortarla por magnitud instantanea seria
+// destruir la politica — la misma trampa que el cap por ratio que este plan ya
+// descarto, con otra aritmetica.
+//
+// Lo que distingue a pp27 no es que su exposicion fuera grande, es que era
+// grande Y NO SE CERRABA: 72 h creciendo porque el delta ya no existia. La
+// duracion es el discriminador, no el tamano.
+const DEFAULT_NAKED_CAP_PCT_OF_POOL = 15;
+const DEFAULT_NAKED_CAP_FLOOR_USD = 30;
+// Escalon minimo de `resolveNakedExposure` (1 = 1 h) antes de que el tope
+// actue. Por debajo se avisa, no se interviene.
+const DEFAULT_NAKED_CAP_MIN_TIER = 1;
+
+function resolveNakedNotionalCapUsd(protection, poolValueUsd) {
+  const pct = Number(protection?.nakedNotionalCapPctOfPool);
+  const floor = Number(protection?.nakedNotionalCapFloorUsd);
+  const effectivePct = Number.isFinite(pct) && pct > 0 ? pct : DEFAULT_NAKED_CAP_PCT_OF_POOL;
+  const effectiveFloor = Number.isFinite(floor) && floor >= 0 ? floor : DEFAULT_NAKED_CAP_FLOOR_USD;
+  const pool = Number(poolValueUsd) || 0;
+  return Math.max(effectiveFloor, (effectivePct / 100) * pool);
+}
+
+/**
+ * ¿Hay que intervenir por encima de lo que diga la politica?
+ *
+ * `tier` viene de `resolveNakedExposure`: -1 sin severidad, 0 a partir de 15
+ * min, 1 a partir de 1 h, 2 a partir de 6 h.
+ */
+function resolveNakedNotionalBreach({
+  nakedNotionalUsd,
+  poolValueUsd,
+  tier = -1,
+  protection = null,
+  minTier = DEFAULT_NAKED_CAP_MIN_TIER,
+} = {}) {
+  const usd = Math.abs(Number(nakedNotionalUsd) || 0);
+  const capUsd = resolveNakedNotionalCapUsd(protection, poolValueUsd);
+  const sustained = Number(tier) >= minTier;
+  return {
+    capUsd,
+    nakedNotionalUsd: usd,
+    sustained,
+    breached: sustained && usd > capUsd,
+  };
+}
+
+// Piso de margen: cuanto colateral hace falta para cubrir el delta objetivo,
+// con holgura.
+//
+// El 1.3 no es decoracion. El `hedgeRealizedPnl` se descuenta del MISMO margen
+// aislado que dimensiona el hedge y no existe via de reposicion: un hedge que
+// pierde reduce su propia capacidad de cubrir. La holgura es lo que absorbe ese
+// drawdown antes de que la cobertura se quede sin balas — que es como la cuenta
+// de pp18 paso de $31.76 a $20.38 y se murio en silencio.
+const DEFAULT_MARGIN_FLOOR_BUFFER = 1.3;
+
+function resolveMarginFloor({
+  targetQty,
+  currentPrice,
+  leverage,
+  availableMarginUsd,
+  bufferFactor = DEFAULT_MARGIN_FLOOR_BUFFER,
+} = {}) {
+  const qty = Math.max(0, Number(targetQty) || 0);
+  const price = Math.max(0, Number(currentPrice) || 0);
+  const lev = Math.max(1, Number(leverage) || 1);
+  const available = Math.max(0, Number(availableMarginUsd) || 0);
+  const buffer = Number(bufferFactor) > 0 ? Number(bufferFactor) : DEFAULT_MARGIN_FLOOR_BUFFER;
+  const requiredMarginUsd = ((qty * price) / lev) * buffer;
+  return {
+    requiredMarginUsd,
+    availableMarginUsd: available,
+    bufferFactor: buffer,
+    satisfied: available >= requiredMarginUsd,
+    shortfallUsd: Math.max(0, requiredMarginUsd - available),
+  };
+}
+
+/**
+ * Cuanto LP se puede sostener con el margen que hay.
+ *
+ * Hoy, si no puede cubrir, el sistema sostiene el LP DESNUDO indefinidamente.
+ * Lo correcto es lo contrario: un LP mas chico y cubierto domina a uno grande y
+ * descubierto. Esto calcula hasta donde habria que encogerlo.
+ *
+ * Devuelve una RECOMENDACION. Reducir un LP es una accion de capital
+ * irreversible y no se ejecuta sola.
+ */
+function resolveDeleverageTarget({
+  poolValueUsd,
+  targetQty,
+  currentPrice,
+  leverage,
+  availableMarginUsd,
+  bufferFactor = DEFAULT_MARGIN_FLOOR_BUFFER,
+} = {}) {
+  const floor = resolveMarginFloor({ targetQty, currentPrice, leverage, availableMarginUsd, bufferFactor });
+  const pool = Math.max(0, Number(poolValueUsd) || 0);
+  const qty = Math.max(0, Number(targetQty) || 0);
+  if (floor.satisfied || qty <= 0) {
+    return { needed: false, coverableFraction: 1, suggestedPoolValueUsd: pool, reduceByUsd: 0, ...floor };
+  }
+  // El delta de un LP concentrado escala con su tamano, asi que la fraccion
+  // cubrible del delta es la fraccion sostenible del LP.
+  const coverableFraction = Math.max(0, Math.min(1, floor.requiredMarginUsd > 0
+    ? floor.availableMarginUsd / floor.requiredMarginUsd
+    : 1));
+  const suggestedPoolValueUsd = pool * coverableFraction;
+  return {
+    needed: true,
+    coverableFraction,
+    suggestedPoolValueUsd,
+    reduceByUsd: Math.max(0, pool - suggestedPoolValueUsd),
+    ...floor,
+  };
+}
+
 function normalizeEvaluationStatus({
   decision,
   trackingErrorUsd,
@@ -761,6 +884,10 @@ module.exports = {
   buildCooldown,
   normalizeEvaluationStatus,
   resolveNakedExposure,
+  resolveNakedNotionalBreach,
+  resolveMarginFloor,
+  resolveDeleverageTarget,
+  resolveNakedNotionalCapUsd,
   NAKED_EXPOSURE_TIERS,
   deriveBandSettings,
   computeVolatilityStats,

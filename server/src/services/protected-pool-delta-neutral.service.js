@@ -22,6 +22,13 @@ const {
 const { computeExtractableSlotSurplusUsd } = require('../utils/isolated-margin');
 const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
 const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
+// Margen de seguridad al recortar una orden a lo que el colateral permite. El
+// precio se mueve entre el calculo y el fill, y quedarse pegado al limite
+// convierte el recorte en el mismo rechazo que venia a evitar.
+const MARGIN_CLAMP_SAFETY_FACTOR = 0.98;
+// Cuanto dura la urgencia al entrar en zona de borde. Pasado esto se vuelve a
+// la cadencia normal aunque se siga ahi. Ver `_tickProtection`.
+const NEAR_BOUNDARY_URGENCY_MS = 15 * 60_000;
 const POSITION_MISSING_CONFIRMATION_COUNT = 2;
 const POSITION_MISSING_GRACE_MS = 15 * 60_000;
 // Dust tolerance al verificar cierre en desactivación. Residuos por debajo de
@@ -115,6 +122,9 @@ class ProtectedPoolDeltaNeutralService {
     this.interval = null;
     this.running = false;
     this.lastEvalAt = new Map();
+    // Desde cuando la proteccion no sale de la zona de borde. Ver el gate de
+    // `_tickProtection`.
+    this.nearBoundarySince = new Map();
     this.twapSessions = new Map();
     this.rvCache = new Map();
     this.blockNotifLastSentAt = new Map();
@@ -946,11 +956,52 @@ class ProtectedPoolDeltaNeutralService {
     // `withdrawable + slotSurplusExtractable`. Así el block real ocurre solo
     // cuando ni cross ni la extracción del slot pueden cubrir el incremento.
     if (targetIncreaseQty > 0 && incrementMarginUsd > availableForIncrementUsd) {
+      // Se RECORTA la orden a lo que el margen permite, en vez de rechazarla
+      // entera.
+      //
+      // El todo-o-nada es el que dejó a pp24 siete días en `actual_qty =
+      // 0.00010` contra un target de 0.068 —descubierto medio $170, pico $270—
+      // porque reentrar al rango exige reconstruir el hedge completo, que es la
+      // orden más grande que ese pool emite. Cerrar es gratis y reabrir no: esa
+      // asimetría es la que convierte un episodio en una semana.
+      //
+      // La compuerta además sólo existe hacia arriba (`Math.max(..., 0)` en
+      // `targetIncreaseQty`): medido sobre 25 días, 56.722 bloqueos con el hedge
+      // corto contra 664 con el hedge largo. Entrar al 60% y completar en el
+      // tick siguiente domina a quedarse en 0.
+      const affordableQty = ((availableForIncrementUsd * leverage) / currentPrice)
+        * MARGIN_CLAMP_SAFETY_FACTOR;
+      const affordableNotionalUsd = Math.max(0, affordableQty) * currentPrice;
+      if (affordableQty > 0 && affordableNotionalUsd >= effectiveMinOrderNotionalUsd) {
+        return {
+          ok: true,
+          status: 'tracking',
+          reason: 'margin_clamped_increase',
+          executionSkippedBecause: null,
+          // El caller recorta el target a `actualQty + maxIncreaseQty`.
+          maxIncreaseQty: affordableQty,
+          clampedFromQty: targetIncreaseQty,
+          affordableNotionalUsd,
+          extraMarginNeededUsd,
+          existingMarginUsd,
+          slotRawUsd,
+          slotSurplusExtractableUsd,
+          incrementMarginUsd,
+          withdrawable,
+          requiredMarginUsd,
+          positionObserved,
+          positionReadSource,
+          positionMissingUnconfirmed,
+        };
+      }
+      // Aquí no cabe NADA. Es un estado distinto de "no cabe todo" y hasta
+      // ahora los dos se registraban igual, así que no se podían separar.
       return {
         ok: false,
         status: 'margin_pending',
         reason: 'insufficient_margin',
         executionSkippedBecause: 'insufficient_margin',
+        affordableNotionalUsd,
         extraMarginNeededUsd,
         existingMarginUsd,
         slotRawUsd,
@@ -1180,7 +1231,27 @@ class ProtectedPoolDeltaNeutralService {
       // a merced de la cadencia larga: es capital descubierto.
       || strategyState.pendingForceReason != null;
 
-    if (!evalDue && !crossedBoundary && !nearBoundary) return;
+    // Estar en el borde solo saltea el throttle un rato.
+    //
+    // `nearBoundary` incluye `outside`, y fuera del rango eso es
+    // permanentemente cierto: el camino urgente —pensado para un cruce
+    // transitorio— se volvia permanente y el lazo pasaba de 30 s a 2 s sin
+    // volver. Medido: 120 filas/hora/pool dentro de rango contra 1.760 fuera, y
+    // `protection_decision_log` en 6,49 M de filas / 1,79 GB contra 592
+    // rebalanceos reales.
+    //
+    // El diseno estaba invertido: cuando el precio se estaciona fuera, el LP no
+    // cobra fees y deberia trabajar MENOS, no 15 veces mas. El cruce en si
+    // (`crossedBoundary`) sigue disparando evaluacion inmediata siempre.
+    if (!nearBoundary) {
+      this.nearBoundarySince.delete(protection.id);
+    } else if (!this.nearBoundarySince.has(protection.id)) {
+      this.nearBoundarySince.set(protection.id, now);
+    }
+    const nearBoundaryFresh = nearBoundary
+      && (now - (this.nearBoundarySince.get(protection.id) || now)) <= NEAR_BOUNDARY_URGENCY_MS;
+
+    if (!evalDue && !crossedBoundary && !nearBoundaryFresh) return;
 
     this._recordHybridStat('marketTicks');
     this.lastEvalAt.set(protection.id, now);

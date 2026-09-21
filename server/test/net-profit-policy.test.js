@@ -128,10 +128,37 @@ test('net_profit_v1 lleva riesgo >=15% a inner pero conserva los gates operativo
   assert.equal(capped.gate, 'fill_cap');
 });
 
-test('net_profit_v1 no cierra normalmente cuando el target es cero', () => {
-  const decision = decideNetProfitV1({
+// Este test aseguraba lo contrario: con `deltaQty: 0` y un short entero abierto
+// esperaba `hold`. Era exactamente el estado de pp27 (target 0.00308, actual
+// 0.02260) asertado como correcto y pasando en verde — la decision de sostener
+// estaba escrita, no era un descuido. Se cambia junto con la politica.
+test('con el target agotado el hedge se desarma, pero no al primer tick', () => {
+  const base = {
     deltaQty: 0,
     actualQty: 1,
+    currentPrice: 2_000,
+    rangeLowerPrice: 1_900,
+    rangeUpperPrice: 2_100,
+  };
+
+  // Un cero puede ser un mal snapshot: tirar el hedge entero por una lectura
+  // suelta seria peor que esperar. Por eso arranca un reloj.
+  const primero = decideNetProfitV1({ ...base, now: 1_000_000, state: {} });
+  assert.equal(primero.decision, 'hold');
+  assert.equal(primero.gate, 'zero_target_confirming');
+
+  // Sostenido el cero, es real: se desmonta. Lo que le faltaba al viejo
+  // `normal_zero_target` era justamente la caducidad.
+  const confirmado = decideNetProfitV1({ ...base, now: 1_130_000, state: primero.nextState });
+  assert.equal(confirmado.decision, 'rebalance');
+  assert.equal(confirmado.gate, 'zero_target_unwind');
+  assert.equal(confirmado.adjustQty, -1, 'cierre COMPLETO, no la correccion parcial del 75%');
+});
+
+test('sin posicion abierta un target en cero no hace nada', () => {
+  const decision = decideNetProfitV1({
+    deltaQty: 0,
+    actualQty: 0,
     currentPrice: 2_000,
     rangeLowerPrice: 1_900,
     rangeUpperPrice: 2_100,
@@ -142,9 +169,16 @@ test('net_profit_v1 no cierra normalmente cuando el target es cero', () => {
   assert.equal(decision.gate, 'normal_zero_target');
 });
 
-test('net_profit_v1 confirma y rearma una salida superior sin ejecutar durante la histéresis', () => {
+// El fixture original era imposible: `deltaQty: 1` (delta MAXIMO) con el precio
+// por encima del techo del rango. Arriba del borde superior un LP concentrado
+// queda todo en estable y su delta tiende a 0 — lo dice el propio comentario de
+// `range-exit-policy.service.js`. Se probaba la maquina de estados sobre datos
+// que contradicen la fisica del instrumento, y nunca la consecuencia de
+// exposicion. Ahora el delta es un residuo plausible y se asercta que al
+// confirmar la salida el short se REDUCE.
+test('la salida superior se confirma antes de actuar, y al confirmarse desarma', () => {
   const base = {
-    deltaQty: 1,
+    deltaQty: 0.02,
     actualQty: 0.5,
     currentPrice: 111.5,
     rangeLowerPrice: 90,
@@ -152,29 +186,38 @@ test('net_profit_v1 confirma y rearma una salida superior sin ejecutar durante l
     expectedCostUsd: 1,
     lpValueUsd: 1_000,
   };
-  const first = decideNetProfitV1({ ...base, now: 1_000_000, state: {} });
-  assert.equal(first.decision, 'hold');
-  assert.equal(first.gate, 'upper_exit_confirming');
 
-  const confirmed = decideNetProfitV1({ ...base, now: 1_120_000, state: first.nextState });
-  assert.equal(confirmed.decision, 'hold');
-  assert.equal(confirmed.gate, 'upper_exit_latched');
+  const primero = decideNetProfitV1({ ...base, now: 1_000_000, state: {} });
+  assert.equal(primero.decision, 'hold');
+  assert.equal(primero.gate, 'upper_exit_confirming');
 
-  const rearmStart = decideNetProfitV1({
-    ...base,
-    currentPrice: 108.4,
-    now: 1_130_000,
-    state: confirmed.nextState,
+  // Una mecha que pincha el borde no es una salida: durante la confirmacion no
+  // se toca nada. Para esto existe la histeresis y se conserva.
+  const durante = decideNetProfitV1({ ...base, now: 1_060_000, state: primero.nextState });
+  assert.equal(durante.decision, 'hold');
+  assert.equal(durante.gate, 'upper_exit_confirming');
+
+  // Confirmada la salida se redimensiona. Antes esto devolvia `hold` de forma
+  // incondicional y sin caducidad: es lo que dejo a pp27 sosteniendo $53.90 de
+  // short desnudo durante ~72 h mientras el delta del LP era ~0.
+  const confirmada = decideNetProfitV1({ ...base, now: 1_120_000, state: durante.nextState });
+  assert.equal(confirmada.decision, 'rebalance');
+  assert.ok(confirmada.adjustQty < 0, 'tiene que REDUCIR el short, no sostenerlo ni aumentarlo');
+
+  // El rearme sigue pidiendo su propia confirmacion al volver dentro.
+  const rearmando = decideNetProfitV1({
+    ...base, currentPrice: 108.4, now: 1_130_000, state: confirmada.nextState,
   });
-  assert.equal(rearmStart.gate, 'upper_rearm_confirming');
+  assert.equal(rearmando.gate, 'upper_rearm_confirming');
 
-  const rearmed = decideNetProfitV1({
-    ...base,
-    currentPrice: 108.4,
-    now: 1_250_000,
-    state: rearmStart.nextState,
+  const rearmado = decideNetProfitV1({
+    ...base, currentPrice: 108.4, now: 1_250_000, state: rearmando.nextState,
   });
-  assert.equal(rearmed.decision, 'rebalance');
+  assert.equal(
+    rearmado.nextState.upperExitConfirmed,
+    false,
+    'cumplida la confirmacion, la maquina vuelve a estado normal'
+  );
 });
 
 test('shadow mantiene contabilidad aislada y no muta el estado live', () => {
@@ -278,4 +321,35 @@ test('shadow valora a mercado la posicion abierta como hace el motor legacy', ()
     targetQty: 0, bid: 1_899, ask: 1_901, feeRate: 0.0005,
   });
   assert.equal(state.unrealizedPnlUsd, 0);
+});
+
+// La combinacion que rompio no tenia test. `normal_zero_target` y el latch
+// superior tenian uno cada uno, por separado; latcheado Y con el delta en ~0 Y
+// con un short grande abierto —que es el estado real de pp27— no lo cubria
+// ninguno, y es justo donde las dos mitades se tapan entre si.
+test('latcheado, sin delta y con un short grande: desarma', () => {
+  // Cifras de pp27 el 2026-09-21, escaladas al rango del fixture.
+  const base = {
+    deltaQty: 0,
+    actualQty: 0.0226,
+    currentPrice: 111.5,
+    rangeLowerPrice: 90,
+    rangeUpperPrice: 110,
+    expectedCostUsd: 1,
+    lpValueUsd: 353,
+    // Salida superior ya confirmada en un tick anterior.
+    state: { upperExitConfirmed: true, upperExitStartedAt: 900_000 },
+  };
+
+  const primero = decideNetProfitV1({ ...base, now: 1_000_000 });
+  assert.equal(primero.decision, 'hold');
+  assert.equal(primero.gate, 'zero_target_confirming', 'el cero todavia hay que confirmarlo');
+
+  const confirmado = decideNetProfitV1({ ...base, now: 1_130_000, state: primero.nextState });
+  assert.equal(confirmado.decision, 'rebalance');
+  assert.equal(confirmado.gate, 'zero_target_unwind');
+  assert.equal(confirmado.adjustQty, -0.0226, 'se cierra entero: no queda nada que cubrir');
+  // El latch sigue puesto —el precio sigue arriba— y aun asi se desmonta. Ese
+  // es el cambio: estar latcheado ya no implica sostener la exposicion.
+  assert.equal(confirmado.nextState.upperExitConfirmed, true);
 });

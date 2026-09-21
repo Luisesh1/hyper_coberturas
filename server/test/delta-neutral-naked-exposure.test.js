@@ -228,3 +228,77 @@ test('resolver un episodio abierto es idempotente por construccion', async () =>
   assert.equal(cerradas, 0, 'volver a cerrar lo ya cerrado no es un error');
   assert.match(exec.calls[0].sql, /resolved_at IS NULL/, 'solo toca lo que sigue abierto');
 });
+
+// ---------------------------------------------------------------------------
+// Tope de exposicion direccional (Fase 3): limite de RIESGO, por encima de la
+// politica. Exige magnitud Y duracion — ver el comentario del helper.
+// ---------------------------------------------------------------------------
+
+const { resolveNakedNotionalBreach } = require('../src/services/protected-pool-delta-neutral.helpers');
+const { decideNetProfitV1 } = require('../src/services/net-profit-policy.service');
+
+test('pp27 supera el tope una vez que la exposicion se sostiene', () => {
+  // 15.3% del pool, sostenido mas de una hora (tier 1).
+  const r = resolveNakedNotionalBreach({ ...PP27, tier: 1 });
+  assert.equal(r.breached, true);
+  assert.ok(r.capUsd < PP27.nakedNotionalUsd);
+});
+
+test('la misma exposicion recien aparecida NO dispara el tope', () => {
+  // tier 0 = lleva 15 min. Se avisa, no se interviene: una divergencia puede
+  // cerrarse sola en el cruce de borde siguiente.
+  const r = resolveNakedNotionalBreach({ ...PP27, tier: 0 });
+  assert.equal(r.sustained, false);
+  assert.equal(r.breached, false);
+});
+
+test('la divergencia deliberada de range_exit_v1 no se recorta', () => {
+  // Esta es LA regresion a evitar. `range_exit_v1` paga divergencia a proposito
+  // para no pagar comisiones; un tope que la recorte destruye la politica.
+  // $7.25 sobre un pool de $320 es 2.3%: por debajo del tope aunque lleve dias.
+  const r = resolveNakedNotionalBreach({ nakedNotionalUsd: 7.25, poolValueUsd: 320, tier: 2 });
+  assert.equal(r.breached, false, 'una divergencia chica y larga sigue siendo su modo normal de operar');
+});
+
+test('el tope escala con el pool, con un piso para los pools chicos', () => {
+  const grande = resolveNakedNotionalBreach({ nakedNotionalUsd: 0, poolValueUsd: 10_000, tier: 2 });
+  assert.equal(grande.capUsd, 1_500, '15% de $10.000');
+
+  // En un pool minusculo el 15% seria calderilla; manda el piso absoluto.
+  const chico = resolveNakedNotionalBreach({ nakedNotionalUsd: 0, poolValueUsd: 50, tier: 2 });
+  assert.equal(chico.capUsd, 30);
+});
+
+test('el tope es configurable por proteccion', () => {
+  const r = resolveNakedNotionalBreach({
+    ...PP27,
+    tier: 1,
+    protection: { nakedNotionalCapPctOfPool: 30, nakedNotionalCapFloorUsd: 10 },
+  });
+  assert.equal(r.breached, false, '30% de $353 son $106: $53.90 cabe');
+});
+
+// ---------------------------------------------------------------------------
+// Fase 3.3 — el escape de riesgo de net_profit tiene que ser alcanzable.
+// ---------------------------------------------------------------------------
+
+test('riskToInner ya es alcanzable con la salida superior confirmada', () => {
+  // Antes el latch retornaba ANTES de que `riskToInner` se calculara: un escape
+  // de riesgo que no podia dispararse en el estado de riesgo. Al dejar de
+  // frenar en `upper_exit_latched`, la ruta queda abierta.
+  const decision = decideNetProfitV1({
+    deltaQty: 0.02,
+    actualQty: 0.5,
+    currentPrice: 111.5,
+    rangeLowerPrice: 90,
+    rangeUpperPrice: 110,
+    expectedCostUsd: 1,
+    lpValueUsd: 100,
+    now: 1_000_000,
+    state: { upperExitConfirmed: true, upperExitStartedAt: 900_000 },
+  });
+
+  assert.equal(decision.decision, 'rebalance');
+  assert.equal(decision.gate, 'risk_to_inner');
+  assert.ok(decision.adjustQty < 0);
+});
