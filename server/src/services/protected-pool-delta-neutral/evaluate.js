@@ -25,6 +25,7 @@ const {
   resolveMinOrderNotionalUsd,
   resolveCenterDeadZone,
   resolveMinRebalanceNotionalUsd,
+  resolveNakedExposure,
   resolveRebalanceDecision,
   resolveUrgentMinRebalanceNotionalUsd,
   safeJsonClone,
@@ -542,18 +543,10 @@ const evaluateMethods = {
     nextState.lastSpotFailureReason = spotFailureReason || null;
     nextState.truthPending = normalizeStrategyState(activeProtection.strategyState).truthPending === true;
 
-    if (Number.isFinite(nextState.coverageRatioPct)
-        && Number(metrics.targetQty) > NEAR_ZERO_TARGET_QTY
-        && (nextState.coverageRatioPct < 90 || nextState.coverageRatioPct > 110)) {
-      this.logger.warn?.('delta_neutral_coverage_out_of_band', {
-        protectionId: activeProtection.id,
-        accountId: activeProtection.accountId,
-        asset: activeProtection.inferredAsset,
-        targetQty: Number(metrics.targetQty),
-        actualQty,
-        coverageRatioPct: nextState.coverageRatioPct,
-      });
-    }
+    // Exposicion direccional sostenida: se calcula justo antes del estado (ver
+    // mas abajo), porque el estado depende de ella y la alerta depende de la
+    // decision, que todavia no esta resuelta en este punto.
+    const exposureWasMaterial = Number(strategyState.nakedExposureSince) > 0;
 
     this.logger.info?.('delta_neutral_position_observed', {
       protectionId: activeProtection.id,
@@ -1042,7 +1035,20 @@ const evaluateMethods = {
       });
     }
 
+    const nakedExposure = resolveNakedExposure({
+      nakedNotionalUsd: tracking.trackingErrorUsd,
+      poolValueUsd: metrics.poolValueUsd,
+      priorSince: strategyState.nakedExposureSince,
+      priorTier: strategyState.nakedExposureTier,
+    });
+    nextState.nakedExposureSince = nakedExposure.since;
+    nextState.nakedExposureTier = nakedExposure.tier;
+    nextState.nakedNotionalUsd = nakedExposure.material
+      ? Math.abs(Number(tracking.trackingErrorUsd) || 0)
+      : 0;
+
     nextState.status = normalizeEvaluationStatus({
+      nakedExposureSustained: nakedExposure.tier >= 0,
       decision: rebalanceDecision.decision,
       trackingErrorUsd: tracking.trackingErrorUsd,
       riskStatus: forcedStatus,
@@ -1097,6 +1103,52 @@ const evaluateMethods = {
         nextState.lastDecision = 'hold';
         nextState.lastDecisionReason = forcedStatus === 'risk_paused' ? 'risk_paused' : 'margin_pending';
       }
+    }
+
+    // Aviso de exposicion direccional. Antes esto era un `warn` por tick que
+    // nadie consumia: 5.265 emisiones en 3 horas, todas identicas, ninguna
+    // entregada. El detector funcionaba; lo que faltaba era que la senal
+    // sobreviviera hasta un humano. Ahora el episodio tiene principio, duracion
+    // y escalones, y solo se avisa al CRUZAR uno — 3 avisos por episodio en vez
+    // de miles. Va aqui y no donde se calcula porque necesita la decision ya
+    // resuelta: sin el motivo, la alerta no dice que hacer.
+    if (nakedExposure.escalated) {
+      const usd = Math.abs(Number(tracking.trackingErrorUsd) || 0);
+      const minutos = Math.round(nakedExposure.elapsedMs / 60_000);
+      this.logger.warn?.('delta_neutral_naked_exposure', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        severity: nakedExposure.severity,
+        nakedNotionalUsd: usd,
+        poolValueUsd: Number(metrics.poolValueUsd) || null,
+        elapsedMinutes: minutos,
+        targetQty: Number(metrics.targetQty),
+        actualQty,
+        coverageRatioPct: nextState.coverageRatioPct,
+        decision: nextState.lastDecision,
+        decisionReason: nextState.lastDecisionReason,
+      });
+      this._notifyBlock(activeProtection, {
+        blockType: 'naked_exposure',
+        reason: `Exposicion direccional sin cubrir: $${usd.toFixed(2)} desde hace ${minutos} min`,
+        extra: {
+          severidad: nakedExposure.severity,
+          nakedNotionalUsd: usd,
+          targetQty: Number(metrics.targetQty),
+          actualQty,
+          motivo: nextState.lastDecisionReason || null,
+        },
+      }).catch(() => {});
+    } else if (exposureWasMaterial && !nakedExposure.material) {
+      this.logger.info?.('delta_neutral_naked_exposure_cleared', {
+        protectionId: activeProtection.id,
+        accountId: activeProtection.accountId,
+        asset: activeProtection.inferredAsset,
+        durationMinutes: Math.round(
+          (Date.now() - Number(strategyState.nakedExposureSince)) / 60_000
+        ),
+      });
     }
 
     await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {

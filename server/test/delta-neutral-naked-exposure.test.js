@@ -1,0 +1,161 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  resolveNakedExposure,
+  normalizeEvaluationStatus,
+} = require('../src/services/protected-pool-delta-neutral.helpers');
+
+/**
+ * Exposicion direccional sostenida (pp27 / orq #54, 2026-09-18 → 09-21).
+ *
+ * El precio salio por arriba del rango, el delta del LP colapso a ~0 y la
+ * politica latcheo el hedge en 0.0226 ETH. Quedaron $53.90 de short desnudo
+ * durante ~72 h. El sistema lo detectaba —`delta_neutral_coverage_out_of_band`
+ * disparo 5.265 veces en 3 horas— y no lo comunicaba: era un `warn` suelto.
+ * Ademas se reportaba `strategy_status: tracking`, `fallos: 0`, `ult_error`
+ * vacio: en el panel la proteccion se veia sana.
+ *
+ * Dos decisiones de diseno que estos tests fijan:
+ *
+ * 1. Se mide el NOTIONAL EN USD, no el ratio actual/target. Con el delta
+ *    tendiendo a 0 el ratio se dispara a 40x-290x sin que pase nada anomalo
+ *    —es el comportamiento normal de `range_exit_v1` cerca del borde— asi que
+ *    un umbral por ratio la marcaria rota permanentemente.
+ * 2. Se avisa al CRUZAR un escalon de duracion, no por tick.
+ */
+
+// Cifras reales del tick de las 19:53:50Z del 2026-09-21.
+const PP27 = { nakedNotionalUsd: 53.90, poolValueUsd: 353.29 };
+const T0 = 1_800_000_000_000;
+const MIN = 60_000;
+
+test('un descuadre trivial en USD no es exposicion, aunque el ratio se vea feo', () => {
+  // pp24 el mismo dia: target 0.002782 vs actual 0.0028 -> $0.05 sobre $319.
+  const r = resolveNakedExposure({ nakedNotionalUsd: 0.05, poolValueUsd: 319.56, now: T0 });
+  assert.equal(r.material, false);
+  assert.equal(r.tier, -1);
+  assert.equal(r.escalated, false);
+});
+
+test('range_exit_v1 cerca del borde no dispara pese a un ratio de 30x', () => {
+  // Delta casi agotado (0.0001) contra un hedge de apertura de 0.003: el ratio
+  // es 30x, pero lo realmente descubierto son $7.25 sobre un pool de $320.
+  // Un umbral por ratio la marcaria rota; el umbral en USD la deja en paz.
+  const r = resolveNakedExposure({ nakedNotionalUsd: 7.25, poolValueUsd: 320, now: T0 });
+  assert.equal(r.material, false, 'la politica de borde de rango no puede vivir en alerta');
+});
+
+test('un monto grande sobre un pool mucho mayor tampoco alarma', () => {
+  // $20 desnudos en un pool de $2.000 son el 1%: por encima del piso absoluto,
+  // por debajo del relativo. Hacen falta LAS DOS condiciones.
+  const r = resolveNakedExposure({ nakedNotionalUsd: 20, poolValueUsd: 2_000, now: T0 });
+  assert.equal(r.material, false);
+});
+
+test('pp27 es material desde el primer tick, pero todavia no se avisa', () => {
+  const r = resolveNakedExposure({ ...PP27, now: T0 });
+  assert.equal(r.material, true);
+  assert.equal(r.since, T0, 'el episodio arranca su reloj aqui');
+  assert.equal(r.tier, -1, 'sin duracion suficiente no hay severidad');
+  assert.equal(r.escalated, false, 'avisar al instante convertiria un blip en ruido');
+});
+
+test('a los 15 minutos cruza el primer escalon y avisa una sola vez', () => {
+  const primero = resolveNakedExposure({
+    ...PP27, now: T0 + (16 * MIN), priorSince: T0, priorTier: -1,
+  });
+  assert.equal(primero.tier, 0);
+  assert.equal(primero.severity, 'warning');
+  assert.equal(primero.escalated, true);
+
+  // Mismo escalon en el tick siguiente: NO vuelve a avisar. Esto es lo que
+  // convierte 5.265 warns en 3 alertas.
+  const siguiente = resolveNakedExposure({
+    ...PP27, now: T0 + (16 * MIN) + 2_000, priorSince: T0, priorTier: 0,
+  });
+  assert.equal(siguiente.tier, 0);
+  assert.equal(siguiente.escalated, false);
+});
+
+test('la severidad escala con la duracion del episodio', () => {
+  const unaHora = resolveNakedExposure({ ...PP27, now: T0 + (61 * MIN), priorSince: T0, priorTier: 0 });
+  assert.equal(unaHora.severity, 'high');
+  assert.equal(unaHora.escalated, true);
+
+  const seisHoras = resolveNakedExposure({ ...PP27, now: T0 + (7 * 60 * MIN), priorSince: T0, priorTier: 1 });
+  assert.equal(seisHoras.severity, 'critical');
+  assert.equal(seisHoras.escalated, true);
+
+  // pp27 estuvo 72 h: sigue en critical, sin volver a escalar.
+  const tresDias = resolveNakedExposure({ ...PP27, now: T0 + (72 * 60 * MIN), priorSince: T0, priorTier: 2 });
+  assert.equal(tresDias.severity, 'critical');
+  assert.equal(tresDias.escalated, false);
+});
+
+test('al cerrarse el episodio el reloj se reinicia', () => {
+  const cerrado = resolveNakedExposure({
+    nakedNotionalUsd: 0.4, poolValueUsd: 353.29, now: T0 + (80 * 60 * MIN), priorSince: T0, priorTier: 2,
+  });
+  assert.equal(cerrado.material, false);
+  assert.equal(cerrado.since, null, 'un episodio nuevo no puede heredar el reloj del anterior');
+  assert.equal(cerrado.tier, -1);
+});
+
+// ---------------------------------------------------------------------------
+// El estado reportado tiene que reflejar la exposicion.
+// ---------------------------------------------------------------------------
+
+test('un hold que sostiene exposicion sostenida deja de llamarse tracking', () => {
+  const base = {
+    decision: 'hold',
+    trackingErrorUsd: 53.90,
+    riskStatus: null,
+    preflightStatus: null,
+    shouldRebalance: false,
+    preflightOk: true,
+  };
+
+  assert.equal(
+    normalizeEvaluationStatus({ ...base, nakedExposureSustained: true }),
+    'naked_exposure',
+    'pp27 paso 3 dias reportandose sano con $53.90 de short desnudo'
+  );
+  assert.equal(
+    normalizeEvaluationStatus({ ...base, nakedExposureSustained: false }),
+    'tracking',
+    'un descuadre pasajero sigue siendo seguimiento normal'
+  );
+});
+
+test('una correccion ya en curso pesa mas que la exposicion', () => {
+  // Si el motor ya decidio rebalancear y el preflight paso, lo informativo es
+  // que hay una orden en camino, no que todavia falta cubrir.
+  assert.equal(
+    normalizeEvaluationStatus({
+      decision: 'rebalance_full',
+      trackingErrorUsd: 53.90,
+      riskStatus: null,
+      preflightStatus: null,
+      shouldRebalance: true,
+      preflightOk: true,
+      nakedExposureSustained: true,
+    }),
+    'rebalance_pending'
+  );
+});
+
+test('un gate de riesgo sigue mandando sobre todo lo demas', () => {
+  assert.equal(
+    normalizeEvaluationStatus({
+      decision: 'hold',
+      trackingErrorUsd: 53.90,
+      riskStatus: 'risk_paused',
+      preflightStatus: null,
+      shouldRebalance: false,
+      preflightOk: false,
+      nakedExposureSustained: true,
+    }),
+    'risk_paused'
+  );
+});

@@ -80,6 +80,7 @@ const DELTA_NEUTRAL_STATUSES = new Set([
   'spot_stale',
   'snapshot_invalid',
   'risk_paused',
+  'naked_exposure',
   'reconciling',
   'deactivating',
   'deactivation_pending',
@@ -561,6 +562,59 @@ function buildCooldown(error, strategyState, { fallbackMs = RATE_LIMIT_COOLDOWN_
   };
 }
 
+// Exposicion direccional: lo que queda SIN CUBRIR, medido en USD.
+//
+// Deliberadamente NO se usa el ratio actual/target. Cuando el precio sale del
+// rango el delta del LP tiende a 0 y el ratio se dispara a 40x-290x sin que
+// pase nada anomalo — es el comportamiento normal de `range_exit_v1`. Un
+// umbral por ratio la marcaria rota todo el tiempo. El notional en USD sigue
+// siendo finito y comparable cuando el denominador se va a cero.
+const NAKED_EXPOSURE_MIN_USD = 15;
+const NAKED_EXPOSURE_MIN_PCT_OF_POOL = 0.05;
+// Severidad por duracion. Se notifica al CRUZAR un escalon, no por tick: un
+// episodio largo produce 3 avisos, no uno cada 2 segundos.
+const NAKED_EXPOSURE_TIERS = [
+  { afterMs: 15 * 60_000, severity: 'warning' },
+  { afterMs: 60 * 60_000, severity: 'high' },
+  { afterMs: 6 * 60 * 60_000, severity: 'critical' },
+];
+
+function resolveNakedExposure({
+  nakedNotionalUsd,
+  poolValueUsd,
+  now = Date.now(),
+  priorSince = null,
+  priorTier = -1,
+  minUsd = NAKED_EXPOSURE_MIN_USD,
+  minPctOfPool = NAKED_EXPOSURE_MIN_PCT_OF_POOL,
+} = {}) {
+  const usd = Math.abs(Number(nakedNotionalUsd) || 0);
+  const pool = Number(poolValueUsd) || 0;
+  // Las dos condiciones a la vez: el piso en USD evita alarmar por centavos en
+  // un pool grande, y el porcentaje evita alarmar por un monto que el propio
+  // tamano de la posicion vuelve irrelevante.
+  const material = usd >= minUsd && (pool > 0 ? (usd / pool) >= minPctOfPool : true);
+  if (!material) {
+    return { material: false, since: null, elapsedMs: 0, tier: -1, severity: null, escalated: false };
+  }
+  const prevSince = Number(priorSince);
+  const since = Number.isFinite(prevSince) && prevSince > 0 ? prevSince : now;
+  const elapsedMs = Math.max(0, now - since);
+  const prevTier = Number.isFinite(Number(priorTier)) ? Number(priorTier) : -1;
+  let tier = -1;
+  for (let i = 0; i < NAKED_EXPOSURE_TIERS.length; i += 1) {
+    if (elapsedMs >= NAKED_EXPOSURE_TIERS[i].afterMs) tier = i;
+  }
+  return {
+    material: true,
+    since,
+    elapsedMs,
+    tier,
+    severity: tier >= 0 ? NAKED_EXPOSURE_TIERS[tier].severity : null,
+    escalated: tier >= 0 && tier > prevTier,
+  };
+}
+
 function normalizeEvaluationStatus({
   decision,
   trackingErrorUsd,
@@ -568,10 +622,17 @@ function normalizeEvaluationStatus({
   preflightStatus,
   shouldRebalance,
   preflightOk,
+  nakedExposureSustained = false,
 }) {
   if (riskStatus) return riskStatus;
   if (preflightStatus && preflightStatus !== 'tracking') return preflightStatus;
   if (shouldRebalance && decision !== 'hold' && preflightOk) return 'rebalance_pending';
+  // Sostener exposicion direccional no es "tracking". `tracking` dice "voy
+  // siguiendo al delta", y aqui justamente se dejo de seguirlo: pp27 paso 3
+  // dias reportandose `tracking` con $53.90 de short desnudo, `fallos: 0` y
+  // `ult_error` vacio. Va despues de `rebalance_pending` a proposito — si ya
+  // hay una correccion en curso, eso es lo informativo.
+  if (nakedExposureSustained) return 'naked_exposure';
   if (decision === 'hold') {
     return Math.abs(Number(trackingErrorUsd || 0)) > 0 ? 'tracking' : 'healthy';
   }
@@ -699,6 +760,8 @@ module.exports = {
   resolveRebalanceDecision,
   buildCooldown,
   normalizeEvaluationStatus,
+  resolveNakedExposure,
+  NAKED_EXPOSURE_TIERS,
   deriveBandSettings,
   computeVolatilityStats,
 };
