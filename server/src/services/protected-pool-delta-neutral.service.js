@@ -4,6 +4,7 @@ const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const deltaRebalanceLogRepository = require('../repositories/protected-pool-delta-rebalance.repository');
 const decisionLogRepository = require('../repositories/protection-decision-log.repository');
+const hedgeAlertsRepository = require('../repositories/hedge-alerts.repository');
 const timeInRangeService = require('./time-in-range.service');
 const uniswapService = require('./uniswap.service');
 const hlRegistry = require('./hyperliquid.registry');
@@ -66,6 +67,7 @@ class ProtectedPoolDeltaNeutralService {
     this.repo = deps.protectedPoolRepository || protectedPoolRepository;
     this.deltaLogRepo = deps.deltaRebalanceLogRepository || deltaRebalanceLogRepository;
     this.decisionLogRepo = deps.protectionDecisionLogRepository || decisionLogRepository;
+    this.hedgeAlertsRepo = deps.hedgeAlertsRepository || hedgeAlertsRepository;
     this.uniswapService = deps.uniswapService || uniswapService;
     this.hlRegistry = deps.hlRegistry || hlRegistry;
     this.getTradingService = deps.getTradingService || getTradingService;

@@ -1129,6 +1129,34 @@ const evaluateMethods = {
         decision: nextState.lastDecision,
         decisionReason: nextState.lastDecisionReason,
       });
+      // Registro durable ANTES de intentar el envio. Telegram ya fallo 24 de 24
+      // veces sin dejar rastro: si el unico canal es tambien el unico registro,
+      // un canal caido borra la evidencia. La fila queda aunque el mensaje no
+      // salga, y es lo que alimenta /api/health y /metrics.
+      this.hedgeAlertsRepo.create({
+        protectedPoolId: activeProtection.id,
+        alertType: 'naked_exposure',
+        severity: nakedExposure.severity,
+        episodeStartedAt: nakedExposure.since,
+        message: `Exposicion direccional sin cubrir: $${usd.toFixed(2)} desde hace ${minutos} min`,
+        details: {
+          nakedNotionalUsd: usd,
+          poolValueUsd: Number(metrics.poolValueUsd) || null,
+          targetQty: Number(metrics.targetQty),
+          actualQty,
+          coverageRatioPct: nextState.coverageRatioPct,
+          decision: nextState.lastDecision,
+          decisionReason: nextState.lastDecisionReason,
+          asset: activeProtection.inferredAsset,
+          accountId: activeProtection.accountId,
+        },
+      }).catch((err) => {
+        this.logger.warn?.('hedge_alert_persist_failed', {
+          protectionId: activeProtection.id,
+          error: err.message,
+        });
+      });
+
       this._notifyBlock(activeProtection, {
         blockType: 'naked_exposure',
         reason: `Exposicion direccional sin cubrir: $${usd.toFixed(2)} desde hace ${minutos} min`,
@@ -1148,6 +1176,15 @@ const evaluateMethods = {
         durationMinutes: Math.round(
           (Date.now() - Number(strategyState.nakedExposureSince)) / 60_000
         ),
+      });
+      this.hedgeAlertsRepo.resolveOpenByType({
+        protectedPoolId: activeProtection.id,
+        alertType: 'naked_exposure',
+      }).catch((err) => {
+        this.logger.warn?.('hedge_alert_resolve_failed', {
+          protectionId: activeProtection.id,
+          error: err.message,
+        });
       });
     }
 

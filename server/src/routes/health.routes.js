@@ -4,6 +4,7 @@ const db = require('../db');
 const hlWsClient = require('../websocket/hyperliquidWs');
 const runtimeStatus = require('../runtime/status');
 const metrics = require('../services/metrics.service');
+const hedgeAlertsRepository = require('../repositories/hedge-alerts.repository');
 
 const router = Router();
 
@@ -26,6 +27,16 @@ router.get('/ready', asyncHandler(async (req, res) => {
   const runtime = runtimeStatus.snapshot();
   const ready = dbReady && runtime.bootstrapped;
 
+  // Estado de las coberturas. Va como CAMPO, no como 503: un pool descubierto
+  // es un problema de negocio, no una razon para que el contenedor se declare
+  // no-listo. `docker-compose.prod.yml` usa `depends_on: service_healthy`, asi
+  // que un 503 aqui podria frenar el arranque de nginx en el proximo deploy y
+  // convertir una alerta en una caida.
+  let hedge = null;
+  if (dbReady) {
+    hedge = await hedgeAlertsRepository.summarizeOpen().catch(() => null);
+  }
+
   res.status(ready ? 200 : 503).json({
     status: ready ? 'ready' : 'degraded',
     requestId: req.requestId,
@@ -33,7 +44,10 @@ router.get('/ready', asyncHandler(async (req, res) => {
       db: dbReady,
       hyperliquidWs: !!hlWsClient.isConnected,
       bootstrapped: runtime.bootstrapped,
+      // false cuando hay al menos un episodio de cobertura abierto.
+      hedgeCoverage: hedge ? hedge.openEpisodes === 0 : null,
     },
+    hedge,
     runtime,
     timestamp: new Date().toISOString(),
   });
@@ -44,7 +58,18 @@ router.get('/ready', asyncHandler(async (req, res) => {
 // Sin autenticación aquí para que Prometheus pueda scrapear sin
 // secretos; en prod se recomienda aislarlo por red o restringirlo vía
 // nginx (`allow <prometheus-ip>; deny all;` en una location específica).
-router.get('/metrics', (req, res) => {
+router.get('/metrics', asyncHandler(async (req, res) => {
+  // Cobertura: el canal de alerta que NO depende de que Telegram entregue.
+  // Un episodio abierto de exposición direccional queda visible acá aunque el
+  // mensaje saliente se haya perdido, que es lo que pasó las 72 h de pp27.
+  try {
+    const hedge = await hedgeAlertsRepository.summarizeOpen();
+    metrics.gauge('hedge_open_alert_episodes', null, 'Open hedge alert episodes').set(hedge.openEpisodes);
+    for (const [severity, count] of Object.entries(hedge.bySeverity)) {
+      metrics.gauge(`hedge_open_alert_episodes_${severity}`, null, `Open hedge alert episodes (${severity})`).set(count);
+    }
+  } catch { /* swallow: /metrics nunca debe tumbarse por la db */ }
+
   // Snapshot de gauges básicas
   try {
     const runtime = runtimeStatus.snapshot();
@@ -74,6 +99,6 @@ router.get('/metrics', (req, res) => {
 
   res.set('Content-Type', 'text/plain; version=0.0.4');
   res.send(metrics.render());
-});
+}));
 
 module.exports = router;

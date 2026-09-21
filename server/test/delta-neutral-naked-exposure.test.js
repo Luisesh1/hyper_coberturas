@@ -159,3 +159,72 @@ test('un gate de riesgo sigue mandando sobre todo lo demas', () => {
     'risk_paused'
   );
 });
+
+// ---------------------------------------------------------------------------
+// Registro durable: el canal que NO depende de que Telegram entregue.
+// ---------------------------------------------------------------------------
+
+const hedgeAlerts = require('../src/repositories/hedge-alerts.repository');
+
+function fakeExecutor(rows = [], rowCount = 0) {
+  const calls = [];
+  return {
+    calls,
+    query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows, rowCount };
+    },
+  };
+}
+
+test('summarizeOpen cuenta EPISODIOS y se queda con la peor severidad', async () => {
+  const exec = fakeExecutor([
+    { severity: 'warning', episodes: '2' },
+    { severity: 'critical', episodes: '1' },
+  ]);
+
+  const resumen = await hedgeAlerts.summarizeOpen(exec);
+
+  assert.equal(resumen.openEpisodes, 3);
+  assert.equal(resumen.worstSeverity, 'critical');
+  assert.deepEqual(resumen.bySeverity, { warning: 2, high: 0, critical: 1 });
+  // Un episodio que escalo warning -> high -> critical son 3 filas y UN
+  // problema. Si esto contara filas, el health check exageraria.
+  assert.match(exec.calls[0].sql, /count\(DISTINCT/i);
+});
+
+test('sin episodios abiertos no hay severidad', async () => {
+  const resumen = await hedgeAlerts.summarizeOpen(fakeExecutor([]));
+  assert.equal(resumen.openEpisodes, 0);
+  assert.equal(resumen.worstSeverity, null);
+});
+
+test('un escalon se guarda con el inicio del episodio, no con el suyo', async () => {
+  const exec = fakeExecutor([{ id: 7 }]);
+
+  await hedgeAlerts.create({
+    protectedPoolId: 27,
+    alertType: 'naked_exposure',
+    severity: 'critical',
+    episodeStartedAt: T0,
+    message: 'Exposicion direccional sin cubrir: $53.90 desde hace 4320 min',
+    details: { nakedNotionalUsd: 53.9 },
+  }, exec);
+
+  const { params } = exec.calls[0];
+  assert.equal(params[0], 27);
+  assert.equal(params[1], 'naked_exposure');
+  assert.equal(params[2], 'critical');
+  assert.equal(params[3], T0, 'es lo que permite agrupar los escalones del mismo episodio');
+  assert.equal(JSON.parse(params[5]).nakedNotionalUsd, 53.9);
+});
+
+test('resolver un episodio abierto es idempotente por construccion', async () => {
+  const exec = fakeExecutor([], 0);
+  const cerradas = await hedgeAlerts.resolveOpenByType({
+    protectedPoolId: 27, alertType: 'naked_exposure',
+  }, exec);
+
+  assert.equal(cerradas, 0, 'volver a cerrar lo ya cerrado no es un error');
+  assert.match(exec.calls[0].sql, /resolved_at IS NULL/, 'solo toca lo que sigue abierto');
+});
