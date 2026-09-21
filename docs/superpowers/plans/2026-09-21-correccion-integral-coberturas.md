@@ -154,10 +154,10 @@ Todo lo estructural depende de una sola pregunta, y no la puede contestar el có
   Esto resuelve los dos errores de diseño de la *Tesis* a la vez: le da al `hold` la dimensión temporal que no tenía (deja de tratar un delta cero de tres días como una lectura sospechosa) y hace que sostenga la *posición correcta* en vez del *tamaño viejo*.
 
   Alcance: aplica a `net_profit_v1`/`v2` (`upper_exit_latched` y `normal_zero_target`). **No aplica a `range_exit_v1`**, que ya redimensiona al confirmar el cruce, ni a legacy, que no tiene latch.
-- [ ] **1.2 · Cambiar los dos tests que bendicen el comportamiento actual.** No es refactor: es el acto que registra la decisión de 1.1.
+- [x] **1.2 · Cambiar los dos tests que bendicen el comportamiento actual.** ✅ **HECHO.** El de `normal_zero_target` ahora asegura desarme tras confirmación; el del latch usa un delta físicamente posible y aserta que el short **se reduce**. No es refactor: es el acto que registra la decisión de 1.1.
   - `net-profit-policy.test.js:131` — `normal_zero_target` con `deltaQty: 0, actualQty: 1` asertando `hold`. Debe asertar lo que decida 1.1.
   - `net-profit-policy.test.js:145` — el fixture del latch usa `deltaQty: 1` por encima del techo. Corregirlo a un delta físicamente posible (≈0) y **añadir una aserción sobre la exposición resultante**, no sólo sobre el gate.
-- [ ] **1.3 · Añadir el caso que nunca existió:** latcheado **y** delta→0 **y** `actualQty` grande. Es la combinación que rompió y no la cubre ningún test hoy.
+- [x] **1.3 · Añadir el caso que nunca existió:** ✅ **HECHO** (`latcheado, sin delta y con un short grande: desarma`). latcheado **y** delta→0 **y** `actualQty` grande. Es la combinación que rompió y no la cubre ningún test hoy.
 
 ---
 
@@ -180,11 +180,11 @@ Sin esto no se puede verificar ninguna de las fases siguientes: hoy el log dice 
 
 Reemplaza a la tarea 2.3 del plan anterior. **El ratio no sirve como límite; el notional en USD sí.**
 
-- [ ] **3.1 · Definir `nakedNotionalUsd` como métrica de primera clase.** `|actualQty − deltaQty| × precio`. Es finita, comparable entre las tres políticas y económicamente real incluso cuando el delta es 0 y el ratio explota. Emitirla en `delta_neutral_delta_diagnostic` y persistirla en el log de decisiones.
-- [ ] **3.2 · Tope duro de notional desnudo, transversal a la política.** Debe vivir **por encima** de las políticas, no dentro: es un límite de riesgo, no una decisión de cobertura. Ninguna de las tres lo tiene hoy. Cuando se supere, la corrección se ejecuta aunque la política diga `hold` — con su propio evento y su propia alerta.
+- [x] **3.1 · Definir `nakedNotionalUsd` como métrica de primera clase.** ✅ **HECHO** (adelantada en Fase 2.4). No hizo falta inventarla: `trackingErrorUsd` ya era `|target − actual| × precio`. El problema nunca fue que faltara la magnitud, sino que nadie la usaba como criterio. `|actualQty − deltaQty| × precio`. Es finita, comparable entre las tres políticas y económicamente real incluso cuando el delta es 0 y el ratio explota. Emitirla en `delta_neutral_delta_diagnostic` y persistirla en el log de decisiones.
+- [x] **3.2 · Tope duro de notional desnudo, transversal a la política.** ✅ **HECHO.** Exige magnitud **y duración** (15% del pool, piso $30, sostenido ≥1 h). La duración es el discriminador: lo que distingue a pp27 no es que su exposición fuera grande, es que era grande **y no se cerraba**. Sobrescribe el `hold` de la política pero **no** los gates de riesgo, el min-dwell ni el preflight. Valores iniciales, a afinar en Fase 6. Debe vivir **por encima** de las políticas, no dentro: es un límite de riesgo, no una decisión de cobertura. Ninguna de las tres lo tiene hoy. Cuando se supere, la corrección se ejecuta aunque la política diga `hold` — con su propio evento y su propia alerta.
   - Valor inicial sugerido: un porcentaje del valor del LP, no un absoluto, para que escale con el capital. La memoria `shadow-vs-legacy-eval` ya documenta que los pisos absolutos (`max(11, 3×coste)`) no escalan y dejan la política inerte en pools chicos.
-- [ ] **3.3 · Hacer alcanzable el escape de riesgo de `net_profit`.** `riskToInner` (`net-profit-policy.service.js:167`) hoy sólo sobrescribe el gate de `daily_rotation_budget`, y el latch retorna en `:130`, **antes** de que se calcule. Un escape de riesgo que no puede dispararse en el estado de riesgo no es un escape.
-- [ ] **3.4 · Tests:** el tope dispara con la política en `hold`; el ratio alto de `range_exit_v1` cerca del borde **no** lo dispara (es la regresión que mataría esa política); `riskToInner` alcanzable estando latcheado.
+- [x] **3.3 · Hacer alcanzable el escape de riesgo de `net_profit`.** ✅ **RESUELTA POR FASE 1.** Al dejar de frenar en `upper_exit_latched`, `riskToInner` quedó en el camino. Hay test que lo fija. `riskToInner` (`net-profit-policy.service.js:167`) hoy sólo sobrescribe el gate de `daily_rotation_budget`, y el latch retorna en `:130`, **antes** de que se calcule. Un escape de riesgo que no puede dispararse en el estado de riesgo no es un escape.
+- [x] **3.4 · Tests:** ✅ **HECHO.** el tope dispara con la política en `hold`; el ratio alto de `range_exit_v1` cerca del borde **no** lo dispara (es la regresión que mataría esa política); `riskToInner` alcanzable estando latcheado.
 
 ---
 
@@ -192,7 +192,7 @@ Reemplaza a la tarea 2.3 del plan anterior. **El ratio no sirve como límite; el
 
 La compuerta de margen sólo existe en la dirección de crecer, y cuando bloquea **rechaza la orden entera en vez de recortarla**. Medido sobre 25 días: **56 722 bloqueos con el hedge corto contra 664 con el hedge largo — 98.8% en una sola dirección.**
 
-- [ ] **4.1 · Recortar la orden a lo que el margen permite, en vez de rechazarla.** `protected-pool-delta-neutral.service.js:930`:
+- [x] **4.1 · Recortar la orden a lo que el margen permite, en vez de rechazarla.** ✅ **HECHO.** El preflight devuelve `maxIncreaseQty` y el motor recorta el target. Factor de seguridad 0.98: pegarse al límite reproduce el rechazo que se venía a evitar. `protected-pool-delta-neutral.service.js:930`:
   ```js
   if (targetIncreaseQty > 0 && incrementMarginUsd > availableForIncrementUsd) {
     return { ok: false, reason: 'insufficient_margin' };   // todo o nada
@@ -200,23 +200,23 @@ La compuerta de margen sólo existe en la dirección de crecer, y cuando bloquea
   ```
   Con recorte, pp24 habría entrado al ~60% en vez de al 0% y completado en el tick siguiente. En su lugar se quedó **siete días** en `actual_qty = 0.00010` contra un target de `0.068` (descubierto medio $170, pico $270).
   - Respetar el mínimo del exchange: si lo recortado cae bajo `minOrderNotionalUsd`, no enviar — pero **registrar la diferencia entre "no cabe nada" y "no cabe todo"**, que hoy son el mismo `insufficient_margin`.
-- [ ] **4.2 · Distinguir bloqueo total de bloqueo parcial** en el log y en la alerta. Son dos situaciones con acciones distintas.
-- [ ] **4.3 · Invariante de piso de margen.** Hereda la 2.1. Antes de abrir o crecer un LP, exigir margen suficiente para el delta objetivo con holgura que absorba el drawdown del hedge — que hoy consume margen sin vía de reposición.
-- [ ] **4.4 · Camino de desapalancamiento cuando el piso no se cumple.** Hereda la 2.2. Hoy, si no puede cubrir, el sistema sostiene el LP desnudo indefinidamente. Debe reducir el LP hasta el tamaño que sí puede cubrir. Detrás de un flag y avisando antes de actuar (ver *Riesgos*).
-- [ ] **4.5 · Tests de 4.1–4.4** con `deps` inyectados: recorte que entra parcial; recorte que queda bajo el mínimo y no se envía; piso que bloquea el crecimiento; desapalancamiento que se dispara.
+- [x] **4.2 · Distinguir bloqueo total de bloqueo parcial** ✅ **HECHO.** `margin_clamped_increase` (entra parcial) vs `insufficient_margin` (no cabe nada, con `affordableNotionalUsd`). en el log y en la alerta. Son dos situaciones con acciones distintas.
+- [x] **4.3 · Invariante de piso de margen.** ✅ **HECHO** (`resolveMarginFloor`). Holgura 1.3 sobre el margen nominal: no es decoración, es lo que absorbe el drawdown del hedge, que se descuenta del mismo pozo que lo dimensiona. Hereda la 2.1. Antes de abrir o crecer un LP, exigir margen suficiente para el delta objetivo con holgura que absorba el drawdown del hedge — que hoy consume margen sin vía de reposición.
+- [~] **4.4 · Camino de desapalancamiento — DECISIÓN hecha, EJECUCIÓN no cableada.** ⚠️ **Alcance recortado a propósito.** `resolveDeleverageTarget` calcula hasta dónde habría que encoger el LP para que el margen lo sostenga, y está testeado con las cifras de pp18. Lo que **no** hice es cablear la reducción del LP on-chain: es una acción de capital irreversible, el propio plan pide flag y aviso previo, y hoy **no hay flota viva contra la que validarla**. Queda como recomendación hasta que la Fase 6 pueda ejercitarla. Original: Hereda la 2.2. Hoy, si no puede cubrir, el sistema sostiene el LP desnudo indefinidamente. Debe reducir el LP hasta el tamaño que sí puede cubrir. Detrás de un flag y avisando antes de actuar (ver *Riesgos*).
+- [x] **4.5 · Tests de 4.1–4.2** ✅ **HECHO** (`delta-neutral-margin-clamp.test.js`, 5 casos con las cifras de pp24). Pendientes los de 4.3/4.4. Original: con `deps` inyectados: recorte que entra parcial; recorte que queda bajo el mínimo y no se envía; piso que bloquea el crecimiento; desapalancamiento que se dispara.
 
 ---
 
 ## Fase 5 · El amplificador del lazo
 
-- [ ] **5.1 · Que `outside` no saltee el throttle indefinidamente.** `protected-pool-delta-neutral.service.js:1160`:
+- [x] **5.1 · Que `outside` no saltee el throttle indefinidamente.** ✅ **HECHO.** La urgencia dura 15 min desde que se entra en zona de borde; después vuelve la cadencia de 30 s aunque se siga fuera. El **cruce** sigue disparando evaluación inmediata siempre. `protected-pool-delta-neutral.service.js:1160`:
   ```js
   if (!evalDue && !crossedBoundary && !nearBoundary) return;
   ```
   `nearBoundary` incluye `zoneState === 'outside'`, que fuera de rango es permanentemente cierto → evaluación completa cada 2 s y no vuelve. El diseño está invertido: el camino urgente, pensado para un cruce transitorio, se vuelve permanente cuando el precio se estaciona afuera — que es cuando el LP no cobra fees y debería trabajar *menos*, no 15× más.
   - Distinguir **cruce** (transitorio, merece urgencia) de **estar afuera** (estacionario, merece la cadencia larga).
-- [ ] **5.2 · Retención en `protection_decision_log`.** 6.49 M filas / 1.79 GB contra 592 rebalanceos. Definir política de retención o agregación. Sin 5.1 esto sólo tapa el síntoma, así que va después.
-- [ ] **5.3 · Test:** una protección fuera de rango de forma sostenida vuelve a la cadencia larga; un cruce sigue disparando evaluación inmediata.
+- [x] **5.2 · Retención en `protection_decision_log`.** ✅ **HECHO.** `pruneDecisionLog` + `scripts/prune-decision-log.js`, **dry-run por defecto** y borrado por lotes (un DELETE único sobre millones de filas bloquearía al motor, que corre cada 2 s). No lo he ejecutado contra prod. 6.49 M filas / 1.79 GB contra 592 rebalanceos. Definir política de retención o agregación. Sin 5.1 esto sólo tapa el síntoma, así que va después.
+- [x] **5.3 · Test:** ✅ **HECHO.** una protección fuera de rango de forma sostenida vuelve a la cadencia larga; un cruce sigue disparando evaluación inmediata.
 
 ---
 
