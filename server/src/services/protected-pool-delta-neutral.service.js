@@ -361,7 +361,23 @@ class ProtectedPoolDeltaNeutralService {
   _normalizeBlockReason(reason = '') {
     const normalized = String(reason || '').trim().toLowerCase();
     if (!normalized) return 'unknown';
-    if (normalized.includes('insufficient_margin') || normalized.includes('insufficient margin') || normalized.includes('margen insuficiente')) {
+    // Hyperliquid no dice "insufficient margin" en todas sus variantes:
+    //   "Account does not have sufficient margin available for increasing position"
+    //   "Position does not have sufficient margin for reduction."
+    //   "Insufficient margin to place order"
+    // Las dos primeras NO contienen "insufficient margin", asi que caian al
+    // `replace(/\s+/g,'_')` del final y se guardaban crudas como si fueran una
+    // categoria propia: el 2026-09-18 el mismo evento quedo partido en 41 filas
+    // normalizadas y 355 crudas, y cualquier conteo sobre `insufficient_margin`
+    // subcontaba por nueve.
+    //
+    // Se matchea la familia entera con "sufficient margin", que es substring de
+    // "insufficient margin" y cubre las tres. Aqui no hay falso positivo posible
+    // por un "has sufficient margin" afirmativo: esta funcion solo recibe
+    // motivos de bloqueo.
+    if (normalized.includes('sufficient_margin')
+      || normalized.includes('sufficient margin')
+      || normalized.includes('margen insuficiente')) {
       return 'insufficient_margin';
     }
     if (normalized.includes('cooldown_active') || normalized.includes('cooldown activo')) {

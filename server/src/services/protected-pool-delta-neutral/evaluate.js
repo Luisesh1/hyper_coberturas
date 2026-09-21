@@ -1118,6 +1118,38 @@ const evaluateMethods = {
 
     const riskPausedCanReduce = (forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath;
 
+    // Por que NO se ejecuta. Tiene que cubrir las MISMAS ramas que el gate del
+    // final de esta funcion, o el log dice que no hubo impedimento cuando si lo
+    // hubo.
+    //
+    // El agujero que esto tapa: bajo zonas legacy, `rebalanceDecision` sale de
+    // `resolveRebalanceDecision`, que es drift-contra-banda PURO y no sabe nada
+    // del temporizador; quien gatea la ejecucion es `effectiveShouldRebalance`,
+    // que si lo incluye. Cuando el drift superaba la banda pero el timer no
+    // habia vencido, se registraba `rebalance_full` con `executionSkippedBecause`
+    // en NULL — indistinguible de una ejecucion exitosa. pp26 acumulo asi 2.870
+    // filas el 2026-09-12 y 2.860 el 09-13 sin ejecutar una sola orden.
+    //
+    // `decision === 'hold'` NO es un bloqueo: es la politica diciendo que no hay
+    // nada que hacer. Ahi el NULL es correcto y se conserva.
+    const isLegacyLive = !isNetProfitLive && !isRangeExitLive;
+    let executionBlockedBecause = null;
+    if (forcedStatus && !riskPausedCanReduce) {
+      executionBlockedBecause = riskGateReason;
+    } else if (!preflight.ok) {
+      executionBlockedBecause = preflight.executionSkippedBecause;
+    } else if (!riskPausedCanReduce && rebalanceDecision.decision !== 'hold' && !effectiveShouldRebalance) {
+      // `riskPausedCanReduce` queda fuera a proposito: esa rama del gate se
+      // salta `effectiveShouldRebalance` y ejecuta el reduce igual.
+      executionBlockedBecause = confidenceBlocksIncrease
+        ? 'low_confidence_model'
+        : minDwellActive
+          ? 'min_dwell_active'
+          // `legacyDecision.gate` ya trae el motivo exacto que frena
+          // (`timer_not_due`, `below_min_notional`, `center_dead_zone`...).
+          : (isLegacyLive && legacyDecision?.gate) || 'not_triggered';
+    }
+
     await this._persistDecision(activeProtection, {
       decision: nextState.lastDecision,
       reason: nextState.lastDecisionReason,
@@ -1125,7 +1157,7 @@ const evaluateMethods = {
       spotSource,
       snapshotStatus: snapshotMeta.validation.status,
       snapshotFreshnessMs: Math.max(Date.now() - Number(snapshotMeta.snapshotFreshAt || Date.now()), 0),
-      executionSkippedBecause: (forcedStatus && !riskPausedCanReduce) ? riskGateReason : (preflight.ok ? null : preflight.executionSkippedBecause),
+      executionSkippedBecause: executionBlockedBecause,
       executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
       estimatedCostUsd: rebalanceDecision.bands.estimatedCostUsd,
       targetQty: metrics.targetQty,
