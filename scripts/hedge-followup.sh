@@ -44,6 +44,15 @@ q() {
   docker exec "$CONTAINER" psql -U "$DBUSER" -d "$DB" -P pager=off -c "$sql"
 }
 
+# Igual que `q`, pero devuelve un escalar sin cabeceras. Mismo guard.
+qt() {
+  local sql="$1"
+  if printf '%s' "$sql" | grep -iqE '\b(insert|update|delete|drop|alter|truncate|grant)\b'; then
+    echo "ABORT: query no-read detectada, bloqueada." >&2; exit 2
+  fi
+  docker exec "$CONTAINER" psql -U "$DBUSER" -d "$DB" -tA -c "$sql"
+}
+
 WIN_MS="${WIN_DAYS}::bigint*86400000"
 
 echo "════════════════════════════════════════════════════════════════"
@@ -394,6 +403,107 @@ GROUP BY 1 ORDER BY 1;"
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
+echo " 7. CRITERIOS DE SALIDA del plan 2026-09-21"
+echo "════════════════════════════════════════════════════════════════"
+# Estas cinco metricas son las que el plan usa para dar por cerrada la
+# correccion, y hasta ahora no las medía nada. Sin ellas la Fase 6 produce
+# datos limpios que nadie sabe leer — que es exactamente como se llego aqui.
+
+echo ""
+echo "── 7.1 · NOTIONAL DESNUDO — la magnitud que sigue teniendo sentido ──"
+# Deliberadamente NO se usa el ratio actual/target: con el delta tendiendo a 0
+# el ratio se dispara a 40x-290x sin que pase nada anomalo (es el modo normal
+# de `range_exit_v1` cerca del borde). `tracking_error_usd` ya es
+# |target - actual| x precio.
+# Objetivo: pico bajo el tope, y minutos expuesto ~0.
+q "
+WITH c AS (SELECT (EXTRACT(EPOCH FROM NOW())::bigint*1000 - ${WIN_MS}) AS t)
+SELECT protected_pool_id AS pp,
+  ROUND(MAX(ABS(tracking_error_usd))::numeric,2) AS pico_usd,
+  ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ABS(tracking_error_usd))::numeric,2) AS p95_usd,
+  COUNT(DISTINCT date_trunc('minute', to_timestamp(created_at/1000)))
+    FILTER (WHERE ABS(tracking_error_usd) > 15) AS min_expuesto,
+  COUNT(DISTINCT date_trunc('minute', to_timestamp(created_at/1000))) AS min_totales
+FROM protection_decision_log, c
+WHERE created_at >= c.t AND tracking_error_usd IS NOT NULL
+GROUP BY 1 ORDER BY 1;"
+
+echo ""
+echo "── 7.2 · ¿DECIDE Y EJECUTA? — la fila que mentia ──"
+# Antes del fix, una decision de accion con \`execution_skipped_because\` NULL era
+# indistinguible de una ejecucion: pp26 acumulo 2.870 en un dia y ejecuto CERO.
+# Ahora \`sin_motivo\` deberia acercarse a \`rebalanceos_reales\`.
+q "
+WITH c AS (SELECT (EXTRACT(EPOCH FROM NOW())::bigint*1000 - ${WIN_MS}) AS t),
+d AS (
+  SELECT protected_pool_id AS pp,
+    COUNT(*) FILTER (WHERE decision <> 'hold') AS decisiones_accion,
+    COUNT(*) FILTER (WHERE decision <> 'hold' AND execution_skipped_because IS NULL) AS sin_motivo
+  FROM protection_decision_log, c WHERE created_at >= c.t GROUP BY 1),
+r AS (
+  SELECT protected_pool_id AS pp, COUNT(*) AS rebalanceos_reales
+  FROM protected_pool_delta_rebalance_log, c WHERE created_at >= c.t GROUP BY 1)
+SELECT d.pp, d.decisiones_accion, d.sin_motivo,
+  COALESCE(r.rebalanceos_reales,0) AS rebalanceos_reales,
+  -- Una brecha pequena es normal: la fila se escribe ANTES de ejecutar y la
+  -- ejecucion puede fallar despues. Lo que delata la mentira es la PROPORCION:
+  -- pp26 marco 20.755 contra 38 rebalanceos reales (546x).
+  CASE WHEN d.sin_motivo > GREATEST(10, COALESCE(r.rebalanceos_reales,0) * 5)
+       THEN 'MIENTE' ELSE '' END AS alerta
+FROM d LEFT JOIN r ON r.pp = d.pp ORDER BY d.pp;"
+
+echo ""
+echo "── 7.3 · RITMO DEL LAZO — 120/h sano, 1.760/h es el lazo desbocado ──"
+# \`nearBoundary\` incluia \`outside\`, permanentemente cierto fuera de rango: el
+# camino urgente se volvia permanente. Tras el fix la urgencia dura 15 min.
+q "
+WITH c AS (SELECT (EXTRACT(EPOCH FROM NOW())::bigint*1000 - ${WIN_MS}) AS t),
+h AS (
+  SELECT protected_pool_id AS pp,
+    date_trunc('hour', to_timestamp(created_at/1000)) AS hora,
+    COUNT(*) AS n
+  FROM protection_decision_log, c WHERE created_at >= c.t GROUP BY 1,2)
+SELECT pp, MAX(n) AS pico_hora, ROUND(AVG(n)) AS media_hora,
+  COUNT(*) FILTER (WHERE n > 200) AS horas_desbocadas,
+  CASE WHEN MAX(n) > 200 THEN 'REVISAR' ELSE '' END AS alerta
+FROM h GROUP BY 1 ORDER BY 1;"
+
+echo ""
+echo "── 7.4 · ALERTAS ENTREGADAS — el canal que no depende de Telegram ──"
+HAS_ALERTS="$(qt "SELECT to_regclass('public.hedge_alerts') IS NOT NULL;" 2>/dev/null || echo f)"
+if [ "$HAS_ALERTS" = "t" ]; then
+  q "
+  WITH c AS (SELECT (EXTRACT(EPOCH FROM NOW())::bigint*1000 - ${WIN_MS}) AS t)
+  SELECT alert_type AS tipo, severity AS severidad,
+    COUNT(DISTINCT (protected_pool_id, episode_started_at)) AS episodios,
+    COUNT(*) AS escalones,
+    COUNT(*) FILTER (WHERE resolved_at IS NULL) AS abiertos
+  FROM hedge_alerts, c WHERE created_at >= c.t
+  GROUP BY 1,2 ORDER BY 1,2;"
+else
+  echo "   (tabla hedge_alerts aun no existe — migracion 026 sin desplegar)"
+fi
+
+echo ""
+echo "── 7.5 · BLOQUEOS DE MARGEN — rechazo total vs. entrada parcial ──"
+# \`rechazo_crudo\` son los que el normalizador no reconocia: el 2026-09-18 el
+# mismo evento quedo partido en 41 filas normalizadas y 355 crudas.
+q "
+WITH c AS (SELECT (EXTRACT(EPOCH FROM NOW())::bigint*1000 - ${WIN_MS}) AS t)
+SELECT protected_pool_id AS pp,
+  COUNT(*) FILTER (WHERE execution_skipped_because = 'insufficient_margin') AS rechazo_normalizado,
+  COUNT(*) FILTER (WHERE execution_skipped_because ILIKE '%sufficient margin%'
+                     AND execution_skipped_because <> 'insufficient_margin') AS rechazo_crudo,
+  COUNT(*) FILTER (WHERE execution_skipped_because = 'below_min_order_notional') AS bajo_minimo
+FROM protection_decision_log, c
+WHERE created_at >= c.t AND execution_skipped_because IS NOT NULL
+GROUP BY 1 HAVING COUNT(*) > 0 ORDER BY 1;"
+echo "   ⚠️ el RECORTE por margen (entrada parcial) hoy solo queda en el log del"
+echo "      contenedor como 'delta_neutral_increase_clamped_to_margin': no se"
+echo "      persiste en db, asi que esta seccion no lo puede contar."
+
+echo ""
+echo "════════════════════════════════════════════════════════════════"
 echo " Lecturas rápidas:"
 echo "  · dist_liq_pct < 8%  → margen apretado, considerar bajar leverage / revertir a 0.85"
 echo "  · ratio_tgt_delta ~1.0 → SOLO dice que el mult. de zona es 1.0, NO que se cubra"
@@ -401,4 +511,8 @@ echo "  · corr_total_lp → 0 y net_pnl → positivo → el residual está conv
 echo "  · anomalias_hl0 > 0 → el fix de métricas no está corriendo / regresión"
 echo "  · cobertura (3a) ~1.0 → el delta esta cubierto; <1 expuesto, >1 net-short"
 echo "  · hedge_beta (3b) NO sirve para decidir: subestima por patas asincronas"
+echo "  · 7.1 pico_usd → usar USD, nunca el ratio: con delta→0 el ratio no significa nada"
+echo "  · 7.2 'MIENTE' → hay decisiones de accion sin motivo de bloqueo que no ejecutaron"
+echo "  · 7.3 pico_hora > 200 → el lazo dejo de throttlear (deberia ser ~120)"
+echo "  · 7.5 rechazo_crudo > 0 → el normalizador de motivos volvio a quedarse corto"
 echo "════════════════════════════════════════════════════════════════"

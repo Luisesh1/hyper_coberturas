@@ -234,6 +234,10 @@ No empieza hasta que 2–5 estén desplegadas. Es la lección que este repo ya a
 
 ## Criterios de salida
 
+Los mide la **sección 7 de `scripts/hedge-followup.sh`** (añadida el 2026-09-21, sólo-lectura). Antes no los medía nada, que es precisamente cómo se llegó aquí: el sistema detectaba todo y no comunicaba nada.
+
+⚠️ Una limitación conocida: el **recorte por margen** (entrada parcial, Fase 4.1) sólo queda como evento en el log del contenedor —`delta_neutral_increase_clamped_to_margin`— y no se persiste en base, así que la sección 7.5 cuenta los rechazos pero no los recortes. Si esa cifra resulta importante para decidir, hay que persistirla.
+
 El plan está terminado cuando, sostenido 7 días:
 
 | criterio | hoy | objetivo |
