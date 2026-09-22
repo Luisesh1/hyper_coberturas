@@ -51,6 +51,15 @@ const MAX_TRIGGER_OFFSET_PCT = 0.02;   // 2%
 // medido sobre el ajuste del borde, no sobre el drift instantaneo.
 const COST_COVERAGE_MULTIPLE = 2;
 
+// Cuanto puede alejarse el short REAL del ultimo target que esta politica
+// mando antes de considerar que esa orden no aterrizo. Cubre el redondeo del
+// exchange (szDecimals) sin tapar un llenado parcial.
+const COMMIT_TOLERANCE_PCT = 0.02;
+
+// Piso absoluto de esa tolerancia: solo ruido de coma flotante, nada que
+// represente cobertura real.
+const RESIDUAL_QTY = 1e-8;
+
 function finite(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -164,7 +173,14 @@ function decideRangeExitV1({
     adjustQty: delta - held,
     errorQty: delta - held,
     minNotionalUsd: null,
-    nextState: { ...nextState, lastRebalanceAt: now, lastSnapshotPrice: price },
+    nextState: {
+      ...nextState,
+      lastRebalanceAt: now,
+      lastSnapshotPrice: price,
+      // Lo que esta politica ORDENO. Es la referencia contra la que el tick
+      // siguiente comprueba si la orden llego a ejecutarse.
+      committedTargetQty: delta,
+    },
     ...extra,
   });
 
@@ -204,6 +220,44 @@ function decideRangeExitV1({
   // Este es el corazon de la politica y la razon por la que existe: entre dos
   // cruces no hay ni una sola orden.
   if (zone === anchoredZone) {
+    // --- La orden anterior, ¿aterrizo? ------------------------------------
+    //
+    // El motor persiste el estado de esta maquina al DECIDIR, no al ejecutar
+    // (`evaluate.js`: el estado se guarda antes del preflight y la ejecucion
+    // puede abortarse despues). Y este `hold` es absorbente: si la zona ya
+    // coincide, no se vuelve a mirar hasta el proximo cruce de borde. La suma
+    // de las dos cosas dejaba el hedge varado con una sola orden bloqueada.
+    //
+    // Pasó de verdad, en pp24 (2026-09-15/18):
+    //
+    //   18:47  cae bajo el rango, ordena 0.12406 -> llena solo 0.08490
+    //   18:55  reentra, ordena 0.11435 -> insufficient_margin
+    //   ...    47 h dentro del rango, target 0.0516, short clavado en 0.08490
+    //
+    // La zona ya decia `inside`, asi que nunca reintento. Lo mismo estrandaba
+    // un LP re-centrado: `range_rebased` movia el `rangeKey`, la orden se
+    // bloqueaba, y el hedge se quedaba en cero para siempre.
+    //
+    // Se compara contra el target ORDENADO, no contra el delta: la politica
+    // sigue sin perseguir el delta dentro del rango —esa divergencia es el
+    // punto— pero deja de tolerar su propia orden sin cumplir.
+    // La tolerancia es relativa al target, con un piso absoluto para que el
+    // ruido de coma flotante no cuente como orden incumplida. Con `committed`
+    // en 0 —por encima del borde superior— el piso es lo unico que queda, y
+    // ahi cualquier residuo SI debe reintentarse: cerrar del todo es la unica
+    // orden sub-minimo que Hyperliquid acepta.
+    const committed = finite(prior.committedTargetQty);
+    const commitGap = committed == null ? 0 : Math.abs(held - committed);
+    const commitTolerance = Math.max(Math.abs(committed || 0) * COMMIT_TOLERANCE_PCT, RESIDUAL_QTY);
+    if (committed != null && commitGap > commitTolerance) {
+      return rebalance('commit_incomplete', {
+        ...prior,
+        rangeKey: key,
+        zone,
+        crossPendingZone: null,
+        crossStartedAt: null,
+      });
+    }
     // Si habia un cruce a medio confirmar y el precio volvio, se descarta.
     if (prior.crossPendingZone) {
       return hold('cross_aborted', { ...prior, crossPendingZone: null, crossStartedAt: null });
@@ -264,6 +318,7 @@ module.exports = {
   MIN_TRIGGER_OFFSET_PCT,
   MAX_TRIGGER_OFFSET_PCT,
   COST_COVERAGE_MULTIPLE,
+  COMMIT_TOLERANCE_PCT,
   rangeKey,
   resolveZone,
   resolveTriggerOffsetPct,
