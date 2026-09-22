@@ -101,6 +101,21 @@ function mapActiveHedge(row) {
       livePolicy,
       firstFinite(row.active_protection_center_dead_zone_pct, state.centerDeadZonePct),
     ),
+    // Tamano del short vivo y lo que vale AHORA, para que la caratula diga si
+    // hay cobertura sin tener que abrir nada.
+    //
+    // El valor se DERIVA de `hedge_size * price_current` en vez de leer
+    // `hedge_notional_usd`, porque esa columna se queda rancia: al cerrarse la
+    // cobertura de pp28 quedo en 253.11 con `hedge_size` ya en 0. Pintarla
+    // habria mostrado $253 de cobertura sobre un LP descubierto — exactamente
+    // la clase de dato que miente sin fallar.
+    hedgeQty: firstFinite(row.active_protection_hedge_size, state.hedgeSize),
+    hedgeValueUsd: (() => {
+      const qty = firstFinite(row.active_protection_hedge_size, state.hedgeSize);
+      const price = firstFinite(row.active_protection_price_current, state.priceCurrent);
+      if (qty == null || price == null) return null;
+      return Math.abs(qty) * price;
+    })(),
   };
 }
 
@@ -221,6 +236,8 @@ async function getById(userId, id, executor) {
             p.policy_version       AS active_protection_policy_version,
             p.status               AS active_protection_status,
             p.center_dead_zone_pct AS active_protection_center_dead_zone_pct,
+            p.hedge_size           AS active_protection_hedge_size,
+            p.price_current        AS active_protection_price_current,
             p.strategy_state_json  AS active_protection_state_json
        FROM lp_orchestrators o
        LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id
@@ -236,6 +253,8 @@ async function listForUser(userId, { includeArchived = false } = {}, executor) {
             p.policy_version       AS active_protection_policy_version,
             p.status               AS active_protection_status,
             p.center_dead_zone_pct AS active_protection_center_dead_zone_pct,
+            p.hedge_size           AS active_protection_hedge_size,
+            p.price_current        AS active_protection_price_current,
             p.strategy_state_json  AS active_protection_state_json
        FROM lp_orchestrators o
        LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id

@@ -163,6 +163,25 @@
   border-color: var(--uni-border);
 }
 
+/* Valor vivo del short, al lado del nombre de la politica. Va en texto plano
+   y no en chip: el chip es identidad (que motor), esto es una medida que
+   cambia cada tick. Dos chips seguidos competirian entre si. */
+.hedgeValue {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--uni-text-2);
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Un LP descubierto es el fallo mas caro del sistema: aqui si grita. */
+.hedgeValue_naked {
+  color: var(--uni-red);
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+}
+
 .badge {
   flex-shrink: 0;
   padding: 5px 11px;

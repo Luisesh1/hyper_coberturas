@@ -112,6 +112,36 @@ export default function OrchestratorCard({
     () => (issue?.kind === 'unprotected' ? null : getHedgePolicyBadge(orchestrator)),
     [orchestrator, issue],
   );
+  // Cuánto vale la cobertura AHORA, junto al nombre de la política.
+  //
+  // Hasta ahora la carátula decía qué motor cubre pero no si cubre algo: un
+  // hedge en cero y uno a tamaño completo se pintaban igual, y había que
+  // desplegar la tarjeta para notar la diferencia. Un LP descubierto es el
+  // fallo más caro que tiene este sistema y era el menos visible.
+  //
+  // Se compara contra el valor del LP para dar la cifra en contexto: $255
+  // sobre un LP de $528 es media cobertura, y ese cociente es el dato, no el
+  // valor suelto.
+  const hedgeValue = useMemo(() => {
+    const hedge = orchestrator.activeHedge;
+    if (!hedge || hedge.hedgeValueUsd == null) return null;
+    const usd = Number(hedge.hedgeValueUsd);
+    if (!Number.isFinite(usd)) return null;
+    const poolUsd = Number(orchestrator.lastEvaluation?.poolSnapshot?.currentValueUsd);
+    const pctOfPool = Number.isFinite(poolUsd) && poolUsd > 0 ? (usd / poolUsd) * 100 : null;
+    // El umbral no es "cero exacto": Hyperliquid deja residuos de 1e-4 que no
+    // cubren nada. pp24 estuvo siete días con actual_qty = 0.00010 y la
+    // tarjeta lo pintaba como cobertura viva.
+    const naked = usd < 1;
+    return {
+      text: naked ? 'sin cobertura' : formatUsd(usd),
+      naked,
+      title: naked
+        ? 'El short está en cero: el LP corre descubierto.'
+        : `Valor del short ahora mismo${pctOfPool != null ? ` — ${pctOfPool.toFixed(0)}% del valor del LP` : ''}.`,
+    };
+  }, [orchestrator.activeHedge, orchestrator.lastEvaluation]);
+
   const severity = useMemo(() => getOrchestratorSeverity(orchestrator), [orchestrator]);
 
   const summary = useMemo(
@@ -221,6 +251,17 @@ export default function OrchestratorCard({
                   >
                     <ShieldIcon className={styles.hedgeChipIcon} />
                     {hedgeBadge.text}
+                  </span>
+                </>
+              )}
+              {hedgeValue && (
+                <>
+                  <span className={styles.dot}>·</span>
+                  <span
+                    className={`${styles.hedgeValue} ${hedgeValue.naked ? styles.hedgeValue_naked : ''}`}
+                    title={hedgeValue.title}
+                  >
+                    {hedgeValue.text}
                   </span>
                 </>
               )}
