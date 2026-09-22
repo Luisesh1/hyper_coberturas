@@ -215,7 +215,26 @@ La compuerta de margen sólo existe en la dirección de crecer, y cuando bloquea
   ```
   `nearBoundary` incluye `zoneState === 'outside'`, que fuera de rango es permanentemente cierto → evaluación completa cada 2 s y no vuelve. El diseño está invertido: el camino urgente, pensado para un cruce transitorio, se vuelve permanente cuando el precio se estaciona afuera — que es cuando el LP no cobra fees y debería trabajar *menos*, no 15× más.
   - Distinguir **cruce** (transitorio, merece urgencia) de **estar afuera** (estacionario, merece la cadencia larga).
-- [x] **5.2 · Retención en `protection_decision_log`.** ✅ **HECHO.** `pruneDecisionLog` + `scripts/prune-decision-log.js`, **dry-run por defecto** y borrado por lotes (un DELETE único sobre millones de filas bloquearía al motor, que corre cada 2 s). No lo he ejecutado contra prod. 6.49 M filas / 1.79 GB contra 592 rebalanceos. Definir política de retención o agregación. Sin 5.1 esto sólo tapa el síntoma, así que va después.
+- [x] **5.2 · Retención en `protection_decision_log`.** ✅ **HECHO Y EJECUTADO CONTRA PROD (2026-09-22).** `pruneDecisionLog` + `scripts/prune-decision-log.js`, **dry-run por defecto** y borrado por lotes (un DELETE único sobre millones de filas bloquearía al motor, que corre cada 2 s).
+
+  Ejecución real con retención de **30 días** (corte 2026-08-23 02:08Z):
+
+  | | antes | después |
+  |---|---|---|
+  | filas | 6 561 189 | **806 539** |
+  | tabla | 1297 MB | **164 MB** |
+  | índices | 494 MB | **42 MB** |
+  | total | **1791 MB** | **206 MB** |
+
+  Borrado 5 754 650 filas en 6m 07s; `VACUUM FULL ... ANALYZE` en 4,7 s (`0 removable, 806539 nonremovable` — sin tuplas muertas atascadas). El `DELETE` por sí solo **no devuelve espacio al SO**: sin el `VACUUM FULL` la tabla se habría quedado en 1791 MB. Se hizo con la flota cerrada, que es cuando el lock exclusivo no cuesta nada.
+
+  **Respaldo previo** en `/root/backups/hyperbot_decision_log_20260922/` — borrar 2026-04→08 elimina la evidencia sobre la que se construyó este informe, así que se archivó antes:
+  - `protection_decision_log_pre_20260823.csv.gz` — 128 MB, ids 1→5 754 686 (1,21 GB en claro), `gzip -t` OK
+  - `colchon_id_5754687_5764686.csv.gz` — 379 KB; el corte del script es temporal y avanza con el reloj, este colchón cubre la deriva durante los 6 min de ejecución
+
+  Se restaura con `COPY protection_decision_log FROM ... WITH (FORMAT csv, HEADER true)`.
+
+  **Pendiente menor:** `created_at` no tiene índice propio (sólo el compuesto `(protected_pool_id, created_at DESC)`), así que el `DELETE` filtra por escaneo. Los `id` son monótonos con `created_at` —verificado en el corte: 5754686 → 5754687— de modo que podar por `id <= N` usaría la PK. Con 806 k filas da igual; conviene revisarlo si la tabla vuelve a crecer.
 - [x] **5.3 · Test:** ✅ **HECHO.** una protección fuera de rango de forma sostenida vuelve a la cadencia larga; un cruce sigue disparando evaluación inmediata.
 
 ---
