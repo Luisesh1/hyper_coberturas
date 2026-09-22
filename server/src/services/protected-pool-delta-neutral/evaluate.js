@@ -430,6 +430,9 @@ const evaluateMethods = {
         rangeUpperPrice: activeProtection.rangeUpperPrice,
         state: strategyState.rangeExitPolicyState || {},
         forceRebalance,
+        // El mismo piso que juzga el preflight. Sin esto la politica decide
+        // ordenes que el exchange rechaza y las reintenta sin fin.
+        minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
       })
       : null;
     // No modificamos el record para ejecutar: esta vista efímera aplica los

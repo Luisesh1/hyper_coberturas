@@ -206,3 +206,73 @@ test('tras ejecutar, el ciclo completo salida-reentrada deja de varar', () => {
   assert.equal(d.decision, 'hold');
   assert.equal(d.gate, 'outside_range_hold');
 });
+
+// ---------------------------------------------------------------------------
+// El reintento no puede perseguir lo que el exchange no acepta.
+//
+// pp24 arrastraba 0.00546 pedido contra 0.00280 vivo: $7 de hueco sobre un
+// minimo de $11. La orden se rechaza, no se mueve capital, la cobertura no
+// mejora — y cada intento gasta una alerta. Reintentarlo cada 30 s de forma
+// indefinida es ruido sobre algo irreparable.
+// ---------------------------------------------------------------------------
+
+test('no reintenta un hueco por debajo del minimo del exchange', () => {
+  // 0.00266 ETH a $2400 son ~$6.38, por debajo del minimo de $11.
+  const d = decide({
+    deltaQty: 0.00546, actualQty: 0.00280, currentPrice: 2400,
+    minOrderNotionalUsd: 11,
+    state: {
+      rangeKey: rangeKey(LOWER, UPPER),
+      zone: 'inside',
+      committedTargetQty: 0.00546,
+    },
+  });
+
+  assert.equal(d.decision, 'hold');
+  assert.equal(d.gate, 'commit_below_min_notional');
+  assert.ok(d.commitGapUsd < 11);
+});
+
+test('el hueco inejecutable se nombra distinto de un hold normal', () => {
+  // Por fuera se parecen; confundirlos es como se pierden de vista estas cosas.
+  const normal = decide({
+    deltaQty: 0.05, actualQty: 0.10, currentPrice: 2400,
+    state: { rangeKey: rangeKey(LOWER, UPPER), zone: 'inside', committedTargetQty: 0.10 },
+  });
+  assert.equal(normal.gate, 'inside_range_hold');
+
+  const pendiente = decide({
+    deltaQty: 0.00546, actualQty: 0.00280, currentPrice: 2400,
+    minOrderNotionalUsd: 11,
+    state: { rangeKey: rangeKey(LOWER, UPPER), zone: 'inside', committedTargetQty: 0.00546 },
+  });
+  assert.equal(pendiente.gate, 'commit_below_min_notional');
+  assert.notEqual(pendiente.gate, normal.gate);
+});
+
+test('un hueco que SI llega al minimo se sigue reintentando', () => {
+  // 0.0351 ETH a $2211 son $77: la frontera no puede tragarse el caso real.
+  const d = decide({
+    deltaQty: 0.124, actualQty: 0.0889, currentPrice: LOWER * 0.97,
+    minOrderNotionalUsd: 11,
+    state: { rangeKey: rangeKey(LOWER, UPPER), zone: 'below', committedTargetQty: 0.124 },
+  });
+
+  assert.equal(d.decision, 'rebalance');
+  assert.equal(d.gate, 'commit_incomplete');
+});
+
+test('cerrar del todo se reintenta aunque quede por debajo del minimo', () => {
+  // Hyperliquid acepta un reduceOnly sub-minimo si deja la posicion en cero, y
+  // es la unica via de sacar un residuo. Sin esta excepcion, el 0.00010 de pp24
+  // por encima del borde se quedaria puesto para siempre.
+  const d = decide({
+    deltaQty: 0, actualQty: 0.0001, currentPrice: UPPER * 1.1,
+    minOrderNotionalUsd: 11,
+    state: { rangeKey: rangeKey(LOWER, UPPER), zone: 'above', committedTargetQty: 0 },
+  });
+
+  assert.equal(d.decision, 'rebalance', 'cerrar es la unica orden sub-minimo que el exchange acepta');
+  assert.equal(d.gate, 'commit_incomplete');
+  assert.equal(d.targetQty, 0);
+});

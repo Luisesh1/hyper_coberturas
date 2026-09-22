@@ -29,7 +29,10 @@
  * pone un techo. Se parecen en la forma (menos cobertura en el centro) y se
  * diferencian en lo que importa (el sesgo y el tope).
  */
-const { ESTIMATED_TAKER_FEE_RATE } = require('./protected-pool-delta-neutral.helpers');
+const {
+  ESTIMATED_TAKER_FEE_RATE,
+  DEFAULT_MIN_ORDER_NOTIONAL_USD,
+} = require('./protected-pool-delta-neutral.helpers');
 
 const RANGE_EXIT_V1 = 'range_exit_v1';
 
@@ -143,6 +146,7 @@ function decideRangeExitV1({
   now = Date.now(),
   forceRebalance = false,
   takerFeeRate = ESTIMATED_TAKER_FEE_RATE,
+  minOrderNotionalUsd = DEFAULT_MIN_ORDER_NOTIONAL_USD,
 } = {}) {
   const delta = Math.max(0, finite(deltaQty, 0));
   const held = Math.max(0, finite(actualQty, 0));
@@ -250,13 +254,31 @@ function decideRangeExitV1({
     const commitGap = committed == null ? 0 : Math.abs(held - committed);
     const commitTolerance = Math.max(Math.abs(committed || 0) * COMMIT_TOLERANCE_PCT, RESIDUAL_QTY);
     if (committed != null && commitGap > commitTolerance) {
-      return rebalance('commit_incomplete', {
-        ...prior,
-        rangeKey: key,
-        zone,
-        crossPendingZone: null,
-        crossStartedAt: null,
-      });
+      // Reintentar lo que el exchange no puede aceptar es gritar sobre algo
+      // irreparable: la orden se rechaza, no se mueve capital, la cobertura no
+      // mejora, y cada intento gasta una alerta. pp24 arrastraba justo eso —
+      // 0.00546 pedido contra 0.00280 vivo, $7 sobre un minimo de $11.
+      //
+      // La excepcion es cerrar del todo: Hyperliquid SI acepta un reduceOnly
+      // sub-minimo cuando deja la posicion en cero, y es la unica via de sacar
+      // un residuo. Sin esta rama, un resto de 1e-4 por encima del borde se
+      // quedaria puesto para siempre.
+      const isFullClose = delta <= RESIDUAL_QTY && held > RESIDUAL_QTY;
+      const minNotional = Math.max(0, finite(minOrderNotionalUsd, DEFAULT_MIN_ORDER_NOTIONAL_USD));
+      if (isFullClose || commitGap * price >= minNotional) {
+        return rebalance('commit_incomplete', {
+          ...prior,
+          rangeKey: key,
+          zone,
+          crossPendingZone: null,
+          crossStartedAt: null,
+        });
+      }
+      // Hay una orden sin cumplir, pero no se puede enviar. Se nombra distinto
+      // de `inside_range_hold` a proposito: por fuera se parecen, y confundir
+      // "todo en orden" con "pendiente e inejecutable" es como se pierden estas
+      // cosas de vista.
+      return hold('commit_below_min_notional', prior, { commitGapUsd: commitGap * price });
     }
     // Si habia un cruce a medio confirmar y el precio volvio, se descarta.
     if (prior.crossPendingZone) {
