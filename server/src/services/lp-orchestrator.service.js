@@ -1462,6 +1462,21 @@ class LpOrchestratorService {
             activePoolAddress: orch.activePoolAddress,
             activeProtectedPoolId: protectedPoolId,
           }, client);
+          // Cerrar la incidencia, no solo resolverla.
+          //
+          // `lastError` sobrevivia a su propia causa: la tarjeta levanta
+          // incidencia con la sola presencia de ese texto, asi que un
+          // orquestador recuperado —proteccion activa, hedge vivo, fase
+          // `lp_active`— seguia pidiendo "reconciliacion" indefinidamente. Un
+          // aviso que no se apaga cuando el problema se va entrena a ignorar
+          // los avisos.
+          //
+          // Tambien limpia el backoff de reintento: la recuperacion funciono,
+          // y arrastrar la espera del fallo anterior retrasaria el siguiente.
+          await this.repo.updatePhase(orch.userId, orch.id, {
+            phase: 'lp_active',
+            lastError: null,
+          }, client);
         }
         await this.repo.updateStrategyState(orch.userId, orch.id, {
           strategyState: { ...orch.strategyState, protectionRetry: retryState },
