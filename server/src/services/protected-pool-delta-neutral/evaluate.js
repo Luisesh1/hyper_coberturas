@@ -1327,6 +1327,13 @@ const evaluateMethods = {
       finalStrategyStatus: nextState.status,
       riskGateTriggered,
       liquidationDistancePct: distanceToLiqPct,
+      // Recorte por margen: no es un salto, es haber ejecutado MENOS. El
+      // preflight ya corrio, asi que el dato esta disponible aqui sin mover
+      // nada. Solo vivia en los logs del contenedor, que se pierden en cada
+      // rebuild: el panel contaba rechazos y era ciego a los recortes.
+      marginClampedFromQty: Number(preflight.maxIncreaseQty) > 0
+        ? (Number(preflight.clampedFromQty) || null)
+        : null,
       modelConfidence: nextState.modelConfidence,
       basisSpreadBps: nextState.basisSpreadBps,
       zoneState: nextState.zoneState,

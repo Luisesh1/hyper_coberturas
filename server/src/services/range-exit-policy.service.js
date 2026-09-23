@@ -41,10 +41,10 @@ const RANGE_EXIT_V1 = 'range_exit_v1';
 // salida del rango.
 const CROSS_CONFIRM_MS = 120_000;
 
-// Limites del corrimiento del trigger. El valor se DERIVA del coste (ver
-// `resolveTriggerOffsetPct`); esto solo evita los dos extremos degenerados:
-// un offset de 0 (que devuelve el whipsaw que la histeresis viene a matar) y
-// uno tan ancho que la cobertura llegue tarde a un movimiento real.
+// Limites del corrimiento del trigger. El MINIMO es hoy el valor efectivo en
+// el 100% de los casos: la derivacion por coste queda siempre por debajo (ver
+// `resolveTriggerOffsetPct`). El maximo evita el otro extremo degenerado, un
+// offset tan ancho que la cobertura llegue tarde a un movimiento real.
 const MIN_TRIGGER_OFFSET_PCT = 0.0015; // 0.15%
 const MAX_TRIGGER_OFFSET_PCT = 0.02;   // 2%
 
@@ -88,37 +88,43 @@ function resolveZone(price, lower, upper) {
 }
 
 /**
- * Corrimiento del trigger, derivado del coste de ida y vuelta.
+ * Corrimiento del trigger.
  *
- * El pedido original fue "correr un poco el trigger para cubrir comisiones".
- * La forma honesta de elegir ese "poco" es preguntarle al coste. Cruzar el
- * borde implica un ajuste de `adjustQty` y volver a entrar implica deshacerlo,
- * asi que el viaje redondo cuesta ~2x la comision de ese ajuste. Se pide que el
- * movimiento mas alla del borde le gane a ese coste con margen:
+ * El pedido original fue "correr un poco el trigger para cubrir comisiones", y
+ * la forma honesta de elegir ese "poco" es preguntarle al coste. Cruzar implica
+ * un ajuste y volver implica deshacerlo, asi que el viaje redondo cuesta ~2x la
+ * comision. Pidiendo que el movimiento le gane a ese coste con margen:
  *
  *     adjustQty * movimiento >= COST_COVERAGE_MULTIPLE * 2 * comision(adjustQty)
  *
- * Y aqui aparece el resultado que importa: la comision de Hyperliquid es
- * puramente proporcional al notional (`size * price * rate`, sin componente
- * fija), asi que al despejar el movimiento **`adjustQty` se cancela**. El
- * offset de equilibrio NO depende del tamano del ajuste:
+ * Y como la comision de Hyperliquid es puramente proporcional al notional, al
+ * despejar `adjustQty` se cancela: `offsetPct = 4 * takerFeeRate`.
  *
- *     offsetPct = 2 * COST_COVERAGE_MULTIPLE * takerFeeRate
+ * ⚠️ Esa derivacion NO gobierna, y decirlo importa mas que conservarla:
  *
- * Con el taker en 0.00025 eso da 0.10%. Se deja escrito asi, como una funcion
- * de la tasa y no de la cantidad, porque una version que recibiera `adjustQty`
- * para despues ignorarlo aparentaria una sofisticacion que no tiene. Si algun
- * dia el coste gana una parte fija (gas, piso de notional), la cancelacion se
- * rompe y ESTE es el lugar donde hay que volver a meter el tamano.
+ *   - Con el taker en 0.00025 da 0.10%, POR DEBAJO del piso de 0.15%. El clamp
+ *     gana siempre.
+ *   - Y no hay tasa real que pasar: `assetContext.takerFeeRate` no lo puebla
+ *     nadie en todo el servidor (verificado con grep el 2026-09-23). El motor
+ *     tampoco se la pasa a esta funcion.
  *
- * Los clamps no son el mecanismo, son la red: protegen de una tasa corrupta o
- * de un 0 que devolveria el ping-pong que la histeresis viene a matar.
+ * O sea que el offset efectivo es 0.15%, constante, en el 100% de los casos.
+ * Se deja la derivacion escrita porque es el razonamiento que justifica el
+ * valor, pero el codigo ya no aparenta que la tasa manda. Para que vuelva a
+ * mandar hace falta que la tasa supere 0.0375% Y que alguien la pueble de
+ * verdad; ese dia hay que revisar tambien el piso.
+ *
+ * Y ojo con la premisa: la cancelacion de `adjustQty` supone que el coste no
+ * tiene parte fija. El minimo de orden de $11 ES una parte fija — por debajo,
+ * la orden no es cara, es imposible. Ese caso se atiende aparte, en
+ * `commit_below_min_notional`.
  */
 function resolveTriggerOffsetPct({ takerFeeRate = ESTIMATED_TAKER_FEE_RATE } = {}) {
   const rate = finite(takerFeeRate, ESTIMATED_TAKER_FEE_RATE);
   if (!(rate > 0)) return MIN_TRIGGER_OFFSET_PCT;
-  const offsetPct = 2 * COST_COVERAGE_MULTIPLE * rate;
-  return Math.min(MAX_TRIGGER_OFFSET_PCT, Math.max(MIN_TRIGGER_OFFSET_PCT, offsetPct));
+  const derivado = 2 * COST_COVERAGE_MULTIPLE * rate;
+  // Los clamps no son la red, son quien decide: ver la nota de arriba.
+  return Math.min(MAX_TRIGGER_OFFSET_PCT, Math.max(MIN_TRIGGER_OFFSET_PCT, derivado));
 }
 
 /**

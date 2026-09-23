@@ -10,9 +10,10 @@ async function create(payload, executor) {
        protected_pool_id, decision, reason, strategy_status, spot_source, snapshot_status,
        snapshot_freshness_ms, execution_skipped_because, execution_mode, estimated_cost_usd,
        realized_cost_usd, target_qty, actual_qty, tracking_error_qty, tracking_error_usd,
-       current_price, final_strategy_status, risk_gate_triggered, liquidation_distance_pct, created_at
+       current_price, final_strategy_status, risk_gate_triggered, liquidation_distance_pct,
+       margin_clamped_from_qty, created_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
      RETURNING id`,
     [
       payload.protectedPoolId,
@@ -34,6 +35,9 @@ async function create(payload, executor) {
       payload.finalStrategyStatus ?? null,
       payload.riskGateTriggered ?? null,
       payload.liquidationDistancePct ?? null,
+      // No nulo = el preflight recorto el incremento a lo que el colateral
+      // aguantaba. Se guarda lo PEDIDO; lo concedido ya esta en `target_qty`.
+      payload.marginClampedFromQty ?? null,
       payload.createdAt ?? Date.now(),
     ]
   );
@@ -63,6 +67,7 @@ async function listByProtectedPoolId(protectedPoolId, { limit = 50 } = {}, execu
             final_strategy_status AS "finalStrategyStatus",
             risk_gate_triggered AS "riskGateTriggered",
             liquidation_distance_pct AS "liquidationDistancePct",
+            margin_clamped_from_qty AS "marginClampedFromQty",
             created_at AS "createdAt"
        FROM protection_decision_log
       WHERE protected_pool_id = $1
@@ -81,6 +86,7 @@ async function listByProtectedPoolId(protectedPoolId, { limit = 50 } = {}, execu
     trackingErrorUsd: row.trackingErrorUsd != null ? Number(row.trackingErrorUsd) : null,
     currentPrice: row.currentPrice != null ? Number(row.currentPrice) : null,
     liquidationDistancePct: row.liquidationDistancePct != null ? Number(row.liquidationDistancePct) : null,
+    marginClampedFromQty: row.marginClampedFromQty != null ? Number(row.marginClampedFromQty) : null,
     snapshotFreshnessMs: row.snapshotFreshnessMs != null ? Number(row.snapshotFreshnessMs) : null,
     createdAt: Number(row.createdAt),
   }));
