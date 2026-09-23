@@ -109,3 +109,54 @@ test('el recorte nunca cruza al otro lado del objetivo', () => {
   });
   assert.equal(t, 0.09000, 'la divergencia ya cabia en el cap');
 });
+
+// ---------------------------------------------------------------------------
+// El recorte tiene que convertirse en el ancla nueva de la politica.
+//
+// Sin esto los dos mecanismos se anulaban. Medido en pp28 el 2026-09-23, dos
+// veces seguidas:
+//
+//   12:18:16  el cap recorta a 0.0959 (no al delta 0.11047): correcto
+//   12:19:43  `commit_incomplete` ve held 0.0959 != committed 0.0785
+//             y reintenta al delta COMPLETO
+//   12:19:48  short en 0.10960 — justo donde el cap trataba de no ponerlo
+//
+// El recorte vivio 92 segundos. La politica interpretaba el movimiento del cap
+// como SU orden incumplida: no distingue "me movieron" de "mi orden no
+// aterrizo". Adoptar el valor recortado como `committedTargetQty` convierte la
+// intervencion en el ancla nueva, que es lo que es.
+// ---------------------------------------------------------------------------
+
+const { decideRangeExitV1, rangeKey } = require('../src/services/range-exit-policy.service');
+
+test('tras adoptar el recorte como ancla, la politica NO lo deshace', () => {
+  const RANGO = { rangeLowerPrice: 2612, rangeUpperPrice: 2858 };
+  const key = rangeKey(2612, 2858);
+
+  // Estado justo despues del recorte, CON el ancla actualizada.
+  const conAncla = decideRangeExitV1({
+    ...RANGO, deltaQty: 0.11047, actualQty: 0.0959, currentPrice: 2715.5,
+    state: { rangeKey: key, zone: 'inside', committedTargetQty: 0.0959 },
+  });
+
+  assert.equal(conAncla.decision, 'hold', 'el recorte se respeta');
+  assert.equal(conAncla.gate, 'inside_range_hold');
+});
+
+test('sin adoptarlo, la politica lo deshace: la regresion que hubo en vivo', () => {
+  const RANGO = { rangeLowerPrice: 2612, rangeUpperPrice: 2858 };
+  const key = rangeKey(2612, 2858);
+
+  // El ancla vieja, anterior al recorte. Esto es lo que paso en produccion.
+  const sinAncla = decideRangeExitV1({
+    ...RANGO, deltaQty: 0.11047, actualQty: 0.0959, currentPrice: 2715.5,
+    state: { rangeKey: key, zone: 'inside', committedTargetQty: 0.0785 },
+  });
+
+  assert.equal(sinAncla.decision, 'rebalance');
+  assert.equal(sinAncla.gate, 'commit_incomplete');
+  assert.equal(
+    Number(sinAncla.targetQty.toFixed(5)), 0.11047,
+    'reintenta al delta completo, deshaciendo el recorte'
+  );
+});

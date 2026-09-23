@@ -1044,6 +1044,36 @@ const evaluateMethods = {
     nextState.nakedNotionalCapUsd = nakedBreach.capUsd;
     const capOverridesPolicy = nakedBreach.breached && rebalanceDecision.decision === 'hold';
 
+    // A donde lleva el cap cuando interviene. Se calcula AQUI, antes de
+    // persistir el estado, porque la politica tiene que enterarse de que su
+    // ancla cambio.
+    //
+    // Sin eso los dos mecanismos se anulaban. Medido en pp28 el 2026-09-23:
+    //
+    //   12:18:16  el cap recorta a 0.0959 (no al delta 0.11047): correcto
+    //   12:19:43  `commit_incomplete` ve held 0.0959 != committed 0.0785
+    //             y reintenta al delta COMPLETO
+    //   12:19:48  short en 0.10960 — justo donde el cap trataba de no ponerlo
+    //
+    // El recorte vivio 92 segundos. La politica interpretaba el movimiento del
+    // cap como SU orden incumplida, porque no distingue "me movieron" de "mi
+    // orden no aterrizo". Adoptar el valor recortado como `committedTargetQty`
+    // convierte la intervencion en el ancla nueva, que es lo que es.
+    const capTrimTargetQty = capOverridesPolicy
+      ? resolveCapTrimTarget({
+        actualQty,
+        targetQty: Number(executionMetrics.targetQty),
+        currentPrice,
+        capUsd: nakedBreach.capUsd,
+      })
+      : null;
+    if (capOverridesPolicy && isRangeExitLive && Number.isFinite(capTrimTargetQty)) {
+      nextState.rangeExitPolicyState = {
+        ...(nextState.rangeExitPolicyState || {}),
+        committedTargetQty: capTrimTargetQty,
+      };
+    }
+
     const preflight = await this._buildPreflight({
       protection: executionProtection,
       hl,
@@ -1417,16 +1447,8 @@ const evaluateMethods = {
     // El cap RECORTA, no reinicia. Llevar al delta completo imponia descubierto
     // cero —el objetivo de otra politica— y bajo `range_exit_v1` re-anclaba la
     // cobertura donde el cap la interrumpio. Ver `resolveCapTrimTarget`.
-    const capTrimmedMetrics = capOverridesPolicy
-      ? {
-        ...executionMetrics,
-        targetQty: resolveCapTrimTarget({
-          actualQty,
-          targetQty: Number(executionMetrics.targetQty),
-          currentPrice,
-          capUsd: nakedBreach.capUsd,
-        }),
-      }
+    const capTrimmedMetrics = capOverridesPolicy && Number.isFinite(capTrimTargetQty)
+      ? { ...executionMetrics, targetQty: capTrimTargetQty }
       : executionMetrics;
     const clampedMetrics = Number(preflight.maxIncreaseQty) > 0
       ? { ...capTrimmedMetrics, targetQty: actualQty + Number(preflight.maxIncreaseQty) }
