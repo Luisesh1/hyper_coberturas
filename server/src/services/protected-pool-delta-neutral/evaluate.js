@@ -980,8 +980,30 @@ const evaluateMethods = {
       priorSince: strategyState.nakedExposureSince,
       priorTier: strategyState.nakedExposureTier,
     });
+    // Divergencia POR DISENO, que no es lo mismo que exposicion sin cubrir.
+    //
+    // `range_exit_v1` congela el hedge entre cruces de borde y deja que el
+    // delta se aleje: esa divergencia no es un fallo, es el producto. El
+    // detector, en cambio, solo mira dolares y porcentaje, asi que la denuncia
+    // igual — 5 episodios en 11 h sobre pp28, con la politica funcionando
+    // exactamente como debe. Un aviso que suena cuando no pasa nada entrena a
+    // ignorar el que si importa.
+    //
+    // Solo callan los dos gates que implican que la ultima orden SI aterrizo:
+    // `commit_incomplete` y `commit_below_min_notional` retornan antes, asi que
+    // llegar aqui ya es prueba de que no hay ninguna orden pendiente.
+    //
+    // Lo que NO se toca es el seguimiento ni el cap: `nakedExposure` se sigue
+    // calculando entero porque `resolveNakedNotionalBreach` se alimenta de su
+    // `tier`. Silenciar el detector habria desactivado el limite de riesgo, que
+    // es justo la pieza que faltaba cuando pp27 sostuvo $53.90 desnudos.
+    const divergenceByDesign = isRangeExitLive
+      && (rangeExitDecision?.gate === 'inside_range_hold'
+        || rangeExitDecision?.gate === 'outside_range_hold');
+
     nextState.nakedExposureSince = nakedExposure.since;
     nextState.nakedExposureTier = nakedExposure.tier;
+    nextState.nakedExposureByDesign = divergenceByDesign;
     nextState.nakedNotionalUsd = nakedExposure.material
       ? Math.abs(Number(tracking.trackingErrorUsd) || 0)
       : 0;
@@ -1073,7 +1095,7 @@ const evaluateMethods = {
 
 
     nextState.status = normalizeEvaluationStatus({
-      nakedExposureSustained: nakedExposure.tier >= 0,
+      nakedExposureSustained: nakedExposure.tier >= 0 && !divergenceByDesign,
       decision: rebalanceDecision.decision,
       trackingErrorUsd: tracking.trackingErrorUsd,
       riskStatus: forcedStatus,
@@ -1141,7 +1163,7 @@ const evaluateMethods = {
     // y escalones, y solo se avisa al CRUZAR uno — 3 avisos por episodio en vez
     // de miles. Va aqui y no donde se calcula porque necesita la decision ya
     // resuelta: sin el motivo, la alerta no dice que hacer.
-    if (nakedExposure.escalated) {
+    if (nakedExposure.escalated && !divergenceByDesign) {
       const usd = Math.abs(Number(tracking.trackingErrorUsd) || 0);
       const minutos = Math.round(nakedExposure.elapsedMs / 60_000);
       this.logger.warn?.('delta_neutral_naked_exposure', {
