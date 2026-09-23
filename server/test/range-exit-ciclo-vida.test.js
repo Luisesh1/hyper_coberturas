@@ -227,3 +227,60 @@ test('abrir fuera por arriba y reentrar cubre al 100% en una sola orden', () => 
   assert.deepEqual(ordenes, ['range_reentry']);
   assert.ok(held > 0, 'dentro del rango vuelve a haber delta que cubrir');
 });
+
+// ---------------------------------------------------------------------------
+// El override legacy de "target casi cero" no puede puentear la confirmacion.
+//
+// `forceReduceNearZero` convierte un `hold` en `rebalance_full` cuando el
+// target cae a ~0 con posicion viva. Para esta politica eso cerraria el hedge
+// en cuanto una mecha asome por encima del borde, sin esperar los 120 s — y si
+// el precio vuelve hay que reconstruirlo, que es el whipsaw que la
+// confirmacion existe para evitar.
+//
+// En la practica no disparaba: exige target <= 1e-6 y por encima del rango el
+// delta se queda en ~1e-4. Sobre ~570.000 ticks paso UNA vez; pp24 nunca bajo
+// de 0.00009014 en 198.315 ticks. Se excluye para que no pueda activarse en
+// silencio si algun dia el calculo del delta llega a cero de verdad.
+// ---------------------------------------------------------------------------
+
+test('la confirmacion de 120 s se respeta aunque el target sea casi cero', () => {
+  let state = correr([2735]).state;
+  const held = deltaEn(2735);
+
+  // Justo por encima del borde: el delta cae practicamente a cero.
+  T += 30_000;
+  const primero = decideRangeExitV1({
+    ...RANGO, deltaQty: 1e-7, actualQty: held, currentPrice: 2870, state, now: T,
+  });
+
+  assert.equal(primero.decision, 'hold', 'sin confirmar no se cierra');
+  assert.equal(primero.gate, 'cross_confirming');
+
+  // Y si el precio vuelve antes de confirmar, no se ejecuto nada.
+  T += 30_000;
+  const vuelta = decideRangeExitV1({
+    ...RANGO, deltaQty: deltaEn(2790), actualQty: held, currentPrice: 2790,
+    state: primero.nextState, now: T,
+  });
+  assert.equal(vuelta.decision, 'hold');
+  assert.equal(vuelta.gate, 'cross_aborted', 'la mecha no costo ninguna orden');
+});
+
+test('confirmado el cruce, el cierre si ocurre', () => {
+  let state = correr([2735]).state;
+  const held = deltaEn(2735);
+
+  T += 30_000;
+  const primero = decideRangeExitV1({
+    ...RANGO, deltaQty: 1e-7, actualQty: held, currentPrice: 2870, state, now: T,
+  });
+  T += CROSS_CONFIRM_MS + 1;
+  const confirmado = decideRangeExitV1({
+    ...RANGO, deltaQty: 1e-7, actualQty: held, currentPrice: 2870,
+    state: primero.nextState, now: T,
+  });
+
+  assert.equal(confirmado.decision, 'rebalance');
+  assert.equal(confirmado.gate, 'range_exit');
+  assert.ok(confirmado.targetQty < 1e-6, 'cierra el hedge');
+});

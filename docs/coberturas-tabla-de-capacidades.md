@@ -18,7 +18,7 @@ que nadie había declarado.
 | **Zona muerta central** | no | **sí** | sí | `evaluate.js:853` |
 | **minDwell** | no | sí | sí | `:795` |
 | **Bloqueo por confianza baja** | no | sí | sí | `:798` |
-| **`forceReduceNearZero`** (anula el hold) | **sí** ⚠️ | no | sí | `:851`, `:997` |
+| **`forceReduceNearZero`** (anula el hold) | no | no | sí | `:851`, `:997` |
 | **`urgentTrigger`** | sí (sólo log) | no | sí (sólo log) | `:852`, `:971` |
 | **Medida de exposición** | `\|committed−actual\|` | `\|delta−actual\|` | `\|delta−actual\|` | `:1003` |
 | **Tope de exposición** (cap) | sí | sí | sí | `:1071` |
@@ -39,7 +39,7 @@ que nadie había declarado.
 Escribir la tabla era también la auditoría. Dos celdas aparecieron sin que
 nadie las hubiera declarado:
 
-### ⚠️ `forceReduceNearZero` aplica a `range_exit_v1`
+### ✅ RESUELTA — `forceReduceNearZero` ya no aplica a `range_exit_v1`
 
 ```js
 const forceReduceNearZero = !isNetProfitLive && legacyDecision.forceReduceNearZero;
@@ -61,8 +61,17 @@ whipsaw que la confirmación existe para evitar.
 **Pero no es obviamente un error.** Cerrar rápido un short cuyo delta ya es 0 es
 la lección de pp27 ($53,90 desnudos 72 h). Puede ser una red deliberada.
 
-**No lo he tocado.** Es una decisión de producto, y hoy ya me equivoqué
-tratando una regla del usuario como fuga legacy.
+**Resuelto el 2026-09-23: excluido.** Los datos decidieron. Exige
+`targetQty <= 1e-6`, y por encima del rango el delta **no decae a cero**: se
+queda en ~1e-4. Sobre ~570.000 ticks de todas las protecciones eso pasó **una
+vez** (pp17); pp24, que es `range_exit`, nunca bajó de `0.00009014` en 198.315
+ticks — noventa veces el umbral.
+
+O sea que era código muerto para esta política. Se excluyó igualmente para que
+no pueda activarse en silencio si algún día el cálculo del delta llega a cero
+de verdad, y porque `commit_incomplete` ya cierra residuos por su cuenta con el
+bypass de cierre total. Efecto práctico del cambio: ninguno. Lo que compra es
+que la casilla deje de ser una trampa latente.
 
 ### `urgentTrigger` llega a `range_exit` pero sólo registra
 

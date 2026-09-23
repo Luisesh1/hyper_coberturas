@@ -848,7 +848,27 @@ const evaluateMethods = {
       now: Date.now(),
     });
     const { priceMovePct, timerDue } = legacyDecision;
-    const forceReduceNearZero = !isNetProfitLive && legacyDecision.forceReduceNearZero;
+    // `forceReduceNearZero` anula el `hold` de la politica cuando el target cae
+    // a ~0 con posicion viva. Para `range_exit_v1` eso puentearia la
+    // confirmacion de 120 s del cruce: una mecha que asome por encima del borde
+    // cerraria el hedge sin confirmar, y si el precio vuelve hay que
+    // reconstruirlo — el whipsaw que la confirmacion existe para evitar.
+    //
+    // Hoy no dispara: exige `targetQty <= 1e-6` y por encima del rango el delta
+    // no decae a cero, se queda en ~1e-4. Medido sobre ~570.000 ticks de todas
+    // las protecciones, eso paso UNA vez (pp17); pp24, que es `range_exit`,
+    // nunca bajo de 0.00009014 en 198.315 ticks — noventa veces el umbral.
+    //
+    // Se excluye igualmente para que no pueda activarse en silencio: si algun
+    // dia el calculo del delta llega a cero de verdad, la politica perderia su
+    // confirmacion de cruce sin que nadie lo relacione. Y no hace falta — ya
+    // cierra residuos por su cuenta con `commit_incomplete`, que tiene el
+    // bypass de cierre total.
+    const forceReduceNearZero = !isNetProfitLive
+      && !isRangeExitLive
+      && legacyDecision.forceReduceNearZero;
+    // Solo alimenta un log; se deja igual para no aparentar un cambio de
+    // comportamiento donde no lo hay.
     const urgentTrigger = !isNetProfitLive && legacyDecision.urgentTrigger;
     const centerDeadZoneBlocks = isNetProfitLive
       ? isCenterDeadZoneBlocking({
