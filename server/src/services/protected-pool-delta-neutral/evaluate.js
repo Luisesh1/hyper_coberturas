@@ -1153,21 +1153,40 @@ const evaluateMethods = {
       preflightOk: preflight.ok,
     });
     nextState.lastDecision = rebalanceDecision.decision;
+    // El motivo lo pone QUIEN decidio.
+    //
+    // `range_exit_v1` caia en la rama legacy y quedaba registrada con
+    // `within_cost_aware_band` / `drift_exceeds_cost_aware_band`: compuertas de
+    // un motor que no la gobierna. Medido en pp28 el 2026-09-23: de 37
+    // ejecuciones, CERO llevaban una compuerta suya como motivo. La politica
+    // decidia y otro se atribuia el porque, asi que no habia forma de saber que
+    // fraccion de las ordenes eran realmente suyas — la respuesta era 0% y el
+    // registro no lo dejaba ver.
     nextState.lastDecisionReason = isNetProfitLive
       ? netProfitDecision.gate
-      : forceReason
-        || (rebalanceDecision.decision === 'hold' ? 'within_cost_aware_band' : 'drift_exceeds_cost_aware_band');
+      : isRangeExitLive
+        ? (forceReason || rangeExitDecision.gate)
+        : forceReason
+          || (rebalanceDecision.decision === 'hold' ? 'within_cost_aware_band' : 'drift_exceeds_cost_aware_band');
+    // Quien goberno este tick. `policy` es la politica viva decidiendo por si
+    // misma; el resto son mecanismos que la sobrescriben. Sin esto, una
+    // politica anulada en el 100% de los ticks se lee igual que una que manda.
+    nextState.decisionOwner = 'policy';
+    if (forceReason) nextState.decisionOwner = 'force';
     if (capOverridesPolicy) {
       nextState.lastDecision = 'naked_notional_cap';
       nextState.lastDecisionReason = 'naked_notional_cap_exceeded';
+      nextState.decisionOwner = 'naked_cap';
     }
     if (confidenceBlocksIncrease) {
       nextState.lastDecision = 'refresh_snapshot';
       nextState.lastDecisionReason = 'low_confidence_model';
+      nextState.decisionOwner = 'confidence_gate';
       nextState.truthPending = true;
     } else if (minDwellActive && shouldRebalance) {
       nextState.lastDecision = 'hold';
       nextState.lastDecisionReason = 'min_dwell_active';
+      nextState.decisionOwner = 'min_dwell';
       // Solo las senales forzadas se guardan: un trigger por deriva o por
       // precio se vuelve a evaluar solo en el tick siguiente, y marcarlo como
       // pendiente lo convertiria en un forzado permanente que se salta las
@@ -1199,6 +1218,7 @@ const evaluateMethods = {
       if ((forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath) {
         nextState.lastDecision = 'risk_paused_reduce';
         nextState.lastDecisionReason = 'risk_paused_reduce_only';
+        nextState.decisionOwner = 'risk_gate';
       } else {
         nextState.lastDecision = 'hold';
         nextState.lastDecisionReason = forcedStatus === 'risk_paused' ? 'risk_paused' : 'margin_pending';
@@ -1364,6 +1384,7 @@ const evaluateMethods = {
       marginClampedFromQty: Number(preflight.maxIncreaseQty) > 0
         ? (Number(preflight.clampedFromQty) || null)
         : null,
+      decisionOwner: nextState.decisionOwner || null,
       modelConfidence: nextState.modelConfidence,
       basisSpreadBps: nextState.basisSpreadBps,
       zoneState: nextState.zoneState,
