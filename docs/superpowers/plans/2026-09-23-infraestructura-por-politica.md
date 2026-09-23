@@ -87,7 +87,7 @@ Hoy sólo posee la decisión, y por eso colisiona.
 
 ---
 
-## Fase 1 · Que la política se explique
+## Fase 1 · Que la política se explique `[HECHO]`
 
 Sin esto no se puede medir nada de lo demás, y es de riesgo nulo.
 
@@ -108,7 +108,7 @@ pp28 las decidió su política?". Hoy la respuesta es 0% y no hay forma de verlo
 
 ---
 
-## Fase 2 · Límite de divergencia propio
+## Fase 2 · Límite de divergencia propio `[HECHO — con un cambio de diseño]`
 
 **2.1 · Sustituir el cap global por uno derivado del rango.** La divergencia
 máxima que la política puede producir es **conocible de antemano**: delta en
@@ -135,7 +135,7 @@ baja del modelo. Hoy sí puede, y es justo el caso de pp27 (short desnudo 72 h).
 
 ---
 
-## Fase 3 · Recuperación propia
+## Fase 3 · Recuperación propia `[HECHO]`
 
 **3.1 · El ancla es de la política.** Ya existe `committedTargetQty` (`b56f035`)
 y ya se conectó al recorte del cap (`41290de`). Falta que **cualquier**
@@ -172,3 +172,54 @@ por ciclo en vez de dos**; la raíz sigue.
 3. Un cruce de borde confirmado produce **exactamente una**.
 4. Una divergencia que el rango no explica sigue disparando el límite.
 5. La suite sube, y los tests nuevos fallan si se revierte cada cambio.
+
+
+---
+
+## Resultado (2026-09-23)
+
+Las tres fases cerradas con la flota parada. Suite: **970 pass / 0 fail**
+(desde 951).
+
+| fase | commit | qué quedó |
+|---|---|---|
+| 1 | `30d97b9` | el `reason` sale de la compuerta de la política; `decision_owner` persistido (migración 028) |
+| 2 | `d9ff8ce` | la exposición se mide contra lo ORDENADO, no contra el delta; `minDwell` y confianza desactivados para esta política |
+| 3 | — | el ancla adopta cualquier target comandado tras ejecutar, conservando lo pretendido frente al recorte por margen |
+
+### El plan proponía lo equivocado en la Fase 2
+
+Decía "calcular el cap desde la anchura del rango". Al hacer los números, el
+máximo que el rango explica es **prácticamente el valor entero del LP**: un cap
+así no dispararía nunca. Habría sido quitar la red disfrazándolo de calibrarla.
+
+La pregunta correcta no era *cuánta* divergencia sino **respecto a qué**:
+
+```
+|delta − actual|       lo que movió el mercado   → producto en range_exit
+|committed − actual|   lo que la política ORDENÓ → avería en cualquiera
+```
+
+Mismo mecanismo, medida correcta, y el caso de pp27 se sigue atrapando.
+
+### Hallazgo que la implementación añadió
+
+**El bloqueo por confianza baja del modelo impedía CRECER**, y una reentrada
+por el borde inferior es crecer justo cuando el delta del LP está en su máximo.
+Bloquear el ajuste de borde es la misma familia de fallo que dejó a pp27 con
+$53,90 desnudos 72 h. No estaba en el inventario inicial.
+
+### La 3.2 ya estaba cubierta
+
+El reanclaje como operación registrada no necesitó código nuevo: la Fase 1 le
+dio `decision_owner` y motivo propio, y B.2 llevó `reanclar.js` al repo con sus
+guardas. Hay un test que fija que deja la política en reposo y no en bucle.
+
+## Sigue abierto
+
+- **Nada de esto está validado en vivo.** Los criterios de cierre necesitan una
+  protección `range_exit` corriendo: ±4% dentro del rango → **cero** órdenes;
+  un cruce confirmado → **exactamente una**.
+- **`net_profit_v2` y `legacy` sin tocar**, a propósito. Una política a la vez.
+- La línea base que medir contra: antes de la Fase 1, **0%** de las 37
+  ejecuciones de pp28 las decidió su política.

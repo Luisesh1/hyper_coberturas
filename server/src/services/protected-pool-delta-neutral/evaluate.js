@@ -1498,7 +1498,14 @@ const evaluateMethods = {
       ? { ...executionMetrics, targetQty: capTrimTargetQty }
       : executionMetrics;
     const clampedMetrics = Number(preflight.maxIncreaseQty) > 0
-      ? { ...capTrimmedMetrics, targetQty: actualQty + Number(preflight.maxIncreaseQty) }
+      ? {
+        ...capTrimmedMetrics,
+        targetQty: actualQty + Number(preflight.maxIncreaseQty),
+        // Lo que se PRETENDIA, para que el ancla no adopte el recorte por
+        // margen como si fuera la orden cumplida. Entrar parcial y completar
+        // en el tick siguiente es el diseno; darlo por bueno lo anularia.
+        policyTargetQty: Number(capTrimmedMetrics.targetQty),
+      }
       : capTrimmedMetrics;
     if (clampedMetrics !== capTrimmedMetrics) {
       this.logger.info?.('delta_neutral_increase_clamped_to_margin', {

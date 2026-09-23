@@ -245,6 +245,28 @@ const executionMethods = {
       cooldownReason: null,
       minDwellUntil: Date.now() + this.minDwellMs,
     };
+    // El ancla de `range_exit_v1` adopta lo que se COMANDO, venga de quien
+    // venga.
+    //
+    // La politica solo actualizaba su ancla cuando decidia ella, asi que
+    // cualquier intervencion externa —el tope, una compuerta de riesgo, un
+    // forzado— le dejaba un `committedTargetQty` rancio, y al tick siguiente
+    // intentaba deshacerla creyendo que su orden no habia aterrizado. Se vio
+    // en pp28 el 2026-09-23: el recorte del tope duro 92 segundos.
+    //
+    // Se usa el objetivo PRETENDIDO y no el ejecutado: con un llenado parcial
+    // o un recorte por margen, el ancla debe seguir apuntando a lo que falta
+    // para que el reintento lo complete.
+    if (updatedState.rangeExitPolicyState) {
+      const comandado = Number(metrics.policyTargetQty ?? metrics.targetQty);
+      if (Number.isFinite(comandado)) {
+        updatedState.rangeExitPolicyState = {
+          ...updatedState.rangeExitPolicyState,
+          committedTargetQty: comandado,
+        };
+      }
+    }
+
     delete updatedState.pendingRotationBudgetIncrement;
     if (pendingRotationBudget && Number.isFinite(Number(pendingRotationBudget.rotationBudgetDay))) {
       updatedState.netProfitPolicyState = {
