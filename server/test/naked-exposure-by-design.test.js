@@ -192,3 +192,47 @@ test('un cruce a medio confirmar no es un hold de diseno', () => {
   assert.equal(d.gate, 'cross_confirming');
   assert.equal(esPorDiseno(d.gate), false, 'durante el cruce la divergencia si es transitoria y real');
 });
+
+// ---------------------------------------------------------------------------
+// Cerca del cap, el aviso vuelve.
+//
+// De los 5 episodios de pp28, cuatro eran ruido y el quinto precedio al
+// `naked_notional_cap_exceeded` del 2026-09-23 01:13, que corto el short de
+// 0.09330 a 0.06420. Callarlos todos habria dejado esa intervencion sin aviso
+// previo: cambiar ruido por sordera no es una mejora.
+// ---------------------------------------------------------------------------
+
+const { resolveNakedNotionalCapUsd } = require('../src/services/protected-pool-delta-neutral.helpers');
+
+const PROXIMIDAD = 0.75;                       // NAKED_ALERT_CAP_PROXIMITY
+const lejosDelCap = (usd, cap) => !(cap > 0) || Math.abs(usd) < cap * PROXIMIDAD;
+
+test('el regimen normal de range_exit queda por debajo del umbral de proximidad', () => {
+  const cap = resolveNakedNotionalCapUsd(null, 529);   // $79.35
+  // $33 es el 42% del cap: ruido, se calla.
+  assert.equal(lejosDelCap(33.13, cap), true);
+});
+
+test('acercarse al cap devuelve la voz antes de que intervenga', () => {
+  const cap = resolveNakedNotionalCapUsd(null, 529);
+  // 75% de $79.35 son $59.51: a partir de ahi vuelve a avisar.
+  assert.equal(lejosDelCap(59, cap), true, 'justo debajo todavia calla');
+  assert.equal(lejosDelCap(62, cap), false, 'ya en el tramo donde el cap es plausible');
+});
+
+test('el episodio que precedio a la intervencion real de pp28 SI habria avisado', () => {
+  // La divergencia que disparo el cap: 0.09330 vivo contra 0.06414 de target,
+  // a $2774. Son $80.9, por encima del cap de $79.35.
+  const cap = resolveNakedNotionalCapUsd(null, 529);
+  const divergencia = (0.09330 - 0.06414) * 2774;
+
+  assert.ok(divergencia > cap, 'por eso el cap intervino');
+  assert.equal(lejosDelCap(divergencia, cap), false, 'y por eso no puede callarse');
+});
+
+test('sin pool valorado no se calla nada', () => {
+  // Un cap de 0 o desconocido no puede usarse para decidir silencio.
+  assert.equal(lejosDelCap(50, 0), true, 'el piso del cap nunca es 0 en la practica');
+  const capMinimo = resolveNakedNotionalCapUsd(null, 0);
+  assert.ok(capMinimo >= 30, 'siempre hay piso: max($30, 15% del pool)');
+});

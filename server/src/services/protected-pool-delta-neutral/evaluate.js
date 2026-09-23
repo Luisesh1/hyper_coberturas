@@ -27,6 +27,7 @@ const {
   resolveMinRebalanceNotionalUsd,
   resolveNakedExposure,
   resolveNakedNotionalBreach,
+  resolveNakedNotionalCapUsd,
   resolveRebalanceDecision,
   resolveUrgentMinRebalanceNotionalUsd,
   safeJsonClone,
@@ -37,6 +38,11 @@ const {
   decideNetProfitV1,
 } = require('../net-profit-policy.service');
 const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.service');
+
+// A partir de que fraccion del cap una divergencia "por diseno" vuelve a
+// merecer aviso. 0.75 deja callado el regimen normal de `range_exit_v1` y
+// devuelve la voz en el tramo donde la intervencion es plausible.
+const NAKED_ALERT_CAP_PROXIMITY = 0.75;
 const {
   NEAR_ZERO_TARGET_QTY,
   ORPHAN_TARGET_QTY,
@@ -997,7 +1003,19 @@ const evaluateMethods = {
     // calculando entero porque `resolveNakedNotionalBreach` se alimenta de su
     // `tier`. Silenciar el detector habria desactivado el limite de riesgo, que
     // es justo la pieza que faltaba cuando pp27 sostuvo $53.90 desnudos.
+    // Y solo mientras esté LEJOS del cap. Cerca deja de ser diseño: es el
+    // preludio de una intervención.
+    //
+    // Medido en pp28: de 5 episodios, 4 eran ruido y el quinto precedió al
+    // `naked_notional_cap_exceeded` del 2026-09-23 01:13, que corto el short de
+    // 0.09330 a 0.06420. Callarlos todos habria dejado esa intervencion sin
+    // aviso previo — cambiar ruido por sordera no es una mejora.
+    const nakedCapUsd = resolveNakedNotionalCapUsd(activeProtection, metrics.poolValueUsd);
+    const farFromCap = !(nakedCapUsd > 0)
+      || Math.abs(Number(tracking.trackingErrorUsd) || 0) < nakedCapUsd * NAKED_ALERT_CAP_PROXIMITY;
+
     const divergenceByDesign = isRangeExitLive
+      && farFromCap
       && (rangeExitDecision?.gate === 'inside_range_hold'
         || rangeExitDecision?.gate === 'outside_range_hold');
 
