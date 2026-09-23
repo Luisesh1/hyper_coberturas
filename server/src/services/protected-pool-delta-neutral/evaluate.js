@@ -28,6 +28,7 @@ const {
   resolveNakedExposure,
   resolveNakedNotionalBreach,
   resolveNakedNotionalCapUsd,
+  resolveCapTrimTarget,
   resolveRebalanceDecision,
   resolveUrgentMinRebalanceNotionalUsd,
   safeJsonClone,
@@ -1406,10 +1407,24 @@ const evaluateMethods = {
     // El preflight puede haber recortado el incremento a lo que el colateral
     // aguanta. Entrar parcial y completar en el tick siguiente domina a no
     // entrar: es la diferencia entre el 60% y el 0% de cobertura.
-    const clampedMetrics = Number(preflight.maxIncreaseQty) > 0
-      ? { ...executionMetrics, targetQty: actualQty + Number(preflight.maxIncreaseQty) }
+    // El cap RECORTA, no reinicia. Llevar al delta completo imponia descubierto
+    // cero —el objetivo de otra politica— y bajo `range_exit_v1` re-anclaba la
+    // cobertura donde el cap la interrumpio. Ver `resolveCapTrimTarget`.
+    const capTrimmedMetrics = capOverridesPolicy
+      ? {
+        ...executionMetrics,
+        targetQty: resolveCapTrimTarget({
+          actualQty,
+          targetQty: Number(executionMetrics.targetQty),
+          currentPrice,
+          capUsd: nakedBreach.capUsd,
+        }),
+      }
       : executionMetrics;
-    if (clampedMetrics !== executionMetrics) {
+    const clampedMetrics = Number(preflight.maxIncreaseQty) > 0
+      ? { ...capTrimmedMetrics, targetQty: actualQty + Number(preflight.maxIncreaseQty) }
+      : capTrimmedMetrics;
+    if (clampedMetrics !== capTrimmedMetrics) {
       this.logger.info?.('delta_neutral_increase_clamped_to_margin', {
         protectionId: activeProtection.id,
         accountId: activeProtection.accountId,

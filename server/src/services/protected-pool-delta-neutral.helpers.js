@@ -643,6 +643,58 @@ function resolveNakedNotionalCapUsd(protection, poolValueUsd) {
   return Math.max(effectiveFloor, (effectivePct / 100) * pool);
 }
 
+// Que fraccion del cap se deja como descubierto tras un recorte.
+//
+// No se recorta hasta el BORDE del cap: con la divergencia justo por encima,
+// esa orden seria de centavos —$1.55 en el episodio real de pp28— y quedaria
+// por debajo del minimo del exchange, inejecutable y disparando otra vez al
+// instante. El 50% deja holgura antes del siguiente disparo y garantiza que
+// cualquier recorte sea una orden enviable.
+const NAKED_CAP_TRIM_RETAIN = 0.5;
+
+/**
+ * A donde llevar el hedge cuando el cap interviene.
+ *
+ * El cap es un limite de RIESGO: dice "el descubierto no puede pasar de X". La
+ * primera version rebalanceaba al delta completo, o sea imponia descubierto
+ * CERO — eso no es hacer cumplir el limite, es imponer el objetivo de otra
+ * politica, y bajo `range_exit_v1` tiene un coste concreto: re-ancla la
+ * cobertura donde el cap la interrumpio.
+ *
+ * Paso de verdad en pp28 el 2026-09-23. El cap corto en un maximo local (ETH
+ * 2774), donde el delta estaba en su valor mas bajo; el precio revirtio a 2754
+ * y la politica, que congela dentro del rango, quedo pegada al extremo:
+ *
+ *   corte al delta completo   short 0.0933 -> 0.0642   luego infra-cubierto $44
+ *   recorte parcial           short 0.0933 -> 0.0785   luego casi clavado
+ *
+ * Devuelve `targetQty` sin tocar cuando el recorte no aplica, para que el
+ * llamador pueda usarlo sin ramificar.
+ */
+function resolveCapTrimTarget({
+  actualQty,
+  targetQty,
+  currentPrice,
+  capUsd,
+  retain = NAKED_CAP_TRIM_RETAIN,
+} = {}) {
+  const held = Number(actualQty);
+  const target = Number(targetQty);
+  const price = Number(currentPrice);
+  const cap = Number(capUsd);
+  if (![held, target, price, cap].every(Number.isFinite) || price <= 0 || cap <= 0) return target;
+
+  const divergenceQty = target - held;
+  const divergenceUsd = Math.abs(divergenceQty) * price;
+  if (divergenceUsd <= cap) return target;
+
+  const allowedQty = (cap * Math.min(Math.max(retain, 0), 1)) / price;
+  if (allowedQty >= Math.abs(divergenceQty)) return target;
+
+  // Mover `held` hacia `target`, pero parando a `allowedQty` de distancia.
+  return target - Math.sign(divergenceQty) * allowedQty;
+}
+
 /**
  * ¿Hay que intervenir por encima de lo que diga la politica?
  *
@@ -888,6 +940,8 @@ module.exports = {
   resolveMarginFloor,
   resolveDeleverageTarget,
   resolveNakedNotionalCapUsd,
+  resolveCapTrimTarget,
+  NAKED_CAP_TRIM_RETAIN,
   NAKED_EXPOSURE_TIERS,
   deriveBandSettings,
   computeVolatilityStats,
