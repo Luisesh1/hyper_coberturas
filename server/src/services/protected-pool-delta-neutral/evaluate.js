@@ -28,6 +28,7 @@ const {
   resolveNakedExposure,
   resolveNakedNotionalBreach,
   resolveNakedNotionalCapUsd,
+  resolveExposureMeasureUsd,
   resolveCapTrimTarget,
   resolveRebalanceDecision,
   resolveUrgentMinRebalanceNotionalUsd,
@@ -778,8 +779,24 @@ const evaluateMethods = {
       tickUpper: rawSnapshot.tickUpper ?? null,
     });
 
-    const minDwellActive = Number.isFinite(Number(nextState.minDwellUntil)) && Date.now() < Number(nextState.minDwellUntil);
-    const confidenceBlocksIncrease = nextState.modelConfidence === 'low' && driftQty > 0;
+    // `range_exit_v1` trae sus propios frenos y estos dos la estorban:
+    //
+    //   minDwell        pensado para politicas que rebalancean seguido. Esta
+    //                   rebalancea solo en bordes, y ya exige 120 s de
+    //                   confirmacion del cruce — ese ES su dwell.
+    //   confianza baja  bloquea CRECER. Una reentrada por el borde inferior es
+    //                   crecer, y es justo cuando mas urge: el delta del LP
+    //                   esta en su maximo. Su senal de confianza es el cruce
+    //                   confirmado, no el modelo de volatilidad.
+    //
+    // El segundo no es teorico: bloquear el ajuste por borde es la familia de
+    // fallo que dejo a pp27 con $53.90 de short desnudo durante 72 h.
+    const minDwellActive = !isRangeExitLive
+      && Number.isFinite(Number(nextState.minDwellUntil))
+      && Date.now() < Number(nextState.minDwellUntil);
+    const confidenceBlocksIncrease = !isRangeExitLive
+      && nextState.modelConfidence === 'low'
+      && driftQty > 0;
     // Porcentaje del valor VIVO del LP, no un absoluto congelado al crear la
     // proteccion: si el LP crece o mengua, el umbral lo sigue.
     const minRebalanceNotionalUsd = resolveMinRebalanceNotionalUsd(activeProtection, metrics.poolValueUsd);
@@ -981,8 +998,19 @@ const evaluateMethods = {
       rebalanceDecision.decision = 'rebalance_full';
     }
 
+    // Que se mide como exposicion depende de la politica viva: bajo
+    // `range_exit_v1` el hueco contra el delta es el producto, y la averia es
+    // el hueco contra lo que ELLA ordeno. Ver `resolveExposureMeasureUsd`.
+    const exposureUsd = resolveExposureMeasureUsd({
+      livePolicy: isRangeExitLive ? RANGE_EXIT_V1 : null,
+      actualQty,
+      deltaQty: Number(metrics.deltaQty),
+      committedTargetQty: nextState.rangeExitPolicyState?.committedTargetQty,
+      currentPrice,
+    });
+
     const nakedExposure = resolveNakedExposure({
-      nakedNotionalUsd: tracking.trackingErrorUsd,
+      nakedNotionalUsd: exposureUsd,
       poolValueUsd: metrics.poolValueUsd,
       priorSince: strategyState.nakedExposureSince,
       priorTier: strategyState.nakedExposureTier,
@@ -1013,7 +1041,7 @@ const evaluateMethods = {
     // aviso previo — cambiar ruido por sordera no es una mejora.
     const nakedCapUsd = resolveNakedNotionalCapUsd(activeProtection, metrics.poolValueUsd);
     const farFromCap = !(nakedCapUsd > 0)
-      || Math.abs(Number(tracking.trackingErrorUsd) || 0) < nakedCapUsd * NAKED_ALERT_CAP_PROXIMITY;
+      || Math.abs(exposureUsd) < nakedCapUsd * NAKED_ALERT_CAP_PROXIMITY;
 
     const divergenceByDesign = isRangeExitLive
       && farFromCap
@@ -1023,9 +1051,7 @@ const evaluateMethods = {
     nextState.nakedExposureSince = nakedExposure.since;
     nextState.nakedExposureTier = nakedExposure.tier;
     nextState.nakedExposureByDesign = divergenceByDesign;
-    nextState.nakedNotionalUsd = nakedExposure.material
-      ? Math.abs(Number(tracking.trackingErrorUsd) || 0)
-      : 0;
+    nextState.nakedNotionalUsd = nakedExposure.material ? Math.abs(exposureUsd) : 0;
 
     // Tope de exposicion direccional: limite de RIESGO, por encima de la
     // politica. Ninguna de las tres lo tenia, y por eso `upper_exit_latched`
@@ -1036,7 +1062,7 @@ const evaluateMethods = {
     // bloqueo por baja confianza del modelo: crecer la cobertura sobre datos
     // en los que no confiamos seria cambiar un riesgo por otro.
     const nakedBreach = resolveNakedNotionalBreach({
-      nakedNotionalUsd: tracking.trackingErrorUsd,
+      nakedNotionalUsd: exposureUsd,
       poolValueUsd: metrics.poolValueUsd,
       tier: nakedExposure.tier,
       protection: activeProtection,
@@ -1233,7 +1259,7 @@ const evaluateMethods = {
     // de miles. Va aqui y no donde se calcula porque necesita la decision ya
     // resuelta: sin el motivo, la alerta no dice que hacer.
     if (nakedExposure.escalated && !divergenceByDesign) {
-      const usd = Math.abs(Number(tracking.trackingErrorUsd) || 0);
+      const usd = Math.abs(exposureUsd);
       const minutos = Math.round(nakedExposure.elapsedMs / 60_000);
       this.logger.warn?.('delta_neutral_naked_exposure', {
         protectionId: activeProtection.id,

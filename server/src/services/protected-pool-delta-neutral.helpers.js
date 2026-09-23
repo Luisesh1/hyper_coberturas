@@ -634,6 +634,50 @@ const DEFAULT_NAKED_CAP_FLOOR_USD = 30;
 // actue. Por debajo se avisa, no se interviene.
 const DEFAULT_NAKED_CAP_MIN_TIER = 1;
 
+/**
+ * Que exposicion mide el tope, y por que no siempre es la misma.
+ *
+ * El tope se alimentaba SIEMPRE de `|delta - actual|`. Para una politica que
+ * persigue el delta continuamente eso es correcto: si el hueco se sostiene, la
+ * cobertura esta averiada.
+ *
+ * Para `range_exit_v1` es exactamente al reves — ese hueco ES el producto. La
+ * politica congela el hedge entre cruces de borde a proposito, asi que medirlo
+ * como avería garantiza que el tope dispare siempre. Medido en pp28 el
+ * 2026-09-23: el tope saltaba con una caida del 1,2% contra un rango de +/-4,5%,
+ * o sea al 23% del camino al borde. La politica nunca llegaba a cruzar.
+ *
+ * La tentacion era ensanchar el tope hasta lo que el rango explica. No sirve:
+ * ese maximo es practicamente el valor entero del LP, asi que seria quitar la
+ * red disfrazandolo de calibrarla.
+ *
+ * Lo correcto no es cuanta divergencia, es divergencia RESPECTO A QUE:
+ *
+ *   |delta - actual|      lo que el mercado movio   -> producto en range_exit
+ *   |committed - actual|  lo que la politica ORDENO -> averia en cualquiera
+ *
+ * Una orden que no aterrizo es un fallo para todas las politicas por igual, y
+ * es lo unico que el tope deberia perseguir aqui. Sin `committedTargetQty`
+ * —protecciones anteriores al 2026-09-22— no hay referencia y se cae al
+ * comportamiento anterior: sin dato no se puede juzgar mejor.
+ */
+function resolveExposureMeasureUsd({
+  livePolicy,
+  actualQty,
+  deltaQty,
+  committedTargetQty,
+  currentPrice,
+}) {
+  const price = Number(currentPrice) || 0;
+  const held = Number(actualQty) || 0;
+  const porDelta = Math.abs((Number(deltaQty) || 0) - held) * price;
+  if (livePolicy !== 'range_exit_v1') return porDelta;
+
+  const committed = Number(committedTargetQty);
+  if (!Number.isFinite(committed)) return porDelta;
+  return Math.abs(committed - held) * price;
+}
+
 function resolveNakedNotionalCapUsd(protection, poolValueUsd) {
   const pct = Number(protection?.nakedNotionalCapPctOfPool);
   const floor = Number(protection?.nakedNotionalCapFloorUsd);
@@ -940,6 +984,7 @@ module.exports = {
   resolveMarginFloor,
   resolveDeleverageTarget,
   resolveNakedNotionalCapUsd,
+  resolveExposureMeasureUsd,
   resolveCapTrimTarget,
   NAKED_CAP_TRIM_RETAIN,
   NAKED_EXPOSURE_TIERS,
