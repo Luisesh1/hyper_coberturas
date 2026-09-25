@@ -10,7 +10,7 @@ const {
   DEFAULT_TARGET_HEDGE_RATIO,
   safeJsonClone,
 } = require('../protected-pool-delta-neutral.helpers');
-const { policyOwnsFullDelta } = require('../protected-pool-delta-neutral.helpers');
+const { policyOwnsTarget } = require('../protected-pool-delta-neutral.helpers');
 
 // Un snapshot del pool más viejo que esto deja de valer como fallback cuando
 // la verdad on-chain falla. Espeja la constante del servicio.
@@ -96,7 +96,11 @@ const pricingMethods = {
 
     const zoneState = this._deriveZoneState(protection, baseTwin.syntheticPriceCurrent);
     const policyVersion = protection.policyVersion || protection.strategyState?.policyVersion;
-    const liveFullDelta = policyOwnsFullDelta(policyVersion, protection.strategyState?.executionIntent);
+    // `policyOwnsTarget` y no `policyOwnsFullDelta`: terminal_range_v1 tampoco
+    // hereda escalones de zona, aunque su orden no sea el delta. Aqui el
+    // target sale al 100% del delta solo como referencia; el que se ejecuta lo
+    // pone la politica.
+    const liveFullDelta = policyOwnsTarget(policyVersion, protection.strategyState?.executionIntent);
     const baseRatio = liveFullDelta ? 1 : Number(protection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
     // Las políticas net profit y range_exit viven sobre el 100% del delta y no
     // heredan los escalones de zona legacy. Es crucial también en live: de otro

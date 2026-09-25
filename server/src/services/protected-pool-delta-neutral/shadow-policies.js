@@ -21,12 +21,18 @@ const {
 const { decideLegacyZones } = require('../legacy-zones-policy.service');
 const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.service');
 const {
+  TERMINAL_RANGE_V1,
+  DEFAULT_TERMINAL_CONFIG,
+  decideTerminalRangeV1,
+  promoteTerminalIntent,
+} = require('../terminal-range-policy.service');
+const {
   estimateExecutionCostUsd,
   resolveMinOrderNotionalUsd,
   resolveLivePolicy,
 } = require('../protected-pool-delta-neutral.helpers');
 
-const ALL_POLICIES = [LEGACY_ZONES_V1, NET_PROFIT_V1, NET_PROFIT_V2, RANGE_EXIT_V1];
+const ALL_POLICIES = [LEGACY_ZONES_V1, NET_PROFIT_V1, NET_PROFIT_V2, RANGE_EXIT_V1, TERMINAL_RANGE_V1];
 const NET_PROFIT_POLICIES = [NET_PROFIT_V1, NET_PROFIT_V2];
 // Mismo throttle de escritura que tenia el snapshot unico.
 const SHADOW_SNAPSHOT_THROTTLE_MS = 30_000;
@@ -84,7 +90,42 @@ function decideShadow(policy, {
   centerDeadZone,
   forceReason,
   forceRebalance,
+  lpValuation,
+  terminalConfig,
+  minOrderNotionalUsd,
 }) {
+  if (policy === TERMINAL_RANGE_V1) {
+    // Sin valoracion del LP no hay objetivo terminal: se queda quieta en vez
+    // de inventar uno. Su N es el de SU hedge contrafactual, no el del vivo:
+    // la contabilidad del ciclo es parte de la politica que se compara.
+    if (!lpValuation) {
+      return {
+        policyVersion: TERMINAL_RANGE_V1,
+        decision: 'hold',
+        gate: 'valuation_unavailable',
+        targetQty: previous.actualQty,
+        adjustQty: 0,
+        nextState: policyState,
+      };
+    }
+    return decideTerminalRangeV1({
+      valueAt: lpValuation.valueAt,
+      volatileAt: lpValuation.volatileAt,
+      currentPrice,
+      rangeLowerPrice,
+      rangeUpperPrice,
+      liquidity: lpValuation.liquidity,
+      actualQty: previous.actualQty,
+      hedgeNetUsd: previous.realizedPnlUsd + previous.unrealizedPnlUsd + previous.fundingUsd
+        - previous.executionFeesUsd - previous.slippageUsd,
+      state: policyState,
+      now,
+      forceRebalance,
+      config: terminalConfig || DEFAULT_TERMINAL_CONFIG,
+      minOrderNotionalUsd,
+    });
+  }
+
   if (policy === RANGE_EXIT_V1) {
     // No recibe banda, temporizador ni zona muerta: esta politica no los
     // consulta. Su unica entrada es donde esta el precio respecto al rango,
@@ -188,6 +229,9 @@ function resolveExecutionGate({
   forceRebalance,
 }) {
   if (decision.decision !== 'rebalance') return null;
+  // Igual que en vivo, terminal no sufre el min-dwell: su confirmacion por
+  // cierres de minuto ya lo es, y su piso economico vive en el solver.
+  if (policy === TERMINAL_RANGE_V1) return null;
 
   const minDwellUntil = Number(policyState?.minDwellUntil);
   if (Number.isFinite(minDwellUntil) && now < minDwellUntil) return 'min_dwell_active';
@@ -272,6 +316,8 @@ function runShadowPolicies({
   forceRebalance = false,
   minOrderNotionalUsd = resolveMinOrderNotionalUsd(null),
   minDwellMs = 0,
+  lpValuation = null,
+  terminalConfig = null,
 } = {}) {
   const delta = Number(deltaQty);
   const price = Number(currentPrice);
@@ -306,6 +352,9 @@ function runShadowPolicies({
       centerDeadZone,
       forceReason,
       forceRebalance,
+      lpValuation,
+      terminalConfig,
+      minOrderNotionalUsd,
     });
     const executionGate = resolveExecutionGate({
       policy,
@@ -339,7 +388,20 @@ function runShadowPolicies({
     });
     // Un gate de ejecucion no deja avanzar el estado de la politica: en vivo
     // tampoco se consume cooldown ni presupuesto por una orden que no se mando.
-    const nextPolicyState = fills ? (decision.nextState || policyState) : policyState;
+    let nextPolicyState = fills ? (decision.nextState || policyState) : policyState;
+    if (policy === TERMINAL_RANGE_V1) {
+      // Terminal lleva estado que avanza tambien en `hold` (cierres de minuto y
+      // candidatura): congelarlo haria que la sombra nunca confirmara. En sombra
+      // el fill es inmediato y completo, asi que su intencion se promueve aqui.
+      nextPolicyState = decision.nextState || policyState;
+      if (fills) {
+        nextPolicyState = promoteTerminalIntent(nextPolicyState, {
+          intentId: decision.intentId ?? null,
+          commandedQty: filledTargetQty,
+          now,
+        });
+      }
+    }
     const entry = {
       policyVersion: policy,
       decision: executionGate ? 'hold' : decision.decision,

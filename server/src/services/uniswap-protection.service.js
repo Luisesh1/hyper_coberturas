@@ -12,6 +12,10 @@ const { ValidationError, NotFoundError } = require('../errors/app-error');
 const protectedPoolDeltaNeutralService = require('./protected-pool-delta-neutral.service');
 const { getTradingService } = require('./trading.factory');
 const {
+  computeInitialTerminalQty,
+} = require('./protected-pool-delta-neutral/terminal-range');
+const { normalizeTerminalConfig } = require('./terminal-range-policy.service');
+const {
   policyOwnsFullDelta,
   SELECTABLE_LIVE_POLICIES,
   // Viven en los helpers y NO se re-exportan desde
@@ -868,6 +872,7 @@ async function createDeltaNeutralProtectedPool({
   maxSlippageBps,
   twapMinNotionalUsd,
   policyVersion,
+  terminalRangeConfig,
   executionIntent,
   activationConfirmed,
   creationOperationId,
@@ -900,7 +905,9 @@ async function createDeltaNeutralProtectedPool({
   // zonas legacy — el modo de fallo que la politica se cableo para evitar.
   const isSelectableLivePolicy = SELECTABLE_LIVE_POLICIES.includes(policyVersion);
   const isRangeExitPolicy = policyVersion === 'range_exit_v1';
-  if ((isNetProfitPolicy || isRangeExitPolicy) && executionIntent === 'live' && activationConfirmed !== true) {
+  const isTerminalPolicy = policyVersion === 'terminal_range_v1';
+  if ((isNetProfitPolicy || isRangeExitPolicy || isTerminalPolicy)
+      && executionIntent === 'live' && activationConfirmed !== true) {
     throw new ValidationError('Confirma la operación real antes de activar esta política.');
   }
   // `liveNetProfit` conserva su nombre porque manda sobre los limites de
@@ -928,6 +935,22 @@ async function createDeltaNeutralProtectedPool({
   if (!deltaMetrics.eligible || !Number.isFinite(Number(deltaMetrics.targetQty))) {
     throw new ValidationError(deltaMetrics.reason || 'No se pudo calcular el hedge inicial delta-neutral');
   }
+
+  // `terminal_range_v1` viva abre con la SECANTE, no con el delta: el alta
+  // (hedgeSize, notional, preflight de margen) tiene que mostrar el mismo
+  // numero que la politica ordenara en su primer tick. Si el delta se
+  // aplicara primero y la politica lo corrigiera despues, habria una orden y
+  // unos costes que el diseno no contempla.
+  const liveTerminal = isTerminalPolicy && executionIntent === 'live';
+  const initialTargetQty = liveTerminal
+    ? computeInitialTerminalQty(snapshot, { volatilePriceUsd: deltaMetrics.volatilePriceUsd })
+    : Number(deltaMetrics.targetQty);
+  if (!Number.isFinite(initialTargetQty)) {
+    throw new ValidationError('No se pudo calcular el short inicial de terminal_range_v1');
+  }
+  const initialNotionalUsd = liveTerminal
+    ? initialTargetQty * Number(deltaMetrics.volatilePriceUsd)
+    : deltaMetrics.hedgeNotionalUsd;
 
   const account = await (deps.hyperliquidAccountsService || hyperliquidAccountsService)
     .resolveAccount(userId, accountId);
@@ -964,7 +987,7 @@ async function createDeltaNeutralProtectedPool({
     currentPrice: deltaMetrics.volatilePriceUsd,
     deltaQty: deltaMetrics.deltaQty,
     gamma: deltaMetrics.gamma,
-    targetQty: deltaMetrics.targetQty,
+    targetQty: initialTargetQty,
     actualQty: 0,
     effectiveBandPct: normalizedBaseBandPct,
   });
@@ -988,8 +1011,13 @@ async function createDeltaNeutralProtectedPool({
   strategyState.shadowPolicyVersion = isSelectableLivePolicy && executionIntent !== 'live'
     ? policyVersion
     : null;
-  strategyState.trackingErrorQty = Number(deltaMetrics.targetQty);
-  strategyState.trackingErrorUsd = Number(deltaMetrics.targetQty) * Number(snapshot.priceCurrent || deltaMetrics.volatilePriceUsd || 0);
+  // Sus parametros viajan con su estado, igual que la version: la politica los
+  // lee de aqui en cada tick y un reinicio no los pierde.
+  if (isTerminalPolicy) {
+    strategyState.terminalRangeConfig = normalizeTerminalConfig(terminalRangeConfig || {});
+  }
+  strategyState.trackingErrorQty = Number(initialTargetQty);
+  strategyState.trackingErrorUsd = Number(initialTargetQty) * Number(snapshot.priceCurrent || deltaMetrics.volatilePriceUsd || 0);
   const baseRecord = {
     userId,
     accountId: account.id,
@@ -1006,8 +1034,8 @@ async function createDeltaNeutralProtectedPool({
     rangeUpperPrice: snapshot.rangeUpperPrice,
     priceCurrent: snapshot.priceCurrent,
     inferredAsset: candidate.deltaNeutralAsset,
-    hedgeSize: deltaMetrics.targetQty,
-    hedgeNotionalUsd: deltaMetrics.hedgeNotionalUsd,
+    hedgeSize: initialTargetQty,
+    hedgeNotionalUsd: initialNotionalUsd,
     configuredHedgeNotionalUsd: normalizedNotionalUsd,
     initialConfiguredHedgeNotionalUsd: normalizedNotionalUsd,
     valueMultiplier: normalizedValueMultiplier,
@@ -1159,6 +1187,7 @@ async function createProtectedPool({
   maxSlippageBps,
   twapMinNotionalUsd,
   policyVersion,
+  terminalRangeConfig,
   executionIntent,
   activationConfirmed,
   creationOperationId,
@@ -1202,6 +1231,7 @@ async function createProtectedPool({
       maxSlippageBps,
       twapMinNotionalUsd,
       policyVersion,
+      terminalRangeConfig,
       executionIntent,
       activationConfirmed,
       creationOperationId,

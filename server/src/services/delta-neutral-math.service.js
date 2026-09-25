@@ -317,6 +317,7 @@ function networkSentinelIntervalMs(network) {
 module.exports = {
   asFiniteNumber,
   buildSyntheticLpState,
+  calculatePoolValueAtPrice,
   buildBandPreset,
   computeDeltaNeutralMetrics,
   getCurrentVolatilePriceUsd,

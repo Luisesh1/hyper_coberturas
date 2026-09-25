@@ -4,6 +4,7 @@
  *
  * Se compone sobre el prototipo del servicio (ver margin.js).
  */
+const { promoteTerminalIntent } = require('../terminal-range-policy.service');
 const crypto = require('node:crypto');
 const logger = require('../logger.service');
 const {
@@ -265,6 +266,17 @@ const executionMethods = {
           committedTargetQty: comandado,
         };
       }
+    }
+
+    // `terminal_range_v1`: lo comandado se adopta siempre (mismo contrato que
+    // range_exit), pero el lado y la zona solo avanzan si este fill es de SU
+    // intencion. Una orden del tope o de un forzado ajeno no le cambia el
+    // borde que cree estar cubriendo.
+    if (updatedState.terminalRangePolicyState) {
+      updatedState.terminalRangePolicyState = promoteTerminalIntent(updatedState.terminalRangePolicyState, {
+        intentId: metrics.terminalIntentId ?? null,
+        commandedQty: Number(metrics.policyTargetQty ?? metrics.targetQty),
+      });
     }
 
     delete updatedState.pendingRotationBudgetIncrement;

@@ -17,6 +17,7 @@
 const {
   resolveDeltaNeutralOrientation,
 } = require('../delta-neutral-math.service');
+const { DEFAULT_TERMINAL_CONFIG } = require('../terminal-range-policy.service');
 
 // Identidad y orden de los checks. El cliente los pinta en este orden y los
 // tests se apoyan en que la lista sea estable.
@@ -158,9 +159,17 @@ async function runProtectionPreflight({ userId, plan }, deps = {}) {
   }
 
   // ── 4. Margen libre ──────────────────────────────────────────────────────
-  const notionalUsd = Number(protection.configuredNotionalUsd) > 0
+  const baseNotionalUsd = Number(protection.configuredNotionalUsd) > 0
     ? Number(protection.configuredNotionalUsd)
     : Number(plan.capitalUsd);
+  // `terminal_range_v1` puede crecer el short hasta `maxHedge` veces el LP para
+  // recuperar lo perdido antes del borde. Se exige margen para ese PICO: con
+  // menos, el preflight del motor recortaria justo el ajuste que la politica
+  // necesita y el borde quedaria sin cubrir. Con LP de $10.000, 3x y 1.5 son
+  // los $5.000 de margen con que se valido el perfil.
+  const notionalUsd = protection.policyVersion === 'terminal_range_v1' && Number(plan.capitalUsd) > 0
+    ? Math.max(baseNotionalUsd, Number(plan.capitalUsd) * DEFAULT_TERMINAL_CONFIG.maxHedge)
+    : baseNotionalUsd;
   computed.notionalUsd = Number.isFinite(notionalUsd) ? roundUsd(notionalUsd) : null;
 
   const effectiveLeverage = Number.isFinite(leverage) && leverage > 0 ? leverage : null;

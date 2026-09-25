@@ -40,6 +40,12 @@ const {
   decideNetProfitV1,
 } = require('../net-profit-policy.service');
 const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.service');
+const {
+  TERMINAL_RANGE_V1,
+  buildLpValuation,
+  evaluateTerminalRange,
+  resolveTerminalConfig,
+} = require('./terminal-range');
 
 // A partir de que fraccion del cap una divergencia "por diseno" vuelve a
 // merecer aviso. 0.75 deja callado el regimen normal de `range_exit_v1` y
@@ -443,6 +449,30 @@ const evaluateMethods = {
         minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
       })
       : null;
+    // `terminal_range_v1` viva. Mismo motivo que range_exit para rutearla
+    // explicito: sin esta rama ejecutaria legacy bajo la etiqueta terminal.
+    // Toda su logica vive en el adaptador; aqui solo se consume el resultado.
+    const isTerminalLive = policyVersion === TERMINAL_RANGE_V1
+      && (activeProtection.strategyState?.executionIntent || strategyState.executionIntent) === 'live';
+    const terminalResult = isTerminalLive
+      ? evaluateTerminalRange({
+        // La misma foto CRUDA que alimenta el gemelo (y por tanto `deltaQty`):
+        // valorar con otra liquidez haria que V y delta hablaran de LPs
+        // distintos.
+        snapshot: activeProtection.poolSnapshot,
+        metrics,
+        priorPolicyState: strategyState.terminalRangePolicyState || {},
+        tickState: nextState,
+        actualQty,
+        currentPrice,
+        markPrice: Number(liveMarket?.hlPrice) || currentPrice,
+        rangeLowerPrice: activeProtection.rangeLowerPrice,
+        rangeUpperPrice: activeProtection.rangeUpperPrice,
+        forceRebalance,
+        minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
+        estimatedCostUsd: expectedPolicyCostUsd,
+      })
+      : null;
     // No modificamos el record para ejecutar: esta vista efímera aplica los
     // límites aprobados a cada IOC y a todos sus reintentos. Riesgo >=15% del
     // LP puede usar 30 bps, pero sigue pasando los mismos gates de snapshot,
@@ -464,20 +494,28 @@ const evaluateMethods = {
     // La política calcula el delta completo para medir el riesgo, pero la
     // orden live lleva sólo su corrección parcial. Conservamos ambos targets:
     // `targetQty` para ejecutar y `policyTargetQty` para observabilidad.
-    const executionMetrics = isNetProfitLive && netProfitDecision?.decision === 'rebalance'
-      ? {
-        ...metrics,
-        targetQty: actualQty + Number(netProfitDecision.adjustQty || 0),
-        policyTargetQty: Number(metrics.deltaQty),
-      }
-      : metrics;
-    const executionTracking = isNetProfitLive && netProfitDecision?.decision === 'rebalance'
-      ? {
-        trackingErrorQty: Number(executionMetrics.targetQty) - actualQty,
-        trackingErrorUsd: Math.abs(Number(executionMetrics.targetQty) - actualQty) * currentPrice,
-      }
-      : null;
-    const rebalanceDecision = isNetProfitLive
+    // Bajo terminal la orden lleva SU objetivo (secante/solver), nunca el
+    // delta: `metrics.targetQty` queda solo como referencia.
+    const executionMetrics = isTerminalLive
+      ? terminalResult.executionMetrics
+      : isNetProfitLive && netProfitDecision?.decision === 'rebalance'
+        ? {
+          ...metrics,
+          targetQty: actualQty + Number(netProfitDecision.adjustQty || 0),
+          policyTargetQty: Number(metrics.deltaQty),
+        }
+        : metrics;
+    const executionTracking = isTerminalLive
+      ? terminalResult.executionTracking
+      : isNetProfitLive && netProfitDecision?.decision === 'rebalance'
+        ? {
+          trackingErrorQty: Number(executionMetrics.targetQty) - actualQty,
+          trackingErrorUsd: Math.abs(Number(executionMetrics.targetQty) - actualQty) * currentPrice,
+        }
+        : null;
+    const rebalanceDecision = isTerminalLive
+      ? terminalResult.rebalanceDecision
+      : isNetProfitLive
       ? {
         decision: netProfitDecision.decision === 'rebalance' ? 'net_profit_rebalance' : 'hold',
         tracking: {
@@ -515,6 +553,20 @@ const evaluateMethods = {
           forceReason,
           forceRebalance,
         });
+    // Lo que terminal PRETENDE tener ahora: el objetivo si decide, y si no su
+    // ultima orden comandada. Es lo que se reporta y contra lo que se mide.
+    const terminalReportedTargetQty = isTerminalLive ? terminalResult.reportedTargetQty : null;
+    if (isTerminalLive) {
+      nextState.lastTargetQty = terminalReportedTargetQty;
+      // Bloque propio: nunca toca `rangeExitPolicyState` ni
+      // `netProfitPolicyState`. El lado y la zona NO avanzan aqui: solo la
+      // ejecucion confirmada promueve la intencion (ver `execution.js`).
+      nextState.terminalRangePolicyState = terminalResult.policyState;
+      nextState.terminalRangePolicyGate = terminalResult.decision.gate;
+      nextState.terminalRangeTargetQty = terminalReportedTargetQty;
+      nextState.terminalRangeResidualUsd = terminalResult.decision.residualUsd ?? null;
+      nextState.terminalRangeInfeasible = terminalResult.decision.infeasible === true;
+    }
     if (isRangeExitLive) {
       // El estado de la maquina (ancla del rango, zona y cruce a medio
       // confirmar) solo avanza cuando la politica decide; en `hold` se
@@ -728,7 +780,13 @@ const evaluateMethods = {
       }
     }
 
-    const driftQty = Number(metrics.targetQty) - actualQty;
+    // Bajo terminal el drift se mide contra SU objetivo: decide si la baja
+    // confianza bloquea (solo incrementos) y si una pausa de riesgo puede
+    // reducir. Medido contra el delta, una pausa llevaria el short hacia el
+    // objetivo de otra politica.
+    const driftQty = isTerminalLive
+      ? terminalReportedTargetQty - actualQty
+      : Number(metrics.targetQty) - actualQty;
     const driftUsd = Math.abs(driftQty) * currentPrice;
     const isReduceOnlyPath = driftQty < -1e-8;
 
@@ -791,7 +849,12 @@ const evaluateMethods = {
     //
     // El segundo no es teorico: bloquear el ajuste por borde es la familia de
     // fallo que dejo a pp27 con $53.90 de short desnudo durante 72 h.
+    // `terminal_range_v1` tambien se salta el dwell (su confirmacion por cierres
+    // de minuto ES su dwell) pero NO el de confianza: con datos en los que no
+    // confiamos no se aumenta exposicion, y la intencion pendiente se reemite
+    // cuando la confianza vuelve.
     const minDwellActive = !isRangeExitLive
+      && !isTerminalLive
       && Number.isFinite(Number(nextState.minDwellUntil))
       && Date.now() < Number(nextState.minDwellUntil);
     const confidenceBlocksIncrease = !isRangeExitLive
@@ -866,10 +929,13 @@ const evaluateMethods = {
     // bypass de cierre total.
     const forceReduceNearZero = !isNetProfitLive
       && !isRangeExitLive
+      // Terminal cierra sus residuos con `commit_incomplete` y, arriba del
+      // rango, ya ordena cero por su cuenta; este atajo puentearia su maquina.
+      && !isTerminalLive
       && legacyDecision.forceReduceNearZero;
     // Solo alimenta un log; se deja igual para no aparentar un cambio de
     // comportamiento donde no lo hay.
-    const urgentTrigger = !isNetProfitLive && legacyDecision.urgentTrigger;
+    const urgentTrigger = !isNetProfitLive && !isTerminalLive && legacyDecision.urgentTrigger;
     const centerDeadZoneBlocks = isNetProfitLive
       ? isCenterDeadZoneBlocking({
         centerDeadZone,
@@ -878,13 +944,15 @@ const evaluateMethods = {
         hasPosition: Boolean(position),
         targetQty: Number(metrics.targetQty),
       })
-      : isRangeExitLive
+      : isRangeExitLive || isTerminalLive
         // La zona muerta central es un concepto de las zonas legacy y aqui
         // seria redundante: esta politica ya se queda quieta DENTRO del rango
         // por diseno, y cuando decide es en el borde, que nunca es centro.
         ? false
         : legacyDecision.centerDeadZoneBlocks;
-    const shouldRebalance = isNetProfitLive
+    const shouldRebalance = isTerminalLive
+      ? terminalResult.decision.decision === 'rebalance'
+      : isNetProfitLive
       ? !centerDeadZoneBlocks && netProfitDecision.decision === 'rebalance'
       : isRangeExitLive
         ? rangeExitDecision.decision === 'rebalance'
@@ -933,6 +1001,10 @@ const evaluateMethods = {
       // ellos la sombra mediria "esta politica si nada la frenara".
       minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
       minDwellMs: this.minDwellMs,
+      // Solo la sombra terminal lo usa: valora el LP real para su objetivo.
+      // Aritmetica pura sobre la foto ya cargada, sin IO.
+      lpValuation: isTerminalLive ? null : buildLpValuation(activeProtection.poolSnapshot),
+      terminalConfig: resolveTerminalConfig(strategyState),
     });
     if (shadowResults.length) {
       const snapshotDue = !nextState.lastShadowSnapshotAt
@@ -1022,10 +1094,12 @@ const evaluateMethods = {
     // `range_exit_v1` el hueco contra el delta es el producto, y la averia es
     // el hueco contra lo que ELLA ordeno. Ver `resolveExposureMeasureUsd`.
     const exposureUsd = resolveExposureMeasureUsd({
-      livePolicy: isRangeExitLive ? RANGE_EXIT_V1 : null,
+      livePolicy: isRangeExitLive ? RANGE_EXIT_V1 : isTerminalLive ? TERMINAL_RANGE_V1 : null,
       actualQty,
       deltaQty: Number(metrics.deltaQty),
-      committedTargetQty: nextState.rangeExitPolicyState?.committedTargetQty,
+      committedTargetQty: isTerminalLive
+        ? nextState.terminalRangePolicyState?.committedTargetQty
+        : nextState.rangeExitPolicyState?.committedTargetQty,
       currentPrice,
     });
 
@@ -1063,10 +1137,11 @@ const evaluateMethods = {
     const farFromCap = !(nakedCapUsd > 0)
       || Math.abs(exposureUsd) < nakedCapUsd * NAKED_ALERT_CAP_PROXIMITY;
 
-    const divergenceByDesign = isRangeExitLive
+    const divergenceByDesign = (isRangeExitLive
       && farFromCap
       && (rangeExitDecision?.gate === 'inside_range_hold'
-        || rangeExitDecision?.gate === 'outside_range_hold');
+        || rangeExitDecision?.gate === 'outside_range_hold'))
+      || (isTerminalLive && farFromCap && terminalResult.divergenceByDesign);
 
     nextState.nakedExposureSince = nakedExposure.since;
     nextState.nakedExposureTier = nakedExposure.tier;
@@ -1113,6 +1188,14 @@ const evaluateMethods = {
         capUsd: nakedBreach.capUsd,
       })
       : null;
+    if (capOverridesPolicy && isTerminalLive && Number.isFinite(capTrimTargetQty)) {
+      // Mismo contrato que range_exit: el recorte del tope es el ancla nueva,
+      // no una orden suya incumplida que reintentar.
+      nextState.terminalRangePolicyState = {
+        ...(nextState.terminalRangePolicyState || {}),
+        committedTargetQty: capTrimTargetQty,
+      };
+    }
     if (capOverridesPolicy && isRangeExitLive && Number.isFinite(capTrimTargetQty)) {
       nextState.rangeExitPolicyState = {
         ...(nextState.rangeExitPolicyState || {}),
@@ -1208,7 +1291,9 @@ const evaluateMethods = {
     // decidia y otro se atribuia el porque, asi que no habia forma de saber que
     // fraccion de las ordenes eran realmente suyas — la respuesta era 0% y el
     // registro no lo dejaba ver.
-    nextState.lastDecisionReason = isNetProfitLive
+    nextState.lastDecisionReason = isTerminalLive
+      ? (forceReason || terminalResult.decision.gate)
+      : isNetProfitLive
       ? netProfitDecision.gate
       : isRangeExitLive
         ? (forceReason || rangeExitDecision.gate)
@@ -1387,7 +1472,7 @@ const evaluateMethods = {
     //
     // `decision === 'hold'` NO es un bloqueo: es la politica diciendo que no hay
     // nada que hacer. Ahi el NULL es correcto y se conserva.
-    const isLegacyLive = !isNetProfitLive && !isRangeExitLive;
+    const isLegacyLive = !isNetProfitLive && !isRangeExitLive && !isTerminalLive;
     let executionBlockedBecause = null;
     if (forcedStatus && !riskPausedCanReduce) {
       executionBlockedBecause = riskGateReason;
@@ -1415,7 +1500,7 @@ const evaluateMethods = {
       executionSkippedBecause: executionBlockedBecause,
       executionMode: activeProtection.executionMode || DEFAULT_EXECUTION_MODE,
       estimatedCostUsd: rebalanceDecision.bands.estimatedCostUsd,
-      targetQty: metrics.targetQty,
+      targetQty: isTerminalLive ? terminalReportedTargetQty : metrics.targetQty,
       actualQty,
       trackingErrorQty: tracking.trackingErrorQty,
       trackingErrorUsd: tracking.trackingErrorUsd,
@@ -1501,7 +1586,7 @@ const evaluateMethods = {
 
     const reason = capOverridesPolicy
       ? 'naked_notional_cap'
-      : isNetProfitLive
+      : isNetProfitLive || isTerminalLive
         ? policyVersion
         : forceReason
           || (!position && metrics.targetQty > ORPHAN_TARGET_QTY ? 'restart_reconcile' : priceMovePct >= band.effectiveBandPct ? 'price_band' : 'timer_and_drift');

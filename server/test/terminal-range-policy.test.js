@@ -348,3 +348,29 @@ test('sin rango utilizable se queda quieta', () => {
   assert.equal(d.decision, 'hold');
   assert.equal(d.gate, 'range_unavailable');
 });
+
+test('intencion ya cumplida por la posicion (bajo el minimo): se confirma con lo que hay, sin bucle', () => {
+  const lp = makeLp();
+  const opened = run(lp, {}, [[0, 1, 100]]);
+  // Estado pendiente cuyo objetivo esta a menos del minimo de lo que ya hay.
+  const pendiente = decideTerminalRangeV1(baseInput(lp, {
+    state: opened.state, actualQty: opened.held, now: at(0, 10), forceRebalance: true,
+  }));
+  assert.equal(pendiente.decision, 'hold', 'un ajuste de centavos no se manda');
+  assert.equal(pendiente.gate, 'intent_within_min_notional');
+  assert.equal(pendiente.nextState.pendingIntent, null, 'no queda una intencion que reintentar sin fin');
+  assert.equal(pendiente.nextState.side, 0);
+  assert.equal(pendiente.nextState.committedTargetQty, opened.held, 'lo confirmado es lo que hay');
+});
+
+test('cierre total por encima del rango se manda aunque sea sub-minimo', () => {
+  const lp = makeLp();
+  const opened = run(lp, {}, [[0, 1, 100]]);
+  const d = decideTerminalRangeV1(baseInput(lp, {
+    currentPrice: 106, state: { ...opened.state, minute: { bucket: Math.floor(at(1, 1) / MIN), lastPrice: 106 } },
+    actualQty: 0.05, now: at(2, 1),
+  }));
+  assert.equal(d.decision, 'rebalance');
+  assert.equal(d.gate, 'range_exit');
+  assert.equal(d.targetQty, 0);
+});

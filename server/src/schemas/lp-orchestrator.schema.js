@@ -27,6 +27,17 @@ const strategyConfigSchema = z.object({
   v4DynamicFeeHookVersionId: z.number().int().positive().optional(),
 });
 
+const POLICY_VERSIONS = ['legacy_zones_v1', 'net_profit_v1', 'net_profit_v2', 'range_exit_v1', 'terminal_range_v1'];
+
+// Parametros propios de `terminal_range_v1`. Viajan explicitos: el perfil
+// aprobado es 40% / 2 min y no debe depender de un default historico. NO se
+// reutiliza `baseRebalancePriceMovePct` para el umbral: aquel es un movimiento
+// de precio, este una fraccion del camino al borde.
+const terminalRangeConfigSchema = z.object({
+  threshold: z.number().gt(0).lt(1),
+  confirmMinutes: z.number().int().min(0).max(60),
+}).strict();
+
 const protectionConfigSchema = z.union([
   z.object({ enabled: z.literal(false) }),
   z.object({
@@ -46,7 +57,8 @@ const protectionConfigSchema = z.union([
     centerDeadZonePct: z.number().min(0).max(90).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
-    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1', 'net_profit_v2', 'range_exit_v1']).optional(),
+    policyVersion: z.enum(POLICY_VERSIONS).optional(),
+    terminalRangeConfig: terminalRangeConfigSchema.optional(),
     executionIntent: z.enum(['shadow', 'live']).optional(),
     activationConfirmed: z.literal(true).optional(),
   }),
@@ -149,7 +161,8 @@ const wizardProtectionSchema = z.union([
     centerDeadZonePct: z.number().min(0).max(90).optional(),
     maxSlippageBps: z.number().int().min(1).max(500).optional(),
     twapMinNotionalUsd: z.number().positive().optional(),
-    policyVersion: z.enum(['legacy_zones_v1', 'net_profit_v1', 'net_profit_v2', 'range_exit_v1']).optional(),
+    policyVersion: z.enum(POLICY_VERSIONS).optional(),
+    terminalRangeConfig: terminalRangeConfigSchema.optional(),
     executionIntent: z.enum(['shadow', 'live']).optional(),
     activationConfirmed: z.literal(true).optional(),
   }),
@@ -236,6 +249,8 @@ module.exports = {
   commitIntentSchema,
   strategyConfigPatchSchema,
   protectionConfigSchema,
+  terminalRangeConfigSchema,
+  POLICY_VERSIONS,
   createOrchestratorSchema,
   updateOrchestratorConfigSchema,
   attachLpSchema,

@@ -242,6 +242,7 @@ class LpOrchestratorService {
           maxSlippageBps: protectionConfig.maxSlippageBps,
           twapMinNotionalUsd: protectionConfig.twapMinNotionalUsd,
           policyVersion: protectionConfig.policyVersion,
+          terminalRangeConfig: protectionConfig.terminalRangeConfig,
           executionIntent: protectionConfig.executionIntent,
           activationConfirmed: protectionConfig.activationConfirmed,
           creationOperationId,
@@ -1439,6 +1440,7 @@ class LpOrchestratorService {
           maxSlippageBps: protection.maxSlippageBps,
           twapMinNotionalUsd: protection.twapMinNotionalUsd,
           policyVersion: protection.policyVersion,
+          terminalRangeConfig: protection.terminalRangeConfig,
           executionIntent: protection.executionIntent,
           activationConfirmed: protection.activationConfirmed,
         });

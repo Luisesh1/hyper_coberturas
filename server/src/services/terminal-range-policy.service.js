@@ -335,8 +335,32 @@ function decideTerminalRangeV1({
     return { qty: solved.qty, residualUsd: solved.residualUsd, infeasible: solved.infeasible, edge: E };
   };
 
+  const minNotional = Math.max(0, finite(minOrderNotionalUsd, 11));
+
   const rebalance = (gate, cycle, { side, zone, id }) => {
     const target = targetFor(cycle, side, zone);
+    // La posicion YA esta a menos del minimo del objetivo: no hay orden que el
+    // exchange acepte, y la ejecucion la descartaria sin fill. Dejarla
+    // pendiente seria reintentarla en cada tick para siempre. Lo que confirma
+    // aqui es la POSICION, no la intencion: se adopta como comandado lo que hay.
+    // Cerrar del todo es la excepcion — Hyperliquid acepta un reduceOnly
+    // sub-minimo cuando deja la posicion en cero.
+    const isFullClose = target.qty <= RESIDUAL_QTY && held > RESIDUAL_QTY;
+    if (!isFullClose && Math.abs(target.qty - held) * S < minNotional) {
+      return hold('intent_within_min_notional', {
+        ...cycle,
+        candidate: null,
+        pendingIntent: null,
+        side,
+        zone,
+        committedTargetQty: held,
+        lastAdjustAt: now,
+        lastAdjustGate: gate,
+        lastResidualUsd: target.residualUsd,
+        lastInfeasible: target.infeasible,
+        lastEdge: target.edge,
+      }, { residualUsd: target.residualUsd, infeasible: target.infeasible, edge: target.edge });
+    }
     const seq = finite(cycle.intentSeq, 0) + (id ? 0 : 1);
     const intentId = id || `${cycle.cycleId}:${seq}`;
     return {
@@ -468,7 +492,7 @@ function decideTerminalRangeV1({
     const tolerance = Math.max(committed * COMMIT_TOLERANCE_PCT, RESIDUAL_QTY);
     if (gap > tolerance) {
       const isFullClose = committed <= RESIDUAL_QTY && held > RESIDUAL_QTY;
-      if (isFullClose || gap * S >= Math.max(0, finite(minOrderNotionalUsd, 11))) {
+      if (isFullClose || gap * S >= minNotional) {
         return {
           ...hold('commit_incomplete', cycle),
           decision: 'rebalance',

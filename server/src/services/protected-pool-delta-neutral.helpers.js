@@ -339,6 +339,22 @@ function policyOwnsFullDelta(policyVersion, executionIntent) {
 }
 
 /**
+ * Politicas que fijan su PROPIO objetivo y que tampoco deben heredar los
+ * escalones de zona legacy.
+ *
+ * No es lo mismo que `FULL_DELTA_POLICIES`: `terminal_range_v1` no vive sobre
+ * el delta, dimensiona con secante y solver. Meterla en la lista de delta
+ * completo haria que el alta de una proteccion la dimensionara al delta y que
+ * cualquier lector de esa lista asumiera un objetivo que no es el suyo. Lo que
+ * comparten es solo esto: `pricing.js` no debe aplicarles `zoneMultiplier`.
+ */
+const OWN_TARGET_POLICIES = [...FULL_DELTA_POLICIES, 'terminal_range_v1'];
+
+function policyOwnsTarget(policyVersion, executionIntent) {
+  return OWN_TARGET_POLICIES.includes(policyVersion) && executionIntent === 'live';
+}
+
+/**
  * Politicas que se pueden ELEGIR para operar de verdad. Todo lo demas —una
  * politica desconocida, o una elegida con intencion `shadow`— sigue ejecutando
  * con las zonas legacy.
@@ -346,7 +362,7 @@ function policyOwnsFullDelta(policyVersion, executionIntent) {
  * Misma lista de literales y por el mismo motivo que `FULL_DELTA_POLICIES`:
  * importar las constantes desde los modulos de politica cerraria un ciclo.
  */
-const SELECTABLE_LIVE_POLICIES = ['net_profit_v1', 'net_profit_v2', 'range_exit_v1'];
+const SELECTABLE_LIVE_POLICIES = ['net_profit_v1', 'net_profit_v2', 'range_exit_v1', 'terminal_range_v1'];
 
 /**
  * La politica que EJECUTA, que no es siempre la declarada. Una proteccion
@@ -372,8 +388,13 @@ function resolveLivePolicy({ policyVersion, executionIntent } = {}) {
  * cuando decide es en el borde, que nunca es centro.
  */
 function policyHonorsCenterDeadZone(livePolicy) {
-  return livePolicy != null && livePolicy !== 'range_exit_v1';
+  return livePolicy != null && livePolicy !== 'range_exit_v1' && livePolicy !== 'terminal_range_v1';
 }
+
+// Banda central de `terminal_range_v1` con el perfil aprobado: entre los dos
+// umbrales al 40% del camino a cada borde queda el 40% central del rango
+// (ancla centrada). Literal por el mismo motivo que las listas de arriba.
+const TERMINAL_NO_OP_BAND_PCT = 40;
 
 /**
  * El tramo del rango donde la cobertura NO opera, tal como lo produce la
@@ -391,6 +412,9 @@ function policyHonorsCenterDeadZone(livePolicy) {
  */
 function resolveNoOpZone(livePolicy, centerDeadZonePct) {
   if (livePolicy == null) return null;
+  // `terminal_range_v1` no usa la zona muerta configurable, pero SI tiene una
+  // banda propia donde no actua: la de sus umbrales.
+  if (livePolicy === 'terminal_range_v1') return { kind: 'center', pct: TERMINAL_NO_OP_BAND_PCT };
   if (!policyHonorsCenterDeadZone(livePolicy)) return { kind: 'full_range', pct: 100 };
   // La misma trampa que documenta `resolveCenterDeadZone`: `Number(null)` da 0,
   // que es finito. Sin este corte, una proteccion que todavia no resolvio su
@@ -671,7 +695,9 @@ function resolveExposureMeasureUsd({
   const price = Number(currentPrice) || 0;
   const held = Number(actualQty) || 0;
   const porDelta = Math.abs((Number(deltaQty) || 0) - held) * price;
-  if (livePolicy !== 'range_exit_v1') return porDelta;
+  // `terminal_range_v1` tampoco persigue el delta: su referencia es lo que
+  // ella misma ordeno, igual que range_exit.
+  if (livePolicy !== 'range_exit_v1' && livePolicy !== 'terminal_range_v1') return porDelta;
 
   const committed = Number(committedTargetQty);
   if (!Number.isFinite(committed)) return porDelta;
@@ -958,6 +984,8 @@ module.exports = {
   ESTIMATED_TAKER_FEE_RATE,
   FULL_DELTA_POLICIES,
   policyOwnsFullDelta,
+  OWN_TARGET_POLICIES,
+  policyOwnsTarget,
   SELECTABLE_LIVE_POLICIES,
   resolveLivePolicy,
   resolveProtectionLivePolicy,
