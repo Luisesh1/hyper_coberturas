@@ -43,8 +43,15 @@ test('usa sqrtPriceX96 exacto para no inflar la liquidez dentro del tick activo'
     sqrtPriceX96: '3429045923241452434882560',
   });
 
-  assert.equal(desdeTickEntero, 158_615787626032n);
-  assert.equal(desdeSqrtExacto, 157_734408893455n);
+  // La estimacion es float (Math.pow): el ultimo digito cambia entre versiones
+  // de V8 (Node 22 vs 24 difieren en 3 unidades sobre 1.6e14). Se compara con
+  // tolerancia relativa; lo que protege el test es la desviacion de abajo.
+  const assertCerca = (actual, esperado) => {
+    const diff = actual > esperado ? actual - esperado : esperado - actual;
+    assert.ok(diff * 1_000_000_000n <= esperado, `${actual} lejos de ${esperado}`);
+  };
+  assertCerca(desdeTickEntero, 158_615787626032n);
+  assertCerca(desdeSqrtExacto, 157_734408893455n);
   assert.ok(desdeSqrtExacto < desdeTickEntero, 'el tick entero sobreestimaba la liquidez');
   assert.ok(
     ((desdeTickEntero - desdeSqrtExacto) * 10_000n) / desdeTickEntero > 50n,
