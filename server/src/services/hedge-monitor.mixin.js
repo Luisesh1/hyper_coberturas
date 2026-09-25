@@ -137,7 +137,13 @@ const monitorMethods = {
   },
 
   async _monitorPendingSl(hedge, { openOrders, openOidSet, openOrdersAvailable }) {
-    const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
+    const { ok, pos } = await this._readPosition(hedge);
+    if (!ok) {
+      // Un fallo de lectura no es una posicion cerrada: se espera al tick
+      // siguiente en vez de cerrar el ciclo y re-entrar con la posicion viva.
+      await this._save(hedge).catch((err) => logger.error('hedge_save_failed', { hedgeId: hedge.id, error: err.message }));
+      return;
+    }
     if (!pos || parseFloat(pos.szi) === 0) {
       const recovered = await this._recoverExitFromExchange(hedge);
       if (!recovered) {
@@ -215,7 +221,13 @@ const monitorMethods = {
   },
 
   async _monitorClosing(hedge) {
-    const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
+    const { ok, pos } = await this._readPosition(hedge);
+    if (!ok) {
+      // Un fallo de lectura no es una posicion cerrada: se espera al tick
+      // siguiente en vez de cerrar el ciclo y re-entrar con la posicion viva.
+      await this._save(hedge).catch((err) => logger.error('hedge_save_failed', { hedgeId: hedge.id, error: err.message }));
+      return;
+    }
     if (!pos || parseFloat(pos.szi) === 0) {
       const recovered = await this._recoverExitFromExchange(hedge);
       if (!recovered) {
@@ -234,7 +246,13 @@ const monitorMethods = {
   },
 
   async _monitorOpenProtected(hedge, { openOrders, openOidSet, openOrdersAvailable }) {
-    const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
+    const { ok, pos } = await this._readPosition(hedge);
+    if (!ok) {
+      // Un fallo de lectura no es una posicion cerrada: se espera al tick
+      // siguiente en vez de cerrar el ciclo y re-entrar con la posicion viva.
+      await this._save(hedge).catch((err) => logger.error('hedge_save_failed', { hedgeId: hedge.id, error: err.message }));
+      return;
+    }
     if (!pos || parseFloat(pos.szi) === 0) {
       const recovered = await this._recoverExitFromExchange(hedge);
       if (!recovered) {

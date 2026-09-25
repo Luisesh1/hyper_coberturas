@@ -676,3 +676,125 @@ test('reutiliza un SL existente si slOid se perdio antes de recolocarlo', async 
   assert.equal(hedge.slOid, 4321);
   assert.equal(hedge.status, 'open_protected');
 });
+
+// Regresion: `getPosition` fallaba (timeout, 429) y el `.catch` devolvia
+// `null`, lo mismo que "sin posicion". El monitor cerraba el ciclo con un PnL
+// inventado, olvidaba el SL que seguia vivo y colocaba una entrada NUEVA con
+// la posicion anterior aun abierta: exposicion duplicada por un solo tick.
+for (const status of ['open_protected', 'entry_filled_pending_sl', 'closing']) {
+  test(`monitor no cierra el ciclo en ${status} si getPosition falla`, async () => {
+    let entryOrders = 0;
+    let cyclesClosed = 0;
+    const { service } = createService({
+      hlOverrides: {
+        getOpenOrders: async () => [{ oid: 222 }],
+        getPosition: async () => { throw new Error('ETIMEDOUT'); },
+        getUserFills: async () => { throw new Error('ETIMEDOUT'); },
+      },
+    });
+    service._placeEntryOrder = async () => { entryOrders += 1; };
+    service._completeCycleWithoutExitFill = async () => { cyclesClosed += 1; };
+    const hedge = buildHedge({
+      status,
+      entryOid: null,
+      slOid: 222,
+      openPrice: 70000,
+      openedAt: Date.now() - 60_000,
+      positionSize: 0.00771,
+      closingStartedAt: status === 'closing' ? Date.now() - 1_000 : null,
+    });
+    service.hedges.set(hedge.id, hedge);
+
+    await service._monitorPositions();
+
+    assert.equal(hedge.status, status);
+    assert.equal(hedge.slOid, 222);
+    assert.equal(cyclesClosed, 0);
+    assert.equal(entryOrders, 0);
+  });
+}
+
+test('entry fill con exit cruzado no re-entra si getPosition falla', async () => {
+  let entryOrders = 0;
+  let closeCalls = 0;
+  let positionCalls = 0;
+  const { service } = createService({
+    hlOverrides: {
+      getAllMids: async () => ({ BTC: '71500' }),
+      getPosition: async () => {
+        positionCalls += 1;
+        if (positionCalls === 1) return { szi: '-0.00771', entryPx: '70000' };
+        throw new Error('ETIMEDOUT');
+      },
+    },
+  });
+  service._placeEntryOrder = async () => { entryOrders += 1; };
+  service._closePositionReduceOnly = async () => { closeCalls += 1; };
+  const hedge = buildHedge();
+  service.hedges.set(hedge.id, hedge);
+
+  await service._onEntryFill(hedge, { px: '70000', sz: '0.00771', oid: 111, time: Date.now(), fee: '0' });
+
+  assert.equal(hedge.status, 'closing');
+  assert.equal(entryOrders, 0);
+  assert.equal(closeCalls, 0);
+});
+
+test('rescate de entrada no envia la IOC si getPosition falla', async () => {
+  let iocCalls = 0;
+  const { service } = createService({
+    hlOverrides: {
+      getOpenOrders: async () => [],
+      getPosition: async () => { throw new Error('ETIMEDOUT'); },
+      placeOrder: async () => { iocCalls += 1; return { oid: 555 }; },
+    },
+  });
+  service._recoverEntryFromExchange = async () => false;
+  const hedge = buildHedge({ entryPlacedAt: Date.now() - 60_000 });
+  service.hedges.set(hedge.id, hedge);
+
+  const result = await service._reconcileTriggeredEntry(hedge, { currentPrice: 69900, openOrders: [], source: 'monitor' });
+
+  assert.equal(iocCalls, 0);
+  assert.equal(hedge.status, 'entry_pending');
+  assert.equal(result?.acted, false);
+});
+
+test('_placeEntryOrder no coloca la entrada si getPosition falla', async () => {
+  let triggerCalls = 0;
+  const { service } = createService({
+    hlOverrides: {
+      getPosition: async () => { throw new Error('ETIMEDOUT'); },
+      placeTriggerEntry: async () => { triggerCalls += 1; return 1234; },
+    },
+  });
+  bindRealPlaceEntryOrder(service);
+  service._ensureEntryConfig = async () => {};
+  const hedge = buildHedge({ status: 'waiting', entryOid: null });
+  service.hedges.set(hedge.id, hedge);
+
+  await assert.rejects(() => service._placeEntryOrder(hedge, { openOrders: [] }));
+  assert.equal(triggerCalls, 0);
+});
+
+for (const failing of ['getPosition', 'getOpenOrders']) {
+  test(`cancel_pending no se da por cancelado si ${failing} falla tras cancelar`, async () => {
+    let calls = 0;
+    const { service } = createService({
+      hlOverrides: {
+        getOpenOrders: failing === 'getOpenOrders'
+          ? async () => { calls += 1; if (calls > 1) throw new Error('ETIMEDOUT'); return []; }
+          : async () => [],
+        getPosition: failing === 'getPosition'
+          ? async () => { calls += 1; if (calls > 1) throw new Error('ETIMEDOUT'); return null; }
+          : async () => null,
+      },
+    });
+    const hedge = buildHedge({ status: 'cancel_pending', cancelStartedAt: Date.now() });
+    service.hedges.set(hedge.id, hedge);
+
+    await service._reconcileCancelPending(hedge);
+
+    assert.equal(hedge.status, 'cancel_pending');
+  });
+}

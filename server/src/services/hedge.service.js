@@ -791,7 +791,14 @@ class HedgeService extends EventEmitter {
         return { acted: false, reason: 'open_orders_unconfirmed' };
       }
 
-      const posBeforeIoc = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
+      const { ok: posBeforeIocOk, pos: posBeforeIoc } = await this._readPosition(hedge);
+      if (!posBeforeIocOk) {
+        // Ultimo control antes de la IOC: sin lectura podria haber ya una
+        // posicion abierta y la IOC la duplicaria.
+        hedge.error = 'Entrada pendiente: no se pudo leer la posicion; IOC omitida para evitar duplicados.';
+        await this._emitUpdated(hedge);
+        return { acted: false, reason: 'position_unavailable' };
+      }
       if (posBeforeIoc && parseFloat(posBeforeIoc.szi) !== 0) {
         if (await this._handleUnexpectedPositionSize(hedge, Math.abs(parseFloat(posBeforeIoc.szi)), `${source}:pre_ioc_position`)) {
           return { acted: false, reason: 'oversized_position' };
@@ -870,7 +877,12 @@ class HedgeService extends EventEmitter {
     try {
       await this._ensureEntryConfig(hedge);
 
-      const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
+      const { ok: posOk, pos } = await this._readPosition(hedge);
+      if (!posOk) {
+        // Colocar la entrada sin saber si hay posicion abierta puede duplicar
+        // la exposicion; mejor fallar como cualquier otra colocacion fallida.
+        throw new Error('No se pudo leer la posicion en HL; entrada no colocada');
+      }
       if (pos && parseFloat(pos.szi) !== 0) {
         hedge.positionSize = Math.abs(parseFloat(pos.szi));
         hedge.dynamicAnchorPrice = this._getDynamicAnchorPrice(hedge);
@@ -1085,7 +1097,12 @@ class HedgeService extends EventEmitter {
         hedge.closingStartedAt = Date.now();
         await this._emitUpdated(hedge);
 
-        const pos = await this.hl.getPosition(hedge.asset).catch((err) => { logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message }); return null; });
+        const { ok, pos } = await this._readPosition(hedge);
+        if (!ok) {
+          // Sin lectura no se sabe si la posicion sigue abierta: queda en
+          // `closing` y el monitor la cierra o completa el ciclo al confirmar.
+          return;
+        }
         if (pos && parseFloat(pos.szi) !== 0) {
           await this._closePositionReduceOnly(hedge, pos).catch((e) =>
             logger.error('hedge_emergency_close_failed', { hedgeId: hedge.id, error: e.message })
@@ -1185,6 +1202,21 @@ class HedgeService extends EventEmitter {
       reduceOnly: true,
       tif: 'Ioc',
     });
+  }
+
+  /**
+   * Lee la posicion distinguiendo "no hay posicion" de "no se pudo leer".
+   * `getPosition` devuelve `null` en ambos casos si el error se traga con un
+   * `.catch`, y tratar un timeout como posicion cerrada cerraba el ciclo con
+   * la posicion viva y abria una entrada nueva encima.
+   */
+  async _readPosition(hedge) {
+    try {
+      return { ok: true, pos: await this.hl.getPosition(hedge.asset) };
+    } catch (err) {
+      logger.warn('getPosition failed', { hedgeId: hedge?.id, asset: hedge?.asset, error: err.message });
+      return { ok: false, pos: null };
+    }
   }
 
   async _getRecentFills() {
@@ -1296,7 +1328,10 @@ class HedgeService extends EventEmitter {
       const stillHasSl = hedge.slOid && openAfterSet.has(Number(hedge.slOid));
       const stillHasPos = !!(posAfter && parseFloat(posAfter.szi) !== 0);
 
-      if (!stillHasEntry && !stillHasSl && !stillHasPos) {
+      // Sin leer ordenes y posicion no se puede afirmar que quedo todo plano:
+      // un fallo daria conjuntos vacios y marcaria cancelado con la posicion viva.
+      const afterKnown = openOrdersAfterResult.status === 'fulfilled' && posAfterResult.status === 'fulfilled';
+      if (afterKnown && !stillHasEntry && !stillHasSl && !stillHasPos) {
         hedge.status = 'cancelled';
         hedge.entryOid = null;
         hedge.slOid = null;
