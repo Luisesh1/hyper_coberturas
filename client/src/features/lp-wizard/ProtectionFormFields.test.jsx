@@ -228,6 +228,29 @@ describe('política de cobertura', () => {
     expect(payload.activationConfirmed).toBe(true);
   });
 
+  it('terminal manda su perfil explicito (40% / 2 min) y solo cuando es la elegida', () => {
+    const terminal = buildProtectionPayload({ ...netProfit(), policyVersion: 'terminal_range_v1' });
+    expect(terminal.policyVersion).toBe('terminal_range_v1');
+    expect(terminal.terminalRangeConfig).toEqual({ threshold: 0.4, confirmMinutes: 2 });
+    expect(terminal.executionIntent).toBe('live');
+    const otra = buildProtectionPayload({ ...netProfit(), policyVersion: 'range_exit_v1' });
+    expect(otra.terminalRangeConfig).toBeUndefined();
+  });
+
+  it('con terminal el margen mostrado es el del pico del short, no el del delta', () => {
+    render(
+      <ProtectionFormFields
+        value={{ ...netProfit(), policyVersion: 'terminal_range_v1', notionalAuto: false, configuredNotionalUsd: '500', leverage: '3' }}
+        onChange={() => {}}
+        accounts={[{ id: 1 }]}
+        initialUsd={10000}
+      />,
+    );
+    // 10.000 x 1,5 / 3 = 5.000
+    const consecuencia = screen.getAllByText(/margen/i).find((el) => el.tagName === 'SPAN');
+    expect(consecuencia.textContent).toMatch(/5[.,]000/);
+  });
+
   it('validateProtectionForm ya no exige confirmar la operación real', () => {
     expect(validateProtectionForm(netProfit())).toBeNull();
     expect(validateProtectionForm({ ...netProfit(), activationConfirmed: false })).toBeNull();

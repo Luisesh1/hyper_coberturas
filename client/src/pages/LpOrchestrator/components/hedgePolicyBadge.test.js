@@ -88,3 +88,9 @@ describe('getHedgePolicyBadge', () => {
     expect(hedgePolicyLabel(null)).toBe('desconocida');
   });
 });
+
+describe('terminal_range_v1', () => {
+  it('tiene etiqueta propia y no se muestra con el nombre crudo', () => {
+    expect(hedgePolicyLabel('terminal_range_v1')).toBe('Terminal');
+  });
+});

@@ -11,6 +11,9 @@ export const POLICY_OPTIONS = [
   // y `selectPolicySnapshot` ya los descarta por `hlAccountUsd` no finito, asi
   // que la serie arranca el dia que se desplego.
   { value: 'range_exit_v1', label: 'Borde de rango v1' },
+  // Misma logica: serie en sombra en todas las protecciones desde su alta. Su
+  // divergencia contra el delta es su diseno, no un fallo de cobertura.
+  { value: 'terminal_range_v1', label: 'Terminal v1' },
 ];
 
 // Componentes del PnL neto, en el mismo orden y con el mismo signo con que

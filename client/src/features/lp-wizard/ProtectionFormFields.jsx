@@ -34,6 +34,15 @@ const DELTA_NEUTRAL_PRESETS = [
 // sigue vivo para quien llame la API a mano; desde aqui, elegirla en el
 // desplegable ES el acto explicito que pedia.
 
+// Perfil aprobado de `terminal_range_v1` (backtest 2026-09-25). Se manda
+// explicito: el servidor no debe depender de un default historico, y el
+// umbral no es `baseRebalancePriceMovePct` (aquel es movimiento de precio,
+// este fraccion del camino al borde).
+export const TERMINAL_RANGE_PROFILE = Object.freeze({ threshold: 0.4, confirmMinutes: 2 });
+// El short de terminal puede crecer hasta 1,5 veces el LP antes del borde; el
+// margen se dimensiona para ese pico, igual que el preflight del servidor.
+export const TERMINAL_MAX_HEDGE = 1.5;
+
 const DEFAULT_PROTECTION = Object.freeze({
   enabled: false,
   accountId: '',
@@ -288,7 +297,10 @@ export default function ProtectionFormFields({
   });
   // Con auto activo el número mostrado manda sobre lo que haya en el state:
   // así cambiar el rango en un paso anterior se refleja sin tocar nada.
-  const effectiveNotionalUsd = v.notionalAuto && auto ? auto.notionalUsd : Number(v.configuredNotionalUsd);
+  const baseNotionalUsd = v.notionalAuto && auto ? auto.notionalUsd : Number(v.configuredNotionalUsd);
+  const effectiveNotionalUsd = v.policyVersion === 'terminal_range_v1' && Number(initialUsd) > 0
+    ? Math.max(Number(baseNotionalUsd) || 0, Number(initialUsd) * TERMINAL_MAX_HEDGE)
+    : baseNotionalUsd;
   const hedgeConsequence = computeHedgeConsequence({
     notionalUsd: effectiveNotionalUsd, leverage: v.leverage,
   });
@@ -390,6 +402,7 @@ export default function ProtectionFormFields({
 
   const isNetProfit = ['net_profit_v1', 'net_profit_v2'].includes(v.policyVersion);
   const isRangeExit = v.policyVersion === 'range_exit_v1';
+  const isTerminal = v.policyVersion === 'terminal_range_v1';
   const isAutoTuned = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) === Number(rangeWidthPct);
   const tunedDrifted = v.enabled && v.autoTunedFor != null && Number(v.autoTunedFor) !== Number(rangeWidthPct);
 
@@ -519,10 +532,11 @@ export default function ProtectionFormFields({
                 <option value="net_profit_v1">Net profit — bandas por coste neto</option>
                 <option value="net_profit_v2">Net profit V2 — ajuste parcial y límites de rotación</option>
                 <option value="range_exit_v1">Borde de rango — cubre al abrir y sólo reajusta al salir/entrar</option>
+                <option value="terminal_range_v1">Terminal — resultado en dólares a cero al llegar al borde</option>
               </select>
             </div>
 
-            {!isNetProfit && !isRangeExit && (
+            {!isNetProfit && !isRangeExit && !isTerminal && (
               <p className={styles.hint}>
                 Cubre por zonas respecto al borde del rango: en el centro deja ~40% del delta
                 descubierto a propósito, y los umbrales de zona no escalan con el ancho del rango.
@@ -539,11 +553,24 @@ export default function ProtectionFormFields({
               </p>
             )}
 
+            {isTerminal && (
+              <p className={styles.hint}>
+                Abre con un short balanceado entre los dos bordes y, cuando el precio recorre
+                el <strong>40%</strong> del camino a un borde y lo sostiene <strong>2 minutos</strong> de
+                cierres, lo redimensiona para que al llegar a ese borde el resultado del ciclo —LP,
+                hedge, funding y costes de cerrar y reabrir— quede cerca de cero. No sigue el delta:
+                el short puede crecer hasta {TERMINAL_MAX_HEDGE}× el LP, y el margen se pide para ese
+                pico. El cero es un objetivo, no una garantía: en el backtest el perfil perdió −37,85% en
+                un año. El recentrado sigue siendo tuyo: se recomienda solo fuera del rango y 24 h
+                después de abrir el LP.
+              </p>
+            )}
+
             {/* Que la elegida opera y las demás se miden va escrito una sola
                 vez, debajo del selector: es la regla del sistema, no un
                 atributo de una política concreta. */}
             <p className={styles.hint}>
-              La política elegida <strong>opera con dinero real</strong>. Las otras tres se siguen
+              La política elegida <strong>opera con dinero real</strong>. Las demás se siguen
               simulando en sombra en cada tick, sobre los mismos datos, para la comparativa de
               Métricas — no mandan órdenes.
             </p>
@@ -695,6 +722,9 @@ export function buildProtectionPayload(formValue) {
     maxSlippageBps: Number(formValue.maxSlippageBps),
     twapMinNotionalUsd: Number(formValue.twapMinNotionalUsd),
     policyVersion: formValue.policyVersion || 'legacy_zones_v1',
+    ...(formValue.policyVersion === 'terminal_range_v1'
+      ? { terminalRangeConfig: { ...TERMINAL_RANGE_PROFILE } }
+      : {}),
     // Fijos a proposito: el formulario ya no ofrece sombra, asi que lo
     // seleccionado es lo que opera. Leerlos del formValue dejaria que un
     // `executionIntent: 'shadow'` viejo —persistido antes de este cambio, o

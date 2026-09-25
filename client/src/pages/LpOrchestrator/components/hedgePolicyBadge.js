@@ -19,6 +19,7 @@ export const HEDGE_POLICY_LABELS = {
   net_profit_v1: 'Net profit',
   net_profit_v2: 'Net profit V2',
   range_exit_v1: 'Borde de rango',
+  terminal_range_v1: 'Terminal',
 };
 
 export function hedgePolicyLabel(policyVersion) {
