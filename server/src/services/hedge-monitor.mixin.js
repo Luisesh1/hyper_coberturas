@@ -9,9 +9,14 @@
 
 const logger = require('./logger.service');
 const config = require('../config');
+const { fundingReceivedUsd } = require('../utils/hl-funding');
 
 const MONITOR_INTERVAL_MS = config.intervals.hedgeMonitorMs;
 const CLOSING_TIMEOUT_MS = config.intervals.hedgeClosingTimeoutMs;
+// Intentos de colocar la entrada desde `waiting` antes de pasar a `error`. El
+// mismo tope que el SL: absorbe fallos transitorios (red, 429, margen que se
+// libera) sin reintentar para siempre un rechazo permanente.
+const MAX_ENTRY_RETRIES = 8;
 
 const monitorMethods = {
   _startMonitor() {
@@ -32,6 +37,7 @@ const monitorMethods = {
   async _monitorPositions() {
     const activeHedges = [...this.hedges.values()].filter((hedge) =>
       [
+        'waiting',
         'entry_pending',
         'entry_filled_pending_sl',
         'open_protected',
@@ -63,6 +69,11 @@ const monitorMethods = {
             return;
           }
 
+          if (hedge.status === 'waiting') {
+            await this._monitorWaiting(hedge, { openOrders, openOrdersAvailable });
+            return;
+          }
+
           if (hedge.status === 'entry_pending') {
             await this._monitorEntryPending(hedge, { openOrders, openOidSet, openOrdersAvailable });
             return;
@@ -89,6 +100,37 @@ const monitorMethods = {
           logger.error('hedge_monitor_item_error', { hedgeId: hedge.id, error: err.message });
         }
       });
+    }
+  },
+
+  /**
+   * `waiting` es transitorio: se asigna justo antes de colocar la entrada. Si
+   * esa colocacion falla (al cerrar un ciclo, al re-apuntar la entrada) o el
+   * proceso se reinicia en medio, el hedge queda aqui y nadie mas lo mueve.
+   * `_placeEntryOrder` ya adopta una posicion abierta o una entrada existente
+   * antes de colocar otra, asi que reintentarla no duplica exposicion.
+   */
+  async _monitorWaiting(hedge, { openOrders, openOrdersAvailable }) {
+    if (this._isEntryTransitionInProgress(hedge) || !openOrdersAvailable) {
+      await this._save(hedge).catch((err) => logger.error('hedge_save_failed', { hedgeId: hedge.id, error: err.message }));
+      return;
+    }
+
+    try {
+      await this._placeEntryOrder(hedge, { openOrders, openOrdersAvailable });
+      hedge.entryRetryCount = 0;
+    } catch (err) {
+      hedge.entryRetryCount = (hedge.entryRetryCount || 0) + 1;
+      logger.warn('hedge_waiting_entry_failed', { hedgeId: hedge.id, attempt: hedge.entryRetryCount, error: err.message });
+      if (hedge.entryRetryCount >= MAX_ENTRY_RETRIES) {
+        await this._setError(
+          hedge,
+          new Error(`La entrada fallo ${MAX_ENTRY_RETRIES} veces seguidas: ${err.message}. Intervencion manual requerida.`)
+        );
+        return;
+      }
+      hedge.error = `Entrada pendiente (intento ${hedge.entryRetryCount}/${MAX_ENTRY_RETRIES}): ${err.message}`;
+      await this._emitUpdated(hedge);
     }
   },
 
@@ -271,8 +313,10 @@ const monitorMethods = {
 
     const prevPnl = hedge.unrealizedPnl;
     hedge.unrealizedPnl = parseFloat(pos.unrealizedPnl || 0);
-    if (pos.cumFunding?.sinceOpen !== undefined) {
-      hedge.fundingAccum = parseFloat(pos.cumFunding.sinceOpen || 0);
+    // Con signo recibido: `cumFunding` de Hyperliquid es positivo al PAGAR.
+    const fundingUsd = fundingReceivedUsd(pos);
+    if (fundingUsd != null) {
+      hedge.fundingAccum = fundingUsd;
     }
 
     if (prevPnl !== hedge.unrealizedPnl) {

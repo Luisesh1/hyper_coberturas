@@ -1197,7 +1197,7 @@ class HedgeService extends EventEmitter {
     await this.hl.placeOrder({
       assetIndex: hedge.assetIndex,
       isBuy,
-      size: formatSize(Math.abs(szi), hedge.szDecimals || 4),
+      size: formatSize(Math.abs(szi), hedge.szDecimals ?? 4),
       price,
       reduceOnly: true,
       tif: 'Ioc',

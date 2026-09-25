@@ -724,3 +724,15 @@ test('ninguna sombra toca TradingService', async () => {
 
   assert.deepEqual(tocadas, [], `una sombra llamo a TradingService: ${tocadas.join(', ')}`);
 });
+
+// `cumFunding.sinceOpen = -1.5` en Hyperliquid significa 1.5 USD RECIBIDOS. El
+// motor trabaja con "positivo = recibido", asi que tiene que sumar +1.5.
+test('el motor convierte cumFunding al signo recibido', async () => {
+  const protection = buildProtection();
+  const service = buildService(protection);
+  service._executeRebalance = async ({ strategyState }) => ({ ...strategyState, executed: true });
+
+  await service.evaluateProtection(protection);
+
+  assert.equal(protection.strategyState.fundingAccumUsd, 1.5);
+});

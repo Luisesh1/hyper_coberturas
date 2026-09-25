@@ -798,3 +798,155 @@ for (const failing of ['getPosition', 'getOpenOrders']) {
     assert.equal(hedge.status, 'cancel_pending');
   });
 }
+
+// Regresion: `waiting` es transitorio (se asigna justo antes de colocar la
+// entrada) pero el monitor no lo recorria. Si `_placeEntryOrder` fallaba al
+// cerrar un ciclo, o el proceso se reiniciaba con el hedge en `waiting`, nadie
+// volvia a colocar la entrada y el hedge quedaba varado sin avisar.
+test('monitor coloca la entrada de un hedge varado en waiting', async () => {
+  let triggerCalls = 0;
+  const { service } = createService({
+    hlOverrides: {
+      getOpenOrders: async () => [],
+      getPosition: async () => null,
+      placeTriggerEntry: async () => { triggerCalls += 1; return 4321; },
+    },
+  });
+  bindRealPlaceEntryOrder(service);
+  service._ensureEntryConfig = async () => {};
+  const hedge = buildHedge({ status: 'waiting', entryOid: null, entryPlacedAt: null });
+  service.hedges.set(hedge.id, hedge);
+
+  await service._monitorPositions();
+
+  assert.equal(triggerCalls, 1);
+  assert.equal(hedge.status, 'entry_pending');
+  assert.equal(hedge.entryOid, 4321);
+});
+
+test('monitor adopta la entrada que ya existe en el exchange en vez de duplicarla', async () => {
+  let triggerCalls = 0;
+  const { service } = createService({
+    hlOverrides: {
+      getOpenOrders: async () => [{ oid: 777, coin: 'BTC', side: 'A', sz: '0.00771', reduceOnly: false }],
+      getPosition: async () => null,
+      placeTriggerEntry: async () => { triggerCalls += 1; return 4321; },
+    },
+  });
+  bindRealPlaceEntryOrder(service);
+  service._ensureEntryConfig = async () => {};
+  const hedge = buildHedge({ status: 'waiting', entryOid: null, entryPlacedAt: null });
+  service.hedges.set(hedge.id, hedge);
+
+  await service._monitorPositions();
+
+  assert.equal(triggerCalls, 0);
+  assert.equal(hedge.status, 'entry_pending');
+  assert.equal(hedge.entryOid, 777);
+});
+
+test('monitor no toca un hedge en waiting si no puede leer las ordenes abiertas', async () => {
+  let triggerCalls = 0;
+  const { service } = createService({
+    hlOverrides: {
+      getOpenOrders: async () => { throw new Error('ETIMEDOUT'); },
+      placeTriggerEntry: async () => { triggerCalls += 1; return 4321; },
+    },
+  });
+  bindRealPlaceEntryOrder(service);
+  service._ensureEntryConfig = async () => {};
+  const hedge = buildHedge({ status: 'waiting', entryOid: null, entryPlacedAt: null });
+  service.hedges.set(hedge.id, hedge);
+
+  await service._monitorPositions();
+
+  assert.equal(triggerCalls, 0);
+  assert.equal(hedge.status, 'waiting');
+});
+
+test('waiting reintenta la entrada y pasa a error al agotar los intentos', async () => {
+  let triggerCalls = 0;
+  const errors = [];
+  const { service } = createService({
+    hlOverrides: {
+      getOpenOrders: async () => [],
+      getPosition: async () => null,
+      placeTriggerEntry: async () => { triggerCalls += 1; throw new Error('Insufficient margin'); },
+    },
+    notifierOverrides: { error: (_hedge, err) => { errors.push(err.message); } },
+  });
+  bindRealPlaceEntryOrder(service);
+  service._ensureEntryConfig = async () => {};
+  const hedge = buildHedge({ status: 'waiting', entryOid: null, entryPlacedAt: null });
+  service.hedges.set(hedge.id, hedge);
+
+  await service._monitorPositions();
+  assert.equal(hedge.status, 'waiting');
+  assert.match(hedge.error, /intento 1\/8.*Insufficient margin/);
+
+  for (let i = 0; i < 8; i += 1) await service._monitorPositions();
+
+  assert.equal(hedge.status, 'error');
+  assert.equal(triggerCalls, 8);
+  assert.equal(errors.length, 1);
+  assert.match(hedge.error, /Insufficient margin/);
+});
+
+test('un reintento exitoso de la entrada reinicia el contador', async () => {
+  let fail = true;
+  const { service } = createService({
+    hlOverrides: {
+      getOpenOrders: async () => [],
+      getPosition: async () => null,
+      placeTriggerEntry: async () => { if (fail) throw new Error('429'); return 4321; },
+    },
+  });
+  bindRealPlaceEntryOrder(service);
+  service._ensureEntryConfig = async () => {};
+  const hedge = buildHedge({ status: 'waiting', entryOid: null, entryPlacedAt: null });
+  service.hedges.set(hedge.id, hedge);
+
+  await service._monitorPositions();
+  assert.equal(hedge.entryRetryCount, 1);
+  fail = false;
+  await service._monitorPositions();
+
+  assert.equal(hedge.status, 'entry_pending');
+  assert.equal(hedge.entryRetryCount, 0);
+  assert.equal(hedge.error, null);
+});
+
+test('cierre reduceOnly respeta szDecimals = 0 en vez de caer a 4 decimales', async () => {
+  const orders = [];
+  const { service } = createService({
+    hlOverrides: {
+      getAllMids: async () => ({ DOGE: '0.2' }),
+      placeOrder: async (order) => { orders.push(order); return { oid: 1 }; },
+    },
+  });
+  const hedge = buildHedge({ asset: 'DOGE', szDecimals: 0, assetIndex: 12 });
+
+  await service._closePositionReduceOnly(hedge, { szi: '-150' });
+
+  assert.equal(orders.length, 1);
+  assert.equal(orders[0].size, '150');
+});
+
+test('monitor registra el funding con signo recibido (cumFunding es positivo al pagar)', async () => {
+  const { service } = createService({
+    hlOverrides: {
+      getOpenOrders: async () => [{ oid: 222, coin: 'BTC', side: 'B', sz: '0.00771', reduceOnly: true }],
+      getPosition: async () => ({ szi: '-0.00771', unrealizedPnl: '1.0', cumFunding: { sinceOpen: '3.5' } }),
+      getAllMids: async () => ({ BTC: '70000' }),
+    },
+  });
+  const hedge = buildHedge({
+    status: 'open_protected', entryOid: null, slOid: 222,
+    openPrice: 70000, openedAt: Date.now() - 60_000, positionSize: 0.00771,
+  });
+  service.hedges.set(hedge.id, hedge);
+
+  await service._monitorPositions();
+
+  assert.equal(hedge.fundingAccum, -3.5);
+});

@@ -14,7 +14,6 @@ const {
   DEFAULT_TARGET_HEDGE_RATIO,
   MARGIN_COOLDOWN_MS,
   buildCooldown,
-  clampNonNegative,
   computeLiquidationDistancePct,
   deriveBandSettings,
   estimateExecutionCostUsd,
@@ -40,6 +39,7 @@ const {
   decideNetProfitV1,
 } = require('../net-profit-policy.service');
 const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.service');
+const { fundingReceivedUsd } = require('../../utils/hl-funding');
 const {
   TERMINAL_RANGE_V1,
   buildLpValuation,
@@ -319,7 +319,13 @@ const evaluateMethods = {
     const riskControls = await this._getRiskControls(activeProtection.userId);
     const marginModeVerified = position ? isIsolatedPosition(position) : true;
     const distanceToLiqPct = computeLiquidationDistancePct(position, currentPrice);
-    const fundingAccumUsd = position?.cumFunding?.sinceOpen != null ? Number(position.cumFunding.sinceOpen) : clampNonNegative(strategyState.fundingAccumUsd, 0);
+    // Con signo recibido: `cumFunding` de Hyperliquid es positivo al PAGAR.
+    // El respaldo no se recorta a >= 0 porque el funding pagado es negativo.
+    const liveFundingUsd = fundingReceivedUsd(position);
+    const storedFundingUsd = Number(strategyState.fundingAccumUsd);
+    const fundingAccumUsd = liveFundingUsd != null
+      ? liveFundingUsd
+      : (Number.isFinite(storedFundingUsd) ? storedFundingUsd : 0);
     const hedgeUnrealizedPnlUsd = position?.unrealizedPnl != null ? Number(position.unrealizedPnl) : 0;
     const lpPnlUsd = Number(snapshot.pnlTotalUsd || 0);
     const topUpState = this._refreshTopUpWindow(strategyState);
@@ -977,7 +983,7 @@ const evaluateMethods = {
       bid: Number(liveMarket?.bbo?.bid ?? currentPrice),
       ask: Number(liveMarket?.bbo?.ask ?? currentPrice),
       feeRate: Number(liveMarket?.assetContext?.takerFeeRate) || 0.0005,
-      realFundingUsd: Number(position?.cumFunding?.sinceOpen),
+      realFundingUsd: fundingReceivedUsd(position) ?? Number.NaN,
       now: Date.now(),
       rangeLowerPrice: activeProtection.rangeLowerPrice,
       rangeUpperPrice: activeProtection.rangeUpperPrice,

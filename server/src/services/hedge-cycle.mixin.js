@@ -31,6 +31,7 @@ const cycleMethods = {
     hedge.entryFeePaid = 0;
     hedge.fundingAccum = 0;
     hedge.slRetryCount = 0;
+    hedge.entryRetryCount = 0;
     hedge.cancelStartedAt = null;
     hedge.entryPlacedAt = null;
     hedge._priceActionInProgress = false;

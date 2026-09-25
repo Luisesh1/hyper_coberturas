@@ -27,6 +27,8 @@ function formatSize(size, szDecimals) {
     .toFixed(szDecimals + 8)
     .split('.');
 
+  // Sin decimales no hay parte fraccionaria: "12." no es un numero canonico.
+  if (szDecimals <= 0) return integerPart;
   return `${integerPart}.${fractionalPart.slice(0, szDecimals).padEnd(szDecimals, '0')}`;
 }
 
