@@ -40,6 +40,7 @@ function _getRecoveryProvider(network) {
   return onChainManager.getProvider(networkConfig, { scope: 'lp-orchestrator-recovery' });
 }
 
+const { resolveTerminalRecenterDecision } = require('./lp-orchestrator/terminal-recenter');
 const rangeEvaluator = require('./lp-orchestrator/range-evaluator');
 const { recommendRangeWidthPct } = require('./lp-orchestrator/range-recommender');
 const accounting = require('./lp-orchestrator/accounting');
@@ -1791,9 +1792,12 @@ class LpOrchestratorService {
     //     la diferencia contra el baseline guardado en el orquestador.
     let newHedgeBaseline = orch.strategyState?.hedgeBaseline || null;
     let newShadowBaselines = orch.strategyState?.shadowBaselines || {};
+    // La misma lectura sirve para la regla de recentrado de terminal (paso 4).
+    let linkedProtectionForPolicy = null;
     if (orch.activeProtectedPoolId) {
       try {
         const protection = await this.protectedPoolRepo.getById(orch.userId, orch.activeProtectedPoolId);
+        linkedProtectionForPolicy = protection;
         const currentHedgeState = this.accounting.readHedgeStateFromProtection(protection);
         if (currentHedgeState) {
           const result = this.accounting.applyHedgeStateDelta(
@@ -1900,7 +1904,18 @@ class LpOrchestratorService {
     const threshold = Number(orch.strategyConfig?.costToRewardThreshold ?? 0.3333);
     const reinvestThreshold = Number(orch.strategyConfig?.reinvestThresholdUsd ?? 0);
 
-    if (!evaluation.inRange) {
+    // `terminal_range_v1` viva trae su propia regla: recentrar solo fuera del
+    // rango y con 24 h desde la apertura del ciclo. El resto sigue igual.
+    const terminalRecenter = resolveTerminalRecenterDecision({
+      protection: linkedProtectionForPolicy,
+      evaluation,
+      cooldownSec: orch.strategyConfig?.minRebalanceCooldownSec,
+      now: Date.now(),
+    });
+    if (terminalRecenter) {
+      decision = terminalRecenter.decision;
+      reason = terminalRecenter.reason;
+    } else if (!evaluation.inRange) {
       decision = 'urgent_adjust';
       reason = `out_of_range_${evaluation.outOfRangeSide}`;
     } else if (!evaluation.inCentralBand) {
