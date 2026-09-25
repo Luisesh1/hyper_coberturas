@@ -109,6 +109,33 @@ de forma explícita desde la configuración persistida.
 3. Redondeo y mínimos los aplica la capa de ejecución existente
    (`szDecimals`, `minOrderNotionalUsd`).
 4. F = mid/mark de Hyperliquid (no hay precio de ejecución previo al fill).
+5. `qMax` no incluye el margen: lo limita el preflight del motor, que recorta
+   incrementos a lo asumible. Por eso el alta exige margen para el pico
+   (`capital × maxHedge / leverage`: $5.000 con LP de $10.000 a 3x).
+6. Una intención cuyo ajuste queda bajo el mínimo del exchange se confirma con
+   la posición real (`intent_within_min_notional`, `committed = actual`) en vez
+   de reintentarse sin fin; el cierre total sí se manda aunque sea sub-mínimo.
+
+## Limitaciones conocidas
+
+- `fundingAccumUsd` sale de `cumFunding.sinceOpen` de Hyperliquid: si el short
+  se cierra del todo (por encima del rango) y se reabre, ese acumulado
+  arranca de cero y N pierde el funding previo del ciclo. Afecta también a
+  `netProtectionPnlUsd`; no se corrige aquí.
+- La barra de rango del orquestador dibuja la banda de 40% centrada en el
+  medio geométrico; los umbrales de terminal son aritméticos respecto al
+  ancla. Con 10% de ancho la diferencia es despreciable.
+- El alta directa (`POST /protected-pools`) no acepta `policyVersion` y sigue
+  siendo solo legacy; terminal entra por el wizard/orquestador.
+
+## Hallazgo fuera de alcance
+
+La sombra de `range_exit_v1` nunca confirma un cruce: `runShadowPolicies`
+descarta el `nextState` de una decisión `hold`, así que `crossPendingZone` no
+sobrevive al tick y la política queda en `cross_confirming` para siempre. Su
+contrafactual en Métricas está sesgado. Terminal no lo sufre (su estado avanza
+en `hold`). Se deja documentado sin tocar porque el aislamiento exige no
+cambiar otras políticas en esta integración.
 
 ## Pruebas
 
