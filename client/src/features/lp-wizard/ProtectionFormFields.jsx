@@ -1,7 +1,12 @@
 import { useEffect } from 'react';
 import { formatAccountIdentity } from '../../utils/hyperliquidAccounts';
 import { formatUsd } from '../../pages/UniswapPools/utils/pool-formatters';
-import { computeDeltaNotionalUsd, computeHedgeConsequence, computeVolatileFraction } from './hedgeNotional';
+import {
+  computeBalancedFraction,
+  computeDeltaNotionalUsd,
+  computeHedgeConsequence,
+  computeVolatileFraction,
+} from './hedgeNotional';
 import styles from './ProtectionFormFields.module.css';
 
 // Espeja DEFAULT_MIN_REBALANCE_NOTIONAL_PCT del servidor
@@ -148,9 +153,25 @@ export function computeAutoTunedProtection(rangeWidthPct, initialUsd) {
  * correcta sólo con el precio centrado, pero es lo mejor disponible mientras el
  * paso de rango no haya resuelto todavía sus precios.
  */
-export function resolveAutoNotional({ capitalUsd, currentPrice, rangeLowerPrice, rangeUpperPrice }) {
+export function resolveAutoNotional({ capitalUsd, currentPrice, rangeLowerPrice, rangeUpperPrice, policyVersion }) {
   const capital = Number(capitalUsd);
   if (!Number.isFinite(capital) || capital <= 0) return null;
+
+  // terminal_range_v1 no abre con el delta sino con la secante entre bordes
+  // (`computeInitialTerminalQty` del servidor). Mostrar el delta, o el pico de
+  // 1,5x que sólo dimensiona el margen, anunciaría un short que no se abre.
+  if (policyVersion === 'terminal_range_v1') {
+    const balanced = computeBalancedFraction({ currentPrice, rangeLowerPrice, rangeUpperPrice });
+    if (balanced != null) {
+      const pct = Math.round(balanced * 100);
+      return {
+        notionalUsd: capital * balanced,
+        exact: true,
+        pct,
+        explanation: `Entrada balanceada entre los dos bordes: un short del ${pct}% de tu LP.`,
+      };
+    }
+  }
 
   const fromDelta = computeDeltaNotionalUsd({
     capitalUsd: capital, currentPrice, rangeLowerPrice, rangeUpperPrice,
@@ -292,17 +313,23 @@ export default function ProtectionFormFields({
     ? !!raw.notionalAuto
     : !(raw.configuredNotionalUsd > 0 || String(raw.configuredNotionalUsd || '').trim() !== '');
   const v = { ...DEFAULT_PROTECTION, ...raw, notionalAuto: inferredAuto };
+  const terminalPolicy = v.policyVersion === 'terminal_range_v1';
   const auto = resolveAutoNotional({
-    capitalUsd: initialUsd, currentPrice, rangeLowerPrice, rangeUpperPrice,
+    capitalUsd: initialUsd, currentPrice, rangeLowerPrice, rangeUpperPrice, policyVersion: v.policyVersion,
   });
+  // En terminal el tamaño lo fija la política desde el LP (el servidor ignora
+  // un notional manual al abrir), así que siempre se calcula.
+  const notionalAutoActive = terminalPolicy || !!v.notionalAuto;
   // Con auto activo el número mostrado manda sobre lo que haya en el state:
   // así cambiar el rango en un paso anterior se refleja sin tocar nada.
-  const baseNotionalUsd = v.notionalAuto && auto ? auto.notionalUsd : Number(v.configuredNotionalUsd);
-  const effectiveNotionalUsd = v.policyVersion === 'terminal_range_v1' && Number(initialUsd) > 0
+  const baseNotionalUsd = notionalAutoActive && auto ? auto.notionalUsd : Number(v.configuredNotionalUsd);
+  // El margen, en cambio, se reserva para el pico del short de terminal.
+  const terminalPeakMargin = terminalPolicy && Number(initialUsd) > 0;
+  const marginNotionalUsd = terminalPeakMargin
     ? Math.max(Number(baseNotionalUsd) || 0, Number(initialUsd) * TERMINAL_MAX_HEDGE)
     : baseNotionalUsd;
   const hedgeConsequence = computeHedgeConsequence({
-    notionalUsd: effectiveNotionalUsd, leverage: v.leverage,
+    notionalUsd: marginNotionalUsd, leverage: v.leverage,
   });
   const matchingAccount = accounts.find((account) => (
     lpWalletAddress
@@ -323,12 +350,12 @@ export default function ProtectionFormFields({
   // tiene que escribir su resultado en el state y no sólo pintarlo. Sin esto un
   // cambio de rango dejaba la UI mostrando un número y el backend recibiendo otro.
   useEffect(() => {
-    if (!v.enabled || !v.notionalAuto || !auto) return;
+    if (!v.enabled || !notionalAutoActive || !auto) return;
     const next = auto.notionalUsd.toFixed(2);
     if (v.configuredNotionalUsd !== next) {
       onChange({ ...v, configuredNotionalUsd: next });
     }
-  }, [auto, onChange, v]);
+  }, [auto, notionalAutoActive, onChange, v]);
 
   const handleField = (key, val) => {
     onChange({ ...v, [key]: val });
@@ -482,18 +509,20 @@ export default function ProtectionFormFields({
             </div>
             <div className={styles.field}>
               <label htmlFor="notional-auto">Notional a cubrir</label>
-              <label className={styles.autoRow} htmlFor="notional-auto">
-                <input
-                  id="notional-auto"
-                  type="checkbox"
-                  checked={!!v.notionalAuto}
-                  onChange={(e) => handleNotionalAuto(e.target.checked)}
-                  aria-label="Calcular el notional automáticamente"
-                />
-                <span>Automático</span>
-              </label>
-              {v.notionalAuto ? (
-                <span className={styles.autoValue}>{formatUsd(effectiveNotionalUsd)}</span>
+              {!terminalPolicy && (
+                <label className={styles.autoRow} htmlFor="notional-auto">
+                  <input
+                    id="notional-auto"
+                    type="checkbox"
+                    checked={!!v.notionalAuto}
+                    onChange={(e) => handleNotionalAuto(e.target.checked)}
+                    aria-label="Calcular el notional automáticamente"
+                  />
+                  <span>Automático</span>
+                </label>
+              )}
+              {notionalAutoActive ? (
+                <span className={styles.autoValue}>{formatUsd(baseNotionalUsd)}</span>
               ) : (
                 <input
                   type="number"
@@ -507,7 +536,7 @@ export default function ProtectionFormFields({
             </div>
           </div>
 
-          {v.notionalAuto && auto && (
+          {notionalAutoActive && auto && (
             <span className={styles.hint}>{auto.explanation}</span>
           )}
 
@@ -516,7 +545,10 @@ export default function ProtectionFormFields({
               dos números abstractos en una decisión informada mientras se teclean. */}
           {hedgeConsequence && (
             <div className={styles.consequence}>
-              <span>margen <strong>{formatUsd(hedgeConsequence.requiredMarginUsd)}</strong></span>
+              <span>
+                margen <strong>{formatUsd(hedgeConsequence.requiredMarginUsd)}</strong>
+                {terminalPeakMargin && ` para el pico de ${TERMINAL_MAX_HEDGE}× el LP`}
+              </span>
               <span>liquidación <strong>−{hedgeConsequence.liquidationMovePct}%</strong></span>
             </div>
           )}

@@ -69,6 +69,48 @@ export function computeDeltaNotionalUsd({
 }
 
 /**
+ * Fracción del LP que mide la entrada balanceada de `terminal_range_v1`: la
+ * secante (V(b) − V(a)) / (b − a) del valor del LP entre bordes, por el precio,
+ * sobre V(P). Espeja `balancedQty` del servidor, que es el short con que la
+ * política abre; como el delta, `L` se cancela y basta con P, Pa y Pb.
+ */
+export function computeBalancedFraction({ currentPrice, rangeLowerPrice, rangeUpperPrice }) {
+  const price = finitePositive(currentPrice);
+  const lower = finitePositive(rangeLowerPrice);
+  const upper = finitePositive(rangeUpperPrice);
+  if (price == null || lower == null || upper == null || upper <= lower) return null;
+
+  const sqrtLower = Math.sqrt(lower);
+  const sqrtUpper = Math.sqrt(upper);
+  const valueAt = (p) => {
+    if (p <= lower) return p * ((1 / sqrtLower) - (1 / sqrtUpper));
+    if (p >= upper) return sqrtUpper - sqrtLower;
+    return (2 * Math.sqrt(p)) - (p / sqrtUpper) - sqrtLower;
+  };
+  const totalValue = valueAt(price);
+  if (!(totalValue > 0)) return null;
+
+  const slope = (valueAt(upper) - valueAt(lower)) / (upper - lower);
+  return Math.max(0, (slope * price) / totalValue);
+}
+
+/** Notional USD de la entrada balanceada de terminal, desde el valor del LP. */
+export function computeBalancedNotionalUsd({
+  capitalUsd,
+  currentPrice,
+  rangeLowerPrice,
+  rangeUpperPrice,
+}) {
+  const capital = finitePositive(capitalUsd);
+  if (capital == null) return null;
+
+  const fraction = computeBalancedFraction({ currentPrice, rangeLowerPrice, rangeUpperPrice });
+  if (fraction == null) return null;
+
+  return capital * fraction;
+}
+
+/**
  * Consecuencia de dimensionar el hedge: margen inmovilizado y a qué distancia
  * queda la liquidación. Es una aproximación de primer orden — ignora el margen
  * de mantenimiento de Hyperliquid, así que la liquidación real llega algo

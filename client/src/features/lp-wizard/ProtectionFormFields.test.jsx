@@ -251,6 +251,32 @@ describe('política de cobertura', () => {
     expect(consecuencia.textContent).toMatch(/5[.,]000/);
   });
 
+  it('con terminal el notional es la entrada balanceada del LP y el margen, el del pico', async () => {
+    const onChange = vi.fn();
+    render(
+      <ProtectionFormFields
+        value={{ ...netProfit(), policyVersion: 'terminal_range_v1', notionalAuto: true, leverage: '10' }}
+        onChange={onChange}
+        accounts={[{ id: 1 }]}
+        initialUsd={510}
+        currentPrice={100}
+        rangeLowerPrice={95}
+        rangeUpperPrice={105}
+      />,
+    );
+    // LP de $510: el short abre con ~$252 (secante), no con 510 x 1,5 = $765.
+    expect(screen.queryByText('$765')).toBeNull();
+    expect(screen.getByText(/^\$25\d(\.\d+)?$/)).toBeTruthy();
+    // El margen sigue reservando el pico: 765 / 10.
+    const consecuencia = screen.getAllByText(/margen/i).find((el) => el.tagName === 'SPAN');
+    expect(consecuencia.textContent).toMatch(/76[.,]5/);
+    // Lo que viaja al backend es la entrada balanceada.
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const sent = Number(onChange.mock.calls.at(-1)[0].configuredNotionalUsd);
+    expect(sent).toBeGreaterThan(240);
+    expect(sent).toBeLessThan(260);
+  });
+
   it('validateProtectionForm ya no exige confirmar la operación real', () => {
     expect(validateProtectionForm(netProfit())).toBeNull();
     expect(validateProtectionForm({ ...netProfit(), activationConfirmed: false })).toBeNull();

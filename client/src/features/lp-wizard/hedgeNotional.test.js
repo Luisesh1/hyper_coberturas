@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeDeltaNotionalUsd, computeHedgeConsequence } from './hedgeNotional';
+import { computeBalancedNotionalUsd, computeDeltaNotionalUsd, computeHedgeConsequence } from './hedgeNotional';
 
 // Los valores esperados salen de la fórmula cerrada del delta de un LP v3:
 //   fracVolátil = (√P − P/√Pb) / (2√P − P/√Pb − √Pa)
@@ -132,5 +132,45 @@ describe('computeHedgeConsequence', () => {
     expect(computeHedgeConsequence({ notionalUsd: 0, leverage: 10 })).toBeNull();
     expect(computeHedgeConsequence({ notionalUsd: 100, leverage: 0 })).toBeNull();
     expect(computeHedgeConsequence({ notionalUsd: 100, leverage: NaN })).toBeNull();
+  });
+});
+
+// Espejo de `balancedQty` del servidor (terminal-range-policy.service.js): el
+// short con que abre terminal_range_v1 es la secante (V(b) − V(a)) / (b − a)
+// del valor del LP entre bordes. Con L = 1, V(P) = 2√P − P/√b − √a en rango.
+function secantFraction(P, a, b) {
+  const V = (p) => {
+    if (p <= a) return p * (1 / Math.sqrt(a) - 1 / Math.sqrt(b));
+    if (p >= b) return Math.sqrt(b) - Math.sqrt(a);
+    return 2 * Math.sqrt(p) - p / Math.sqrt(b) - Math.sqrt(a);
+  };
+  return (((V(b) - V(a)) / (b - a)) * P) / V(P);
+}
+
+describe('computeBalancedNotionalUsd', () => {
+  it('dimensiona la entrada balanceada desde el valor del LP, no desde el pico', () => {
+    const notional = computeBalancedNotionalUsd({
+      capitalUsd: 510, currentPrice: 100, rangeLowerPrice: 95, rangeUpperPrice: 105,
+    });
+    expect(notional).toBeCloseTo(510 * secantFraction(100, 95, 105), 6);
+    // ~49% del LP con el precio centrado: nunca el 1,5x del pico ($765).
+    expect(notional).toBeGreaterThan(240);
+    expect(notional).toBeLessThan(260);
+  });
+
+  it('con el precio lejos del centro sigue la secante, no el delta', () => {
+    const notional = computeBalancedNotionalUsd({
+      capitalUsd: 1000, currentPrice: 92, rangeLowerPrice: 90, rangeUpperPrice: 110,
+    });
+    expect(notional).toBeCloseTo(1000 * secantFraction(92, 90, 110), 6);
+    const delta = computeDeltaNotionalUsd({
+      capitalUsd: 1000, currentPrice: 92, rangeLowerPrice: 90, rangeUpperPrice: 110,
+    });
+    expect(Math.abs(notional - delta)).toBeGreaterThan(1);
+  });
+
+  it('devuelve null sin capital o sin rango valido', () => {
+    expect(computeBalancedNotionalUsd({ capitalUsd: 0, currentPrice: 100, rangeLowerPrice: 90, rangeUpperPrice: 110 })).toBeNull();
+    expect(computeBalancedNotionalUsd({ capitalUsd: 100, currentPrice: 100, rangeLowerPrice: 110, rangeUpperPrice: 90 })).toBeNull();
   });
 });
