@@ -397,9 +397,11 @@ describe('zona central sin rebalanceo', () => {
     accountId: 1,
   };
 
-  it('arranca en 40% y viaja en el payload', () => {
-    expect(buildDefaultProtection(1000, 5).centerDeadZonePct).toBe(String(DEFAULT_CENTER_DEAD_ZONE_PCT));
-    expect(buildProtectionPayload(baseValue).centerDeadZonePct).toBe(40);
+  it('arranca en 0% (sin zona muerta) y viaja en el payload', () => {
+    expect(DEFAULT_CENTER_DEAD_ZONE_PCT).toBe(0);
+    expect(buildDefaultProtection(1000, 5).centerDeadZonePct).toBe('0');
+    expect(buildDefaultProtection(1000).centerDeadZonePct).toBe('0');
+    expect(buildProtectionPayload(baseValue).centerDeadZonePct).toBe(0);
   });
 
   it('acepta el 0 como "sin zona muerta" y rechaza valores fuera de rango', () => {
@@ -420,7 +422,7 @@ describe('zona central sin rebalanceo', () => {
   it('dice si con el precio de ahora la cobertura rebalancea o no', async () => {
     const { rerender } = render(
       <ProtectionFormFields
-        value={baseValue}
+        value={{ ...baseValue, centerDeadZonePct: '40' }}
         onChange={() => {}}
         accounts={[{ id: 1, alias: 'main', address: '0xabc' }]}
         currentPrice={Math.sqrt(90 * 110)}
@@ -433,7 +435,7 @@ describe('zona central sin rebalanceo', () => {
     // Cerca del borde inferior (fraccion ~0.05) queda fuera del 40% central.
     rerender(
       <ProtectionFormFields
-        value={baseValue}
+        value={{ ...baseValue, centerDeadZonePct: '40' }}
         onChange={() => {}}
         accounts={[{ id: 1, alias: 'main', address: '0xabc' }]}
         currentPrice={91}

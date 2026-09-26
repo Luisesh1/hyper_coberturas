@@ -22,7 +22,7 @@ const {
   // `protected-pool-delta-neutral.service`: importarlas de alli las dejaba en
   // `undefined`, y con eso `parsed > MAX_CENTER_DEAD_ZONE_PCT` era siempre
   // false — el tope de la zona muerta no se validaba en ningun alta.
-  DEFAULT_CENTER_DEAD_ZONE_PCT,
+  DEFAULT_NEW_CENTER_DEAD_ZONE_PCT,
   MAX_CENTER_DEAD_ZONE_PCT,
 } = require('./protected-pool-delta-neutral.helpers');
 const {
@@ -228,7 +228,7 @@ function buildCandidateFromMarket(pool, availableAssets, mids) {
     rebalanceIntervalSec: DEFAULT_REBALANCE_INTERVAL_SEC,
     targetHedgeRatio: DEFAULT_TARGET_HEDGE_RATIO,
     minRebalanceNotionalPct: DEFAULT_MIN_REBALANCE_NOTIONAL_PCT,
-    centerDeadZonePct: DEFAULT_CENTER_DEAD_ZONE_PCT,
+    centerDeadZonePct: DEFAULT_NEW_CENTER_DEAD_ZONE_PCT,
     maxSlippageBps: DEFAULT_MAX_SLIPPAGE_BPS,
     twapMinNotionalUsd: DEFAULT_TWAP_MIN_NOTIONAL_USD,
   };
@@ -828,7 +828,7 @@ function normalizeMinRebalanceNotionalPct(value) {
 // de los otros porcentajes, el 0 es un valor VALIDO y significativo: apaga la
 // zona muerta. `null`/ausente cae al default del servicio.
 function normalizeCenterDeadZonePct(value) {
-  if (value == null) return DEFAULT_CENTER_DEAD_ZONE_PCT;
+  if (value == null) return DEFAULT_NEW_CENTER_DEAD_ZONE_PCT;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0 || parsed > MAX_CENTER_DEAD_ZONE_PCT) {
     throw new ValidationError(`centerDeadZonePct debe ser un porcentaje entre 0 y ${MAX_CENTER_DEAD_ZONE_PCT}.`);

@@ -453,6 +453,8 @@ test('createProtectedPool crea una proteccion delta-neutral con defaults y boots
   assert.equal(protectionWrites[0].maxSlippageBps, DEFAULT_MAX_SLIPPAGE_BPS);
   assert.equal(protectionWrites[0].twapMinNotionalUsd, DEFAULT_TWAP_MIN_NOTIONAL_USD);
   assert.equal(protectionWrites[0].minOrderNotionalUsd, 11);
+  // Una proteccion nueva sin zona central explicita nace sin zona muerta.
+  assert.equal(protectionWrites[0].centerDeadZonePct, 0);
   assert.equal(protectionWrites[0].initialConfiguredHedgeNotionalUsd, 2500);
   assert.equal(protectionWrites[0].marginMode, 'isolated');
   assert.ok(protectionWrites[0].strategyState);

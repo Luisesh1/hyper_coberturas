@@ -41,6 +41,10 @@ const MAX_ADAPTIVE_REBALANCE_INTERVAL_SEC = 1800;
 // recupera. 0 la desactiva. Las rutas de seguridad (force manual, reducir a
 // cero, hedge huerfano, cambio de liquidez) la ignoran.
 const DEFAULT_CENTER_DEAD_ZONE_PCT = 40;
+// Una proteccion NUEVA nace sin zona muerta (decision del 2026-09-25): el 40%
+// de arriba queda solo como respaldo de las filas migradas con la columna NULL,
+// para no cambiar en silencio como rebalancean las que ya estan operando.
+const DEFAULT_NEW_CENTER_DEAD_ZONE_PCT = 0;
 // Techo duro: por encima de esto la zona muerta se comeria tambien los bordes,
 // que es justo donde el delta se acelera y la cobertura tiene que responder.
 const MAX_CENTER_DEAD_ZONE_PCT = 90;
@@ -960,6 +964,7 @@ module.exports = {
   resolveUrgentMinRebalanceNotionalUsd,
   DEFAULT_URGENT_MIN_REBALANCE_NOTIONAL_PCT,
   DEFAULT_CENTER_DEAD_ZONE_PCT,
+  DEFAULT_NEW_CENTER_DEAD_ZONE_PCT,
   MAX_CENTER_DEAD_ZONE_PCT,
   rangePositionFraction,
   resolveCenterDeadZone,

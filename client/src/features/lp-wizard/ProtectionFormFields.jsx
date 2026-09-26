@@ -12,9 +12,13 @@ import styles from './ProtectionFormFields.module.css';
 // Espeja DEFAULT_MIN_REBALANCE_NOTIONAL_PCT del servidor
 // (protected-pool-delta-neutral.helpers.js).
 export const DEFAULT_MIN_REBALANCE_NOTIONAL_PCT = 12;
-// Espeja DEFAULT_CENTER_DEAD_ZONE_PCT del servidor: % del ancho TOTAL del
-// rango, centrado, donde la cobertura no rebalancea. 0 la desactiva.
-export const DEFAULT_CENTER_DEAD_ZONE_PCT = 40;
+// Espeja DEFAULT_NEW_CENTER_DEAD_ZONE_PCT del servidor: % del ancho TOTAL del
+// rango, centrado, donde la cobertura no rebalancea. 0 la desactiva, y es con
+// lo que nace una protección nueva.
+export const DEFAULT_CENTER_DEAD_ZONE_PCT = 0;
+// Espeja DEFAULT_CENTER_DEAD_ZONE_PCT del servidor: lo que el motor aplica a
+// una protección migrada que no guarda el valor. Sólo para mostrarla fiel.
+export const LEGACY_CENTER_DEAD_ZONE_PCT = 40;
 export const MAX_CENTER_DEAD_ZONE_PCT = 90;
 
 const DELTA_NEUTRAL_PRESETS = [
@@ -58,7 +62,7 @@ const DEFAULT_PROTECTION = Object.freeze({
   rebalanceIntervalSec: '21600',
   targetHedgeRatio: '1',
   minRebalanceNotionalPct: '12',
-  centerDeadZonePct: '40',
+  centerDeadZonePct: String(DEFAULT_CENTER_DEAD_ZONE_PCT),
   maxSlippageBps: '20',
   twapMinNotionalUsd: '10000',
   preset: 'adaptive',

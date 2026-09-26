@@ -3,7 +3,7 @@ import { lpOrchestratorApi } from '../../../services/api';
 import ProtectionFormFields, {
   buildProtectionPayload,
   validateProtectionForm,
-  DEFAULT_CENTER_DEAD_ZONE_PCT,
+  LEGACY_CENTER_DEAD_ZONE_PCT,
 } from '../../../features/lp-wizard/ProtectionFormFields';
 import StrategyFieldInput from './StrategyFieldInput';
 import { validateStrategyFields } from './strategy-fields';
@@ -28,9 +28,11 @@ function protectionConfigToFormValue(cfg) {
     rebalanceIntervalSec: cfg.rebalanceIntervalSec != null ? String(cfg.rebalanceIntervalSec) : '21600',
     targetHedgeRatio: cfg.targetHedgeRatio != null ? String(cfg.targetHedgeRatio) : '1',
     minRebalanceNotionalPct: cfg.minRebalanceNotionalPct != null ? String(cfg.minRebalanceNotionalPct) : '12',
+    // Sin valor guardado el motor aplica el respaldo legacy (40%), no el 0 con
+    // que nacen las nuevas: mostrar otro número mentiría sobre lo que corre.
     centerDeadZonePct: cfg.centerDeadZonePct != null
       ? String(cfg.centerDeadZonePct)
-      : String(DEFAULT_CENTER_DEAD_ZONE_PCT),
+      : String(LEGACY_CENTER_DEAD_ZONE_PCT),
     maxSlippageBps: cfg.maxSlippageBps != null ? String(cfg.maxSlippageBps) : '20',
     twapMinNotionalUsd: cfg.twapMinNotionalUsd != null ? String(cfg.twapMinNotionalUsd) : '10000',
     // La politica tiene que viajar: sin esto el formulario abria en
