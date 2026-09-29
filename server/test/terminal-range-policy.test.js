@@ -240,7 +240,7 @@ test('un minuto sin ticks rompe la racha', () => {
   assert.equal(r.last.gate, 'terminal_confirming');
 });
 
-test('tras ajustar abajo, volver al centro NO restaura el balanceado; revertir exige 102 y conserva N', () => {
+test('tras ajustar abajo, volver al centro confirmado restaura el balanceado y conserva N', () => {
   const lp = makeLp();
   const opened = run(lp, {}, [[0, 1, 100]]);
   const down = run(lp, opened.state, [
@@ -248,15 +248,47 @@ test('tras ajustar abajo, volver al centro NO restaura el balanceado; revertir e
   ], { held: opened.held });
   assert.equal(down.state.side, -1);
   const baseline = down.state.hedgeNetBaselineUsd;
-  const center = run(lp, down.state, [[5, 1, 100], [6, 1, 100], [7, 1, 100], [8, 1, 100]], { held: down.held });
+  // m4 cierra bajo; m5, m6, m7 centrales -> confirma en el tick de m8.
+  const center = run(lp, down.state, [[5, 1, 100], [6, 1, 100], [7, 1, 100]], { held: down.held });
   assert.equal(center.last.decision, 'hold');
-  assert.equal(center.state.side, -1);
-  const up = run(lp, center.state, [
-    [9, 1, 102.1], [10, 1, 102.1], [11, 1, 102.1], [12, 1, 102.1],
-  ], { held: center.held, hedgeNetUsd: 12 });
+  assert.equal(center.last.gate, 'terminal_confirming');
+  assert.equal(center.state.side, -1, 'sin confirmar no revierte');
+  const back = run(lp, center.state, [[8, 1, 100]], { held: center.held });
+  assert.equal(back.last.decision, 'rebalance');
+  assert.equal(back.last.gate, 'terminal_revert');
+  assert.equal(back.state.side, 0);
+  const q = balancedQty({ valueAt: lp.valueAt, lower: 95, upper: 105, spot: 100, execPrice: 100 });
+  assert.ok(Math.abs(back.held - q) < 1e-9, 'vuelve al short balanceado');
+  assert.equal(back.state.hedgeNetBaselineUsd, baseline, 'la reversion no reinicia la contabilidad');
+  const stay = run(lp, back.state, [[9, 1, 100], [10, 1, 100]], { held: back.held });
+  assert.equal(stay.last.gate, 'balanced_hold');
+});
+
+test('escape y reversion por arriba: ajusta hacia el borde superior y vuelve al balanceado', () => {
+  const lp = makeLp();
+  const opened = run(lp, {}, [[0, 1, 100]]);
+  const up = run(lp, opened.state, [
+    [1, 1, 102.1], [2, 1, 102.1], [3, 1, 102.1], [4, 1, 102.1],
+  ], { held: opened.held });
   assert.equal(up.decisions.at(-1).gate, 'terminal_adjust');
   assert.equal(up.state.side, 1);
-  assert.equal(up.state.hedgeNetBaselineUsd, baseline, 'la reversion no reinicia la contabilidad');
+  assert.equal(up.decisions.at(-1).edge, 105);
+  const back = run(lp, up.state, [[5, 1, 101], [6, 1, 101], [7, 1, 101], [8, 1, 101]], { held: up.held });
+  assert.equal(back.last.gate, 'terminal_revert');
+  assert.equal(back.state.side, 0);
+  const q = balancedQty({ valueAt: lp.valueAt, lower: 95, upper: 105, spot: 101, execPrice: 101 });
+  assert.ok(Math.abs(back.held - q) < 1e-9);
+});
+
+test('un rebote central de un solo minuto no revierte el lado terminal', () => {
+  const lp = makeLp();
+  const opened = run(lp, {}, [[0, 1, 100]]);
+  const down = run(lp, opened.state, [
+    [1, 1, 97.9], [2, 1, 97.9], [3, 1, 97.9], [4, 1, 97.9],
+  ], { held: opened.held });
+  const r = run(lp, down.state, [[5, 1, 100], [6, 1, 97.9], [7, 1, 97.9], [8, 1, 97.9]], { held: down.held });
+  assert.ok(r.decisions.every((d) => d.decision === 'hold'));
+  assert.equal(r.state.side, -1);
 });
 
 test('fuera de rango: un cierre fuera ajusta en el tick siguiente sin confirmacion; quedarse no reajusta', () => {

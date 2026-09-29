@@ -455,7 +455,9 @@ function decideTerminalRangeV1({
         anchor: finite(cycle.anchorPrice, S), lower: a, upper: b, threshold: cfg.threshold,
       });
       const dir = resolveDirection(close.price, thresholds);
-      if (dir !== 0 && dir !== intendedSide) {
+      // dir 0 con un lado terminal activo es una reversion a la banda central:
+      // se confirma igual que un cruce y restaura el short balanceado inicial.
+      if (dir !== intendedSide) {
         const prev = cycle.candidate;
         const continues = prev && prev.dir === dir && Number(close.bucket) === Number(prev.lastBucket) + 1;
         const candidate = continues
@@ -464,8 +466,9 @@ function decideTerminalRangeV1({
         if (candidate.lastBucket - candidate.startBucket >= cfg.confirmMinutes) {
           // Una senal interior confirmada no se cancela porque este tick haya
           // vuelto al centro; si abrio fuera, cubre el ETH restante.
+          const insideGate = dir === 0 ? 'terminal_revert' : 'terminal_adjust';
           return rebalance(
-            zoneNow === 'inside' ? 'terminal_adjust' : 'range_exit',
+            zoneNow === 'inside' ? insideGate : 'range_exit',
             { ...cycle, candidate: null },
             { side: dir, zone: zoneNow },
           );

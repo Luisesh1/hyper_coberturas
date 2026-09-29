@@ -54,7 +54,9 @@ Bloque propio; no se toca `rangeExitPolicyState` ni `netProfitPolicyState`.
   retiro no cuente como PnL. No se reinicia N.
 - **Dentro del rango**: dirección por cierre de minuto contra
   `T_inf = A − h(A−a)`, `T_sup = A + h(b−A)`. Solo cuenta si difiere del lado
-  confirmado. Volver al centro no restaura el balanceado.
+  confirmado. Volver a la banda central con un lado terminal activo es una
+  reversión: se confirma igual (cierres de minuto) y restaura el short
+  balanceado (`terminal_revert`), por abajo y por arriba.
 - **Objetivo terminal**: `R = V(E) − B + N − K_E − q(F−M)`,
   `g(q') = R + q'(F−F_E) − |q'−q|·F·c − q'·F_E·c`, `F_E = E·M/S`,
   `0 ≤ q' ≤ qMax`, `qMax = V(A)·maxHedge/F` (el margen lo limita además el
