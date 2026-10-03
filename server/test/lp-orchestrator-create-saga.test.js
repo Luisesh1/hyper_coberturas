@@ -314,6 +314,14 @@ function makeSagaWithOperations({ attachLp } = {}) {
       Object.assign(op, patch);
       return op;
     },
+    async reopenCompensated(userId, operationKey, { finalizeResult }) {
+      const op = [...operations.values()].find(
+        (o) => o.operationKey === operationKey && o.userId === userId && o.status === 'compensated'
+      );
+      if (!op) return null;
+      Object.assign(op, { status: 'committing', step: 'retry_pending', result: { finalizeResult } });
+      return op;
+    },
   };
 
   return { saga, operations };
@@ -445,6 +453,70 @@ test('intención: una compensación también es terminal e idempotente', async (
   const again = await saga.commitIntent({ userId: 1, operationKey, finalizeResult: FINALIZE });
   assert.equal(reran, false);
   assert.equal(again.status, 'compensated');
+});
+
+// ── reintento de cobertura sobre un LP ya minado ─────────────────────────
+
+async function compensatedOperation({ failures = 1 } = {}) {
+  let attempts = 0;
+  const attachInputs = [];
+  const { saga, operations } = makeSagaWithOperations({
+    attachLp: async (input) => {
+      attempts += 1;
+      attachInputs.push(input);
+      if (attempts <= failures) throw new Error('No se pudo calcular el valor actual USD del pool');
+      return { id: 8, phase: 'lp_active', activeProtectedPoolId: 66 };
+    },
+  });
+  const { operationKey, operationId } = await saga.beginIntent({ userId: 1, plan: BASE_PLAN });
+  const first = await saga.commitIntent({ userId: 1, operationKey, finalizeResult: FINALIZE });
+  assert.equal(first.status, 'compensated');
+  return { saga, operations, operationKey, operationId, attachInputs };
+}
+
+test('reintento: una compensación con LP vivo vuelve a crear cobertura y orquestador', async () => {
+  const { saga, operations, operationKey, operationId, attachInputs } = await compensatedOperation();
+
+  const result = await saga.retryCommit({ userId: 1, operationKey });
+
+  assert.equal(result.status, 'completed');
+  assert.equal(operations.get(operationId).status, 'done');
+  // Sin el snapshot viejo: attachLp debe leer uno fresco de la cadena.
+  const retryInput = attachInputs.at(-1);
+  assert.equal(retryInput.finalizeResult.positionIdentifier, '48213');
+  assert.equal(retryInput.finalizeResult.refreshedSnapshot, undefined);
+});
+
+test('reintento: si vuelve a fallar queda compensado otra vez y se puede reintentar', async () => {
+  const { saga, operations, operationKey, operationId } = await compensatedOperation({ failures: 2 });
+
+  const second = await saga.retryCommit({ userId: 1, operationKey });
+  assert.equal(second.status, 'compensated');
+  assert.equal(operations.get(operationId).status, 'compensated');
+
+  const third = await saga.retryCommit({ userId: 1, operationKey });
+  assert.equal(third.status, 'completed');
+});
+
+test('reintento: rechaza operaciones que no están compensadas', async () => {
+  const { saga } = makeSagaWithOperations();
+  const { operationKey } = await saga.beginIntent({ userId: 1, plan: BASE_PLAN });
+
+  await assert.rejects(() => saga.retryCommit({ userId: 1, operationKey }), /compensada/);
+  await saga.commitIntent({ userId: 1, operationKey, finalizeResult: FINALIZE });
+  await assert.rejects(() => saga.retryCommit({ userId: 1, operationKey }), /compensada/);
+});
+
+test('reintento: rechaza una compensación sin LP superviviente', async () => {
+  const { saga, operations, operationKey, operationId } = await compensatedOperation();
+  operations.get(operationId).result.survivingLp = { positionIdentifier: null };
+
+  await assert.rejects(() => saga.retryCommit({ userId: 1, operationKey }), /LP/);
+});
+
+test('reintento: clave inexistente', async () => {
+  const { saga } = makeSagaWithOperations();
+  await assert.rejects(() => saga.retryCommit({ userId: 1, operationKey: 'no-existe' }), /No existe la intención/);
 });
 
 test('intención: commit sobre una clave inexistente falla en vez de crear a ciegas', async () => {

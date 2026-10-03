@@ -202,6 +202,33 @@ async function claimByOperationKey(userId, operationKey, {
   return mapRow(rows[0]);
 }
 
+/**
+ * Reabre una creación orquestada compensada para reintentar cobertura y
+ * orquestador sobre el LP que sobrevivió. Es atómico: dos reintentos
+ * simultáneos no pueden reabrirla los dos. Deja el `finalizeResult` mínimo
+ * en el resultado para que el worker pueda retomarla si el proceso muere.
+ */
+async function reopenCompensated(userId, operationKey, { finalizeResult }, executor) {
+  const now = Date.now();
+  const { rows } = await exec(executor).query(
+    `UPDATE position_action_operations
+        SET status = 'committing',
+            step = 'retry_pending',
+            result_json = $3,
+            error_code = NULL,
+            error_message = NULL,
+            finished_at = NULL,
+            updated_at = $4
+      WHERE user_id = $1
+        AND operation_key = $2
+        AND kind = 'orchestrated_lp_create'
+        AND status = 'compensated'
+      RETURNING *`,
+    [userId, operationKey, toJson({ finalizeResult }), now]
+  );
+  return mapRow(rows[0]);
+}
+
 async function renewClaim(id, claimToken, leaseMs = 120_000, executor) {
   const now = Date.now();
   const { rows } = await exec(executor).query(
@@ -311,6 +338,7 @@ module.exports = {
   listPending,
   claimPending,
   claimByOperationKey,
+  reopenCompensated,
   renewClaim,
   releaseClaim,
   expireStaleIntents,

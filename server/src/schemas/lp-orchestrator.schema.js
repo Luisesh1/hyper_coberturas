@@ -241,6 +241,10 @@ const commitIntentSchema = z.object({
   finalizeResult: z.object({}).passthrough(),
 });
 
+const retryCommitSchema = z.object({
+  operationKey: z.string().min(1),
+});
+
 module.exports = {
   strategyConfigSchema,
   wizardStrategySchema,
@@ -248,6 +252,7 @@ module.exports = {
   preflightProtectionSchema,
   createIntentSchema,
   commitIntentSchema,
+  retryCommitSchema,
   strategyConfigPatchSchema,
   protectionConfigSchema,
   terminalRangeConfigSchema,

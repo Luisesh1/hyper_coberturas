@@ -285,6 +285,46 @@ class LpCreateSaga {
   }
 
   /**
+   * Reintenta cobertura y orquestador sobre el LP que sobrevivió a una
+   * compensación (p. ej. la protección falló justo después del mint). El LP
+   * ya está on-chain: no se firma nada, solo se vuelve a correr la saga con el
+   * plan guardado. Se omite el snapshot del primer intento para que attachLp
+   * lea uno fresco de la cadena.
+   */
+  async retryCommit({ userId, operationKey }) {
+    const operation = await this.operationRepo.getByOperationKey(userId, operationKey);
+    if (!operation) {
+      throw new Error(`No existe la intención ${operationKey}`);
+    }
+    if (operation.status !== 'compensated') {
+      const notRetryable = new Error('Solo se puede reintentar una creación compensada.');
+      notRetryable.code = 'OPERATION_NOT_RETRYABLE';
+      notRetryable.statusCode = 409;
+      throw notRetryable;
+    }
+    const survivingLp = operation.result?.survivingLp || {};
+    if (!survivingLp.positionIdentifier) {
+      const noLp = new Error('La creación compensada no dejó un LP al que vincular la cobertura.');
+      noLp.code = 'OPERATION_NOT_RETRYABLE';
+      noLp.statusCode = 409;
+      throw noLp;
+    }
+
+    const finalizeResult = {
+      positionIdentifier: String(survivingLp.positionIdentifier),
+      txHashes: survivingLp.txHashes || operation.txHashes || [],
+    };
+    const reopened = await this.operationRepo.reopenCompensated(userId, operationKey, { finalizeResult });
+    if (!reopened) {
+      const busy = new Error('La creación ya se está reintentando. Consulta el estado de la operación.');
+      busy.code = 'OPERATION_IN_PROGRESS';
+      busy.statusCode = 409;
+      throw busy;
+    }
+    return this.commitIntent({ userId, operationKey, finalizeResult });
+  }
+
+  /**
    * @returns {Promise<{status:'completed'|'compensated', orchestrator?:object,
    *   reason?:string, compensations?:Array, survivingLp?:object, needsManualReview?:boolean}>}
    */

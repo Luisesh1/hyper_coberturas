@@ -16,6 +16,7 @@ const {
   preflightProtectionSchema,
   createIntentSchema,
   commitIntentSchema,
+  retryCommitSchema,
 } = require('../schemas/lp-orchestrator.schema');
 
 const router = Router();
@@ -55,6 +56,16 @@ router.post('/commit-intent', validate(commitIntentSchema), asyncHandler(async (
   });
   // Una compensación NO es un error de la petición: el servidor hizo
   // exactamente lo que debía. El cliente distingue por `status`.
+  res.json({ success: true, data });
+}));
+
+// Reintenta cobertura + orquestador sobre el LP que sobrevivió a una
+// creación compensada. No firma nada on-chain.
+router.post('/retry-commit', validate(retryCommitSchema), asyncHandler(async (req, res) => {
+  const data = await createSaga.retryCommit({
+    userId: req.user.userId,
+    operationKey: req.body.operationKey,
+  });
   res.json({ success: true, data });
 }));
 
