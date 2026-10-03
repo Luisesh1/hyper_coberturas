@@ -151,8 +151,10 @@ test('la ventana de retencion se traduce a un corte temporal coherente', async (
   const antes = Date.now();
 
   const resumen = await pruneDecisionLog({ retentionDays: 7 }, exec);
+  const despues = Date.now();
 
+  // El corte se calcula con un Date.now() interno entre `antes` y `despues`.
   assert.equal(resumen.retentionDays, 7);
-  assert.ok(resumen.cutoffMs <= antes - (7 * 86_400_000));
-  assert.ok(resumen.cutoffMs > antes - (8 * 86_400_000));
+  assert.ok(resumen.cutoffMs >= antes - (7 * 86_400_000));
+  assert.ok(resumen.cutoffMs <= despues - (7 * 86_400_000));
 });
