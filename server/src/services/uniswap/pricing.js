@@ -18,6 +18,7 @@ const STABLE_SYMBOLS = new Set([
   'LUSD',
   'FDUSD',
   'USDE',
+  'USDG',
 ]);
 
 function isStableSymbol(symbol) {

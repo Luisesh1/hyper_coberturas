@@ -60,3 +60,13 @@ test('la identidad de los dos pools dinámicos coincide con la PoolKey de Robinh
     '0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551'
   );
 });
+
+// La protección del primer LP ETH/USDG falló con "No se pudo calcular el valor
+// actual USD del pool": la lista de estables del scan de posiciones no tenía
+// USDG, así que el snapshot quedaba sin currentValueUsd.
+test('el valor USD de una posición ETH/USDG se calcula tratando USDG como estable', () => {
+  const { estimateUsdValueFromPair, isStableSymbol: isPricingStable } = require('../src/services/uniswap/pricing');
+  assert.equal(isPricingStable('USDG'), true);
+  const value = estimateUsdValueFromPair({ symbol: 'ETH' }, { symbol: 'USDG' }, 0.1, 250, 2500);
+  assert.equal(value, 500);
+});
