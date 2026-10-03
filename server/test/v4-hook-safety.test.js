@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   classifyHook,
   isDeltaReturning,
+  isLiquidityDeltaReturning,
   isDynamicFee,
   isZeroHook,
   HOOK_FLAGS,
@@ -76,4 +77,20 @@ test('fee dinámica: sentinel 0x800000 detectado', () => {
   assert.equal(isDynamicFee(0x800000), true);
   assert.equal(isDynamicFee(3000), false);
   assert.equal(isDynamicFee(500), false);
+});
+
+test('los dos hooks observados en Robinhood tienen distinto riesgo de accounting', () => {
+  const first = classifyHook('0xcB787A5cDEA8B3715d984d82F1203Fd7bFeBE0c4');
+  const second = classifyHook('0x06a889870C8f83640D6816319f72e2aA579b6080');
+  assert.equal(first.safe, false);
+  assert.equal(first.flags.AFTER_SWAP_RETURNS_DELTA, true);
+  assert.equal(isLiquidityDeltaReturning('0xcB787A5cDEA8B3715d984d82F1203Fd7bFeBE0c4'), false);
+  assert.equal(second.safe, true);
+  assert.equal(second.flags.BEFORE_SWAP, true);
+});
+
+test('la validación de acciones de liquidez sólo bloquea deltas de liquidez', () => {
+  assert.equal(isLiquidityDeltaReturning(hookAddr(HOOK_FLAGS.AFTER_SWAP_RETURNS_DELTA)), false);
+  assert.equal(isLiquidityDeltaReturning(hookAddr(HOOK_FLAGS.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA)), true);
+  assert.equal(isLiquidityDeltaReturning('hook-invalido'), true);
 });

@@ -74,6 +74,33 @@ const SUPPORTED_NETWORKS = {
       },
     },
   },
+  robinhood: {
+    id: 'robinhood',
+    label: 'Robinhood Chain',
+    chainId: 4663,
+    nativeSymbol: 'ETH',
+    explorerUrl: 'https://robinhoodchain.blockscout.com',
+    rpcUrl: RPC_DEFAULTS.robinhood,
+    fallbackRpcUrl: FALLBACK_RPC_DEFAULTS.robinhood,
+    versions: ['v4'],
+    deployments: {
+      // v3 se usa sólo para los swaps de fondeo/cierre de posiciones v4.
+      // No se expone como versión de LP hasta validar ese flujo por separado.
+      v3: {
+        kind: 'factory',
+        eventSource: '0x1f7d7550b1b028f7571e69a784071f0205fd2efa',
+        quoter: '0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7',
+        swapRouter: '0xcaf681a66d020601342297493863e78c959e5cb2',
+      },
+      v4: {
+        kind: 'poolManager',
+        eventSource: '0x8366a39cc670b4001a1121b8f6a443a643e40951',
+        stateView: '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b',
+        positionManager: '0x58daec3116aae6d93017baaea7749052e8a04fa7',
+        quoter: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
+      },
+    },
+  },
   // ── Testnet ────────────────────────────────────────────────────────────
   // Existe para validar los flujos on-chain (crear / rebalancear / cerrar,
   // v3 y v4) sin capital real. Direcciones verificadas on-chain: el

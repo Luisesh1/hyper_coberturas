@@ -277,7 +277,9 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
             <div className={styles.advancedItem}>
               <span className={styles.advancedLabel}>Comisión del pool / Tick spacing</span>
               <span className={styles.advancedValue}>
-                {pool.fee != null ? `${pool.fee} bps (${(pool.fee / 10000).toFixed(2)}%)` : '—'}
+                {Number(pool.fee) === 0x800000
+                  ? 'Dinámica'
+                  : pool.fee != null ? `${pool.fee} bps (${(pool.fee / 10000).toFixed(2)}%)` : '—'}
                 {pool.tickSpacing != null ? ` · tick ${pool.tickSpacing}` : ''}
               </span>
             </div>

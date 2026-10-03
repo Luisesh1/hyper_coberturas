@@ -17,6 +17,8 @@ const {
 const { normalizeTerminalConfig } = require('./terminal-range-policy.service');
 const {
   policyOwnsFullDelta,
+  resolveLivePolicy,
+  resolveProtectionLivePolicy,
   SELECTABLE_LIVE_POLICIES,
   // Viven en los helpers y NO se re-exportan desde
   // `protected-pool-delta-neutral.service`: importarlas de alli las dejaba en
@@ -157,7 +159,7 @@ function normalizePoolSnapshot(pool) {
   };
 }
 
-function buildSnapshotMetadata(snapshot) {
+function buildSnapshotMetadata(snapshot, { livePolicy = 'legacy_zones_v1' } = {}) {
   const normalizedSnapshot = normalizeProtectionSnapshot(snapshot, {
     network: snapshot.network,
     version: snapshot.version,
@@ -167,7 +169,7 @@ function buildSnapshotMetadata(snapshot) {
     owner: snapshot.owner || snapshot.creator,
     snapshotFreshAt: Date.now(),
   });
-  const validation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
+  const validation = validateNormalizedProtectionSnapshot(normalizedSnapshot, { livePolicy });
   return {
     normalizedSnapshot,
     snapshotStatus: validation.status,
@@ -982,7 +984,9 @@ async function createDeltaNeutralProtectedPool({
   }
 
   const createdAt = Date.now();
-  const snapshotMeta = buildSnapshotMetadata(snapshot);
+  const snapshotMeta = buildSnapshotMetadata(snapshot, {
+    livePolicy: resolveLivePolicy({ policyVersion, executionIntent }),
+  });
   const strategyState = buildInitialStrategyState({
     currentPrice: deltaMetrics.volatilePriceUsd,
     deltaQty: deltaMetrics.deltaQty,
@@ -1600,7 +1604,9 @@ async function diagnoseDeltaNeutral(userId, protectionId, deps = {}) {
     owner: protection.walletAddress,
     snapshotFreshAt: protection.snapshotFreshAt || protection.updatedAt,
   });
-  const snapshotValidation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
+  const snapshotValidation = validateNormalizedProtectionSnapshot(normalizedSnapshot, {
+    livePolicy: resolveProtectionLivePolicy(protection),
+  });
   diagnostics.checks.poolSnapshot = {
     exists: !!protection.poolSnapshot,
     hasPriceCurrent: !!protection.poolSnapshot?.priceCurrent,

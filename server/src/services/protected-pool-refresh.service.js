@@ -2,6 +2,7 @@ const config = require('../config');
 const logger = require('./logger.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const timeInRangeService = require('./time-in-range.service');
+const { resolveProtectionLivePolicy } = require('./protected-pool-delta-neutral.helpers');
 const uniswapService = require('./uniswap.service');
 const {
   computeSnapshotHash,
@@ -192,7 +193,9 @@ class ProtectedPoolRefreshService {
           owner: freshPool.owner || freshPool.creator || protection.walletAddress,
           snapshotFreshAt: Date.now(),
         });
-        const snapshotValidation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
+        const snapshotValidation = validateNormalizedProtectionSnapshot(normalizedSnapshot, {
+          livePolicy: resolveProtectionLivePolicy(protection),
+        });
 
         await this.repo.updateSnapshot(protection.userId, protection.id, {
           poolAddress: freshPool.poolAddress || null,

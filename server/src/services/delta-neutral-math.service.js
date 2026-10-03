@@ -9,6 +9,7 @@ const STABLE_SYMBOLS = new Set([
   'LUSD',
   'FDUSD',
   'USDE',
+  'USDG',
 ]);
 
 const WRAPPED_TOKEN_EQUIVALENTS = new Map([

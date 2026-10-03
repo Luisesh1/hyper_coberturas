@@ -7,7 +7,7 @@
 
 const { ethers } = require('ethers');
 const { V3_POSITION_MANAGER_ABI, V3_SWAP_ROUTER_ABI } = require('./abis');
-const { DEFAULT_SLIPPAGE_BPS, V3_SWAP_ROUTER_ADDRESS } = require('./constants');
+const { DEFAULT_SLIPPAGE_BPS, getV3SwapRouterAddress } = require('./constants');
 const { encodeTx, deadlineFromNow } = require('./tx-encoders');
 const { amountOutMin } = require('../../domains/uniswap/pools/domain/position-action-math');
 
@@ -180,7 +180,7 @@ function buildV3SwapTx(ctx, swap) {
     sqrtPriceLimitX96: 0n,
   }]);
 
-  return encodeTx(V3_SWAP_ROUTER_ADDRESS, data, {
+  return encodeTx(getV3SwapRouterAddress(ctx.networkConfig), data, {
     chainId: ctx.networkConfig.chainId,
     kind: 'swap',
     label: `Swap ${swap.tokenIn.symbol} -> ${swap.tokenOut.symbol}`,

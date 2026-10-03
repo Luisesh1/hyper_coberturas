@@ -63,3 +63,11 @@ test('una red sin envuelto en el catalogo no se rompe', () => {
   const tokens = getKnownTokens('base-sepolia', { version: 'v4' });
   assert.ok(Array.isArray(tokens) && tokens.length > 0);
 });
+
+test('Robinhood v4 ofrece ETH nativo y USDG sin reutilizar tokens de Ethereum', () => {
+  const tokens = getKnownTokens('robinhood', { version: 'v4' });
+  assert.deepEqual(tokens.map((token) => token.symbol), ['ETH', 'USDG']);
+  assert.equal(tokens[0].address, ZERO);
+  assert.equal(tokens[1].address.toLowerCase(), '0x5fc5360d0400a0fd4f2af552add042d716f1d168');
+  assert.ok(getKnownTokens('robinhood').some((token) => token.isWrappedNative));
+});

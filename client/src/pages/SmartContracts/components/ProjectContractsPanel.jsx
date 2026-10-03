@@ -10,6 +10,7 @@ const NETWORKS = [
   { value: 'optimism', label: 'Optimism' },
   { value: 'polygon', label: 'Polygon' },
   { value: 'ethereum', label: 'Ethereum' },
+  { value: 'robinhood', label: 'Robinhood Chain' },
 ];
 
 // Cada estado se explica solo: qué significa, si cuesta gas y qué se puede

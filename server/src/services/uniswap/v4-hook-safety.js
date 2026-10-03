@@ -5,14 +5,15 @@
  * address del hook (ver v4-core Hooks.sol). Eso permite saber, sólo del address,
  * qué callbacks implementa un hook SIN conocer su código.
  *
- * Para la cobertura delta-neutral lo único que rompe la matemática es que el
- * hook devuelva deltas (custom accounting): altera los montos de token que
- * entran/salen en swaps o en add/remove de liquidez, así que el valor y el
- * delta de la posición dejan de seguir la matemática de liquidez concentrada
- * (CLAMM) estándar sobre la que calculamos el hedge. Esos hooks son UNSAFE.
+ * Para las políticas que persiguen el delta se bloquea conservadoramente
+ * cualquier retorno de delta. Un retorno exclusivo de swaps cambia la
+ * liquidación del swapper, pero no demuestra por sí mismo que cambie los
+ * importes de liquidez del LP: las políticas terminales pueden admitirlo.
+ * Los retornos de delta al añadir/quitar liquidez sí afectan directamente la
+ * posición y se bloquean para todas las políticas automáticas.
  *
  * El resto de los hooks (informativos, control de acceso, oráculos, fee
- * dinámica, gating de liquidez) mantienen la matemática CLAMM intacta → SAFE.
+ * dinámica, gating de liquidez) se clasifican como SAFE para la política delta.
  * Un hook que sólo bloquea operaciones puede hacer fallar un rebalanceo, pero
  * eso lo maneja el flujo de tx existente; no corrompe el cálculo del delta.
  */
@@ -81,6 +82,13 @@ function isDynamicFee(fee) {
   return Number(fee) === DYNAMIC_FEE_FLAG;
 }
 
+function isLiquidityDeltaReturning(hooksAddress) {
+  const classification = classifyHook(hooksAddress);
+  if (classification.reason === 'hook_address_invalid') return true;
+  return classification.flags.AFTER_ADD_LIQUIDITY_RETURNS_DELTA === true
+    || classification.flags.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA === true;
+}
+
 /**
  * Clasifica un hook para cobertura delta-neutral.
  * @returns {{ safe: boolean, isHook: boolean, flags: object, reason: string|null }}
@@ -115,6 +123,7 @@ module.exports = {
   ZERO_ADDRESS,
   classifyHook,
   isDeltaReturning,
+  isLiquidityDeltaReturning,
   isDynamicFee,
   isZeroHook,
 };

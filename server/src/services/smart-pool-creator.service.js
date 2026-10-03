@@ -14,7 +14,7 @@ const {
   normalizeHooksAddress,
   ZERO_HOOKS_ADDRESS,
 } = require('./uniswap-v4-helpers.service');
-const { classifyHook } = require('./uniswap/v4-hook-safety');
+const { isLiquidityDeltaReturning } = require('./uniswap/v4-hook-safety');
 const { getSqrtPriceX96AtTick } = require('./uniswap/v4-tick-math');
 const { priceToNearestTick } = require('./uniswap/position-math');
 const { recommendEthUsdcHalfWidthPct } = require('./lp-orchestrator/range-recommender');
@@ -63,6 +63,10 @@ const KNOWN_TOKENS = {
     { symbol: 'USDT', address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6 },
     { symbol: 'ARB', address: '0x912CE59144191C1204E64559FE8253a0e49E6548', decimals: 18 },
     { symbol: 'WBTC', address: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', decimals: 8 },
+  ],
+  robinhood: [
+    { symbol: 'WETH', address: '0x0bd7d308f8e1639fab988df18a8011f41eacad73', decimals: 18, isWrappedNative: true },
+    { symbol: 'USDG', address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', decimals: 6 },
   ],
   // Testnet: solo el par que se usa para validar los flujos v3/v4.
   'base-sepolia': [
@@ -364,7 +368,8 @@ function getWrappedNativeToken(network) {
 }
 
 function getCanonicalUsdcToken(network) {
-  return getKnownTokens(network).find((token) => token.symbol === 'USDC') || null;
+  return getKnownTokens(network).find((token) => token.symbol === 'USDC')
+    || (network === 'robinhood' ? getKnownTokens(network).find((token) => token.symbol === 'USDG') : null);
 }
 
 function getUsdPriceForSymbol(symbol, allPrices = {}) {
@@ -599,23 +604,24 @@ async function getV4PoolContext({
 
   const resolvedHooks = normalizeHooksAddress(hooks);
   if (hasHooks(resolvedHooks)) {
-    // Sólo se rechazan los hooks que devuelven deltas (custom accounting), cuya
-    // matemática de valor/delta no es modelable para la cobertura. Los hooks
-    // safe (fee dinámica, gating, oráculos, informativos) se permiten igual que
-    // un pool v3. Ver services/uniswap/v4-hook-safety.js.
-    const { safe } = classifyHook(resolvedHooks);
-    if (!safe) {
-      throw new ValidationError('Pool v4 con hook de custom accounting (returns-delta): no modelable para cobertura');
+    // Los deltas de liquidez alteran los importes de la posición; los deltas
+    // exclusivos de swaps se evalúan según la política de cobertura elegida.
+    if (isLiquidityDeltaReturning(resolvedHooks)) {
+      throw new ValidationError('Pool v4 con hook que modifica importes de liquidez: no modelable para cobertura');
     }
   }
 
-  const resolvedPoolId = poolId || computeV4PoolId({
+  const canonicalPoolId = computeV4PoolId({
     currency0: ordered.token0.address,
     currency1: ordered.token1.address,
     fee,
     tickSpacing: resolvedTickSpacing,
     hooks: resolvedHooks,
   });
+  if (poolId && String(poolId).toLowerCase() !== canonicalPoolId.toLowerCase()) {
+    throw new ValidationError('El poolId no coincide con los parámetros del pool v4');
+  }
+  const resolvedPoolId = canonicalPoolId;
 
   const stateView = onChainManager.getContract({
     runner: provider,
@@ -1237,6 +1243,9 @@ async function resolveBestDirectRoute({
 }) {
   if (!tokenIn?.address || !tokenOut?.address) return null;
   if (String(tokenIn.address).toLowerCase() === String(tokenOut.address).toLowerCase()) return null;
+  // La búsqueda de rutas de fondeo actual usa v3. En redes sólo v4 no hay
+  // factory v3 configurada; se informa ausencia de ruta en vez de fallar.
+  if (!networkConfig.deployments?.v3?.eventSource) return null;
 
   const factory = onChainManager.getContract({
     runner: provider,
@@ -2108,8 +2117,8 @@ async function getSuggestions({
       requestedTokenOrderReversed: poolContext.requestedTokenOrderReversed === true,
       validation: {
         poolExists: poolContext.poolExists !== false,
-        // Un pool con hook safe (sin returns-delta) es soportado para cobertura.
-        hooksSupported: classifyHook(poolContext.hooks || ZERO_HOOKS_ADDRESS).safe,
+        // La política elegida decide si un delta exclusivo de swaps es viable.
+        hooksSupported: !isLiquidityDeltaReturning(poolContext.hooks || ZERO_HOOKS_ADDRESS),
       },
       gasReserve: balances.gasReserve,
       suggestions,

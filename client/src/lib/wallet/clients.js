@@ -1,11 +1,19 @@
 import { arbitrum, base, baseSepolia, mainnet, optimism, polygon } from 'wagmi/chains';
-import { createPublicClient, fallback, http } from 'viem';
+import { createPublicClient, defineChain, fallback, http } from 'viem';
+
+export const robinhood = defineChain({
+  id: 4663,
+  name: 'Robinhood Chain',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc.mainnet.chain.robinhood.com'] } },
+  blockExplorers: { default: { name: 'Blockscout', url: 'https://robinhoodchain.blockscout.com' } },
+});
 
 // baseSepolia es la testnet donde se validan los flujos on-chain. Tiene que
 // estar aca ademas de en el networks.js del servidor: wagmi/WalletConnect solo
 // declaran estas cadenas en la sesion, y pedir una tx de una cadena ausente
 // hace que la wallet la rechace con "Missing or invalid parameters".
-export const SUPPORTED_CHAINS = [mainnet, arbitrum, base, optimism, polygon, baseSepolia];
+export const SUPPORTED_CHAINS = [mainnet, arbitrum, base, optimism, polygon, baseSepolia, robinhood];
 
 const CHAIN_BY_ID = new Map(SUPPORTED_CHAINS.map((chain) => [Number(chain.id), chain]));
 
@@ -30,6 +38,7 @@ const DEFAULT_RPC_URLS = {
   [optimism.id]: ['https://mainnet.optimism.io', 'https://optimism-rpc.publicnode.com'],
   [polygon.id]: ['https://polygon.drpc.org', 'https://polygon-bor-rpc.publicnode.com'],
   [baseSepolia.id]: ['https://sepolia.base.org', 'https://base-sepolia-rpc.publicnode.com'],
+  [robinhood.id]: ['https://rpc.mainnet.chain.robinhood.com'],
 };
 
 // Hosts que dejaron de servir sin API key. Un test bloquea que vuelvan a
@@ -43,6 +52,7 @@ const ENV_RPC_URLS = {
   [optimism.id]: import.meta.env.VITE_UNI_RPC_OPTIMISM,
   [polygon.id]: import.meta.env.VITE_UNI_RPC_POLYGON,
   [baseSepolia.id]: import.meta.env.VITE_UNI_RPC_BASE_SEPOLIA,
+  [robinhood.id]: import.meta.env.VITE_UNI_RPC_ROBINHOOD,
 };
 
 const CLIENT_CACHE = new Map();

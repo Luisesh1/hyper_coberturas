@@ -31,7 +31,7 @@ const verifyVersionSchema = z.object({
 });
 
 // Redes que cubre el catalogo de contratos desplegables del proyecto.
-const SUPPORTED_CATALOG_NETWORKS = ['ethereum', 'arbitrum', 'base', 'base-sepolia', 'optimism', 'polygon'];
+const SUPPORTED_CATALOG_NETWORKS = ['ethereum', 'arbitrum', 'base', 'base-sepolia', 'optimism', 'polygon', 'robinhood'];
 
 const catalogNetworkSchema = z.object({
   network: z.enum(SUPPORTED_CATALOG_NETWORKS),

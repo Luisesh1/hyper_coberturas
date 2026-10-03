@@ -9,6 +9,7 @@ import { SUPPORTED_CHAINS, getChainById, buildRpcUrls, RPC_HOSTS_BLOQUEADOS } fr
 const CHAIN_IDS_OPERABLES = {
   arbitrum: 42161,
   'base-sepolia': 84532,
+  robinhood: 4663,
 };
 
 describe('SUPPORTED_CHAINS', () => {

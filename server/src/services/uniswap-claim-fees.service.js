@@ -15,6 +15,7 @@ const {
 } = require('./uniswap-v4-helpers.service');
 
 const { SUPPORTED_NETWORKS } = require('./uniswap/networks');
+const { isLiquidityDeltaReturning } = require('./uniswap/v4-hook-safety');
 
 const {
   ERC20_ABI,
@@ -150,8 +151,9 @@ async function prepareV4Collect({ networkConfig, normalizedWallet, tokenId }) {
 
   // Get pool key and position info
   const [poolKey] = await pm.getPoolAndPositionInfo(tokenId);
-  if (hasHooks(normalizeHooksAddress(poolKey.hooks))) {
-    throw new ValidationError('Los pools v4 con hooks no estan soportados en gestion on-chain por ahora');
+  const hooks = normalizeHooksAddress(poolKey.hooks);
+  if (hasHooks(hooks) && isLiquidityDeltaReturning(hooks)) {
+    throw new ValidationError('Pool v4 con hook que modifica importes de liquidez: no modelable para cobertura');
   }
 
   const [token0Info, token1Info] = await Promise.all([

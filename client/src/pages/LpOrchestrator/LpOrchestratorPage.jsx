@@ -388,7 +388,10 @@ export default function LpOrchestratorPage() {
         } else if (reason === 'already_has_lp') {
           setError('Este orquestador ya tiene un LP activo.');
         } else {
-          setError(`No hay LPs en tu wallet que coincidan con ${orchestrator.token0Symbol}/${orchestrator.token1Symbol} (${orchestrator.network}, fee ${(orchestrator.feeTier / 10_000).toFixed(2)}%).`);
+          const feeLabel = Number(orchestrator.feeTier) === 0x800000
+            ? 'comisión dinámica'
+            : `comisión ${(orchestrator.feeTier / 10_000).toFixed(2)}%`;
+          setError(`No hay LPs en tu wallet que coincidan con ${orchestrator.token0Symbol}/${orchestrator.token1Symbol} (${orchestrator.network}, ${feeLabel}).`);
         }
         return;
       }

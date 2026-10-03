@@ -26,13 +26,21 @@ describe('permisos de posiciones Uniswap v4 con hooks', () => {
     });
   });
 
-  it('bloquea hooks que pueden devolver deltas', () => {
-    const unsafeReturnsDeltaHook = '0x0000000000000000000000000000000000000008';
+  it('bloquea hooks que pueden devolver deltas de liquidez', () => {
+    const unsafeReturnsDeltaHook = '0x0000000000000000000000000000000000000002';
 
     expect(permissions(unsafeReturnsDeltaHook)).toMatchObject({
       hasUnsupportedV4Hooks: true,
       canManage: false,
       canClaim: false,
+    });
+  });
+
+  it('permite gestionar un hook que sólo devuelve deltas de swaps', () => {
+    expect(permissions('0x0000000000000000000000000000000000000004')).toMatchObject({
+      hasUnsupportedV4Hooks: false,
+      canManage: true,
+      canClaim: true,
     });
   });
 });

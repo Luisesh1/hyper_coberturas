@@ -49,6 +49,7 @@ const {
   buildRebalanceSwap,
   estimateSwapValueUsd,
 } = require('../../../domains/uniswap/pools/domain/position-action-math');
+const { isLiquidityDeltaReturning } = require('../v4-hook-safety');
 
 const ZERO_ADDRESS_V4 = '0x0000000000000000000000000000000000000000';
 const MAXIMUM_AMOUNT_EXCEEDED_SELECTOR = ethers.id('MaximumAmountExceeded(uint128,uint128)').slice(0, 10);
@@ -1315,7 +1316,9 @@ async function prepareCreatePositionV4(payload) {
   const hooks = normalizeHooksAddress(payload.hooks);
   if (!Number.isInteger(fee) || fee <= 0) throw new ValidationError('fee invalido');
   if (!Number.isInteger(tickSpacing) || tickSpacing <= 0) throw new ValidationError('tickSpacing es requerido para crear una posicion v4');
-  if (hasHooks(hooks)) throw new ValidationError('Los pools v4 con hooks no estan soportados en gestion on-chain por ahora');
+  if (hasHooks(hooks) && isLiquidityDeltaReturning(hooks)) {
+    throw new ValidationError('Pool v4 con hook que modifica importes de liquidez: no modelable para cobertura');
+  }
 
   const orderedPair = smartPoolCreatorService.sortTokensByAddress(token0, token1);
   const canonicalPlan = normalizeCreatePositionPoolOrder({
@@ -1852,11 +1855,21 @@ async function prepareCloseToUsdcV4(payload) {
     }
 
     const amountIn = applyCloseBuffer(entry.estimatedAmount);
+    // El router v3 opera con WETH, mientras que la posición v4 puede
+    // devolver ETH nativo. Envolver sólo el monto que se va a cambiar deja
+    // el remanente de ETH en la wallet para gas y redondeos.
+    const swapTokenIn = isZeroAddress(entry.token.address) ? wrappedNative : entry.token;
+    if (!swapTokenIn) {
+      throw new ValidationError(`No hay token envuelto configurado para convertir ${entry.token.symbol}.`);
+    }
+    if (swapTokenIn !== entry.token) {
+      txPlan.push(buildWrapNativeTx(swapTokenIn, amountIn, ctx.networkConfig.chainId));
+    }
     const swap = await appendV3SwapToToken({
       provider: ctx.provider,
       networkConfig: ctx.networkConfig,
       normalizedWallet: ctx.normalizedWallet,
-      tokenIn: entry.token,
+      tokenIn: swapTokenIn,
       tokenOut: usdc,
       amountIn,
       slippageBps: payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS,

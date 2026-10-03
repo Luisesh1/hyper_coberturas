@@ -20,6 +20,7 @@ const GAS_RESERVE_BY_NETWORK = {
   optimism: '0.0015',
   polygon: '1',
   'base-sepolia': '0.0015',
+  robinhood: '0.002',
 };
 
 // Gas units del plan de creación más caro que el prepare puede emitir: mint v4

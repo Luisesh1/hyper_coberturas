@@ -6,7 +6,7 @@
  */
 
 const ZERO_HOOKS = '0x0000000000000000000000000000000000000000';
-const DELTA_RETURNING_MASK = 0xfn;
+const LIQUIDITY_DELTA_RETURNING_MASK = 0x3n;
 
 function hasUnsupportedV4Hook(version, hooks) {
   if (version !== 'v4') return false;
@@ -15,9 +15,10 @@ function hasUnsupportedV4Hook(version, hooks) {
   const address = BigInt(raw);
   if (address === 0n) return false;
 
-  // Paridad con el clasificador del backend: solo los cuatro bits bajos que
-  // habilitan custom accounting (returns delta) vuelven inseguro al hook.
-  return (address & DELTA_RETURNING_MASK) !== 0n;
+  // La gestión de la posición sólo se bloquea si el hook puede cambiar
+  // los importes al añadir o quitar liquidez. Los deltas de swap se validan
+  // aparte según la política de hedge activa.
+  return (address & LIQUIDITY_DELTA_RETURNING_MASK) !== 0n;
 }
 
 /**

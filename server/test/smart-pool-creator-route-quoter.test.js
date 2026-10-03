@@ -71,6 +71,17 @@ function stubContracts({ quoteFn, poolTick = -200_500 }) {
   return () => { onChainManager.getContract = original; };
 }
 
+test('una red solo v4 informa que no hay ruta v3 sin consultar contratos', async () => {
+  const route = await resolveBestDirectRoute({
+    provider: {},
+    networkConfig: { id: 'robinhood', deployments: { v4: {} } },
+    tokenIn: USDC,
+    tokenOut: WETH,
+    amountInRaw: AMOUNT_IN,
+  });
+  assert.equal(route, null);
+});
+
 test('elige el fee tier por la cotizacion real, no por el fee mas bajo', async () => {
   const restore = stubContracts({ quoteFn: async (fee) => REAL_OUT_BY_FEE[fee] });
   try {

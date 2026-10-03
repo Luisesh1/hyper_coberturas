@@ -61,6 +61,7 @@ const {
   normalizeStrategyState,
   isCooldownActive,
   deriveBandSettings,
+  resolveProtectionLivePolicy,
   computeVolatilityStats,
 } = require('./protected-pool-delta-neutral.helpers');
 const { zoneMultiplier } = require('./legacy-zones-policy.service');
@@ -349,7 +350,9 @@ class ProtectedPoolDeltaNeutralService {
       owner: source.owner || source.creator || protection?.walletAddress,
       snapshotFreshAt: source.snapshotFreshAt || protection?.snapshotFreshAt || Date.now(),
     });
-    const validation = validateNormalizedProtectionSnapshot(normalizedSnapshot);
+    const validation = validateNormalizedProtectionSnapshot(normalizedSnapshot, {
+      livePolicy: resolveProtectionLivePolicy(protection),
+    });
     return {
       normalizedSnapshot,
       validation,

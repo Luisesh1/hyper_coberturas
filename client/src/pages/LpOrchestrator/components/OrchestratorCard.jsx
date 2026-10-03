@@ -41,6 +41,7 @@ function buildPoolFromOrchestrator(orch) {
 function formatFeeTier(feeTier) {
   const n = Number(feeTier);
   if (!Number.isFinite(n) || n <= 0) return '';
+  if (n === 0x800000) return 'Dinámica';
   const pct = n / 10_000;
   const formatted = pct < 0.1 ? pct.toFixed(2) : pct.toFixed(2).replace(/\.?0+$/, '');
   return `${formatted}%`;

@@ -10,7 +10,7 @@ const {
 } = require('../abis');
 const {
   MAX_UINT256,
-  V3_SWAP_ROUTER_ADDRESS,
+  getV3SwapRouterAddress,
   CLOSE_SWAP_BUFFER_BPS,
   ACTIONS,
 } = require('../constants');
@@ -49,6 +49,7 @@ const {
   normalizeHooksAddress,
 } = require('../../uniswap-v4-helpers.service');
 const { SUPPORTED_NETWORKS } = require('../networks');
+const { isLiquidityDeltaReturning } = require('../v4-hook-safety');
 const {
   amountOutMin,
 } = require('../../../domains/uniswap/pools/domain/position-action-math');
@@ -420,10 +421,11 @@ async function appendV3SwapToToken({
     throw new ValidationError(`No se encontro una ruta simple de ${tokenIn.symbol} a ${tokenOut.symbol}`);
   }
 
-  const allowanceState = await getBalanceAndAllowance(provider, tokenIn, normalizedWallet, V3_SWAP_ROUTER_ADDRESS);
+  const swapRouterAddress = getV3SwapRouterAddress(networkConfig);
+  const allowanceState = await getBalanceAndAllowance(provider, tokenIn, normalizedWallet, swapRouterAddress);
   if (allowanceState.allowance < amountIn) {
-    requiresApproval.push(buildApprovalRequirement(tokenIn, V3_SWAP_ROUTER_ADDRESS, amountIn));
-    txPlan.push(maybeBuildApprovalTx(tokenIn, V3_SWAP_ROUTER_ADDRESS, amountIn, networkConfig.chainId));
+    requiresApproval.push(buildApprovalRequirement(tokenIn, swapRouterAddress, amountIn));
+    txPlan.push(maybeBuildApprovalTx(tokenIn, swapRouterAddress, amountIn, networkConfig.chainId));
   }
 
   const amountOutMinimum = amountOutMin(route.expectedOutRaw, slippageBps);
@@ -589,6 +591,7 @@ async function appendFundingSwapTransactions({
   allowanceCache: externalCache,
 }) {
   const allowanceCache = externalCache || new Map();
+  const swapRouterAddress = getV3SwapRouterAddress(networkConfig);
 
   for (const swap of swapPlan) {
     if (swap.requiresWrapNative && swap.wrapToken?.address) {
@@ -604,15 +607,15 @@ async function appendFundingSwapTransactions({
       decimals: Number(swap.tokenIn.decimals),
     };
     const amountIn = BigInt(swap.amountInRaw);
-    const cacheKey = `${tokenIn.address}:${V3_SWAP_ROUTER_ADDRESS}`;
+    const cacheKey = `${tokenIn.address}:${swapRouterAddress}`;
     let allowanceState = allowanceCache.get(cacheKey);
     if (!allowanceState) {
-      allowanceState = await getBalanceAndAllowance(provider, tokenIn, normalizedWallet, V3_SWAP_ROUTER_ADDRESS);
+      allowanceState = await getBalanceAndAllowance(provider, tokenIn, normalizedWallet, swapRouterAddress);
       allowanceCache.set(cacheKey, allowanceState);
     }
     if (allowanceState.allowance < amountIn) {
-      requiresApproval.push(buildApprovalRequirement(tokenIn, V3_SWAP_ROUTER_ADDRESS, amountIn));
-      txPlan.push(maybeBuildApprovalTx(tokenIn, V3_SWAP_ROUTER_ADDRESS, amountIn, networkConfig.chainId));
+      requiresApproval.push(buildApprovalRequirement(tokenIn, swapRouterAddress, amountIn));
+      txPlan.push(maybeBuildApprovalTx(tokenIn, swapRouterAddress, amountIn, networkConfig.chainId));
       allowanceState.allowance = MAX_UINT256;
       allowanceCache.set(cacheKey, allowanceState);
     }
@@ -829,8 +832,8 @@ async function loadV4PositionContext({ network, walletAddress, positionIdentifie
     tickSpacing: Number(poolKey.tickSpacing),
     hooks: normalizeHooksAddress(poolKey.hooks),
   };
-  if (hasHooks(normalizedPoolKey.hooks)) {
-    throw new ValidationError('Los pools v4 con hooks no estan soportados en gestion on-chain por ahora');
+  if (hasHooks(normalizedPoolKey.hooks) && isLiquidityDeltaReturning(normalizedPoolKey.hooks)) {
+    throw new ValidationError('Pool v4 con hook que modifica importes de liquidez: no modelable para cobertura');
   }
 
   const decodedPosition = decodeV4PositionInfo(rawPositionInfo);

@@ -36,6 +36,7 @@ function buildAlchemyRpcUrls(apiKey) {
     polygon: `https://polygon-mainnet.g.alchemy.com/v2/${apiKey}`,
     // Testnet para validar flujos on-chain sin capital real.
     baseSepolia: `https://base-sepolia.g.alchemy.com/v2/${apiKey}`,
+    robinhood: `https://robinhood-mainnet.g.alchemy.com/v2/${apiKey}`,
   };
 }
 
@@ -48,6 +49,7 @@ const PUBLIC_RPC_DEFAULTS = {
   base: 'https://base-rpc.publicnode.com',
   polygon: 'https://polygon-bor-rpc.publicnode.com',
   baseSepolia: 'https://base-sepolia-rpc.publicnode.com',
+  robinhood: 'https://rpc.mainnet.chain.robinhood.com',
 };
 
 const config = {
@@ -78,6 +80,7 @@ const config = {
       base: process.env.UNI_RPC_BASE || ALCHEMY_RPC_URLS.base || PUBLIC_RPC_DEFAULTS.base,
       polygon: process.env.UNI_RPC_POLYGON || ALCHEMY_RPC_URLS.polygon || PUBLIC_RPC_DEFAULTS.polygon,
       baseSepolia: process.env.UNI_RPC_BASE_SEPOLIA || ALCHEMY_RPC_URLS.baseSepolia || PUBLIC_RPC_DEFAULTS.baseSepolia,
+      robinhood: process.env.UNI_RPC_ROBINHOOD || ALCHEMY_RPC_URLS.robinhood || PUBLIC_RPC_DEFAULTS.robinhood,
     },
     fallbackRpcUrls: {
       ethereum: process.env.UNI_FALLBACK_RPC_ETHEREUM || PUBLIC_RPC_DEFAULTS.ethereum,
@@ -86,6 +89,7 @@ const config = {
       base: process.env.UNI_FALLBACK_RPC_BASE || PUBLIC_RPC_DEFAULTS.base,
       polygon: process.env.UNI_FALLBACK_RPC_POLYGON || PUBLIC_RPC_DEFAULTS.polygon,
       baseSepolia: process.env.UNI_FALLBACK_RPC_BASE_SEPOLIA || PUBLIC_RPC_DEFAULTS.baseSepolia,
+      robinhood: process.env.UNI_FALLBACK_RPC_ROBINHOOD || PUBLIC_RPC_DEFAULTS.robinhood,
     },
     scanTimeoutMs: parseInt(process.env.UNI_SCAN_TIMEOUT_MS, 10) || 20_000,
   },

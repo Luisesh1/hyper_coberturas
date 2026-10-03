@@ -39,6 +39,10 @@ const DEFILLAMA_CHAIN_BY_NETWORK = {
 // Con RPCs públicos (publicnode, ankr, etc.) es la única forma estándar de
 // escanear balances sin un indexador externo. Cubre >95% de USD típico.
 const CURATED_TOKENS_BY_NETWORK = {
+  robinhood: [
+    { address: '0x0bd7d308f8e1639fab988df18a8011f41eacad73', symbol: 'WETH', decimals: 18 },
+    { address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', symbol: 'USDG', decimals: 6 },
+  ],
   // Testnet: WETH y USDC alcanzan. El precio sale por SIMBOLO (WETH -> ETH de
   // Hyperliquid, stables -> $1), asi que la valuacion funciona igual que en
   // mainnet aunque estos tokens no tengan mercado propio.

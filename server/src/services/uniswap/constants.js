@@ -8,6 +8,7 @@ const MAX_UINT256 = (1n << 256n) - 1n;
 const DEFAULT_DEADLINE_SECONDS = 1800;
 const DEFAULT_SLIPPAGE_BPS = 100;
 const V3_SWAP_ROUTER_ADDRESS = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45';
+const getV3SwapRouterAddress = (networkConfig) => networkConfig?.deployments?.v3?.swapRouter || V3_SWAP_ROUTER_ADDRESS;
 const CLOSE_SWAP_BUFFER_BPS = 9800n;
 
 const ACTIONS = new Set([
@@ -33,6 +34,7 @@ module.exports = {
   DEFAULT_DEADLINE_SECONDS,
   DEFAULT_SLIPPAGE_BPS,
   V3_SWAP_ROUTER_ADDRESS,
+  getV3SwapRouterAddress,
   CLOSE_SWAP_BUFFER_BPS,
   ACTIONS,
   CLOSE_ACTIONS,
