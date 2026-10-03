@@ -202,6 +202,78 @@ describe('sendWalletTransactionDetailed no reenvía una operación ambigua', () 
   });
 });
 
+// Robinhood (2026-10-03): la hardware wallet firmó y difundió el swap por
+// WalletConnect, pero la respuesta con el hash nunca volvió y el flujo quedó
+// colgado para siempre con la tx ya minada. Mientras se espera a la wallet se
+// vigila el nonce de la cuenta en cadena y se rescata la tx por nonce.
+describe('sendWalletTransactionDetailed rescata la tx por nonce si la wallet no responde', () => {
+  const address = '0x1111111111111111111111111111111111111111';
+  const baseArgs = { address, chainId: 4663, switchChain: vi.fn(), broadcastWatch: { pollMs: 5 } };
+  const minedHash = `0x${'cd'.repeat(32)}`;
+
+  // Cuenta con nonce 9 hasta el bloque 104 incluido; la tx con nonce 9 se mina en el 105.
+  function chainWith({ txInBlock, minedAtBlock = 105, advanceAfterPolls = 2 }) {
+    let latestPolls = 0;
+    return {
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getTransactionCount: vi.fn(async ({ blockNumber, blockTag }) => {
+        if (blockNumber != null) return Number(blockNumber) >= minedAtBlock ? 10 : 9;
+        if (blockTag === 'pending') return 9;
+        latestPolls += 1;
+        return latestPolls > advanceAfterPolls ? 10 : 9;
+      }),
+      getBlock: vi.fn(async ({ blockNumber }) => ({
+        number: blockNumber,
+        transactions: Number(blockNumber) === minedAtBlock ? [txInBlock] : [],
+      })),
+    };
+  }
+
+  it('devuelve el hash minado aunque eth_sendTransaction nunca resuelva', async () => {
+    const provider = { request: vi.fn(() => new Promise(() => {})) };
+    const tx = validTx({ kind: 'swap' });
+    const publicClient = chainWith({
+      txInBlock: { hash: minedHash, from: address.toUpperCase().replace('0X', '0x'), nonce: 9, to: tx.to, input: tx.data },
+    });
+    publicClient.getBlockNumber.mockResolvedValueOnce(100n).mockResolvedValue(110n);
+
+    const result = await sendWalletTransactionDetailed({ ...baseArgs, provider, publicClient, tx });
+
+    expect(result).toMatchObject({ hash: minedHash, normalizedError: null, recoveredFromChain: true });
+    expect(provider.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('no toma como propia una tx distinta que consumió el nonce', async () => {
+    let resolveWallet;
+    const provider = { request: vi.fn(() => new Promise((resolve) => { resolveWallet = resolve; })) };
+    const tx = validTx({ kind: 'swap' });
+    const publicClient = chainWith({
+      txInBlock: { hash: minedHash, from: address, nonce: 9, to: tx.to, input: '0xdeadbeef' },
+    });
+    publicClient.getBlockNumber.mockResolvedValueOnce(100n).mockResolvedValue(110n);
+
+    const pending = sendWalletTransactionDetailed({ ...baseArgs, provider, publicClient, tx });
+    await vi.waitFor(() => expect(publicClient.getBlock).toHaveBeenCalled());
+    const walletHash = `0x${'ef'.repeat(32)}`;
+    resolveWallet(walletHash);
+
+    expect(await pending).toMatchObject({ hash: walletHash, normalizedError: null });
+  });
+
+  it('usa la respuesta de la wallet cuando llega y deja de vigilar', async () => {
+    const walletHash = `0x${'aa'.repeat(32)}`;
+    const provider = { request: vi.fn().mockResolvedValue(walletHash) };
+    const publicClient = chainWith({ txInBlock: null });
+
+    const result = await sendWalletTransactionDetailed({ ...baseArgs, provider, publicClient, tx: validTx() });
+    const pollsAtReturn = publicClient.getTransactionCount.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(result).toMatchObject({ hash: walletHash, normalizedError: null });
+    expect(publicClient.getTransactionCount.mock.calls.length).toBe(pollsAtReturn);
+  });
+});
+
 // Una tx que SI se ejecuto on-chain reportada como fallida es el peor error
 // posible del runner: aborta el plan a la mitad y el usuario cree que no paso
 // nada. Ocurria porque observar bloques y consultar el recibo pueden caer en

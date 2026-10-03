@@ -399,6 +399,84 @@ export async function waitForBroadcastedHash(clientOrProvider, txHash, { attempt
   return false;
 }
 
+const BROADCAST_WATCH_POLL_MS = 3000;
+
+function sameTxIntent(chainTx, address, tx) {
+  return String(chainTx?.from || '').toLowerCase() === String(address || '').toLowerCase()
+    && String(chainTx?.to || '').toLowerCase() === String(tx?.to || '').toLowerCase()
+    && String(chainTx?.input || '0x').toLowerCase() === String(tx?.data || '0x').toLowerCase();
+}
+
+/** Primer bloque en (fromBlock, toBlock] donde la cuenta ya consumió `nonce`. */
+async function findBlockConsumingNonce(publicClient, address, nonce, fromBlock, toBlock) {
+  let lo = fromBlock;
+  let hi = toBlock;
+  while (hi - lo > 1n) {
+    const mid = lo + (hi - lo) / 2n;
+    const count = await publicClient.getTransactionCount({ address, blockNumber: mid });
+    if (Number(count) > nonce) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+}
+
+/**
+ * `eth_sendTransaction` por WalletConnect puede no volver nunca: la wallet
+ * firma y difunde la tx, pero la respuesta se pierde en el relay (visto con
+ * una hardware wallet en Robinhood Chain). El flujo se quedaba esperando con
+ * la tx ya minada. Mientras se espera a la wallet, vigilamos el nonce de la
+ * cuenta; cuando avanza, buscamos por bisección el bloque que lo consumió y
+ * devolvemos esa tx solo si coincide con la que pedimos firmar (to + data),
+ * para no adoptar una tx que el usuario mandó por otro lado.
+ */
+function watchBroadcastByNonce({ publicClient, address, tx, pollMs = BROADCAST_WATCH_POLL_MS }) {
+  const canWatch = publicClient
+    && typeof publicClient.getTransactionCount === 'function'
+    && typeof publicClient.getBlockNumber === 'function'
+    && typeof publicClient.getBlock === 'function';
+  let stopped = false;
+  const stop = () => { stopped = true; };
+  if (!canWatch || !address) return { promise: new Promise(() => {}), stop, ready: Promise.resolve() };
+
+  let resolveReady;
+  const ready = new Promise((resolve) => { resolveReady = resolve; });
+  const promise = (async () => {
+    let startBlock;
+    let nextNonce;
+    try {
+      [startBlock, nextNonce] = await Promise.all([
+        publicClient.getBlockNumber(),
+        publicClient.getTransactionCount({ address, blockTag: 'pending' }).then(Number),
+      ]);
+    } finally {
+      resolveReady();
+    }
+    startBlock = BigInt(startBlock);
+    while (!stopped) {
+      await sleep(pollMs);
+      if (stopped) break;
+      try {
+        const latestNonce = Number(await publicClient.getTransactionCount({ address, blockTag: 'latest' }));
+        while (!stopped && latestNonce > nextNonce) {
+          const latestBlock = BigInt(await publicClient.getBlockNumber());
+          const blockNumber = await findBlockConsumingNonce(publicClient, address, nextNonce, startBlock, latestBlock);
+          const block = await publicClient.getBlock({ blockNumber, includeTransactions: true });
+          const chainTx = (block?.transactions || []).find((item) => (
+            item && String(item.from || '').toLowerCase() === address.toLowerCase() && Number(item.nonce) === nextNonce
+          ));
+          if (chainTx && sameTxIntent(chainTx, address, tx)) return chainTx.hash;
+          startBlock = blockNumber;
+          nextNonce += 1;
+        }
+      } catch {
+        // Best-effort: un fallo del RPC no debe tumbar la espera de la wallet.
+      }
+    }
+    return new Promise(() => {});
+  })().catch(() => new Promise(() => {}));
+  return { promise, stop, ready };
+}
+
 async function estimateTransactionGas(provider, txParams) {
   if (!provider?.request) return null;
   try {
@@ -423,6 +501,7 @@ export async function sendWalletTransactionDetailed({
   tx,
   switchChain,
   actionKey,
+  broadcastWatch = {},
 }) {
   if (!provider?.request) {
     return {
@@ -465,6 +544,7 @@ export async function sendWalletTransactionDetailed({
     };
   }
 
+  let watcher = null;
   try {
     if (actionKey) PROMPT_LOCKS.add(actionKey);
     if (tx?.chainId && chainId && Number(tx.chainId) !== Number(chainId)) {
@@ -486,7 +566,11 @@ export async function sendWalletTransactionDetailed({
     const shouldPreferEstimatedGas = prefersEstimatedGas(tx?.kind);
     const estimatedGas = shouldPreferEstimatedGas ? await estimateTransactionGas(provider, baseTxParams) : null;
 
-    const txHash = await provider.request({
+    // El nonce de partida se lee antes de abrir la firma: si se leyera después,
+    // una wallet rápida ya lo habría consumido y la tx no se encontraría.
+    watcher = watchBroadcastByNonce({ publicClient, address, tx, pollMs: broadcastWatch.pollMs });
+    await Promise.race([watcher.ready, sleep(5000)]);
+    const walletRequest = provider.request({
       method: 'eth_sendTransaction',
       params: [{
         ...buildTransactionParams({
@@ -497,6 +581,17 @@ export async function sendWalletTransactionDetailed({
         ...(estimatedGas ? { gas: estimatedGas } : {}),
       }],
     });
+    const raced = await Promise.race([
+      walletRequest.then((value) => ({ source: 'wallet', value })),
+      watcher.promise.then((hash) => ({ source: 'chain', hash })),
+    ]);
+    watcher.stop();
+    if (raced.source === 'chain') {
+      // La respuesta tardía de la wallet ya no importa; evitamos un rechazo sin manejar.
+      walletRequest.catch(() => {});
+      return { hash: raced.hash, normalizedError: null, recoveredFromChain: true };
+    }
+    const txHash = raced.value;
     const extractedHash = extractTxHash(txHash);
     if (extractedHash) {
       return { hash: extractedHash, normalizedError: null };
@@ -540,6 +635,7 @@ export async function sendWalletTransactionDetailed({
       normalizedError: withFailingTxContext(normalizeWalletError(err), tx),
     };
   } finally {
+    watcher?.stop();
     if (actionKey) PROMPT_LOCKS.delete(actionKey);
   }
 }
