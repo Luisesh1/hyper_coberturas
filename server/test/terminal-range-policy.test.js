@@ -155,6 +155,17 @@ test('solver: sin raiz short-only no abre un long; elige el menor |g| y marca in
   assert.equal(r.qty, 0);
 });
 
+test('solver cobra la reduccion desde la posicion real aunque supere qMax', () => {
+  const r = solveTerminalQty({
+    residualUsd: 0, actualQty: 150, execPrice: 100, edgeExecPrice: 95,
+    costRate: 0.01, maxQty: 100,
+  });
+  // Coste real de modificar 150 -> q', no de 100 -> q'.
+  const residualReal = r.qty * 5 - Math.abs(r.qty - 150) - r.qty * 0.95;
+  assert.ok(Math.abs(residualReal) < 1e-6);
+  assert.ok(Math.abs(r.residualUsd - residualReal) < 1e-6);
+});
+
 test('coste de recentrado: positivo y menor que el valor en el borde', () => {
   const lp = makeLp();
   const k = estimateRecenterCostUsd({

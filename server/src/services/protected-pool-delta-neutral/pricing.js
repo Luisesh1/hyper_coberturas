@@ -127,17 +127,28 @@ const pricingMethods = {
     };
   },
 
-  async _resolvePricingContext(protection, snapshotMeta, liveMarket) {
+  async _resolvePricingContext(protection, snapshotMeta, liveMarket, { requireHyperliquidPrice = false } = {}) {
     const marketTwin = this._buildDigitalTwin(protection, liveMarket);
     const marketPrice = Number(marketTwin?.syntheticPriceCurrent);
     const liveSource = liveMarket?.source || 'unavailable';
 
-    if (this._hasRealtimeMarketPrice(liveMarket) && marketTwin?.eligible && Number.isFinite(marketPrice) && marketPrice > 0) {
+    const hyperliquidSource = /^hl_(ws|http)_/.test(liveSource);
+    if ((this._hasRealtimeMarketPrice(liveMarket) || (requireHyperliquidPrice && hyperliquidSource))
+      && marketTwin?.eligible && Number.isFinite(marketPrice) && marketPrice > 0) {
       return {
         currentPrice: marketPrice,
         twin: marketTwin,
         spotSource: liveSource,
         spotFailureReason: null,
+      };
+    }
+
+    if (requireHyperliquidPrice) {
+      return {
+        currentPrice: null,
+        twin: marketTwin,
+        spotSource: liveSource,
+        spotFailureReason: 'No se pudo obtener el precio actual de Hyperliquid.',
       };
     }
 

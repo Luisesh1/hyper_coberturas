@@ -39,7 +39,7 @@ const {
   decideNetProfitV1,
 } = require('../net-profit-policy.service');
 const { RANGE_EXIT_V1, decideRangeExitV1 } = require('../range-exit-policy.service');
-const { fundingReceivedUsd } = require('../../utils/hl-funding');
+const { accumulateFundingUsd } = require('../../utils/hl-funding');
 const {
   TERMINAL_RANGE_V1,
   buildLpValuation,
@@ -149,12 +149,14 @@ const evaluateMethods = {
         };
       }
     }
+    const requireHyperliquidPrice = (activeProtection.policyVersion || strategyState.policyVersion) === TERMINAL_RANGE_V1
+      && (activeProtection.strategyState?.executionIntent || strategyState.executionIntent) === 'live';
     let {
       currentPrice,
       twin,
       spotSource,
       spotFailureReason,
-    } = await this._resolvePricingContext(activeProtection, snapshotMeta, liveMarket);
+    } = await this._resolvePricingContext(activeProtection, snapshotMeta, liveMarket, { requireHyperliquidPrice });
     let truthAgeMs = Math.max(
       Date.now() - Number(strategyState.lastTruthAt || snapshotMeta.snapshotFreshAt || activeProtection.snapshotFreshAt || 0),
       0,
@@ -211,7 +213,7 @@ const evaluateMethods = {
           twin,
           spotSource,
           spotFailureReason,
-        } = await this._resolvePricingContext(activeProtection, snapshotMeta, liveMarket));
+        } = await this._resolvePricingContext(activeProtection, snapshotMeta, liveMarket, { requireHyperliquidPrice }));
         truthAgeMs = Math.max(
           Date.now() - Number(activeProtection.strategyState?.lastTruthAt || snapshotMeta.snapshotFreshAt || 0),
           0,
@@ -231,17 +233,18 @@ const evaluateMethods = {
     }
 
     if (!Number.isFinite(currentPrice) || currentPrice <= 0 || !twin?.eligible) {
-      const cooldown = buildCooldown('No se pudo obtener el precio actual del pool.', strategyState);
+      const priceError = spotFailureReason || 'No se pudo obtener el precio actual del pool.';
+      const cooldown = buildCooldown(priceError, strategyState);
       const staleState = {
         ...strategyState,
         status: cooldown.status,
-        lastError: 'No se pudo obtener el precio actual del pool.',
+        lastError: priceError,
         lastDecision: 'refresh_snapshot',
         lastDecisionReason: 'spot_stale',
         nextEligibleAttemptAt: cooldown.nextEligibleAttemptAt,
         cooldownReason: cooldown.cooldownReason,
         lastSpotFailureAt: Date.now(),
-        lastSpotFailureReason: 'No se pudo obtener el precio actual del pool.',
+        lastSpotFailureReason: priceError,
       };
       await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
         strategyState: staleState,
@@ -321,11 +324,8 @@ const evaluateMethods = {
     const distanceToLiqPct = computeLiquidationDistancePct(position, currentPrice);
     // Con signo recibido: `cumFunding` de Hyperliquid es positivo al PAGAR.
     // El respaldo no se recorta a >= 0 porque el funding pagado es negativo.
-    const liveFundingUsd = fundingReceivedUsd(position);
-    const storedFundingUsd = Number(strategyState.fundingAccumUsd);
-    const fundingAccumUsd = liveFundingUsd != null
-      ? liveFundingUsd
-      : (Number.isFinite(storedFundingUsd) ? storedFundingUsd : 0);
+    const fundingState = accumulateFundingUsd(position, strategyState);
+    const fundingAccumUsd = fundingState.fundingAccumUsd;
     const hedgeUnrealizedPnlUsd = position?.unrealizedPnl != null ? Number(position.unrealizedPnl) : 0;
     const lpPnlUsd = Number(snapshot.pnlTotalUsd || 0);
     const topUpState = this._refreshTopUpWindow(strategyState);
@@ -372,6 +372,7 @@ const evaluateMethods = {
       rv4hPct: band.rv4hPct,
       rv24hPct: band.rv24hPct,
       fundingAccumUsd,
+      fundingAllTimeBaselineUsd: fundingState.fundingAllTimeBaselineUsd,
       hedgeUnrealizedPnlUsd,
       hedgeRealizedPnlUsd: reconciledRealizedPnlUsd,
       executionFeesUsd: reconciledExecutionFeesUsd,
@@ -983,7 +984,7 @@ const evaluateMethods = {
       bid: Number(liveMarket?.bbo?.bid ?? currentPrice),
       ask: Number(liveMarket?.bbo?.ask ?? currentPrice),
       feeRate: Number(liveMarket?.assetContext?.takerFeeRate) || 0.0005,
-      realFundingUsd: fundingReceivedUsd(position) ?? Number.NaN,
+      realFundingUsd: fundingAccumUsd,
       now: Date.now(),
       rangeLowerPrice: activeProtection.rangeLowerPrice,
       rangeUpperPrice: activeProtection.rangeUpperPrice,

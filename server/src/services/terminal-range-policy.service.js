@@ -175,15 +175,15 @@ function solveTerminalQty({ residualUsd, actualQty, execPrice, edgeExecPrice, co
   const FE = finite(edgeExecPrice, 0);
   const c = Math.max(0, finite(costRate, 0));
   const qMax = Math.max(0, finite(maxQty, 0));
-  const q = Math.min(Math.max(finite(actualQty, 0), 0), qMax);
+  const q = Math.max(finite(actualQty, 0), 0);
   const g = (x) => R + x * (F - FE) - Math.abs(x - q) * F * c - x * FE * c;
 
-  const points = [0, q, qMax];
+  const points = q < qMax ? [0, q, qMax] : [0, qMax];
   for (const p of points) {
     const value = g(p);
     if (Math.abs(value) <= SOLVER_TOLERANCE_USD) return { qty: p, residualUsd: value, infeasible: false };
   }
-  const segments = [[0, q], [q, qMax]].filter(([lo, hi]) => hi > lo);
+  const segments = q < qMax ? [[0, q], [q, qMax]] : [[0, qMax]];
   for (const [start, end] of segments) {
     let lo = start;
     let hi = end;

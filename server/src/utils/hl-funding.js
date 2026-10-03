@@ -23,4 +23,26 @@ function fundingReceivedUsd(position) {
   return paid === 0 ? 0 : -paid;
 }
 
-module.exports = { fundingReceivedUsd };
+/** Conserva el funding del ciclo cuando `sinceOpen` vuelve a cero. */
+function accumulateFundingUsd(position, state = {}) {
+  const stored = Number(state.fundingAccumUsd);
+  const previous = Number.isFinite(stored) ? stored : 0;
+  const allTimeRaw = position?.cumFunding?.allTime;
+  const allTimePaid = allTimeRaw == null ? NaN : Number(allTimeRaw);
+  const allTime = Number.isFinite(allTimePaid) ? -allTimePaid : null;
+  const sinceOpen = fundingReceivedUsd(position);
+  const storedBaseline = state.fundingAllTimeBaselineUsd;
+  const baseline = storedBaseline != null && Number.isFinite(Number(storedBaseline))
+    ? Number(storedBaseline)
+    : allTime != null
+      ? allTime - (sinceOpen ?? previous)
+      : null;
+  return {
+    fundingAccumUsd: allTime != null && baseline != null
+      ? allTime - baseline
+      : baseline == null && sinceOpen != null ? sinceOpen : previous,
+    fundingAllTimeBaselineUsd: baseline,
+  };
+}
+
+module.exports = { fundingReceivedUsd, accumulateFundingUsd };

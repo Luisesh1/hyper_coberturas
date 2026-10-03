@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
+    "dev": "node --watch index.js",
     "lint": "eslint src/ test/",
     "test": "node --test",
     "check": "npm run lint && npm run test",
@@ -35,7 +35,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "eslint": "^8.57.1",
-    "nodemon": "^3.1.4"
+    "eslint": "^8.57.1"
   }
 }

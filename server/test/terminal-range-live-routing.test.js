@@ -167,7 +167,7 @@ function buildService(protection, { onExecute, actualQty = 0 } = {}) {
       trackProtection: () => {},
       start: () => {},
       stop: () => {},
-      getMidPrice: async () => null,
+      getMidPrice: async () => ({ price: PRICE, source: 'ws' }),
       getBbo: async () => null,
       getActiveAssetCtx: async () => null,
       getClearinghouseState: async () => null,
