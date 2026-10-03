@@ -42,6 +42,8 @@ export function deriveRangeWidthPct(range) {
  */
 const DEFAULT_V4_TICK_SPACING_BY_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
 const DYNAMIC_FEE_FLAG = 0x800000;
+// Debe coincidir con SWAP_DELTA_HOOK_POLICIES en server/src/services/uniswap/v4-hook-safety.js.
+const SWAP_DELTA_HOOK_POLICIES = ['terminal_range_v1', 'range_exit_v1'];
 const PROTECTION_CONFIG_KEYS = [
   'enabled',
   'leverage',
@@ -439,10 +441,10 @@ export default function useUnifiedLpFlow({
   /** Dry-run de la cobertura. Bloquea el avance a Revisión si no pasa. */
   const runPreflight = useCallback(async () => {
     if (!isOrchestrated) return { ok: true, skipped: true };
-    if (existingV4Pool?.swapReturnsDelta && protection.policyVersion !== 'terminal_range_v1') {
+    if (existingV4Pool?.swapReturnsDelta && !SWAP_DELTA_HOOK_POLICIES.includes(protection.policyVersion)) {
       const failed = {
         ok: false, checks: [],
-        blockingReason: 'EVPLUSAI requiere la política terminal para cubrir un hook con retornos de delta en swaps.',
+        blockingReason: 'EVPLUSAI requiere la política terminal o de borde para cubrir un hook con retornos de delta en swaps.',
       };
       setPreflight(failed);
       return failed;

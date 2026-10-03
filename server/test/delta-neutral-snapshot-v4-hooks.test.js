@@ -51,11 +51,17 @@ test('v4 con hook returns-delta → rechazado con hook_returns_delta', () => {
   assert.ok(res.reasons.includes('hook_returns_delta'));
 });
 
-test('hook que ajusta swaps se admite con cobertura terminal, pero no con delta por borde', () => {
+test('hook que ajusta swaps se admite con cobertura terminal y de borde, no con las que persiguen el delta', () => {
   const snapshot = v4Snapshot(hookAddr(HOOK_FLAGS.AFTER_SWAP_RETURNS_DELTA));
   assert.equal(validateNormalizedProtectionSnapshot(snapshot, { livePolicy: 'terminal_range_v1' }).valid, true);
-  assert.equal(validateNormalizedProtectionSnapshot(snapshot, { livePolicy: 'range_exit_v1' }).status, 'hook_returns_delta');
+  assert.equal(validateNormalizedProtectionSnapshot(snapshot, { livePolicy: 'range_exit_v1' }).valid, true);
   assert.equal(validateNormalizedProtectionSnapshot(snapshot, { livePolicy: 'net_profit_v2' }).status, 'hook_returns_delta');
+  assert.equal(validateNormalizedProtectionSnapshot(snapshot, { livePolicy: 'legacy_zones_v1' }).status, 'hook_returns_delta');
+});
+
+test('hook que ajusta liquidez se bloquea también con cobertura de borde', () => {
+  const snapshot = v4Snapshot(hookAddr(HOOK_FLAGS.AFTER_ADD_LIQUIDITY_RETURNS_DELTA));
+  assert.equal(validateNormalizedProtectionSnapshot(snapshot, { livePolicy: 'range_exit_v1' }).status, 'hook_returns_delta');
 });
 
 test('hook que ajusta liquidez se bloquea incluso con cobertura terminal', () => {

@@ -203,7 +203,7 @@ export default function UnifiedLpWizard({
                     {unified.existingV4PoolsLoading && <span className={styles.hint}>Comprobando pools en cadena…</span>}
                     {unified.existingV4PoolsError && <span className={styles.errorText}>{unified.existingV4PoolsError}</span>}
                     {unified.existingV4Pool?.swapReturnsDelta && (
-                      <span className={styles.hint}>Este hook devuelve deltas de swap. Verifica la política de protección terminal antes de operar.</span>
+                      <span className={styles.hint}>Este hook devuelve deltas de swap: usa la cobertura Terminal o Borde de rango.</span>
                     )}
                     <span className={styles.hint}>La selección fija ETH/USDG, fee dinámico y la identidad del pool. El APY no está garantizado.</span>
                   </div>

@@ -111,7 +111,30 @@ test('intención: bloquea EVPLUSAI con política delta antes de solicitar firma'
     poolId: '0xc7b615a3721594f73664eb3f62d8290d0fcc8d9d1156aed1ddecbd7f32efd9f5',
     strategy: { v4TickSpacing: 10 },
     protection: { ...BASE_PLAN.protection, policyVersion: 'legacy_zones_v1' },
-  } }), /terminal_range_v1/);
+  } }), /terminal_range_v1 o range_exit_v1/);
+});
+
+test('intención: admite EVPLUSAI con cobertura de borde (range_exit_v1)', async () => {
+  const onChainManager = require('../src/services/onchain-manager.service');
+  const original = { getProvider: onChainManager.getProvider, getContract: onChainManager.getContract };
+  onChainManager.getProvider = () => ({});
+  onChainManager.getContract = () => ({ getSlot0: async () => ({ sqrtPriceX96: 1n << 96n }) });
+  try {
+    const { saga } = makeSaga();
+    saga.operationRepo = { createOrReuse: async () => ({ id: 9 }) };
+    const result = await saga.beginIntent({ userId: 1, plan: {
+      ...BASE_PLAN, network: 'robinhood', version: 'v4', feeTier: 0x800000,
+      token0Address: '0x0000000000000000000000000000000000000000',
+      token1Address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
+      hooks: '0xcB787A5cDEA8B3715d984d82F1203Fd7bFeBE0c4',
+      poolId: '0xc7b615a3721594f73664eb3f62d8290d0fcc8d9d1156aed1ddecbd7f32efd9f5',
+      strategy: { v4TickSpacing: 10 },
+      protection: { ...BASE_PLAN.protection, policyVersion: 'range_exit_v1' },
+    } });
+    assert.ok(result.operationKey);
+  } finally {
+    Object.assign(onChainManager, original);
+  }
 });
 
 test('payload: respeta un rangeWidthPct desacoplado explícitamente', () => {

@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { classifyHook } = require('./uniswap/v4-hook-safety');
+const { classifyHook, policyAllowsSwapDeltaHook } = require('./uniswap/v4-hook-safety');
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -106,17 +106,17 @@ function validateNormalizedProtectionSnapshot(snapshot = {}, { livePolicy = 'leg
   if (!Number.isFinite(snapshot.priceCurrent) || snapshot.priceCurrent <= 0) reasons.push('price_missing');
   if (snapshot.version === 'v3' && !snapshot.poolAddress) reasons.push('pool_address_missing');
   if (snapshot.version === 'v4' && !snapshot.poolId) reasons.push('pool_id_missing');
-  // La política terminal valora el LP en los bordes sin perseguir el delta.
   // Un retorno de delta sólo en swaps modifica la liquidación del swapper,
-  // no los importes de añadir/quitar liquidez. Las políticas que persiguen el
-  // delta mantienen el bloqueo conservador; un delta en liquidez se bloquea
-  // para todas las políticas. Una allowlist auditada puede levantar el bloqueo.
+  // no los importes de añadir/quitar liquidez. Las políticas terminal y de
+  // borde lo admiten; las que persiguen el delta mantienen el bloqueo
+  // conservador. Un delta en liquidez se bloquea para todas las políticas.
+  // Una allowlist auditada puede levantar el bloqueo.
   if (snapshot.version === 'v4' && snapshot.hooks && snapshot.hooks !== ZERO_ADDRESS) {
     const { safe, reason, flags } = classifyHook(snapshot.hooks);
     const liquidityDelta = flags.AFTER_ADD_LIQUIDITY_RETURNS_DELTA || flags.AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA;
-    const terminalSwapOnly = livePolicy === 'terminal_range_v1'
+    const swapOnlyAllowed = policyAllowsSwapDeltaHook(livePolicy)
       && reason === 'hook_returns_delta' && !liquidityDelta;
-    if (!safe && !terminalSwapOnly && !isHookAllowlisted(snapshot.hooks)) {
+    if (!safe && !swapOnlyAllowed && !isHookAllowlisted(snapshot.hooks)) {
       reasons.push(reason || 'hook_returns_delta');
     }
   }

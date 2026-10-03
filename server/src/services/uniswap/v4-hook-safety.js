@@ -117,7 +117,19 @@ function classifyHook(hooksAddress) {
   };
 }
 
+// Políticas que no derivan el hedge del flujo de swaps: la terminal valora el
+// LP en los bordes y la de borde sólo reajusta al salir/entrar del rango. Un
+// hook que sólo altera la liquidación del swapper no cambia los importes del
+// LP, así que ambas lo admiten; los retornos de delta en liquidez nunca.
+const SWAP_DELTA_HOOK_POLICIES = Object.freeze(['terminal_range_v1', 'range_exit_v1']);
+
+function policyAllowsSwapDeltaHook(policyVersion) {
+  return SWAP_DELTA_HOOK_POLICIES.includes(policyVersion);
+}
+
 module.exports = {
+  SWAP_DELTA_HOOK_POLICIES,
+  policyAllowsSwapDeltaHook,
   HOOK_FLAGS,
   DYNAMIC_FEE_FLAG,
   ZERO_ADDRESS,

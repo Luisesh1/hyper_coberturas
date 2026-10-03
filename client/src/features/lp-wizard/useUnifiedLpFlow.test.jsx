@@ -304,8 +304,25 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     let preflight;
     await act(async () => { preflight = await result.current.runPreflight(); });
     expect(preflight.ok).toBe(false);
-    expect(preflight.blockingReason).toMatch(/política terminal/);
+    expect(preflight.blockingReason).toMatch(/terminal o de borde/);
     expect(lpOrchestratorApi.preflightProtection).not.toHaveBeenCalled();
+  });
+
+  it('deja pasar EVPLUSAI al preflight con la cobertura de borde', async () => {
+    const pool = {
+      label: 'ETH/USDG · EVPLUSAI', poolId: `0x${'a'.repeat(64)}`,
+      hooks: `0x${'1'.repeat(40)}`, fee: 0x800000, tickSpacing: 10,
+      token0: { address: `0x${'0'.repeat(40)}` }, token1: { address: `0x${'2'.repeat(40)}` },
+      existingPool: true, swapReturnsDelta: true,
+    };
+    uniswapApi.getSmartCreatePools.mockResolvedValue({ pools: [pool] });
+    const { result } = renderFlow({ network: 'robinhood', version: 'v4' }, { network: 'robinhood' });
+    await act(async () => {});
+    act(() => result.current.selectExistingV4Pool(pool.poolId));
+    act(() => result.current.setProtection({ ...result.current.protection, policyVersion: 'range_exit_v1' }));
+    let preflight;
+    await act(async () => { preflight = await result.current.runPreflight(); });
+    expect(preflight.blockingReason || '').not.toMatch(/terminal o de borde/);
   });
 });
 

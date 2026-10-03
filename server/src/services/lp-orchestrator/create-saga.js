@@ -159,10 +159,10 @@ class LpCreateSaga {
       }
     } else if (plan?.hooks) {
       if (!plan.poolId) throw new Error('Un pool dinámico externo requiere poolId antes de firmar.');
-      const { classifyHook } = require('../uniswap/v4-hook-safety');
+      const { classifyHook, policyAllowsSwapDeltaHook } = require('../uniswap/v4-hook-safety');
       if (plan.protection?.enabled !== false && !classifyHook(plan.hooks).safe
-        && plan.protection?.policyVersion !== 'terminal_range_v1') {
-        throw new Error('Este hook con retornos de delta en swaps requiere la política terminal_range_v1.');
+        && !policyAllowsSwapDeltaHook(plan.protection?.policyVersion)) {
+        throw new Error('Este hook con retornos de delta en swaps requiere la política terminal_range_v1 o range_exit_v1.');
       }
       const { assertExistingDynamicPool } = require('../uniswap/existing-dynamic-pool');
       await assertExistingDynamicPool({
