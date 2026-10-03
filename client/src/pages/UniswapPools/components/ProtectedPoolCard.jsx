@@ -119,7 +119,7 @@ export default function ProtectedPoolCard({ protection, isDeactivating, onDeacti
     { action: 'reinvest-fees', label: 'Reinvertir', icon: '↻', title: 'Reinvertir fees en liquidez' },
     { action: 'modify-range', label: 'Rango', icon: '↔', title: 'Cambiar rango de precios' },
     { action: 'rebalance', label: 'Rebalancear', icon: '⚖', title: 'Rebalancear activos' },
-    { action: 'close-to-usdc', label: 'Cerrar a USDC', icon: '💵', title: 'Cerrar la posición y convertir los fondos a USDC' },
+    { action: 'close-to-usdc', label: `Cerrar a ${Number(snapshot.chainId) === 4663 ? 'USDG' : 'USDC'}`, icon: '💵', title: `Cerrar la posición y convertir los fondos a ${Number(snapshot.chainId) === 4663 ? 'USDG' : 'USDC'}` },
     { action: 'close-keep-assets', label: 'Cerrar LP', icon: '📦', title: 'Cerrar la posición y conservar token0/token1 en la wallet' },
   ];
 

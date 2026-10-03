@@ -92,6 +92,28 @@ test('payload: deriva rangeWidthPct del rango elegido', () => {
   assert.equal(payload.strategyConfig.edgeMarginPct, 40);
 });
 
+test('payload: conserva hook externo y tickSpacing para recrear el mismo pool', () => {
+  const payload = buildOrchestratorPayload({
+    ...BASE_PLAN, version: 'v4', feeTier: 0x800000,
+    hooks: '0x06a889870C8f83640D6816319f72e2aA579b6080',
+    strategy: { edgeMarginPct: 40, v4TickSpacing: 10 },
+  });
+  assert.equal(payload.strategyConfig.v4Hooks, '0x06a889870C8f83640D6816319f72e2aA579b6080');
+  assert.equal(payload.strategyConfig.v4TickSpacing, 10);
+  assert.equal(payload.strategyConfig.v4DynamicFeeHookVersionId, undefined);
+});
+
+test('intención: bloquea EVPLUSAI con política delta antes de solicitar firma', async () => {
+  const { saga } = makeSaga();
+  await assert.rejects(() => saga.beginIntent({ userId: 1, plan: {
+    ...BASE_PLAN, version: 'v4', feeTier: 0x800000,
+    hooks: '0xcB787A5cDEA8B3715d984d82F1203Fd7bFeBE0c4',
+    poolId: '0xc7b615a3721594f73664eb3f62d8290d0fcc8d9d1156aed1ddecbd7f32efd9f5',
+    strategy: { v4TickSpacing: 10 },
+    protection: { ...BASE_PLAN.protection, policyVersion: 'legacy_zones_v1' },
+  } }), /terminal_range_v1/);
+});
+
 test('payload: respeta un rangeWidthPct desacoplado explícitamente', () => {
   const plan = { ...BASE_PLAN, strategy: { edgeMarginPct: 40, rangeWidthPct: 12, rangeWidthDecoupled: true } };
   const payload = buildOrchestratorPayload(plan);

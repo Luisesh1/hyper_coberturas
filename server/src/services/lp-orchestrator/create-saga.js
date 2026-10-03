@@ -67,9 +67,11 @@ function buildOrchestratorPayload(plan) {
       ...strategyRest,
       rangeWidthPct,
       ...v4Identity,
-      ...(plan.version === 'v4' && plan.hooks && plan.v4DynamicFeeHookVersionId != null ? {
+      ...(plan.version === 'v4' && plan.hooks ? {
         v4Hooks: plan.hooks,
-        v4DynamicFeeHookVersionId: Number(plan.v4DynamicFeeHookVersionId),
+        ...(plan.v4DynamicFeeHookVersionId != null ? {
+          v4DynamicFeeHookVersionId: Number(plan.v4DynamicFeeHookVersionId),
+        } : {}),
       } : {}),
     },
     protectionConfig: protection.enabled === false
@@ -155,6 +157,20 @@ class LpCreateSaga {
       if (!selected) {
         throw new Error('El hook seleccionado no está verificado para esta red.');
       }
+    } else if (plan?.hooks) {
+      if (!plan.poolId) throw new Error('Un pool dinámico externo requiere poolId antes de firmar.');
+      const { classifyHook } = require('../uniswap/v4-hook-safety');
+      if (plan.protection?.enabled !== false && !classifyHook(plan.hooks).safe
+        && plan.protection?.policyVersion !== 'terminal_range_v1') {
+        throw new Error('Este hook con retornos de delta en swaps requiere la política terminal_range_v1.');
+      }
+      const { assertExistingDynamicPool } = require('../uniswap/existing-dynamic-pool');
+      await assertExistingDynamicPool({
+        network: plan.network, version: plan.version,
+        token0Address: plan.token0Address, token1Address: plan.token1Address,
+        fee: plan.feeTier, tickSpacing: plan.strategy?.v4TickSpacing,
+        hooks: plan.hooks, poolId: plan.poolId,
+      });
     }
     const operationKey = this.newOperationKey();
     const operation = await this.operationRepo.createOrReuse({

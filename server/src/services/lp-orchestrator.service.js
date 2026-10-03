@@ -2102,7 +2102,7 @@ class LpOrchestratorService {
   }
 
   _hasStableInPair(orch) {
-    const stableSymbols = new Set(['USDC', 'USDT', 'DAI', 'USDC.E', 'USDBC']);
+    const stableSymbols = new Set(['USDC', 'USDT', 'DAI', 'USDC.E', 'USDBC', 'USDG']);
     return stableSymbols.has(String(orch.token0Symbol || '').toUpperCase())
       || stableSymbols.has(String(orch.token1Symbol || '').toUpperCase());
   }

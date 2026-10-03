@@ -46,13 +46,15 @@ export function resolveDefaultTokenAddress(tokenList = [], preferredSymbols = []
  * SmartCreatePoolModal. La UI sólo consume los valores y callbacks
  * que retorna este hook.
  */
-export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook = null, onFinalized }) {
+export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook = null, existingV4Pool = null, onFinalized }) {
   const network = defaults?.network || 'arbitrum';
   const version = defaults?.version || 'v3';
   // Identidad opcional del pool v4. Ausentes, el backend deriva tickSpacing
   // del fee y computa el poolId — que es el caso de un pool sin hook.
-  const v4Hooks = v4DynamicFeeHook?.address || defaults?.hooks || defaults?.v4DynamicFeeHook?.address || null;
-  const v4TickSpacing = v4DynamicFeeHook?.tickSpacing != null
+  const v4Hooks = existingV4Pool?.hooks || v4DynamicFeeHook?.address || defaults?.hooks || defaults?.v4DynamicFeeHook?.address || null;
+  const v4TickSpacing = existingV4Pool?.tickSpacing != null
+    ? Number(existingV4Pool.tickSpacing)
+    : v4DynamicFeeHook?.tickSpacing != null
     ? Number(v4DynamicFeeHook.tickSpacing)
     : defaults?.tickSpacing != null ? Number(defaults.tickSpacing) : null;
 
@@ -124,7 +126,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
     loadTokenList().catch(() => {});
   }, [network, version]);
 
-  // Defaults de UX: ETH nativo en v4, WETH en v3 y USDC como stablecoin.
+  // Defaults de UX: ETH nativo en v4, WETH en v3 y el estable de la red.
   // Solo se aplican cuando no hay defaults explícitos ni una selección manual.
   useEffect(() => {
     if (!tokenList.length) return;
@@ -133,10 +135,10 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
       if (preferredToken0) setToken0AddressState(preferredToken0);
     }
     if (!defaults?.token1Address && !token1TouchedRef.current && !customToken1.trim() && !token1Address) {
-      const preferredToken1 = resolveDefaultTokenAddress(tokenList, ['USDC']);
+      const preferredToken1 = resolveDefaultTokenAddress(tokenList, network === 'robinhood' ? ['USDG'] : ['USDC']);
       if (preferredToken1) setToken1AddressState(preferredToken1);
     }
-  }, [customToken0, customToken1, defaults?.token0Address, defaults?.token1Address, token0Address, token1Address, tokenList]);
+  }, [customToken0, customToken1, defaults?.token0Address, defaults?.token1Address, network, token0Address, token1Address, tokenList]);
 
   // Si cambia la red o la versión, conserva las selecciones que siguen en el
   // catálogo y solo suelta las addresses que ya no son válidas. Los defaults
@@ -412,6 +414,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         totalUsdTarget: Number(totalUsdTarget),
         ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
         ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && existingV4Pool ? { poolId: existingV4Pool.poolId } : {}),
         ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       setToken0AddressState(resolvedToken0);
@@ -463,6 +466,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         ...buildOptionalPoolContext(suggestions),
         ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
         ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && existingV4Pool ? { poolId: existingV4Pool.poolId } : {}),
         ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       if (!isMountedRef.current) return;
@@ -557,6 +561,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         ...buildOptionalPoolContext(suggestions),
         ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
         ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
+        ...(version === 'v4' && existingV4Pool ? { poolId: existingV4Pool.poolId } : {}),
         ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
       setPrepareData(data);

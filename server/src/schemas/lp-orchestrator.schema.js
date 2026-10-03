@@ -197,6 +197,7 @@ const lpPlanSchema = z.object({
   // de nuevo contra el registro al crear la intención antes de cualquier firma.
   hooks: z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
   v4DynamicFeeHookVersionId: z.number().int().positive().optional(),
+  poolId: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
   capitalUsd: z.number().positive(),
   rangeLowerPrice: z.number().positive(),
   rangeUpperPrice: z.number().positive(),

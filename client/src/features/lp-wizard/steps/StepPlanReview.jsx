@@ -1,4 +1,5 @@
 import styles from '../UnifiedLpWizard.module.css';
+import { formatPoolFee } from '../../../lib/formatPoolFee';
 
 function Row({ k, v }) {
   return (
@@ -54,7 +55,7 @@ export default function StepPlanReview({
 
       <section className={styles.card}>
         <h4 className={styles.cardTitle}>Posición</h4>
-        <Row k="Pool" v={`${plan.token0Symbol} / ${plan.token1Symbol} · ${(plan.feeTier / 10000).toFixed(2)}%`} />
+        <Row k="Pool" v={`${plan.token0Symbol} / ${plan.token1Symbol} · ${formatPoolFee(plan.feeTier)}`} />
         <Row k="Red" v={`${plan.network} · ${plan.version}`} />
         <Row
           k="Rango"

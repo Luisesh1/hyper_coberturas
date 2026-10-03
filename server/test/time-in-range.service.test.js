@@ -19,6 +19,10 @@ test('resolveTrackableAsset infiere el activo volatil cuando el otro lado es sta
     token0: { symbol: 'WBTC' },
     token1: { symbol: 'USDC' },
   }), 'BTC');
+  assert.equal(resolveTrackableAsset({
+    token0: { symbol: 'ETH' },
+    token1: { symbol: 'USDG' },
+  }), 'ETH');
 });
 
 test('shouldInvertPrice detecta pools cotizados al reves', () => {

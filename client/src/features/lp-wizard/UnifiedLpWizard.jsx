@@ -184,13 +184,37 @@ export default function UnifiedLpWizard({
 
             {isOrchestrated && unified.version === 'v4' && (
               <>
+                {unified.network === 'robinhood' && (
+                  <div className={styles.field}>
+                    <label htmlFor="robinhood-existing-pool">Pool dinámico existente</label>
+                    <select
+                      id="robinhood-existing-pool"
+                      value={unified.existingV4Pool?.poolId || ''}
+                      onChange={(event) => unified.selectExistingV4Pool(event.target.value)}
+                      disabled={unified.existingV4PoolsLoading}
+                    >
+                      <option value="">Elegir configuración manual</option>
+                      {unified.existingV4Pools.map((pool) => (
+                        <option key={pool.poolId} value={pool.poolId}>
+                          {pool.label}{pool.hasLiquidity ? '' : ' · sin liquidez actual'}
+                        </option>
+                      ))}
+                    </select>
+                    {unified.existingV4PoolsLoading && <span className={styles.hint}>Comprobando pools en cadena…</span>}
+                    {unified.existingV4PoolsError && <span className={styles.errorText}>{unified.existingV4PoolsError}</span>}
+                    {unified.existingV4Pool?.swapReturnsDelta && (
+                      <span className={styles.hint}>Este hook devuelve deltas de swap. Verifica la política de protección terminal antes de operar.</span>
+                    )}
+                    <span className={styles.hint}>La selección fija ETH/USDG, fee dinámico y la identidad del pool. El APY no está garantizado.</span>
+                  </div>
+                )}
                 <div className={styles.field}>
                   <label htmlFor="v4-dynamic-fee-hook">Hook de tarifa dinámica</label>
                   <select
                     id="v4-dynamic-fee-hook"
                     value={unified.v4DynamicFeeHook?.versionId || ''}
                     onChange={(event) => unified.selectDynamicFeeHook(event.target.value || null)}
-                    disabled={unified.dynamicFeeHooksLoading}
+                    disabled={unified.dynamicFeeHooksLoading || Boolean(unified.existingV4Pool)}
                   >
                     <option value="">Sin hook dinámico</option>
                     {unified.verifiedDynamicFeeHooks.map((hook) => (
@@ -201,7 +225,7 @@ export default function UnifiedLpWizard({
                   </select>
                   {unified.dynamicFeeHooksLoading && <span className={styles.hint}>Cargando hooks verificados…</span>}
                   {unified.dynamicFeeHooksError && <span className={styles.errorText}>{unified.dynamicFeeHooksError}</span>}
-                  {!unified.dynamicFeeHooksLoading && !unified.dynamicFeeHooksError && (
+                  {!unified.existingV4Pool && !unified.dynamicFeeHooksLoading && !unified.dynamicFeeHooksError && (
                     <span className={styles.hint}>
                       Sólo aparecen versiones verificadas para esta red. Un hook requiere crear una pool V4 y una posición nuevas.
                     </span>
@@ -234,6 +258,8 @@ export default function UnifiedLpWizard({
               version={flow.version}
               fee={flow.fee}
               setFee={flow.setFee}
+              dynamicFeeHookActive={Boolean(unified.v4DynamicFeeHook || unified.existingV4Pool)}
+              existingPoolSelected={Boolean(unified.existingV4Pool)}
               totalUsdTarget={flow.totalUsdTarget}
               setTotalUsdTarget={flow.setTotalUsdTarget}
               token0Address={flow.token0Address}

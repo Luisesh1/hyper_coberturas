@@ -1,12 +1,13 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { lpOrchestratorApi } = vi.hoisted(() => ({
+const { lpOrchestratorApi, uniswapApi } = vi.hoisted(() => ({
   lpOrchestratorApi: {
     preflightProtection: vi.fn(),
     createIntent: vi.fn(),
     commitIntent: vi.fn(),
   },
+  uniswapApi: { getSmartCreatePools: vi.fn() },
 }));
 
 const { smartContractRegistryApi } = vi.hoisted(() => ({
@@ -20,7 +21,7 @@ const { smartCreateFlow } = vi.hoisted(() => ({
 vi.mock('../../services/api', () => ({
   lpOrchestratorApi,
   smartContractRegistryApi,
-  uniswapApi: {},
+  uniswapApi,
 }));
 
 vi.mock('../../pages/UniswapPools/components/smart-create/useSmartCreateFlow', () => ({
@@ -49,6 +50,8 @@ function makeFlow(overrides = {}) {
     token1Address: USDC,
     fee: 500,
     setFee: vi.fn(),
+    setToken0Address: vi.fn(),
+    setToken1Address: vi.fn(),
     totalUsdTarget: '100',
     tokenList: [
       { symbol: 'WETH', address: WETH, decimals: 18 },
@@ -99,6 +102,7 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     vi.clearAllMocks();
     lpOrchestratorApi.preflightProtection.mockResolvedValue({ ok: true, checks: [] });
     smartContractRegistryApi.listVerifiedHooks.mockResolvedValue([]);
+    uniswapApi.getSmartCreatePools.mockResolvedValue({ pools: [] });
   });
 
   it('manda token0Symbol y token1Symbol resueltos, no undefined', async () => {
@@ -231,6 +235,7 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     await act(async () => {});
 
     const plan = result.current.buildPlan();
+    expect(smartCreateFlow.current.setFee).toHaveBeenCalledWith(0x800000);
     expect(plan.hooks).toBe('0x0000000000000000000000000000000000000080');
     expect(plan.v4DynamicFeeHookVersionId).toBe(19);
   });
@@ -255,6 +260,52 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
       v4DynamicFeeHookVersionId: 24,
       feeTier: 0x800000,
     });
+
+    smartCreateFlow.current.fee = 0x800000;
+    act(() => result.current.selectDynamicFeeHook(null));
+    expect(smartCreateFlow.current.setFee).toHaveBeenCalledWith(3000);
+  });
+
+  it('selecciona ambos pools Robinhood con identidad completa y sin versión de hook propia', async () => {
+    const pools = [
+      { label: 'ETH/USDG · EVPLUSAI', poolId: `0x${'a'.repeat(64)}`, hooks: `0x${'1'.repeat(40)}`, fee: 0x800000, tickSpacing: 10,
+        token0: { address: `0x${'0'.repeat(40)}` }, token1: { address: `0x${'2'.repeat(40)}` }, existingPool: true },
+      { label: 'ETH/USDG · FablesRampETH', poolId: `0x${'b'.repeat(64)}`, hooks: `0x${'3'.repeat(40)}`, fee: 0x800000, tickSpacing: 10,
+        token0: { address: `0x${'0'.repeat(40)}` }, token1: { address: `0x${'2'.repeat(40)}` }, existingPool: true },
+    ];
+    uniswapApi.getSmartCreatePools.mockResolvedValue({ pools });
+    const { result } = renderFlow({ network: 'robinhood', version: 'v4' }, { network: 'robinhood' });
+    await act(async () => {});
+    expect(result.current.existingV4Pools).toHaveLength(2);
+    for (const pool of pools) {
+      act(() => result.current.selectExistingV4Pool(pool.poolId));
+      expect(smartCreateFlow.args.existingV4Pool).toMatchObject({ poolId: pool.poolId });
+      expect(result.current.buildPlan()).toMatchObject({
+        hooks: pool.hooks, poolId: pool.poolId, feeTier: 0x800000,
+        strategy: { v4TickSpacing: 10 },
+      });
+      expect(result.current.buildPlan().v4DynamicFeeHookVersionId).toBeUndefined();
+    }
+    expect(smartCreateFlow.current.setToken0Address).toHaveBeenCalledWith(pools[0].token0.address);
+    expect(smartCreateFlow.current.setToken1Address).toHaveBeenCalledWith(pools[0].token1.address);
+  });
+
+  it('bloquea EVPLUSAI antes del preflight con una política delta', async () => {
+    const pool = {
+      label: 'ETH/USDG · EVPLUSAI', poolId: `0x${'a'.repeat(64)}`,
+      hooks: `0x${'1'.repeat(40)}`, fee: 0x800000, tickSpacing: 10,
+      token0: { address: `0x${'0'.repeat(40)}` }, token1: { address: `0x${'2'.repeat(40)}` },
+      existingPool: true, swapReturnsDelta: true,
+    };
+    uniswapApi.getSmartCreatePools.mockResolvedValue({ pools: [pool] });
+    const { result } = renderFlow({ network: 'robinhood', version: 'v4' }, { network: 'robinhood' });
+    await act(async () => {});
+    act(() => result.current.selectExistingV4Pool(pool.poolId));
+    let preflight;
+    await act(async () => { preflight = await result.current.runPreflight(); });
+    expect(preflight.ok).toBe(false);
+    expect(preflight.blockingReason).toMatch(/política terminal/);
+    expect(lpOrchestratorApi.preflightProtection).not.toHaveBeenCalled();
   });
 });
 

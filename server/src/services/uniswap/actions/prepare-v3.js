@@ -10,7 +10,7 @@ const {
 } = require('../abis');
 const {
   DEFAULT_SLIPPAGE_BPS,
-  V3_SWAP_ROUTER_ADDRESS,
+  getV3SwapRouterAddress,
 } = require('../constants');
 const {
   encodeTx,
@@ -500,8 +500,8 @@ async function prepareModifyRange(payload) {
   const amount1Desired = swap?.postAmount1 ?? redeployPlan.amount1Desired;
 
   if (swap?.amountIn > 0n) {
-    requiresApproval.push(buildApprovalRequirement(swap.tokenIn, V3_SWAP_ROUTER_ADDRESS, swap.amountIn));
-    txPlan.push(maybeBuildApprovalTx(swap.tokenIn, V3_SWAP_ROUTER_ADDRESS, swap.amountIn, ctx.networkConfig.chainId));
+    requiresApproval.push(buildApprovalRequirement(swap.tokenIn, getV3SwapRouterAddress(ctx.networkConfig), swap.amountIn));
+    txPlan.push(maybeBuildApprovalTx(swap.tokenIn, getV3SwapRouterAddress(ctx.networkConfig), swap.amountIn, ctx.networkConfig.chainId));
     txPlan.push(buildV3SwapTx(ctx, swap));
   }
 
@@ -604,8 +604,8 @@ async function prepareRebalance(payload) {
   const requiresApproval = [];
 
   if (swap?.amountIn > 0n) {
-    requiresApproval.push(buildApprovalRequirement(swap.tokenIn, V3_SWAP_ROUTER_ADDRESS, swap.amountIn));
-    txPlan.push(maybeBuildApprovalTx(swap.tokenIn, V3_SWAP_ROUTER_ADDRESS, swap.amountIn, ctx.networkConfig.chainId));
+    requiresApproval.push(buildApprovalRequirement(swap.tokenIn, getV3SwapRouterAddress(ctx.networkConfig), swap.amountIn));
+    txPlan.push(maybeBuildApprovalTx(swap.tokenIn, getV3SwapRouterAddress(ctx.networkConfig), swap.amountIn, ctx.networkConfig.chainId));
     txPlan.push(buildV3SwapTx(ctx, swap));
   }
 

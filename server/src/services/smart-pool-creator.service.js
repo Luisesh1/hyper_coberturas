@@ -15,6 +15,7 @@ const {
   ZERO_HOOKS_ADDRESS,
 } = require('./uniswap-v4-helpers.service');
 const { isLiquidityDeltaReturning } = require('./uniswap/v4-hook-safety');
+const { discoverRobinhoodDynamicPools } = require('./uniswap/robinhood-dynamic-pools');
 const { getSqrtPriceX96AtTick } = require('./uniswap/v4-tick-math');
 const { priceToNearestTick } = require('./uniswap/position-math');
 const { recommendEthUsdcHalfWidthPct } = require('./lp-orchestrator/range-recommender');
@@ -2346,7 +2347,10 @@ async function discoverAvailablePools({ network, version }) {
     }
   });
 
-  const pools = found.filter(Boolean)
+  const dynamicPools = networkConfig.id === 'robinhood' && version === 'v4'
+    ? await discoverRobinhoodDynamicPools(stateView)
+    : [];
+  const pools = [...found.filter(Boolean), ...dynamicPools]
     .sort((a, b) => (Number(b.hasLiquidity) - Number(a.hasLiquidity)) || (a.fee - b.fee));
 
   logger.info('discover_pools_completed', {

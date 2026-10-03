@@ -11,6 +11,8 @@ export default function StepPoolSelection({
   version,
   fee,
   setFee,
+  dynamicFeeHookActive = false,
+  existingPoolSelected = false,
   totalUsdTarget,
   setTotalUsdTarget,
   token0Address,
@@ -83,7 +85,7 @@ export default function StepPoolSelection({
         </label>
 
         <div className={`${styles.field} ${styles.poolField} ${styles.feeField}`} role="group" aria-label="Fee del pool">
-          <span className={styles.fieldLabel}>Fee</span>
+          <span className={styles.fieldLabel}>Fee {dynamicFeeHookActive ? '· dinámica' : ''}</span>
           <div className={styles.feeOptions}>
             {FEE_TIERS.map((tier) => (
               <button
@@ -92,6 +94,7 @@ export default function StepPoolSelection({
                 className={`${styles.tierBtn} ${fee === tier.value ? styles.tierBtnSelected : ''}`}
                 onClick={() => setFee(tier.value)}
                 aria-pressed={fee === tier.value}
+                disabled={dynamicFeeHookActive}
               >
                 {tier.label}
               </button>
@@ -103,7 +106,7 @@ export default function StepPoolSelection({
       <div className={styles.tokenPair}>
         <label className={`${styles.field} ${styles.poolField} ${styles.tokenField}`}>
           <span className={styles.fieldLabel}>Token 0</span>
-          <select className={styles.select} value={token0Address} onChange={(event) => setToken0Address(event.target.value)}>
+          <select className={styles.select} value={token0Address} onChange={(event) => setToken0Address(event.target.value)} disabled={existingPoolSelected}>
             <option value="">— Selecciona token —</option>
             {tokenOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
@@ -114,12 +117,13 @@ export default function StepPoolSelection({
             placeholder="O pega dirección custom"
             value={customToken0}
             onChange={(event) => setCustomToken0(event.target.value)}
+            disabled={existingPoolSelected}
           />
         </label>
 
         <label className={`${styles.field} ${styles.poolField} ${styles.tokenField}`}>
           <span className={styles.fieldLabel}>Token 1</span>
-          <select className={styles.select} value={token1Address} onChange={(event) => setToken1Address(event.target.value)}>
+          <select className={styles.select} value={token1Address} onChange={(event) => setToken1Address(event.target.value)} disabled={existingPoolSelected}>
             <option value="">— Selecciona token —</option>
             {tokenOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
@@ -130,6 +134,7 @@ export default function StepPoolSelection({
             placeholder="O pega dirección custom"
             value={customToken1}
             onChange={(event) => setCustomToken1(event.target.value)}
+            disabled={existingPoolSelected}
           />
         </label>
       </div>

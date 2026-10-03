@@ -9,6 +9,11 @@ const accounting = require('../src/services/lp-orchestrator/accounting');
 // el fake repo, sin tocar pg.
 const fakeDb = { transaction: async (fn) => fn(undefined) };
 
+test('el cierre automático considera USDG estable en Robinhood', () => {
+  const service = new LpOrchestratorService();
+  assert.equal(service._hasStableInPair({ token0Symbol: 'ETH', token1Symbol: 'USDG' }), true);
+});
+
 function makeFakeRepo() {
   const orchestrators = new Map();
   const log = [];

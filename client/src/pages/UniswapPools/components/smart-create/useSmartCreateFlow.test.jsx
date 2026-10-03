@@ -33,6 +33,7 @@ import useSmartCreateFlow from './useSmartCreateFlow';
 const WETH = '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1';
 const USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 const NATIVE = '0x0000000000000000000000000000000000000000';
+const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
 
 const CATALOGO_V3 = [
   { symbol: 'WETH', address: WETH, decimals: 18, isWrappedNative: true },
@@ -200,6 +201,17 @@ describe('defaults iniciales desde la wallet', () => {
     await waitFor(() => expect(result.current.tokenOptions.length).toBe(2));
     expect(result.current.token0Address).toBe(NATIVE);
     expect(result.current.token1Address).toBe(USDC);
+  });
+
+  it('selecciona USDG al crear un pool v4 en Robinhood', async () => {
+    uniswapApi.getSmartCreateTokenList.mockResolvedValue([
+      { symbol: 'ETH', address: NATIVE, decimals: 18, isNative: true },
+      { symbol: 'USDG', address: USDG, decimals: 6 },
+    ]);
+    const { result } = render({ network: 'robinhood', version: 'v4' });
+
+    await waitFor(() => expect(result.current.token1Address).toBe(USDG));
+    expect(result.current.token0Address).toBe(NATIVE);
   });
 
   it('prioriza defaults explícitos y no consulta el objetivo automático', async () => {

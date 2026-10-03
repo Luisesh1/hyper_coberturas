@@ -60,7 +60,7 @@ export default function PoolCard({ pool, hasAccounts, onApplyProtection, walletS
     { action: 'reinvest-fees', label: 'Reinvertir', icon: '↻', title: 'Reinvertir las fees acumuladas en más liquidez' },
     { action: 'modify-range', label: 'Rango', icon: '↔', title: 'Cambiar el rango de precios de la posición' },
     { action: 'rebalance', label: 'Rebalancear', icon: '⚖', title: 'Rebalancear los activos de la posición' },
-    { action: 'close-to-usdc', label: 'Cerrar a USDC', icon: '💵', title: 'Cerrar la posición y convertir los fondos a USDC' },
+    { action: 'close-to-usdc', label: `Cerrar a ${Number(pool.chainId) === 4663 ? 'USDG' : 'USDC'}`, icon: '💵', title: `Cerrar la posición y convertir los fondos a ${Number(pool.chainId) === 4663 ? 'USDG' : 'USDC'}` },
     { action: 'close-keep-assets', label: 'Cerrar LP', icon: '📦', title: 'Cerrar la posición y conservar token0/token1 en la wallet' },
   ];
 

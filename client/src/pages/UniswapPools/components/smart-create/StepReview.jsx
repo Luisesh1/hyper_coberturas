@@ -1,5 +1,6 @@
 import { formatCompactPrice } from '../../utils/pool-formatters';
-import { FEE_TIERS, STEP } from './constants';
+import { formatPoolFee } from '../../../../lib/formatPoolFee';
+import { STEP } from './constants';
 import styles from '../SmartCreatePoolModal.module.css';
 
 /**
@@ -40,7 +41,7 @@ export default function StepReview({
         </div>
         <div className={styles.summaryTile}>
           <span className={styles.tileLabel}>Fee</span>
-          <strong className={styles.tileValue}>{FEE_TIERS.find((item) => item.value === fee)?.label}</strong>
+          <strong className={styles.tileValue}>{formatPoolFee(fee)}</strong>
         </div>
         <div className={styles.summaryTile}>
           <span className={styles.tileLabel}>Rango</span>

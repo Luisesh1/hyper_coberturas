@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { lpOrchestratorApi, smartContractRegistryApi } from '../../services/api';
+import { lpOrchestratorApi, smartContractRegistryApi, uniswapApi } from '../../services/api';
 import useSmartCreateFlow from '../../pages/UniswapPools/components/smart-create/useSmartCreateFlow';
 import { STEP } from '../../pages/UniswapPools/components/smart-create/constants';
 import {
@@ -8,6 +8,7 @@ import {
   validateProtectionForm,
 } from './ProtectionFormFields';
 import useEthUsdcRangeRecommendation from './useEthUsdcRangeRecommendation';
+import { formatPoolFee } from '../../lib/formatPoolFee';
 
 /**
  * Pasos propios del wizard unificado. Los cuatro primeros y los tres
@@ -82,6 +83,10 @@ export default function useUnifiedLpFlow({
   const [dynamicFeeHooksLoading, setDynamicFeeHooksLoading] = useState(false);
   const [dynamicFeeHooksError, setDynamicFeeHooksError] = useState('');
   const [v4DynamicFeeHook, setV4DynamicFeeHook] = useState(null);
+  const [existingV4Pools, setExistingV4Pools] = useState([]);
+  const [existingV4PoolsLoading, setExistingV4PoolsLoading] = useState(false);
+  const [existingV4PoolsError, setExistingV4PoolsError] = useState('');
+  const [existingV4Pool, setExistingV4Pool] = useState(null);
 
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -160,8 +165,43 @@ export default function useUnifiedLpFlow({
     [defaults, network, version]
   );
 
-  const flow = useSmartCreateFlow({ wallet, defaults: flowDefaults, v4DynamicFeeHook, onFinalized: handleFinalized });
+  const flow = useSmartCreateFlow({ wallet, defaults: flowDefaults, v4DynamicFeeHook, existingV4Pool, onFinalized: handleFinalized });
   flowResetRef.current = flow.handleReset;
+
+  useEffect(() => {
+    let active = true;
+    setExistingV4Pool(null);
+    if (network !== 'robinhood' || version !== 'v4') {
+      setExistingV4Pools([]);
+      setExistingV4PoolsError('');
+      return () => { active = false; };
+    }
+    setExistingV4PoolsLoading(true);
+    setExistingV4PoolsError('');
+    uniswapApi.getSmartCreatePools({ network, version })
+      .then((data) => { if (active) setExistingV4Pools((data?.pools || []).filter((pool) => pool.existingPool)); })
+      .catch((error) => {
+        if (active) {
+          setExistingV4Pools([]);
+          setExistingV4PoolsError(error?.message || 'No se pudieron cargar los pools dinámicos.');
+        }
+      })
+      .finally(() => { if (active) setExistingV4PoolsLoading(false); });
+    return () => { active = false; };
+  }, [network, version]);
+
+  const selectExistingV4Pool = useCallback((poolId) => {
+    const selected = existingV4Pools.find((pool) => pool.poolId === poolId) || null;
+    setExistingV4Pool(selected);
+    if (selected) {
+      setV4DynamicFeeHook(null);
+      flow.setFee(Number(selected.fee));
+      flow.setToken0Address(selected.token0.address);
+      flow.setToken1Address(selected.token1.address);
+    } else if (Number(flow.fee) === DYNAMIC_FEE_FLAG) {
+      flow.setFee(3000);
+    }
+  }, [existingV4Pools, flow]);
 
   useEffect(() => {
     let active = true;
@@ -199,11 +239,19 @@ export default function useUnifiedLpFlow({
 
   const selectDynamicFeeHook = useCallback((versionId) => {
     const selected = verifiedDynamicFeeHooks.find((item) => Number(item.versionId) === Number(versionId));
+    if (selected) setExistingV4Pool(null);
     if (selected && Number(flow.fee) !== DYNAMIC_FEE_FLAG) {
       flow.setFee(DYNAMIC_FEE_FLAG);
+    } else if (!selected && Number(flow.fee) === DYNAMIC_FEE_FLAG) {
+      flow.setFee(3000);
     }
     setV4DynamicFeeHook(selected || null);
   }, [flow, verifiedDynamicFeeHooks]);
+
+  const { fee: selectedFee, setFee: setSelectedFee } = flow;
+  useEffect(() => {
+    if ((v4DynamicFeeHook || existingV4Pool) && Number(selectedFee) !== DYNAMIC_FEE_FLAG) setSelectedFee(DYNAMIC_FEE_FLAG);
+  }, [v4DynamicFeeHook, existingV4Pool, selectedFee, setSelectedFee]);
 
   const resetProtection = useCallback((targetUsd = 0) => {
     protectionDirtyRef.current = false;
@@ -294,7 +342,7 @@ export default function useUnifiedLpFlow({
     const t0 = symbolForAddress(flow.token0Address);
     const t1 = symbolForAddress(flow.token1Address);
     if (!t0 || !t1) return '';
-    return `${t0}/${t1} ${(Number(flow.fee) / 10000).toFixed(2)}% · ${flow.network}`;
+    return `${t0}/${t1} ${formatPoolFee(flow.fee)} · ${flow.network}`;
   }, [symbolForAddress, flow.token0Address, flow.token1Address, flow.fee, flow.network]);
 
   const effectiveName = nameTouched ? name : (name || suggestedName);
@@ -326,7 +374,7 @@ export default function useUnifiedLpFlow({
     : derivedRangeWidthPct;
 
   // El tickSpacing real del pool lo resuelve el backend al preparar las txs.
-  const effectiveFeeTier = v4DynamicFeeHook ? DYNAMIC_FEE_FLAG : Number(flow.fee);
+  const effectiveFeeTier = (v4DynamicFeeHook || existingV4Pool) ? DYNAMIC_FEE_FLAG : Number(flow.fee);
   const v4TickSpacingOverride = useMemo(() => {
     if (version !== 'v4') return null;
     const actual = flow.prepareData?.tickSpacing;
@@ -354,7 +402,10 @@ export default function useUnifiedLpFlow({
       token0Symbol,
       token1Symbol,
       feeTier: effectiveFeeTier,
-      ...(flow.version === 'v4' && v4DynamicFeeHook ? {
+      ...(flow.version === 'v4' && existingV4Pool ? {
+        hooks: existingV4Pool.hooks,
+        poolId: existingV4Pool.poolId,
+      } : flow.version === 'v4' && v4DynamicFeeHook ? {
         hooks: v4DynamicFeeHook.address,
         v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId),
       } : {}),
@@ -373,7 +424,8 @@ export default function useUnifiedLpFlow({
         // En v4 el tickSpacing forma parte de la identidad del pool. Solo se
         // manda si difiere del que el backend derivaría del fee tier; si
         // coincide, persistirlo sería ruido.
-        ...(v4TickSpacingOverride != null ? { v4TickSpacing: v4TickSpacingOverride } : {}),
+        ...(existingV4Pool ? { v4TickSpacing: Number(existingV4Pool.tickSpacing) }
+          : v4TickSpacingOverride != null ? { v4TickSpacing: v4TickSpacingOverride } : {}),
       },
       protection: protectionPayload,
     };
@@ -381,12 +433,20 @@ export default function useUnifiedLpFlow({
     mode, isOrchestrated, effectiveName, wallet, protection, strategy,
     effectiveRangeWidthPct, v4TickSpacingOverride, flow.network, flow.version, flow.token0Address,
     flow.token1Address, effectiveFeeTier, flow.totalUsdTarget, flow.activeRange,
-    flow.suggestions, symbolForAddress, v4DynamicFeeHook,
+    flow.suggestions, symbolForAddress, v4DynamicFeeHook, existingV4Pool,
   ]);
 
   /** Dry-run de la cobertura. Bloquea el avance a Revisión si no pasa. */
   const runPreflight = useCallback(async () => {
     if (!isOrchestrated) return { ok: true, skipped: true };
+    if (existingV4Pool?.swapReturnsDelta && protection.policyVersion !== 'terminal_range_v1') {
+      const failed = {
+        ok: false, checks: [],
+        blockingReason: 'EVPLUSAI requiere la política terminal para cubrir un hook con retornos de delta en swaps.',
+      };
+      setPreflight(failed);
+      return failed;
+    }
     const validationError = validateProtectionForm(protection);
     if (validationError) {
       const failed = { ok: false, checks: [], blockingReason: validationError };
@@ -411,7 +471,7 @@ export default function useUnifiedLpFlow({
     } finally {
       setPreflightBusy(false);
     }
-  }, [isOrchestrated, buildPlan, protection]);
+  }, [isOrchestrated, buildPlan, protection, existingV4Pool]);
 
   const handleContinueFromProtection = useCallback(async () => {
     const result = await runPreflight();
@@ -527,6 +587,11 @@ export default function useUnifiedLpFlow({
     dynamicFeeHooksError,
     v4DynamicFeeHook,
     selectDynamicFeeHook,
+    existingV4Pools,
+    existingV4PoolsLoading,
+    existingV4PoolsError,
+    existingV4Pool,
+    selectExistingV4Pool,
 
     name: effectiveName,
     setName: (value) => { setNameTouched(true); setName(value); },
