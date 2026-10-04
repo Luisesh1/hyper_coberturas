@@ -148,6 +148,7 @@ const {
   appendV3SwapToToken,
   appendPermit2Approvals,
   appendFundingSwapTransactions,
+  planNativeRoundTrips,
   loadV4PositionContext,
   getBalancesAndAllowancesBatch,
   quoteV4SwapOutRaw,
@@ -412,28 +413,20 @@ async function prepareIncreaseLiquiditySmartV4(ctx, payload, mintSlippageBps) {
   // Los aportes nativos directos se envuelven en una sola tx: el planner
   // contabiliza el lado nativo como wrapped. Los wraps que necesitan los swaps
   // ya los agrega appendFundingSwapTransactions.
-  let totalNativeWrapRaw = 0n;
-  for (const asset of (plan.selectedFundingAssets || [])) {
-    if (asset.isNative && (asset.fundingRole === 'direct_token0' || asset.fundingRole === 'direct_token1')) {
-      totalNativeWrapRaw += BigInt(asset.useAmountRaw || 0);
-    }
-  }
-
   // Si el pool tiene ETH nativo como currency, el fondeo dejo todo en wrapped
   // (el router nunca entrega nativo) y hay que desenvolverlo antes del
-  // increase, que paga ese lado con el `value` de la tx.
-  //
-  // Un aporte nativo directo iria a ese mismo lado, asi que envolverlo para
-  // desenvolverlo dos pasos despues son dos firmas y dos gas para nada: se
-  // netean y se firma solo la diferencia. El saldo final es identico.
-  // (create-position todavia hace el viaje de ida y vuelta completo.)
+  // increase, que paga ese lado con el `value` de la tx. Los wraps del ETH
+  // directo y de los swaps con origen ETH se netean contra ese unwrap.
   //
   // Se desenvuelve el monto planeado, no el techo con slippage: ese margen
   // sale del nativo libre que la reserva de gas deja en la wallet, y lo que el
   // increase no consuma vuelve por SWEEP.
-  const plannedUnwrapRaw = BigInt(plan.nativeSettlement?.unwrapRaw || 0);
-  const netWrapRaw = totalNativeWrapRaw > plannedUnwrapRaw ? totalNativeWrapRaw - plannedUnwrapRaw : 0n;
-  const netUnwrapRaw = plannedUnwrapRaw > totalNativeWrapRaw ? plannedUnwrapRaw - totalNativeWrapRaw : 0n;
+  const { netWrapRaw, netUnwrapRaw, swapPlan: nettedSwapPlan } = planNativeRoundTrips({
+    selectedFundingAssets: plan.selectedFundingAssets || [],
+    swapPlan: plan.swapPlan || [],
+    plannedUnwrapRaw: BigInt(plan.nativeSettlement?.unwrapRaw || 0),
+    wrappedNativeAddress: plan.wrappedNativeAddress || plan.nativeSettlement?.wrappedAddress,
+  });
 
   if (netWrapRaw > 0n && plan.wrappedNativeAddress) {
     txPlan.push(buildWrapNativeTx(
@@ -447,7 +440,7 @@ async function prepareIncreaseLiquiditySmartV4(ctx, payload, mintSlippageBps) {
     provider: ctx.provider,
     networkConfig: ctx.networkConfig,
     normalizedWallet: ctx.normalizedWallet,
-    swapPlan: plan.swapPlan,
+    swapPlan: nettedSwapPlan,
     requiresApproval,
     txPlan,
   });
@@ -1131,19 +1124,26 @@ async function prepareCreatePositionV4(payload) {
     const requiresApproval = [];
     const txPlan = [];
 
-    // Los aportes nativos directos (ETH de la wallet usado como uno de los
-    // lados) se envuelven en una sola tx, igual que en v3. Los wraps que
-    // necesitan los swaps ya los agrega appendFundingSwapTransactions.
-    let totalNativeWrapRaw = 0n;
-    for (const asset of (plan.selectedFundingAssets || [])) {
-      if (asset.isNative && (asset.fundingRole === 'direct_token0' || asset.fundingRole === 'direct_token1')) {
-        totalNativeWrapRaw += BigInt(asset.useAmountRaw || 0);
-      }
-    }
-    if (totalNativeWrapRaw > 0n && plan.wrappedNativeAddress) {
+    // Los aportes nativos directos se envuelven en una sola tx; si el pool
+    // tiene ETH nativo como currency, el fondeo deja ese lado en wrapped y
+    // hay que desenvolverlo antes del mint, que lo paga con el `value`. Los
+    // wraps del ETH directo y de los swaps con origen ETH se netean contra ese
+    // unwrap: envolver para desenvolver dos pasos despues eran firmas y gas
+    // para nada, con el mismo saldo final.
+    //
+    // Se desenvuelve el monto planeado, no el techo con slippage: ese margen
+    // (~1% de un lado) sale del nativo libre que la reserva de gas ya deja en
+    // la wallet, y lo que el mint no consuma vuelve por SWEEP.
+    const { netWrapRaw, netUnwrapRaw, swapPlan: nettedSwapPlan } = planNativeRoundTrips({
+      selectedFundingAssets: plan.selectedFundingAssets || [],
+      swapPlan: plan.swapPlan || [],
+      plannedUnwrapRaw: BigInt(plan.nativeSettlement?.unwrapRaw || 0),
+      wrappedNativeAddress: plan.wrappedNativeAddress || plan.nativeSettlement?.wrappedAddress,
+    });
+    if (netWrapRaw > 0n && plan.wrappedNativeAddress) {
       txPlan.push(buildWrapNativeTx(
         { address: plan.wrappedNativeAddress, symbol: plan.nativeSettlement?.wrappedSymbol || 'WETH' },
-        totalNativeWrapRaw,
+        netWrapRaw,
         networkConfig.chainId
       ));
     }
@@ -1152,22 +1152,15 @@ async function prepareCreatePositionV4(payload) {
       provider,
       networkConfig,
       normalizedWallet,
-      swapPlan: plan.swapPlan,
+      swapPlan: nettedSwapPlan,
       requiresApproval,
       txPlan,
     });
 
-    // El pool tiene ETH nativo como currency: el fondeo dejo todo en wrapped
-    // (el router nunca entrega nativo), asi que hay que desenvolverlo antes
-    // del mint, que paga ese lado con el `value` de la tx.
-    //
-    // Se desenvuelve el monto planeado, no el techo con slippage: ese margen
-    // (~1% de un lado) sale del nativo libre que la reserva de gas ya deja en
-    // la wallet, y lo que el mint no consuma vuelve por SWEEP.
-    if (plan.nativeSettlement && BigInt(plan.nativeSettlement.unwrapRaw || 0) > 0n) {
+    if (netUnwrapRaw > 0n && plan.nativeSettlement) {
       txPlan.push(buildUnwrapNativeTx(
         { address: plan.nativeSettlement.wrappedAddress, symbol: plan.nativeSettlement.wrappedSymbol },
-        BigInt(plan.nativeSettlement.unwrapRaw),
+        netUnwrapRaw,
         networkConfig.chainId
       ));
     }

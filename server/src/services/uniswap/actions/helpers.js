@@ -581,6 +581,51 @@ async function appendPermit2Approvals({
   }
 }
 
+/**
+ * Neta las conversiones ETH <-> WETH de un plan de fondeo para un pool con ETH
+ * nativo. El planner deja todo el lado nativo como WETH y el prepare lo
+ * desenvuelve al final; sin netear, el ETH que la wallet aporta directo se
+ * envolvía para desenvolverlo dos pasos después, y un swap con origen ETH se
+ * envolvía mientras el WETH que ya tenía la wallet se iba a desenvolver.
+ *
+ * 1. El wrap del ETH directo se compensa contra el unwrap.
+ * 2. Los wraps de swaps con origen ETH se compensan contra el unwrap restante,
+ *    hasta el WETH que la wallet aporta directo: ese WETH está desde el
+ *    principio, así que el swap puede gastarlo y el ETH queda nativo.
+ *
+ * El ETH nativo que consume el plan es idéntico; solo desaparecen firmas.
+ */
+function planNativeRoundTrips({ selectedFundingAssets = [], swapPlan = [], plannedUnwrapRaw = 0n, wrappedNativeAddress = null }) {
+  const isDirect = (asset) => asset.fundingRole === 'direct_token0' || asset.fundingRole === 'direct_token1';
+  const wrappedKey = String(wrappedNativeAddress || '').toLowerCase();
+  let directNativeWrap = 0n;
+  let directWrapped = 0n;
+  for (const asset of selectedFundingAssets) {
+    if (!isDirect(asset)) continue;
+    const raw = BigInt(asset.useAmountRaw || 0);
+    if (asset.isNative) directNativeWrap += raw;
+    else if (wrappedKey && String(asset.address || '').toLowerCase() === wrappedKey) directWrapped += raw;
+  }
+
+  let unwrap = BigInt(plannedUnwrapRaw || 0);
+  const cancelDirect = directNativeWrap < unwrap ? directNativeWrap : unwrap;
+  unwrap -= cancelDirect;
+  let swapBudget = directWrapped < unwrap ? directWrapped : unwrap;
+
+  const nettedSwaps = swapPlan.map((swap) => {
+    if (!swap.requiresWrapNative || swapBudget <= 0n) return swap;
+    const amountIn = BigInt(swap.amountInRaw);
+    const cancelled = swapBudget < amountIn ? swapBudget : amountIn;
+    swapBudget -= cancelled;
+    unwrap -= cancelled;
+    return cancelled === amountIn
+      ? { ...swap, requiresWrapNative: false }
+      : { ...swap, wrapAmountRaw: (amountIn - cancelled).toString() };
+  });
+
+  return { netWrapRaw: directNativeWrap - cancelDirect, netUnwrapRaw: unwrap, swapPlan: nettedSwaps };
+}
+
 async function appendFundingSwapTransactions({
   provider,
   networkConfig,
@@ -598,7 +643,7 @@ async function appendFundingSwapTransactions({
       txPlan.push(buildWrapNativeTx({
         address: swap.wrapToken.address,
         symbol: swap.wrapToken.symbol,
-      }, BigInt(swap.amountInRaw), networkConfig.chainId));
+      }, BigInt(swap.wrapAmountRaw ?? swap.amountInRaw), networkConfig.chainId));
     }
 
     const tokenIn = {
@@ -954,6 +999,7 @@ async function loadWalletPoolSnapshot(userId, {
 }
 
 module.exports = {
+  planNativeRoundTrips,
   // Address/Config
   normalizeAddress,
   normalizeCreatePositionPoolOrder,
