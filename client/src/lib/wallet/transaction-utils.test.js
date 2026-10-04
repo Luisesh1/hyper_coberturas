@@ -274,6 +274,39 @@ describe('sendWalletTransactionDetailed rescata la tx por nonce si la wallet no 
   });
 });
 
+// El RPC público de Robinhood solo guarda estado de ~10k bloques (~15 min).
+// Si la firma tardaba más, la bisección pedía bloques viejos y fallaba siempre.
+describe('el rescate por nonce no consulta estado más viejo de lo necesario', () => {
+  it('encuentra la tx aunque el inicio de la espera ya no tenga estado disponible', async () => {
+    const address = '0x1111111111111111111111111111111111111111';
+    const tx = validTx({ kind: 'close' });
+    const minedHash = `0x${'aa'.repeat(32)}`;
+    let latestPolls = 0;
+    const publicClient = {
+      getBlockNumber: vi.fn().mockResolvedValueOnce(1_000n).mockResolvedValue(20_000n),
+      getTransactionCount: vi.fn(async ({ blockNumber, blockTag }) => {
+        if (blockNumber != null) {
+          if (Number(blockNumber) < 15_000) throw new Error('historical state is not available');
+          return Number(blockNumber) >= 19_990 ? 15 : 14;
+        }
+        if (blockTag === 'pending') return 14;
+        latestPolls += 1;
+        return latestPolls > 1 ? 15 : 14;
+      }),
+      getBlock: vi.fn(async ({ blockNumber }) => ({
+        transactions: Number(blockNumber) === 19_990 ? [{ hash: minedHash, from: address, nonce: 14, to: tx.to, input: tx.data }] : [],
+      })),
+    };
+    const provider = { request: vi.fn(() => new Promise(() => {})) };
+
+    const result = await sendWalletTransactionDetailed({
+      address, chainId: 4663, switchChain: vi.fn(), provider, publicClient, tx, broadcastWatch: { pollMs: 5 },
+    });
+
+    expect(result).toMatchObject({ hash: minedHash, recoveredFromChain: true });
+  });
+});
+
 // La misma wallet tampoco devolvía el rechazo: la espera no tenía salida.
 describe('sendWalletTransactionDetailed permite cancelar la espera de la wallet', () => {
   const address = '0x1111111111111111111111111111111111111111';
@@ -324,6 +357,69 @@ describe('sendWalletTransactionDetailed permite cancelar la espera de la wallet'
     controller.abort();
 
     expect(await pending).toMatchObject({ hash: minedHash, recoveredFromChain: true });
+  });
+});
+
+// Cierre del LP #3571232 (2026-10-04): wagmi seguía "conectado" pero la sesión
+// de WalletConnect ya no existía; la petición no llegaba a la wallet y el
+// modal esperaba para siempre.
+describe('sendWalletTransactionDetailed con una sesión de WalletConnect cerrada', () => {
+  it('falla al momento pidiendo reconectar, sin llamar a la wallet', async () => {
+    const provider = { isWalletConnect: true, session: undefined, request: vi.fn() };
+    const result = await sendWalletTransactionDetailed({
+      address: '0x1111111111111111111111111111111111111111', chainId: 4663, switchChain: vi.fn(), provider, tx: validTx(),
+    });
+
+    expect(provider.request).not.toHaveBeenCalled();
+    expect(result.hash).toBeNull();
+    expect(result.normalizedError.code).toBe('wallet_session_closed');
+    expect(result.normalizedError.message).toMatch(/vuelve a conectar/i);
+  });
+
+  it('con sesión viva envía normalmente', async () => {
+    const provider = { isWalletConnect: true, session: { topic: 't' }, request: vi.fn().mockResolvedValue(`0x${'ab'.repeat(32)}`) };
+    const result = await sendWalletTransactionDetailed({
+      address: '0x1111111111111111111111111111111111111111', chainId: 4663, switchChain: vi.fn(), provider, tx: validTx(),
+    });
+    expect(result.normalizedError).toBeNull();
+  });
+});
+
+// SafePal (2026-10-04): la sesión seguía viva en el navegador pero muerta en el
+// teléfono; ninguna petición llegaba y la firma esperaba para siempre. Un ping
+// sin respuesta lo detecta antes de pedir la firma.
+describe('sendWalletTransactionDetailed comprueba que la wallet responde por WalletConnect', () => {
+  const address = '0x1111111111111111111111111111111111111111';
+
+  it('si la wallet no contesta el ping, pide abrirla o reconectar sin enviar la tx', async () => {
+    const provider = {
+      isWalletConnect: true,
+      session: { topic: 't' },
+      signer: { client: { ping: vi.fn(() => new Promise(() => {})) } },
+      request: vi.fn(),
+    };
+    const result = await sendWalletTransactionDetailed({
+      address, chainId: 4663, switchChain: vi.fn(), provider, tx: validTx(), walletPingTimeoutMs: 20,
+    });
+
+    expect(provider.signer.client.ping).toHaveBeenCalledWith({ topic: 't' });
+    expect(provider.request).not.toHaveBeenCalled();
+    expect(result.normalizedError.code).toBe('wallet_unreachable');
+    expect(result.normalizedError.message).toMatch(/vuelve a conectar/i);
+  });
+
+  it('si la wallet contesta el ping, envía la tx', async () => {
+    const hash = `0x${'cd'.repeat(32)}`;
+    const provider = {
+      isWalletConnect: true,
+      session: { topic: 't' },
+      signer: { client: { ping: vi.fn().mockResolvedValue(undefined) } },
+      request: vi.fn().mockResolvedValue(hash),
+    };
+    const result = await sendWalletTransactionDetailed({
+      address, chainId: 4663, switchChain: vi.fn(), provider, tx: validTx(), walletPingTimeoutMs: 20,
+    });
+    expect(result).toMatchObject({ hash, normalizedError: null });
   });
 });
 

@@ -9,6 +9,7 @@ import styles from './PositionActionModal.module.css';
 import { ACTION_LABELS } from './position-action/constants';
 import { getInitialState, buildPayload } from './position-action/form-state';
 import ModifyRangeFields from './position-action/ModifyRangeFields';
+import CancelWalletWait from '../../../components/shared/CancelWalletWait/CancelWalletWait';
 
 // Las claves vienen en camelCase del backend; en mayúsculas y sin separar
 // quedan ilegibles ("ESTIMATEDCURRENTAMOUNTS") y además no parten de línea.
@@ -69,6 +70,8 @@ export default function PositionActionModal({
     setFormState,
     step,
     txHashes,
+    awaitingWallet,
+    cancelWalletWait,
     handleExecute,
     handlePrepare,
   } = usePositionActionFlow({
@@ -485,6 +488,15 @@ export default function PositionActionModal({
             <p className={ui.sectionHint}>
               {step === STEP.SIGNING ? 'Firma las transacciones en tu wallet...' : 'Conciliando recibos y refrescando snapshots...'}
             </p>
+            {step === STEP.SIGNING && (
+              <CancelWalletWait
+                awaitingWallet={awaitingWallet}
+                onCancelWait={cancelWalletWait}
+                resetKey={txHashes.length}
+                hintClassName={ui.sectionHint}
+                buttonClassName={ui.btnSecondary}
+              />
+            )}
             {txHashes.length > 0 && (
               <div className={styles.planList}>
                 {txHashes.map((hash) => (

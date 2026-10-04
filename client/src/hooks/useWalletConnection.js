@@ -124,6 +124,29 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
     reconnectAsync?.().catch(() => {});
   }, [reconnectAsync]);
 
+  // Si la wallet cierra la sesión de WalletConnect (o ya no existe al
+  // recargar), wagmi puede seguir mostrando la cuenta como conectada. Se
+  // desconecta para que la interfaz pida reconectar en vez de mandar firmas
+  // que nunca llegan.
+  useEffect(() => {
+    const provider = providerState;
+    if (!provider?.isWalletConnect || typeof provider.on !== 'function') return undefined;
+    const handleSessionGone = () => {
+      setError('La sesión de WalletConnect se cerró desde la wallet. Vuelve a conectar.');
+      disconnectAsync().catch(() => {});
+    };
+    if (!provider.session) {
+      handleSessionGone();
+      return undefined;
+    }
+    provider.on('session_delete', handleSessionGone);
+    provider.on('disconnect', handleSessionGone);
+    return () => {
+      provider.removeListener?.('session_delete', handleSessionGone);
+      provider.removeListener?.('disconnect', handleSessionGone);
+    };
+  }, [providerState, disconnectAsync]);
+
   const connectInjected = useCallback(async () => {
     const injected = getInjectedProvider();
     setError(null);

@@ -157,6 +157,8 @@ export function usePositionActionFlow({
     setStep,
     step,
     txHashes: execution.txHashes,
+    awaitingWallet: execution.state === WALLET_EXECUTION_STATE.AWAITING_WALLET,
+    cancelWalletWait: execution.cancelWalletWait,
     handleExecute,
     handlePrepare,
   };

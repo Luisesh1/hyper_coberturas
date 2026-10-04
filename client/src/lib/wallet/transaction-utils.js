@@ -291,6 +291,10 @@ export function formatFriendlyWalletError(code, defaultMessage, detail = null) {
       return 'No hay una wallet conectada.';
     case 'wallet_disconnected':
       return 'La wallet está desconectada de la red.';
+    case 'wallet_unreachable':
+      return 'La wallet no responde por WalletConnect. Ábrela en el teléfono; si sigue igual, desconecta y vuelve a conectar (QR nuevo).';
+    case 'wallet_session_closed':
+      return 'La sesión de WalletConnect se cerró desde la wallet. Desconecta y vuelve a conectar la wallet para firmar.';
     case 'unauthorized':
       return 'La wallet no autorizó esta solicitud.';
     case 'unsupported_method':
@@ -400,6 +404,33 @@ export async function waitForBroadcastedHash(clientOrProvider, txHash, { attempt
 }
 
 const BROADCAST_WATCH_POLL_MS = 3000;
+const WALLET_PING_TIMEOUT_MS = 10_000;
+// Hay RPCs que solo guardan estado reciente (el público de Robinhood, ~10k
+// bloques). El vigilante detecta el nonce segundos después de minarse la tx,
+// así que basta bisecar sobre los últimos bloques.
+const NONCE_SEARCH_MAX_BLOCKS = 5000n;
+
+/**
+ * La sesión de WalletConnect puede seguir viva en el navegador y muerta en el
+ * teléfono (app cerrada, sesión borrada): las peticiones no llegan y la firma
+ * espera para siempre. El SDK de la wallet contesta los pings solo si está
+ * escuchando la sesión, así que un ping sin respuesta lo detecta. Si no hay
+ * forma de hacer ping, no se bloquea.
+ */
+async function walletConnectResponds(provider, timeoutMs) {
+  const client = provider?.signer?.client;
+  const topic = provider?.session?.topic;
+  if (typeof client?.ping !== 'function' || !topic) return true;
+  try {
+    await Promise.race([
+      client.ping({ topic }),
+      sleep(timeoutMs).then(() => { throw new Error('ping timeout'); }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function sameTxIntent(chainTx, address, tx) {
   return String(chainTx?.from || '').toLowerCase() === String(address || '').toLowerCase()
@@ -467,7 +498,9 @@ function watchBroadcastByNonce({ publicClient, address, tx, pollMs = BROADCAST_W
       const latestNonce = Number(await publicClient.getTransactionCount({ address, blockTag: 'latest' }));
       while (latestNonce > nextNonce) {
         const latestBlock = BigInt(await publicClient.getBlockNumber());
-        const blockNumber = await findBlockConsumingNonce(publicClient, address, nextNonce, startBlock, latestBlock);
+        const recentFloor = latestBlock > NONCE_SEARCH_MAX_BLOCKS ? latestBlock - NONCE_SEARCH_MAX_BLOCKS : 0n;
+        const searchFrom = startBlock > recentFloor ? startBlock : recentFloor;
+        const blockNumber = await findBlockConsumingNonce(publicClient, address, nextNonce, searchFrom, latestBlock);
         const block = await publicClient.getBlock({ blockNumber, includeTransactions: true });
         const chainTx = (block?.transactions || []).find((item) => (
           item && String(item.from || '').toLowerCase() === address.toLowerCase() && Number(item.nonce) === nextNonce
@@ -521,6 +554,7 @@ export async function sendWalletTransactionDetailed({
   actionKey,
   broadcastWatch = {},
   cancelSignal = null,
+  walletPingTimeoutMs = WALLET_PING_TIMEOUT_MS,
 }) {
   if (!provider?.request) {
     return {
@@ -530,6 +564,33 @@ export async function sendWalletTransactionDetailed({
         message: formatFriendlyWalletError('wallet_unavailable'),
         rawCode: null,
         rawMessage: 'wallet unavailable',
+      },
+    };
+  }
+
+  // wagmi puede seguir "conectado" con una sesión de WalletConnect que la
+  // wallet ya cerró: la petición no llegaría nunca y la firma esperaría para
+  // siempre. Se corta antes, pidiendo reconectar.
+  if (provider.isWalletConnect && !provider.session) {
+    return {
+      hash: null,
+      normalizedError: {
+        code: 'wallet_session_closed',
+        message: formatFriendlyWalletError('wallet_session_closed'),
+        rawCode: null,
+        rawMessage: 'walletconnect session missing',
+      },
+    };
+  }
+
+  if (provider.isWalletConnect && !(await walletConnectResponds(provider, walletPingTimeoutMs))) {
+    return {
+      hash: null,
+      normalizedError: {
+        code: 'wallet_unreachable',
+        message: formatFriendlyWalletError('wallet_unreachable'),
+        rawCode: null,
+        rawMessage: 'walletconnect ping timeout',
       },
     };
   }
