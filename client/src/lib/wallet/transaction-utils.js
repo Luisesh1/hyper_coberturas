@@ -436,45 +436,63 @@ function watchBroadcastByNonce({ publicClient, address, tx, pollMs = BROADCAST_W
     && typeof publicClient.getBlock === 'function';
   let stopped = false;
   const stop = () => { stopped = true; };
-  if (!canWatch || !address) return { promise: new Promise(() => {}), stop, ready: Promise.resolve() };
+  if (!canWatch || !address) {
+    return { promise: new Promise(() => {}), stop, ready: Promise.resolve(), checkNow: async () => null };
+  }
 
   let resolveReady;
   const ready = new Promise((resolve) => { resolveReady = resolve; });
-  const promise = (async () => {
-    let startBlock;
-    let nextNonce;
+  let startBlock = null;
+  let nextNonce = null;
+  const started = (async () => {
     try {
-      [startBlock, nextNonce] = await Promise.all([
+      const [block, nonce] = await Promise.all([
         publicClient.getBlockNumber(),
         publicClient.getTransactionCount({ address, blockTag: 'pending' }).then(Number),
       ]);
+      startBlock = BigInt(block);
+      nextNonce = nonce;
+      return true;
+    } catch {
+      return false;
     } finally {
       resolveReady();
     }
-    startBlock = BigInt(startBlock);
+  })();
+
+  // Una pasada: si el nonce avanzó, busca la tx que lo consumió. null si no está.
+  async function scanOnce() {
+    if (startBlock == null || nextNonce == null) return null;
+    try {
+      const latestNonce = Number(await publicClient.getTransactionCount({ address, blockTag: 'latest' }));
+      while (latestNonce > nextNonce) {
+        const latestBlock = BigInt(await publicClient.getBlockNumber());
+        const blockNumber = await findBlockConsumingNonce(publicClient, address, nextNonce, startBlock, latestBlock);
+        const block = await publicClient.getBlock({ blockNumber, includeTransactions: true });
+        const chainTx = (block?.transactions || []).find((item) => (
+          item && String(item.from || '').toLowerCase() === address.toLowerCase() && Number(item.nonce) === nextNonce
+        ));
+        if (chainTx && sameTxIntent(chainTx, address, tx)) return chainTx.hash;
+        startBlock = blockNumber;
+        nextNonce += 1;
+      }
+    } catch {
+      // Best-effort: un fallo del RPC no debe tumbar la espera de la wallet.
+    }
+    return null;
+  }
+
+  const promise = (async () => {
+    if (!(await started)) return new Promise(() => {});
     while (!stopped) {
       await sleep(pollMs);
       if (stopped) break;
-      try {
-        const latestNonce = Number(await publicClient.getTransactionCount({ address, blockTag: 'latest' }));
-        while (!stopped && latestNonce > nextNonce) {
-          const latestBlock = BigInt(await publicClient.getBlockNumber());
-          const blockNumber = await findBlockConsumingNonce(publicClient, address, nextNonce, startBlock, latestBlock);
-          const block = await publicClient.getBlock({ blockNumber, includeTransactions: true });
-          const chainTx = (block?.transactions || []).find((item) => (
-            item && String(item.from || '').toLowerCase() === address.toLowerCase() && Number(item.nonce) === nextNonce
-          ));
-          if (chainTx && sameTxIntent(chainTx, address, tx)) return chainTx.hash;
-          startBlock = blockNumber;
-          nextNonce += 1;
-        }
-      } catch {
-        // Best-effort: un fallo del RPC no debe tumbar la espera de la wallet.
-      }
+      const hash = await scanOnce();
+      if (hash) return hash;
     }
     return new Promise(() => {});
-  })().catch(() => new Promise(() => {}));
-  return { promise, stop, ready };
+  })();
+  return { promise, stop, ready, checkNow: scanOnce };
 }
 
 async function estimateTransactionGas(provider, txParams) {
@@ -502,6 +520,7 @@ export async function sendWalletTransactionDetailed({
   switchChain,
   actionKey,
   broadcastWatch = {},
+  cancelSignal = null,
 }) {
   if (!provider?.request) {
     return {
@@ -581,11 +600,36 @@ export async function sendWalletTransactionDetailed({
         ...(estimatedGas ? { gas: estimatedGas } : {}),
       }],
     });
-    const raced = await Promise.race([
+    const cancelled = new Promise((resolve) => {
+      if (!cancelSignal) return;
+      if (cancelSignal.aborted) resolve({ source: 'cancel' });
+      else cancelSignal.addEventListener('abort', () => resolve({ source: 'cancel' }), { once: true });
+    });
+    let raced = await Promise.race([
       walletRequest.then((value) => ({ source: 'wallet', value })),
       watcher.promise.then((hash) => ({ source: 'chain', hash })),
+      cancelled,
     ]);
+    if (raced.source === 'cancel') {
+      // Antes de cortar, una última mirada a la cadena: la wallet pudo firmar
+      // y difundir sin que su respuesta llegara.
+      const hash = await watcher.checkNow();
+      raced = hash ? { source: 'chain', hash } : raced;
+    }
     watcher.stop();
+    if (raced.source === 'cancel') {
+      walletRequest.catch(() => {});
+      return {
+        hash: null,
+        normalizedError: withFailingTxContext({
+          code: 'wallet_wait_cancelled',
+          message: 'Se dejó de esperar a la wallet. Si llegaste a firmar, la transacción puede ejecutarse igualmente: '
+            + 'el reintento recalcula el plan desde la cadena y no repite lo ya hecho.',
+          rawCode: null,
+          rawMessage: 'wallet wait cancelled',
+        }, tx),
+      };
+    }
     if (raced.source === 'chain') {
       // La respuesta tardía de la wallet ya no importa; evitamos un rechazo sin manejar.
       walletRequest.catch(() => {});

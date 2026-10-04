@@ -274,6 +274,59 @@ describe('sendWalletTransactionDetailed rescata la tx por nonce si la wallet no 
   });
 });
 
+// La misma wallet tampoco devolvía el rechazo: la espera no tenía salida.
+describe('sendWalletTransactionDetailed permite cancelar la espera de la wallet', () => {
+  const address = '0x1111111111111111111111111111111111111111';
+  const baseArgs = { address, chainId: 4663, switchChain: vi.fn(), broadcastWatch: { pollMs: 60_000 } };
+
+  function quietChain({ consumed = false, txInBlock = null } = {}) {
+    return {
+      getBlockNumber: vi.fn().mockResolvedValue(100n),
+      getTransactionCount: vi.fn(async ({ blockNumber, blockTag }) => {
+        if (blockNumber != null) return consumed && Number(blockNumber) >= 100 ? 10 : 9;
+        if (blockTag === 'pending') return 9;
+        return consumed ? 10 : 9;
+      }),
+      getBlock: vi.fn(async () => ({ transactions: txInBlock ? [txInBlock] : [] })),
+    };
+  }
+
+  it('al cancelar sin tx en cadena devuelve un error explicativo', async () => {
+    const controller = new AbortController();
+    const provider = { request: vi.fn(() => new Promise(() => {})) };
+    const pending = sendWalletTransactionDetailed({
+      ...baseArgs, provider, publicClient: quietChain(), tx: validTx(), cancelSignal: controller.signal,
+    });
+    await vi.waitFor(() => expect(provider.request).toHaveBeenCalled());
+
+    controller.abort();
+    const result = await pending;
+
+    expect(result.hash).toBeNull();
+    expect(result.normalizedError.code).toBe('wallet_wait_cancelled');
+    expect(result.normalizedError.message).toMatch(/llegaste a firmar/);
+  });
+
+  it('al cancelar, si la tx ya está en cadena la adopta en vez de cortar', async () => {
+    const controller = new AbortController();
+    const tx = validTx();
+    const minedHash = `0x${'be'.repeat(32)}`;
+    const provider = { request: vi.fn(() => new Promise(() => {})) };
+    const publicClient = quietChain({
+      consumed: true, txInBlock: { hash: minedHash, from: address, nonce: 9, to: tx.to, input: tx.data },
+    });
+    publicClient.getBlockNumber.mockResolvedValueOnce(99n).mockResolvedValue(100n);
+    const pending = sendWalletTransactionDetailed({
+      ...baseArgs, provider, publicClient, tx, cancelSignal: controller.signal,
+    });
+    await vi.waitFor(() => expect(provider.request).toHaveBeenCalled());
+
+    controller.abort();
+
+    expect(await pending).toMatchObject({ hash: minedHash, recoveredFromChain: true });
+  });
+});
+
 // Una tx que SI se ejecuto on-chain reportada como fallida es el peor error
 // posible del runner: aborta el plan a la mitad y el usuario cree que no paso
 // nada. Ocurria porque observar bloques y consultar el recibo pueden caer en

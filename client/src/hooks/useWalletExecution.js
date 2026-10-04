@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { uniswapApi } from '../services/api';
 import { useWalletConnection } from './useWalletConnection';
 import {
@@ -78,6 +78,12 @@ export function useWalletExecution() {
   const [normalizedError, setNormalizedError] = useState(null);
   const [txHashes, setTxHashes] = useState([]);
   const [finalResult, setFinalResult] = useState(null);
+  // Permite dejar de esperar a una wallet que no responde (WalletConnect
+  // puede perder tanto el hash como el rechazo).
+  const walletWaitRef = useRef(null);
+  const cancelWalletWait = useCallback(() => {
+    walletWaitRef.current?.abort();
+  }, []);
 
   const reset = useCallback(() => {
     setState(WALLET_EXECUTION_STATE.IDLE);
@@ -197,9 +203,12 @@ export function useWalletExecution() {
 
       setState(WALLET_EXECUTION_STATE.AWAITING_WALLET);
       setProgress((prev) => ({ ...prev, step: WALLET_EXECUTION_STATE.AWAITING_WALLET }));
+      walletWaitRef.current = new AbortController();
       const sendResult = await wallet.submitTransactionDetailed(tx, {
         actionKey: `${action}:${index}`,
+        cancelSignal: walletWaitRef.current.signal,
       });
+      walletWaitRef.current = null;
 
       if (!sendResult?.hash) {
         setNormalizedError(sendResult?.normalizedError || buildExecutionError('unknown', `No se pudo enviar "${txLabel}".`));
@@ -403,6 +412,7 @@ export function useWalletExecution() {
     state,
     runPlan,
     reset,
+    cancelWalletWait,
     currentTx,
     progress,
     normalizedError,
@@ -412,6 +422,7 @@ export function useWalletExecution() {
     listPendingPlansForScope,
     dropInFlightPlan,
   }), [
+    cancelWalletWait,
     currentTx,
     finalResult,
     normalizedError,

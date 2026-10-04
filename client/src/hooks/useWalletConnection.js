@@ -319,7 +319,7 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
     }
   }, [address, chainId]);
 
-  const submitTransactionDetailed = useCallback(async (tx, { actionKey } = {}) => {
+  const submitTransactionDetailed = useCallback(async (tx, { actionKey, cancelSignal = null } = {}) => {
     const effectiveChainId = Number(tx?.chainId || chainId);
     const publicClient = getPublicClientForChain(effectiveChainId);
     const result = await sendWalletTransactionDetailed({
@@ -330,6 +330,7 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
       tx,
       switchChain,
       actionKey,
+      cancelSignal,
     });
     setError(result.normalizedError?.message || null);
     return result;
@@ -456,6 +457,31 @@ function WalletController({ children, walletConnectProjectId, setWalletConnectPr
   return createElement(WalletContext.Provider, { value }, children);
 }
 
+// Una config por projectId para toda la vida de la página. Crearla dentro del
+// render duplicaba el conector de WalletConnect (StrictMode ejecuta el
+// useMemo dos veces en desarrollo): dos Cores sobre la misma sesión, y las
+// respuestas de la wallet — el hash o el rechazo — se perdían.
+const WAGMI_CONFIGS = new Map();
+
+export function getWagmiConfig(walletConnectProjectId) {
+  const key = String(walletConnectProjectId || '');
+  if (WAGMI_CONFIGS.has(key)) return WAGMI_CONFIGS.get(key);
+  const connectors = [injected({ target: 'metaMask', shimDisconnect: true })];
+  if (key) {
+    connectors.push(walletConnect({
+      projectId: key,
+      showQrModal: true,
+    }));
+  }
+  const config = createConfig({
+    chains: SUPPORTED_CHAINS,
+    connectors,
+    transports: buildWagmiTransports(),
+  });
+  WAGMI_CONFIGS.set(key, config);
+  return config;
+}
+
 export function WalletProvider({ children }) {
   const [walletConnectProjectId, setWalletConnectProjectIdState] = useState(getInitialWalletConnectProjectId);
   const [needsWalletConnectSetup, setNeedsWalletConnectSetup] = useState(false);
@@ -492,21 +518,7 @@ export function WalletProvider({ children }) {
     }
   }, []);
 
-  const wagmiConfig = useMemo(() => {
-    const connectors = [injected({ target: 'metaMask', shimDisconnect: true })];
-    if (walletConnectProjectId) {
-      connectors.push(walletConnect({
-        projectId: walletConnectProjectId,
-        showQrModal: true,
-      }));
-    }
-
-    return createConfig({
-      chains: SUPPORTED_CHAINS,
-      connectors,
-      transports: buildWagmiTransports(),
-    });
-  }, [walletConnectProjectId]);
+  const wagmiConfig = useMemo(() => getWagmiConfig(walletConnectProjectId), [walletConnectProjectId]);
 
   return createElement(
     QueryClientProvider,
