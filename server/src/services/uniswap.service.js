@@ -5,6 +5,8 @@ const etherscanQueueService = require('./etherscan-queue.service');
 const timeInRangeService = require('./time-in-range.service');
 const logger = require('./logger.service');
 const onChainManager = require('./onchain-manager.service');
+const httpClient = require('../shared/platform/http/http-client');
+const { discoverV4TokenIds, fetchTokenIdsFromAlchemy } = require('./uniswap/v4-token-discovery');
 const {
   ValidationError,
 } = require('../errors/app-error');
@@ -1367,12 +1369,31 @@ function computeV4PoolId(poolKey) {
 async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
   const provider = getProvider(networkConfig);
   const warnings = [];
-  const apiKey = await getUserApiKey(userId);
+  const apiKey = await getUserApiKey(userId).catch((err) => { logger.warn('getUserApiKey failed', { userId, error: err.message }); return null; });
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
   const positionManager = getContract(networkConfig, positionManagerAddress, V4_POSITION_MANAGER_ABI);
 
-  const { rows, truncated } = await fetchWalletNftTransfers(apiKey, networkConfig, wallet, positionManagerAddress);
-  const { tokenIds, firstInbound } = collectHeldTokenIds(wallet, rows);
+  let nftRowCount = 0;
+  const discovery = await discoverV4TokenIds({
+    etherscanLookup: apiKey
+      ? async () => {
+        const { rows, truncated } = await fetchWalletNftTransfers(apiKey, networkConfig, wallet, positionManagerAddress);
+        nftRowCount = rows.length;
+        return { ...collectHeldTokenIds(wallet, rows), truncated };
+      }
+      : null,
+    alchemyLookup: () => fetchTokenIdsFromAlchemy({
+      rpcUrl: networkConfig.rpcUrl || config.uniswap.rpcUrls[networkConfig.id],
+      wallet,
+      contractAddress: positionManagerAddress,
+      http: httpClient,
+    }),
+  });
+  const { tokenIds, firstInbound, truncated } = discovery;
+  if (discovery.warning) {
+    logger.warn('v4_scan_etherscan_fallback', { network: networkConfig.id, wallet, warning: discovery.warning });
+    warnings.push(discovery.warning);
+  }
   if (truncated) {
     warnings.push(`Etherscan truncó el historial NFT a ${MAX_NFT_PAGES * NFT_PAGE_SIZE} transferencias`);
   }
@@ -1401,7 +1422,7 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
       createdAt: inbound?.createdAt || null,
       openedAt: inbound?.createdAt || null,
       explorerUrl: networkConfig.explorerUrl,
-      source: 'etherscan+nft_position_manager',
+      source: `${discovery.source}+nft_position_manager`,
       completeness: 'full',
       token0Address: normalizeAddress(poolKey.currency0),
       token1Address: normalizeAddress(poolKey.currency1),
@@ -1440,12 +1461,12 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
     },
     version: 'v4',
     mode: 'lp_positions',
-    source: 'etherscan+nft_position_manager',
+    source: `${discovery.source}+nft_position_manager`,
     completeness: truncated ? 'partial' : 'full',
     count: poolsWithRange.length,
     filteredOutCount: records.filter(Boolean).length - poolsWithRange.length,
     inspectedTxCount: records.filter(Boolean).length,
-    totalTxCount: rows.length,
+    totalTxCount: nftRowCount,
     scannedAt: Date.now(),
     warnings: buildWarningsWithDedup(warnings),
     pools: poolsWithRange,
