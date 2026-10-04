@@ -1382,14 +1382,8 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
         return { ...collectHeldTokenIds(wallet, rows), truncated };
       }
       : null,
-    // La key de Alchemy del usuario va primero: el RPC global de la red puede
-    // no ser de Alchemy (en prod no lo es para Base).
-    alchemyLookup: async () => fetchTokenIdsFromAlchemy({
-      rpcUrl: [
-        (await getNetworkConfigForUser(userId, networkConfig.id).catch(() => null))?.rpcUrl,
-        networkConfig.rpcUrl,
-        config.uniswap.rpcUrls[networkConfig.id],
-      ].find((url) => buildAlchemyNftBaseUrl(url)) || null,
+    alchemyLookup: () => fetchTokenIdsFromAlchemy({
+      rpcUrl: networkConfig.rpcUrl,
       wallet,
       contractAddress: positionManagerAddress,
       http: httpClient,
@@ -1484,7 +1478,8 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
     throw new ValidationError('userId es requerido');
   }
 
-  const { wallet: normalizedWallet, networkConfig } = validateRequest({ wallet, network, version });
+  const { wallet: normalizedWallet, networkConfig: globalNetworkConfig } = validateRequest({ wallet, network, version });
+  const networkConfig = await resolveScanNetworkConfig(userId, globalNetworkConfig);
   if (version === 'v3') {
     return scanV3PositionsByWallet({ wallet: normalizedWallet, networkConfig, userId });
   }
@@ -1585,6 +1580,28 @@ async function getNetworkConfigForUser(userId, network) {
   if (!userRpcUrl) return networkConfig;
 
   return { ...networkConfig, rpcUrl: userRpcUrl };
+}
+
+/**
+ * Config de red para escanear posiciones. Si el RPC global de la red no es de
+ * Alchemy (en prod, Base usa un nodo público), se sustituye por el Alchemy del
+ * usuario: el nodo público responde "missing revert data" a ráfagas de
+ * lecturas y no tiene API NFT, que el escaneo v4 necesita sin Etherscan. El
+ * RPC público queda como fallback. Las redes que ya van por Alchemy no tocan
+ * la cuota del usuario.
+ */
+async function resolveScanNetworkConfig(userId, networkConfig) {
+  if (buildAlchemyNftBaseUrl(networkConfig.rpcUrl)) return networkConfig;
+  const userConfig = await getNetworkConfigForUser(userId, networkConfig.id).catch((err) => {
+    logger.warn('scan_user_alchemy_config_failed', { userId, network: networkConfig.id, error: err.message });
+    return null;
+  });
+  if (!userConfig || userConfig.rpcUrl === networkConfig.rpcUrl) return networkConfig;
+  return {
+    ...networkConfig,
+    rpcUrl: userConfig.rpcUrl,
+    fallbackRpcUrl: networkConfig.fallbackRpcUrl || networkConfig.rpcUrl,
+  };
 }
 
 async function testUserAlchemyKey(userId) {
