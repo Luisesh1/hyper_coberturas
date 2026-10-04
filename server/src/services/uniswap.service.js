@@ -6,7 +6,7 @@ const timeInRangeService = require('./time-in-range.service');
 const logger = require('./logger.service');
 const onChainManager = require('./onchain-manager.service');
 const httpClient = require('../shared/platform/http/http-client');
-const { discoverV4TokenIds, fetchTokenIdsFromAlchemy } = require('./uniswap/v4-token-discovery');
+const { buildAlchemyNftBaseUrl, discoverV4TokenIds, fetchTokenIdsFromAlchemy } = require('./uniswap/v4-token-discovery');
 const {
   ValidationError,
 } = require('../errors/app-error');
@@ -1382,8 +1382,14 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
         return { ...collectHeldTokenIds(wallet, rows), truncated };
       }
       : null,
-    alchemyLookup: () => fetchTokenIdsFromAlchemy({
-      rpcUrl: networkConfig.rpcUrl || config.uniswap.rpcUrls[networkConfig.id],
+    // La key de Alchemy del usuario va primero: el RPC global de la red puede
+    // no ser de Alchemy (en prod no lo es para Base).
+    alchemyLookup: async () => fetchTokenIdsFromAlchemy({
+      rpcUrl: [
+        (await getNetworkConfigForUser(userId, networkConfig.id).catch(() => null))?.rpcUrl,
+        networkConfig.rpcUrl,
+        config.uniswap.rpcUrls[networkConfig.id],
+      ].find((url) => buildAlchemyNftBaseUrl(url)) || null,
       wallet,
       contractAddress: positionManagerAddress,
       http: httpClient,

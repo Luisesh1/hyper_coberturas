@@ -74,7 +74,11 @@ async function discoverV4TokenIds({ etherscanLookup, alchemyLookup }) {
       warning: `Etherscan no disponible (${reason}); posiciones v4 obtenidas de Alchemy sin fecha de apertura`,
     };
   } catch (alchemyError) {
-    throw etherscanError || alchemyError;
+    if (!etherscanError) throw alchemyError;
+    // Se conserva el error (y su tipo) de Etherscan, pero sin esconder por
+    // qué tampoco sirvió el respaldo.
+    etherscanError.message = `${etherscanError.message} (respaldo Alchemy: ${alchemyError.message})`;
+    throw etherscanError;
   }
 }
 

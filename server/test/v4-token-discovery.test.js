@@ -93,6 +93,6 @@ test('discoverV4TokenIds propaga el error de Etherscan si Alchemy tampoco respon
       etherscanLookup: async () => { throw new Error('etherscan caído'); },
       alchemyLookup: async () => { throw new Error('alchemy caído'); },
     }),
-    /etherscan caído/
+    /etherscan caído \(respaldo Alchemy: alchemy caído\)/
   );
 });
