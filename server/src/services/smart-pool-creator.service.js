@@ -451,6 +451,20 @@ function logFundingFailure(code, payload = {}) {
  * ser un subconjunto de lo que tiene en la wallet. `usdValue` del asset cubre
  * el balance entero, asi que se prorratea por la porcion pedida.
  */
+/**
+ * Valor que el plan reparte entre token0 y token1. Si lo seleccionado no
+ * llega al objetivo, se reparte lo seleccionado: con el objetivo entero cada
+ * lado pide su parte del total, el primer lado se lleva todo su activo
+ * directo y al otro le falta sin nada que swapear. El plan pasaba el umbral
+ * del 93 % desbalanceado y el mint usaba sólo lo que permitía el lado corto.
+ */
+function resolveEffectiveFundingTargetUsd({ totalUsdTarget, selectedUsd }) {
+  const target = Number(totalUsdTarget);
+  const selected = Number(selectedUsd);
+  if (!Number.isFinite(selected) || selected <= 0) return target;
+  return Math.min(target, selected);
+}
+
 function sumSelectedFundingUsd(selectedAssets = []) {
   return selectedAssets.reduce((sum, entry) => {
     const asset = entry?.asset;
@@ -1528,15 +1542,6 @@ async function buildFundingPlan({
     allPrices,
   });
 
-  const targetAmounts = computeAmountsFromWeight(
-    Number(targetWeightToken0Pct),
-    Number(totalUsdTarget),
-    token0UsdPrice,
-    token1UsdPrice,
-    token0.decimals,
-    token1.decimals
-  );
-
   const wrappedNative = getWrappedNativeToken(network);
 
   // Un pool v4 puede tener ETH nativo (address(0)) como currency. Para PLANEAR
@@ -1575,6 +1580,18 @@ async function buildFundingPlan({
     fundingSelections?.length
       ? fundingSelections
       : optimalSelectionResult.selection
+  );
+
+  const targetAmounts = computeAmountsFromWeight(
+    Number(targetWeightToken0Pct),
+    resolveEffectiveFundingTargetUsd({
+      totalUsdTarget,
+      selectedUsd: sumSelectedFundingUsd(selectedAssets),
+    }),
+    token0UsdPrice,
+    token1UsdPrice,
+    token0.decimals,
+    token1.decimals
   );
 
   const warnings = [];
@@ -2381,6 +2398,7 @@ module.exports = {
   orientRangeToCanonicalOrder,
   pickTargetTokenByUsdDeficit,
   resolveBestDirectRoute,
+  resolveEffectiveFundingTargetUsd,
   resolveBestRoute,
   sortTokensByAddress,
   sumSelectedFundingUsd,
