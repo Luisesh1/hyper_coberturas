@@ -46,6 +46,12 @@ export function resolveDefaultTokenAddress(tokenList = [], preferredSymbols = []
  * SmartCreatePoolModal. La UI sólo consume los valores y callbacks
  * que retorna este hook.
  */
+function toFundingSelections(selectionMap) {
+  return Object.entries(selectionMap || {})
+    .filter(([, value]) => value?.enabled)
+    .map(([assetId, value]) => ({ assetId, amount: value.amount, enabled: true }));
+}
+
 export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook = null, existingV4Pool = null, onFinalized }) {
   const network = defaults?.network || 'arbitrum';
   const version = defaults?.version || 'v3';
@@ -93,6 +99,8 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
   const [error, setError] = useState('');
   const [loadingMessage, setLoadingMessage] = useState('');
   const [isBusy, setIsBusy] = useState(false);
+  // Al reiniciar el asistente se vuelve a pedir el capital por defecto.
+  const [capitalRefreshNonce, setCapitalRefreshNonce] = useState(0);
 
   const execution = useWalletExecution();
   const autoAnalyzedRef = useRef(false);
@@ -211,7 +219,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
       });
 
     return () => { cancelled = true; };
-  }, [defaults?.totalUsdTarget, network, wallet?.address]);
+  }, [defaults?.totalUsdTarget, network, wallet?.address, capitalRefreshNonce]);
 
   // Un cambio de wallet invalida cualquier análisis o plan generado para la
   // dirección anterior, pero conserva el par para que el usuario no tenga
@@ -350,15 +358,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
     };
   }, [customLowerPrice, customUpperPrice, customWeightToken0, rangeMode, selectedPreset, suggestions, totalUsdTarget]);
 
-  const normalizedFundingSelections = useMemo(() => (
-    Object.entries(assetSelections)
-      .filter(([, value]) => value?.enabled)
-      .map(([assetId, value]) => ({
-        assetId,
-        amount: value.amount,
-        enabled: true,
-      }))
-  ), [assetSelections]);
+  const normalizedFundingSelections = useMemo(() => toFundingSelections(assetSelections), [assetSelections]);
 
   // ── handlers ──────────────────────────────────────────────────────
 
@@ -436,7 +436,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
   }
 
   async function refreshFundingPlan({ preserveSelections = false } = {}) {
-    if (!wallet?.address || !activeRange) return;
+    if (!wallet?.address || !activeRange) return null;
     setError('');
     setIsBusy(true);
     setLoadingMessage('Construyendo plan de fondeo y swaps...');
@@ -447,7 +447,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         walletAddress: wallet.address,
         importTokenAddresses: importedFundingTokens,
       });
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return null;
       setAvailableAssets(assetsData.assets || []);
       const plan = await uniswapApi.smartCreateFundingPlan({
         network,
@@ -469,7 +469,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         ...(version === 'v4' && existingV4Pool ? { poolId: existingV4Pool.poolId } : {}),
         ...(version === 'v4' && v4DynamicFeeHook?.versionId != null ? { v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId) } : {}),
       });
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return null;
 
       setAvailableAssets(plan.availableFundingAssets || assetsData.assets || []);
       setFundingPlan(plan);
@@ -478,12 +478,14 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         setAssetSelections(buildSelectionMap(plan.selectedFundingAssets || []));
       }
       setStep(STEP.FUNDING);
+      return plan;
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return null;
       setFundingPlan(null);
       setFundingIssue(deriveFundingIssue(err));
       setError('');
       setStep(STEP.FUNDING);
+      return null;
     } finally {
       if (isMountedRef.current) {
         setIsBusy(false);
@@ -535,10 +537,12 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
     await refreshFundingPlan({ preserveSelections: true });
   }
 
-  async function handlePrepareReview() {
-    if (!fundingPlan) {
+  // Los overrides existen para `retryFromChain`: el plan recién calculado
+  // todavía no está en el estado de este render.
+  async function handlePrepareReview({ fundingPlanOverride = null, fundingSelectionsOverride = null } = {}) {
+    if (!(fundingPlanOverride || fundingPlan)) {
       setError('Genera primero un plan de fondeo.');
-      return;
+      return false;
     }
     setError('');
     setIsBusy(true);
@@ -557,7 +561,7 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
         rangeUpperPrice: Number(activeRange.rangeUpperPrice),
         maxSlippageBps: Number(maxSlippageBps || 50),
         importTokenAddresses: importedFundingTokens,
-        fundingSelections: normalizedFundingSelections,
+        fundingSelections: fundingSelectionsOverride || normalizedFundingSelections,
         ...buildOptionalPoolContext(suggestions),
         ...(version === 'v4' && v4Hooks ? { hooks: v4Hooks } : {}),
         ...(version === 'v4' && v4TickSpacing != null ? { tickSpacing: v4TickSpacing } : {}),
@@ -567,10 +571,12 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
       setPrepareData(data);
       setFundingIssue(null);
       setStep(STEP.REVIEW);
+      return true;
     } catch (err) {
       setFundingIssue(deriveFundingIssue(err));
       setError('');
       setStep(STEP.FUNDING);
+      return false;
     } finally {
       setIsBusy(false);
       setLoadingMessage('');
@@ -635,7 +641,42 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
     }
   }
 
+  function clearChainState() {
+    setAvailableAssets([]);
+    setFundingPlan(null);
+    setFundingIssue(null);
+    setPrepareData(null);
+    setTxHashes([]);
+    setCompletedTxIndex(-1);
+    setCurrentTxIndex(-1);
+    setFailedTxLabel('');
+    setAssetSelections({});
+    setImportedFundingTokens([]);
+    setImportTokenAddress('');
+    setError('');
+    setHasFundingEdits(false);
+    execution.reset();
+  }
+
+  /**
+   * Reintento tras un fallo a mitad de las transacciones. Conserva toda la
+   * configuración (capital incluido) y rehace fondeo y prepare con el estado
+   * actual de la cadena: lo ya minado no se repite porque el plan nuevo ya no
+   * lo necesita, y no se reutilizan cotizaciones ni deadlines caducados.
+   * Devuelve true si terminó en Revisión.
+   */
+  async function retryFromChain() {
+    clearChainState();
+    const plan = await refreshFundingPlan({ preserveSelections: false });
+    if (!plan) return false;
+    const selections = toFundingSelections(buildSelectionMap(plan.selectedFundingAssets || []));
+    return handlePrepareReview({ fundingPlanOverride: plan, fundingSelectionsOverride: selections });
+  }
+
   function handleReset() {
+    // El capital se vuelve a calcular con el saldo actual salvo que venga fijado por defaults.
+    totalUsdTargetTouchedRef.current = defaults?.totalUsdTarget != null;
+    setCapitalRefreshNonce((n) => n + 1);
     setStep(STEP.POOL);
     setSuggestions(null);
     setAvailableAssets([]);
@@ -737,6 +778,10 @@ export default function useSmartCreateFlow({ wallet, defaults, v4DynamicFeeHook 
     handlePrepareReview,
     handleExecute,
     handleReset,
+    retryFromChain,
+    // La wallet no siempre responde por WalletConnect: se puede dejar de esperar.
+    awaitingWallet: execution.state === 'awaiting_wallet',
+    cancelWalletWait: execution.cancelWalletWait,
     handleAddFundingImport,
     refreshFundingPlan,
   };

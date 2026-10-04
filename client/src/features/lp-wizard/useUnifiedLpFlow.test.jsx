@@ -308,6 +308,23 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     expect(lpOrchestratorApi.preflightProtection).not.toHaveBeenCalled();
   });
 
+  it('no exige política compatible con EVPLUSAI si la cobertura está desactivada', async () => {
+    const pool = {
+      label: 'ETH/USDG · EVPLUSAI', poolId: `0x${'a'.repeat(64)}`,
+      hooks: `0x${'1'.repeat(40)}`, fee: 0x800000, tickSpacing: 10,
+      token0: { address: `0x${'0'.repeat(40)}` }, token1: { address: `0x${'2'.repeat(40)}` },
+      existingPool: true, swapReturnsDelta: true,
+    };
+    uniswapApi.getSmartCreatePools.mockResolvedValue({ pools: [pool] });
+    const { result } = renderFlow({ network: 'robinhood', version: 'v4' }, { network: 'robinhood' });
+    await act(async () => {});
+    act(() => result.current.selectExistingV4Pool(pool.poolId));
+    act(() => result.current.setProtection({ ...result.current.protection, enabled: false, policyVersion: 'legacy_zones_v1' }));
+    let preflight;
+    await act(async () => { preflight = await result.current.runPreflight(); });
+    expect(preflight.blockingReason || '').not.toMatch(/terminal o de borde/);
+  });
+
   it('deja pasar EVPLUSAI al preflight con la cobertura de borde', async () => {
     const pool = {
       label: 'ETH/USDG · EVPLUSAI', poolId: `0x${'a'.repeat(64)}`,
@@ -471,6 +488,104 @@ describe('useUnifiedLpFlow — reintento tras un fallo de firma', () => {
     // Dos intenciones distintas: la abandonada caduca sola por TTL en el
     // servidor, pero jamás se firma contra ella.
     expect(lpOrchestratorApi.createIntent).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Primera creación real en Robinhood (2026-10-03): cada fallo obligaba a
+// empezar de cero y la política de cobertura volvía a "Zonas legacy".
+describe('useUnifiedLpFlow — reintentar desde el punto del fallo', () => {
+  const FINALIZE_OK = { positionChanges: { newPositionIdentifier: '98765' }, txHashes: ['0xaaa'] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lpOrchestratorApi.preflightProtection.mockResolvedValue({ ok: true, checks: [] });
+    lpOrchestratorApi.createIntent.mockResolvedValue({ operationKey: 'op-1' });
+    lpOrchestratorApi.retryCommit = vi.fn();
+  });
+
+  function renderOrchestrated(flowOverrides = {}) {
+    smartCreateFlow.current = makeFlow({
+      step: 'review', handleReset: vi.fn(), retryFromChain: vi.fn().mockResolvedValue(true), ...flowOverrides,
+    });
+    const view = renderHook(() => useUnifiedLpFlow({
+      mode: 'orchestrated',
+      wallet: { address: '0x1111111111111111111111111111111111111111' },
+      defaults: { network: 'arbitrum', version: 'v4' },
+    }));
+    act(() => {
+      view.result.current.setProtection({
+        ...view.result.current.protection, accountId: 1, policyVersion: 'range_exit_v1',
+      });
+    });
+    return view;
+  }
+
+  it('empezar de nuevo conserva la configuración de cobertura', () => {
+    const view = renderOrchestrated();
+
+    act(() => { view.result.current.handleReset(); });
+
+    expect(view.result.current.protection.policyVersion).toBe('range_exit_v1');
+    expect(view.result.current.protection.accountId).toBe(1);
+  });
+
+  it('reintentar tras un fallo de firma recalcula desde la cadena sin reiniciar', async () => {
+    const view = renderOrchestrated();
+    await act(async () => { await view.result.current.handleContinueFromProtection(); });
+    await act(async () => { await view.result.current.handleSignAndCreate(); });
+
+    await act(async () => { await view.result.current.retryFromChain(); });
+
+    expect(smartCreateFlow.current.retryFromChain).toHaveBeenCalledTimes(1);
+    expect(smartCreateFlow.current.handleReset).not.toHaveBeenCalled();
+    expect(view.result.current.protection.policyVersion).toBe('range_exit_v1');
+    // La configuración no cambió: la cobertura ya validada sigue valiendo.
+    expect(view.result.current.step).toBe('review');
+    lpOrchestratorApi.createIntent.mockResolvedValue({ operationKey: 'op-2' });
+    await act(async () => { await view.result.current.handleSignAndCreate(); });
+    expect(lpOrchestratorApi.createIntent).toHaveBeenCalledTimes(2);
+  });
+
+  it('reintentar la cobertura vuelve al paso de cobertura y manda la configuración editada', async () => {
+    lpOrchestratorApi.commitIntent.mockResolvedValue({
+      status: 'compensated', reason: 'sin valor USD', survivingLp: { positionIdentifier: '98765' },
+    });
+    lpOrchestratorApi.retryCommit.mockResolvedValue({ status: 'completed', orchestrator: { id: 34 } });
+    const view = renderOrchestrated();
+    await act(async () => { await view.result.current.handleContinueFromProtection(); });
+    await act(async () => { await view.result.current.handleSignAndCreate(); });
+    await act(async () => { await smartCreateFlow.args.onFinalized({ finalizeResult: FINALIZE_OK, txHashes: ['0xaaa'] }); });
+    expect(view.result.current.outcome.status).toBe('compensated');
+
+    act(() => { view.result.current.enterProtectionRetry(); });
+    expect(view.result.current.step).toBe('protection');
+    expect(view.result.current.protectionRetryMode).toBe(true);
+
+    act(() => { view.result.current.setProtection({ ...view.result.current.protection, leverage: '5' }); });
+    await act(async () => { await view.result.current.handleContinueFromProtection(); });
+
+    expect(lpOrchestratorApi.retryCommit).toHaveBeenCalledTimes(1);
+    const [operationKey, protection] = lpOrchestratorApi.retryCommit.mock.calls[0];
+    expect(operationKey).toBe('op-1');
+    expect(Number(protection.leverage)).toBe(5);
+    expect(protection.policyVersion).toBe('range_exit_v1');
+    expect(view.result.current.outcome.status).toBe('completed');
+    expect(view.result.current.protectionRetryMode).toBe(false);
+  });
+
+  it('si la verificación previa falla en modo reintento no llama al servidor', async () => {
+    lpOrchestratorApi.commitIntent.mockResolvedValue({ status: 'compensated', survivingLp: { positionIdentifier: '98765' } });
+    const view = renderOrchestrated();
+    await act(async () => { await view.result.current.handleContinueFromProtection(); });
+    await act(async () => { await view.result.current.handleSignAndCreate(); });
+    await act(async () => { await smartCreateFlow.args.onFinalized({ finalizeResult: FINALIZE_OK, txHashes: ['0xaaa'] }); });
+    act(() => { view.result.current.enterProtectionRetry(); });
+    lpOrchestratorApi.preflightProtection.mockResolvedValue({ ok: false, checks: [], blockingReason: 'margen insuficiente' });
+
+    await act(async () => { await view.result.current.handleContinueFromProtection(); });
+
+    expect(lpOrchestratorApi.retryCommit).not.toHaveBeenCalled();
+    expect(view.result.current.step).toBe('protection');
   });
 });
 

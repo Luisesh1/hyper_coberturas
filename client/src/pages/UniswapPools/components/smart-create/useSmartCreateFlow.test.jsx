@@ -6,6 +6,8 @@ const { uniswapApi } = vi.hoisted(() => ({
     getSmartCreateTokenList: vi.fn(),
     getSmartCreateAssets: vi.fn(),
     smartCreateSuggest: vi.fn(),
+    smartCreateFundingPlan: vi.fn(),
+    prepareCreatePosition: vi.fn(),
   },
 }));
 
@@ -262,5 +264,83 @@ describe('defaults iniciales desde la wallet', () => {
       walletAddress: wallet2.address,
     });
     expect(result.current.suggestions).toBe(null);
+  });
+});
+
+// Primera creación real en Robinhood (2026-10-03): tras un fallo había que
+// reconfigurar todo; al reiniciar el capital se quedaba con el valor viejo.
+describe('reintento y reinicio del flujo base', () => {
+  beforeEach(() => {
+    for (const fn of Object.values(uniswapApi)) fn.mockReset();
+    uniswapApi.getSmartCreateTokenList.mockImplementation(async (_network, version) => (
+      version === 'v4' ? CATALOGO_V4 : CATALOGO_V3
+    ));
+    uniswapApi.getSmartCreateAssets.mockResolvedValue({
+      assets: [
+        { id: 'native', symbol: 'ETH', usableBalance: '0.498', usdPrice: 2500 },
+        { id: 'usdc', symbol: 'USDC', usableBalance: '1200', usdPrice: 1 },
+      ],
+    });
+    uniswapApi.smartCreateSuggest.mockResolvedValue({
+      currentPrice: 2500,
+      suggestions: [{ preset: 'balanced', rangeLowerPrice: 2000, rangeUpperPrice: 3000, targetWeightToken0Pct: 50 }],
+    });
+  });
+
+  it('empezar de nuevo recalcula el capital con el saldo actual', async () => {
+    const { result } = render({ network: 'arbitrum', version: 'v3' });
+    await waitFor(() => expect(result.current.totalUsdTarget).toBe('2322.75'));
+    act(() => { result.current.setTotalUsdTarget('321'); });
+    uniswapApi.getSmartCreateAssets.mockResolvedValue({
+      assets: [{ id: 'usdc', symbol: 'USDC', usableBalance: '100', usdPrice: 1 }],
+    });
+
+    act(() => { result.current.handleReset(); });
+
+    await waitFor(() => expect(result.current.totalUsdTarget).toBe('95'));
+    expect(result.current.step).toBe('pool');
+  });
+
+  it('reintentar desde la cadena rehace fondeo y prepare y deja al usuario en Revisión', async () => {
+    const plan = {
+      selectedFundingAssets: [{ assetId: 'usdc', useAmount: '251' }, { assetId: 'weth', useAmount: '0.0927' }],
+      availableFundingAssets: [],
+    };
+    uniswapApi.smartCreateFundingPlan.mockResolvedValue(plan);
+    uniswapApi.prepareCreatePosition.mockResolvedValue({ txPlan: [{ label: 'Create position (v4)' }] });
+    const { result } = render({
+      network: 'arbitrum', version: 'v3', token0Address: WETH, token1Address: USDC, totalUsdTarget: '500',
+    });
+    await waitFor(() => expect(result.current.tokenOptions.length).toBe(2));
+    await act(async () => { await result.current.handleAnalyzePool(); });
+
+    let ok;
+    await act(async () => { ok = await result.current.retryFromChain(); });
+
+    expect(ok).toBe(true);
+    expect(result.current.step).toBe('review');
+    expect(result.current.totalUsdTarget).toBe('500');
+    const prepareArgs = uniswapApi.prepareCreatePosition.mock.calls[0][0];
+    expect(prepareArgs.totalUsdTarget).toBe(500);
+    expect(prepareArgs.fundingSelections).toEqual([
+      { assetId: 'usdc', amount: '251', enabled: true },
+      { assetId: 'weth', amount: '0.0927', enabled: true },
+    ]);
+  });
+
+  it('si el recálculo del fondeo falla se queda en Fondeo con el problema', async () => {
+    uniswapApi.smartCreateFundingPlan.mockRejectedValue(new Error('saldo insuficiente'));
+    const { result } = render({
+      network: 'arbitrum', version: 'v3', token0Address: WETH, token1Address: USDC, totalUsdTarget: '500',
+    });
+    await waitFor(() => expect(result.current.tokenOptions.length).toBe(2));
+    await act(async () => { await result.current.handleAnalyzePool(); });
+
+    let ok;
+    await act(async () => { ok = await result.current.retryFromChain(); });
+
+    expect(ok).toBe(false);
+    expect(result.current.step).toBe('funding');
+    expect(uniswapApi.prepareCreatePosition).not.toHaveBeenCalled();
   });
 });

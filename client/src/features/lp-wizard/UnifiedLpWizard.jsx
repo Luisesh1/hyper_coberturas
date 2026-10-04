@@ -400,15 +400,21 @@ export default function UnifiedLpWizard({
               onRunPreflight={unified.runPreflight}
             />
             <footer className={styles.footer}>
-              <button type="button" className={styles.btn} onClick={unified.backFromProtection}>← Atrás</button>
+              {!unified.protectionRetryMode && (
+                <button type="button" className={styles.btn} onClick={unified.backFromProtection}>← Atrás</button>
+              )}
               <div className={styles.spacer} />
               <button
                 type="button"
                 className={styles.btnPrimary}
                 onClick={unified.handleContinueFromProtection}
-                disabled={unified.preflightBusy}
+                disabled={unified.preflightBusy || unified.commitBusy}
               >
-                {unified.preflightBusy ? 'Comprobando…' : 'Siguiente →'}
+                {unified.preflightBusy
+                  ? 'Comprobando…'
+                  : unified.commitBusy
+                    ? 'Abriendo la cobertura…'
+                    : unified.protectionRetryMode ? 'Reintentar la cobertura' : 'Siguiente →'}
               </button>
             </footer>
           </>
@@ -451,6 +457,8 @@ export default function UnifiedLpWizard({
             txHashes={flow.txHashes}
             explorerUrl={selectedNetwork?.explorerUrl || null}
             loadingMessage={unified.commitBusy ? 'Abriendo la cobertura y vinculando el orquestador…' : flow.loadingMessage}
+            awaitingWallet={flow.awaitingWallet}
+            onCancelWait={flow.cancelWalletWait}
           />
         )}
 
@@ -471,7 +479,7 @@ export default function UnifiedLpWizard({
           <StepOutcome
             outcome={unified.outcome}
             onClose={onClose}
-            onRetryProtection={unified.resetOutcome}
+            onRetryProtection={unified.enterProtectionRetry}
             onKeepWithoutProtection={onKeepWithoutProtection}
             onCloseLp={onCloseLp}
           />
@@ -488,6 +496,9 @@ export default function UnifiedLpWizard({
             // El del hook unificado, no el del flujo base: el reintento tiene
             // que invalidar tambien el pre-flight de cobertura y la intencion.
             handleReset={unified.handleReset}
+            // Conserva la configuración y recalcula fondeo y transacciones
+            // con el estado actual de la cadena; lo ya minado no se repite.
+            onRetryFromChain={isOrchestrated ? unified.retryFromChain : null}
             onClose={onClose}
           />
         )}

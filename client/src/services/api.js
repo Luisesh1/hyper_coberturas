@@ -311,8 +311,11 @@ export const lpOrchestratorApi = {
   commitIntent: (payload) =>
     request('POST', '/lp-orchestrators/commit-intent', payload, { timeoutMs: 120_000 }),
   // Reintenta cobertura + orquestador sobre el LP de una creación compensada.
-  retryCommit: (operationKey) =>
-    request('POST', '/lp-orchestrators/retry-commit', { operationKey }, { timeoutMs: 120_000 }),
+  retryCommit: (operationKey, protection = null) =>
+    request('POST', '/lp-orchestrators/retry-commit', {
+      operationKey,
+      ...(protection ? { protection } : {}),
+    }, { timeoutMs: 120_000 }),
   evaluate: (id) => request('POST', `/lp-orchestrators/${id}/evaluate`, {}),
   reconcile: (id) => request('POST', `/lp-orchestrators/${id}/reconcile`, {}, { timeoutMs: 60_000 }),
   attachLp: (id, payload) => request('POST', `/lp-orchestrators/${id}/attach-lp`, payload),

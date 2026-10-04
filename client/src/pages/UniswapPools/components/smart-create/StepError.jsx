@@ -12,6 +12,7 @@ export default function StepError({
   explorerUrl,
   failedTxLabel,
   handleReset,
+  onRetryFromChain = null,
   onClose,
 }) {
   return (
@@ -49,6 +50,11 @@ export default function StepError({
         )}
 
         <div className={styles.buttonGroup}>
+          {onRetryFromChain && (
+            <button type="button" className={styles.primaryBtn} onClick={onRetryFromChain}>
+              Reintentar desde aquí
+            </button>
+          )}
           <button type="button" className={styles.secondaryBtn} onClick={handleReset}>
             Empezar de nuevo
           </button>

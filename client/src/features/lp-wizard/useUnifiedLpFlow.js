@@ -106,6 +106,8 @@ export default function useUnifiedLpFlow({
 
   const [commitBusy, setCommitBusy] = useState(false);
   const [outcome, setOutcome] = useState(null);
+  // Clave de la creación compensada cuya cobertura se está reintentando.
+  const [protectionRetryKey, setProtectionRetryKey] = useState(null);
   const intentRef = useRef(null);
   const protectionDirtyRef = useRef(false);
   const walletAddressRef = useRef(null);
@@ -299,6 +301,7 @@ export default function useUnifiedLpFlow({
     if (walletAddressRef.current === nextAddress) return;
     walletAddressRef.current = nextAddress;
     setOutcome(null);
+    setProtectionRetryKey(null);
     setProtectionDone(false);
     setPreflight(null);
     setCommitBusy(false);
@@ -441,7 +444,7 @@ export default function useUnifiedLpFlow({
   /** Dry-run de la cobertura. Bloquea el avance a Revisión si no pasa. */
   const runPreflight = useCallback(async () => {
     if (!isOrchestrated) return { ok: true, skipped: true };
-    if (existingV4Pool?.swapReturnsDelta && !SWAP_DELTA_HOOK_POLICIES.includes(protection.policyVersion)) {
+    if (protection.enabled !== false && existingV4Pool?.swapReturnsDelta && !SWAP_DELTA_HOOK_POLICIES.includes(protection.policyVersion)) {
       const failed = {
         ok: false, checks: [],
         blockingReason: 'EVPLUSAI requiere la política terminal o de borde para cubrir un hook con retornos de delta en swaps.',
@@ -475,11 +478,33 @@ export default function useUnifiedLpFlow({
     }
   }, [isOrchestrated, buildPlan, protection, existingV4Pool]);
 
+  /**
+   * En modo reintento el LP ya está minado: superar la verificación previa
+   * lanza directamente cobertura + orquestador en el servidor con la
+   * configuración editada, sin volver a firmar.
+   */
   const handleContinueFromProtection = useCallback(async () => {
     const result = await runPreflight();
-    if (result?.ok) setProtectionDone(true);
+    if (!result?.ok) return result;
+    if (!protectionRetryKey) {
+      setProtectionDone(true);
+      return result;
+    }
+    setCommitBusy(true);
+    try {
+      const retried = await lpOrchestratorApi.retryCommit(protectionRetryKey, buildPlan().protection);
+      setProtectionRetryKey(null);
+      setOutcome(retried);
+      if (retried?.status === 'completed') onCompleted?.(retried);
+    } catch (err) {
+      const failed = { ok: false, checks: result.checks || [], blockingReason: err.message || 'No se pudo reintentar la cobertura.' };
+      setPreflight(failed);
+      return failed;
+    } finally {
+      setCommitBusy(false);
+    }
     return result;
-  }, [runPreflight]);
+  }, [runPreflight, protectionRetryKey, buildPlan, onCompleted]);
 
   /**
    * Registra la intención y lanza la firma. El orden importa: si el registro
@@ -519,9 +544,10 @@ export default function useUnifiedLpFlow({
   // máquina de estados del flujo base.
   const step = useMemo(() => {
     if (outcome) return UNIFIED_STEP.OUTCOME;
+    if (protectionRetryKey) return UNIFIED_STEP.PROTECTION;
     if (flow.step === STEP.REVIEW && isOrchestrated && !protectionDone) return UNIFIED_STEP.PROTECTION;
     return flow.step;
-  }, [outcome, flow.step, isOrchestrated, protectionDone]);
+  }, [outcome, protectionRetryKey, flow.step, isOrchestrated, protectionDone]);
 
   /**
    * Cambiar de red puede dejar la versión elegida sin soporte. En vez de
@@ -547,12 +573,27 @@ export default function useUnifiedLpFlow({
     flow.setStep(STEP.FUNDING);
   }, [flow]);
 
-  const resetOutcome = useCallback(() => {
+  /** Tras una creación compensada: vuelve a Cobertura con la configuración cargada. */
+  const enterProtectionRetry = useCallback(() => {
+    if (!intentRef.current) return;
+    setProtectionRetryKey(intentRef.current);
     setOutcome(null);
     setProtectionDone(false);
     setPreflight(null);
-    intentRef.current = null;
   }, []);
+
+  /**
+   * Fallo a mitad de las transacciones: conserva toda la configuración (y el
+   * capital) y rehace fondeo y prepare con el estado actual de la cadena. Lo
+   * ya minado no se repite porque el plan nuevo no lo necesita. La cobertura
+   * validada sigue valiendo: la configuración no cambió.
+   */
+  const retryFromChain = useCallback(async () => {
+    setOutcome(null);
+    setProtectionRetryKey(null);
+    intentRef.current = null;
+    return flow.retryFromChain();
+  }, [flow]);
 
   /**
    * Reintento tras un fallo de firma. Limpia el flujo base y ademas lo propio
@@ -564,14 +605,16 @@ export default function useUnifiedLpFlow({
    * plan. Si en el reintento cambiaba el par, la red o el capital, la
    * cobertura no se revalidaba nunca contra lo que realmente se iba a crear.
    */
+  // La configuración de cobertura se conserva: solo se descarta lo validado
+  // contra el plan anterior. El flujo base recalcula el capital con el saldo.
   const handleReset = useCallback(() => {
     setOutcome(null);
+    setProtectionRetryKey(null);
     setProtectionDone(false);
     setPreflight(null);
     intentRef.current = null;
-    resetProtection(flow.totalUsdTarget);
     flow.handleReset();
-  }, [flow, resetProtection]);
+  }, [flow]);
 
   return {
     flow,
@@ -617,7 +660,9 @@ export default function useUnifiedLpFlow({
     handleSignAndCreate,
     commitBusy,
     outcome,
-    resetOutcome,
+    enterProtectionRetry,
+    protectionRetryMode: Boolean(protectionRetryKey),
+    retryFromChain,
     handleReset,
   };
 }

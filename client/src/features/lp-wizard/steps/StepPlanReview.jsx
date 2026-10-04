@@ -131,7 +131,7 @@ export default function StepPlanReview({
         </h4>
         <ol className={styles.planList}>
           {steps.map((step, i) => (
-            <li key={step.label} className={styles.planRow}>
+            <li key={`${i}-${step.label}`} className={styles.planRow}>
               <span className={styles.planNum}>{i + 1}</span>
               <span className={styles.planLabel}>{step.label}</span>
               <span className={step.tag === 'on-chain' ? styles.tagOnChain : styles.tag}>{step.tag}</span>
