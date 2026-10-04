@@ -5,7 +5,7 @@
  * Mismo patrón estructural que `protected-pool-refresh.service.js`:
  *  - `start()` / `stop()` con guard `running`
  *  - errores por orquestador no abortan el loop completo
- *  - default 30 s, configurable vía `config.intervals.lpOrchestratorEvalMs`
+ *  - default 10 min, configurable vía `config.intervals.lpOrchestratorEvalMs`
  */
 
 const config = require('../config');

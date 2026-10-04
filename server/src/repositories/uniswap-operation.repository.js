@@ -208,7 +208,7 @@ async function claimByOperationKey(userId, operationKey, {
  * simultáneos no pueden reabrirla los dos. Deja el `finalizeResult` mínimo
  * en el resultado para que el worker pueda retomarla si el proceso muere.
  */
-async function reopenCompensated(userId, operationKey, { finalizeResult }, executor) {
+async function reopenCompensated(userId, operationKey, { finalizeResult, plan = null }, executor) {
   const now = Date.now();
   const { rows } = await exec(executor).query(
     `UPDATE position_action_operations
@@ -218,13 +218,14 @@ async function reopenCompensated(userId, operationKey, { finalizeResult }, execu
             error_code = NULL,
             error_message = NULL,
             finished_at = NULL,
-            updated_at = $4
+            updated_at = $4,
+            plan_json = COALESCE($5, plan_json)
       WHERE user_id = $1
         AND operation_key = $2
         AND kind = 'orchestrated_lp_create'
         AND status = 'compensated'
       RETURNING *`,
-    [userId, operationKey, toJson({ finalizeResult }), now]
+    [userId, operationKey, toJson({ finalizeResult }), now, plan ? toJson(plan) : null]
   );
   return mapRow(rows[0]);
 }

@@ -99,6 +99,19 @@ function resolvePositionIdentifier(finalizeResult) {
  * incluso cuando no se pudo resolver su identificador — los txHashes son la
  * única pista que le queda al usuario para encontrarlo.
  */
+/**
+ * Un hook externo que devuelve deltas en swaps solo se puede cubrir con las
+ * políticas que no derivan el hedge del flujo de swaps.
+ */
+function assertProtectionSupportsHooks(plan) {
+  if (!plan?.hooks || plan.v4DynamicFeeHookVersionId != null) return;
+  const { classifyHook, policyAllowsSwapDeltaHook } = require('../uniswap/v4-hook-safety');
+  if (plan.protection?.enabled !== false && !classifyHook(plan.hooks).safe
+    && !policyAllowsSwapDeltaHook(plan.protection?.policyVersion)) {
+    throw new Error('Este hook con retornos de delta en swaps requiere la política terminal_range_v1 o range_exit_v1.');
+  }
+}
+
 function buildSurvivingLp(plan, finalizeResult) {
   const snapshot = finalizeResult?.refreshedSnapshot || null;
   return {
@@ -159,11 +172,7 @@ class LpCreateSaga {
       }
     } else if (plan?.hooks) {
       if (!plan.poolId) throw new Error('Un pool dinámico externo requiere poolId antes de firmar.');
-      const { classifyHook, policyAllowsSwapDeltaHook } = require('../uniswap/v4-hook-safety');
-      if (plan.protection?.enabled !== false && !classifyHook(plan.hooks).safe
-        && !policyAllowsSwapDeltaHook(plan.protection?.policyVersion)) {
-        throw new Error('Este hook con retornos de delta en swaps requiere la política terminal_range_v1 o range_exit_v1.');
-      }
+      assertProtectionSupportsHooks(plan);
       const { assertExistingDynamicPool } = require('../uniswap/existing-dynamic-pool');
       await assertExistingDynamicPool({
         network: plan.network, version: plan.version,
@@ -291,7 +300,7 @@ class LpCreateSaga {
    * plan guardado. Se omite el snapshot del primer intento para que attachLp
    * lea uno fresco de la cadena.
    */
-  async retryCommit({ userId, operationKey }) {
+  async retryCommit({ userId, operationKey, protection = null }) {
     const operation = await this.operationRepo.getByOperationKey(userId, operationKey);
     if (!operation) {
       throw new Error(`No existe la intención ${operationKey}`);
@@ -310,11 +319,16 @@ class LpCreateSaga {
       throw noLp;
     }
 
+    // La configuración editada en el reintento se guarda en el plan para que
+    // el worker reanude con la misma si el proceso muere a mitad.
+    const plan = protection ? { ...operation.plan, protection } : null;
+    if (plan) assertProtectionSupportsHooks(plan);
+
     const finalizeResult = {
       positionIdentifier: String(survivingLp.positionIdentifier),
       txHashes: survivingLp.txHashes || operation.txHashes || [],
     };
-    const reopened = await this.operationRepo.reopenCompensated(userId, operationKey, { finalizeResult });
+    const reopened = await this.operationRepo.reopenCompensated(userId, operationKey, { finalizeResult, plan });
     if (!reopened) {
       const busy = new Error('La creación ya se está reintentando. Consulta el estado de la operación.');
       busy.code = 'OPERATION_IN_PROGRESS';
@@ -379,6 +393,7 @@ class LpCreateSaga {
         creationOperationId: operationId,
       });
 
+      this._evaluateInBackground(userId, attached?.id || orchestrator.id);
       return { status: 'completed', orchestrator: attached, survivingLp };
     } catch (err) {
       this.logger.warn?.('lp_orchestrator_create_saga_failed', {
@@ -401,6 +416,20 @@ class LpCreateSaga {
         needsManualReview: compensations.some((step) => step.ok === false),
       };
     }
+  }
+
+  /**
+   * El monitor evalúa cada 10 min por defecto: sin esto, el orquestador
+   * recién creado se ve sin rango ni cobertura hasta la siguiente vuelta.
+   * No bloquea la respuesta y un fallo no afecta a la creación.
+   */
+  _evaluateInBackground(userId, orchestratorId) {
+    if (!orchestratorId || typeof this.orchestratorService.evaluateOne !== 'function') return;
+    Promise.resolve()
+      .then(() => this.orchestratorService.evaluateOne(userId, orchestratorId))
+      .catch((err) => {
+        this.logger.warn?.('lp_orchestrator_initial_evaluation_failed', { orchestratorId, error: err.message });
+      });
   }
 
   /**

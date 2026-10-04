@@ -314,12 +314,12 @@ function makeSagaWithOperations({ attachLp } = {}) {
       Object.assign(op, patch);
       return op;
     },
-    async reopenCompensated(userId, operationKey, { finalizeResult }) {
+    async reopenCompensated(userId, operationKey, { finalizeResult, plan = null }) {
       const op = [...operations.values()].find(
         (o) => o.operationKey === operationKey && o.userId === userId && o.status === 'compensated'
       );
       if (!op) return null;
-      Object.assign(op, { status: 'committing', step: 'retry_pending', result: { finalizeResult } });
+      Object.assign(op, { status: 'committing', step: 'retry_pending', result: { finalizeResult }, ...(plan ? { plan } : {}) });
       return op;
     },
   };
@@ -514,6 +514,39 @@ test('reintento: rechaza una compensación sin LP superviviente', async () => {
   await assert.rejects(() => saga.retryCommit({ userId: 1, operationKey }), /LP/);
 });
 
+test('reintento: la configuración de cobertura editada se guarda en el plan y se usa', async () => {
+  const { saga, operations, operationKey, operationId, attachInputs } = await compensatedOperation();
+  const protection = { ...BASE_PLAN.protection, leverage: 5, policyVersion: 'range_exit_v1' };
+
+  const result = await saga.retryCommit({ userId: 1, operationKey, protection });
+
+  assert.equal(result.status, 'completed');
+  assert.equal(operations.get(operationId).plan.protection.leverage, 5);
+  assert.equal(attachInputs.at(-1).protectionConfig.leverage, 5);
+  assert.equal(attachInputs.at(-1).protectionConfig.policyVersion, 'range_exit_v1');
+});
+
+test('reintento: sin configuración nueva conserva la del plan', async () => {
+  const { saga, operations, operationKey, operationId } = await compensatedOperation();
+
+  await saga.retryCommit({ userId: 1, operationKey });
+
+  assert.equal(operations.get(operationId).plan.protection.leverage, BASE_PLAN.protection.leverage);
+});
+
+test('reintento: rechaza una política incompatible con un hook que devuelve deltas en swaps', async () => {
+  const { saga, operations, operationKey, operationId } = await compensatedOperation();
+  Object.assign(operations.get(operationId).plan, {
+    version: 'v4', hooks: '0xcB787A5cDEA8B3715d984d82F1203Fd7bFeBE0c4', poolId: '0xpool',
+  });
+
+  await assert.rejects(
+    () => saga.retryCommit({ userId: 1, operationKey, protection: { ...BASE_PLAN.protection, policyVersion: 'net_profit_v2' } }),
+    /terminal_range_v1 o range_exit_v1/
+  );
+  assert.equal(operations.get(operationId).status, 'compensated');
+});
+
 test('reintento: clave inexistente', async () => {
   const { saga } = makeSagaWithOperations();
   await assert.rejects(() => saga.retryCommit({ userId: 1, operationKey: 'no-existe' }), /No existe la intención/);
@@ -682,4 +715,29 @@ test('payload: rangeWidthDecoupled es un flag de UI y no se persiste', () => {
 
   assert.equal(payload.strategyConfig.rangeWidthPct, 12, 'el ancho desacoplado sí manda');
   assert.equal('rangeWidthDecoupled' in payload.strategyConfig, false);
+});
+
+// El monitor evalúa cada 10 min por defecto: sin una evaluación inmediata, el
+// orquestador recién creado se veía sin rango ni cobertura hasta la siguiente
+// vuelta aunque el hedge ya estuviera abierto.
+test('saga: evalúa el orquestador recién creado sin bloquear la respuesta', async () => {
+  const { saga } = makeSaga();
+  const evaluated = [];
+  saga.orchestratorService.evaluateOne = async (userId, id) => { evaluated.push({ userId, id }); };
+
+  const result = await saga.commit({ userId: 1, plan: BASE_PLAN, finalizeResult: FINALIZE });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(evaluated, [{ userId: 1, id: 7 }]);
+});
+
+test('saga: un fallo de la evaluación inmediata no cambia el resultado', async () => {
+  const { saga } = makeSaga();
+  saga.orchestratorService.evaluateOne = async () => { throw new Error('rpc caído'); };
+
+  const result = await saga.commit({ userId: 1, plan: BASE_PLAN, finalizeResult: FINALIZE });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.status, 'completed');
 });

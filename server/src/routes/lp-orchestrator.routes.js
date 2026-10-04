@@ -65,6 +65,7 @@ router.post('/retry-commit', validate(retryCommitSchema), asyncHandler(async (re
   const data = await createSaga.retryCommit({
     userId: req.user.userId,
     operationKey: req.body.operationKey,
+    protection: req.body.protection || null,
   });
   res.json({ success: true, data });
 }));

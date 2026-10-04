@@ -243,6 +243,8 @@ const commitIntentSchema = z.object({
 
 const retryCommitSchema = z.object({
   operationKey: z.string().min(1),
+  // Configuración de cobertura editada en el reintento; sin ella se usa la del plan.
+  protection: wizardProtectionSchema.optional(),
 });
 
 module.exports = {
