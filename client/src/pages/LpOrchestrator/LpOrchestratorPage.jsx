@@ -12,6 +12,8 @@ import ActionQueue from './components/ActionQueue';
 import { buildActionQueue } from './components/orchestratorSeverity';
 import PositionActionModal from '../UniswapPools/components/PositionActionModal';
 import UnifiedLpWizard from '../../features/lp-wizard/UnifiedLpWizard';
+import AdoptLpWizard from '../../features/lp-adopt/AdoptLpWizard';
+import CreateOrchestratorChooser from '../../features/lp-adopt/CreateOrchestratorChooser';
 import SmartAddLiquidityModal from '../UniswapPools/components/SmartAddLiquidityModal';
 import WalletConnectSetupModal from '../../components/shared/WalletConnectSetupModal';
 import { formatUsd } from '../UniswapPools/utils/pool-formatters';
@@ -31,7 +33,9 @@ export default function LpOrchestratorPage() {
   const [orchestrators, setOrchestrators] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [meta, setMeta] = useState(null);
+  const [showCreateChoice, setShowCreateChoice] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  const [showAdoptWizard, setShowAdoptWizard] = useState(false);
   // Orquestador que ya existe pero se quedo sin LP: el wizard crea la posicion
   // y luego se le adjunta con attach-lp.
   const [creatingLpFor, setCreatingLpFor] = useState(null); // orchestrator
@@ -579,7 +583,7 @@ export default function LpOrchestratorPage() {
           <button
             type="button"
             className={styles.primaryBtn}
-            onClick={() => setShowWizard(true)}
+            onClick={() => setShowCreateChoice(true)}
           >
             ＋ Crear orquestador
           </button>
@@ -723,6 +727,27 @@ export default function LpOrchestratorPage() {
           orquestador se creaba en BD y, si el segundo fallaba o se cerraba,
           quedaba huérfano sin LP. Ahora nada se persiste hasta que la saga
           confirma, y si algo falla se compensa. */}
+      {showCreateChoice && (
+        <CreateOrchestratorChooser
+          onClose={() => setShowCreateChoice(false)}
+          onCreateNew={() => { setShowCreateChoice(false); setShowWizard(true); }}
+          onAdoptExisting={() => { setShowCreateChoice(false); setShowAdoptWizard(true); }}
+        />
+      )}
+
+      {showAdoptWizard && (
+        <AdoptLpWizard
+          walletAddress={walletConn.address || ''}
+          meta={meta}
+          accounts={accounts}
+          defaultNetwork="arbitrum"
+          onClose={() => setShowAdoptWizard(false)}
+          onCompleted={() => {
+            refresh().catch(() => {});
+          }}
+        />
+      )}
+
       {showWizard && (
         <UnifiedLpWizard
           mode="orchestrated"

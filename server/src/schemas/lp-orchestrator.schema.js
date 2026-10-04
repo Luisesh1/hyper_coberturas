@@ -129,6 +129,35 @@ const strategyConfigPatchSchema = z.object({
   maxRangeWidthPct: z.number().positive().lt(100).optional(),
 });
 
+// Adopción de un LP existente por un orquestador nuevo. La identidad del pool
+// NO viaja: el servidor la relee de la cadena. Solo los campos editables.
+const adoptionCandidatesQuerySchema = z.object({
+  network: z.string().min(1),
+  walletAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+});
+
+const adoptProtectionSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('none') }),
+  z.object({ mode: z.literal('reuse') }),
+  z.object({
+    mode: z.literal('new'),
+    config: protectionConfigSchema.refine((value) => value.enabled === true, {
+      message: 'La cobertura nueva debe estar habilitada',
+    }),
+  }),
+]);
+
+const adoptLpSchema = z.object({
+  network: z.string().min(1),
+  version: z.enum(['v3', 'v4']),
+  walletAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  positionIdentifier: z.union([z.string().min(1), z.number().int().nonnegative()]).transform(String),
+  name: z.string().min(1).max(255).optional(),
+  initialTotalUsd: z.number().positive().optional(),
+  strategyConfig: strategyConfigPatchSchema.optional(),
+  protection: adoptProtectionSchema,
+});
+
 const updateOrchestratorConfigSchema = z.object({
   strategyConfig: strategyConfigPatchSchema.optional(),
   // La protección se reemplaza completa si viene (schema union enabled/disabled),
@@ -264,4 +293,6 @@ module.exports = {
   attachLpSchema,
   recordTxFinalizedSchema,
   killLpSchema,
+  adoptionCandidatesQuerySchema,
+  adoptLpSchema,
 };

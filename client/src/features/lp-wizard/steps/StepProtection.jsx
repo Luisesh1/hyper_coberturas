@@ -23,6 +23,7 @@ export default function StepProtection({
   currentPrice,
   rangeLowerPrice,
   rangeUpperPrice,
+  allowedPolicies = null,
   preflight,
   preflightBusy,
   onRunPreflight,
@@ -42,6 +43,7 @@ export default function StepProtection({
         currentPrice={currentPrice}
         rangeLowerPrice={rangeLowerPrice}
         rangeUpperPrice={rangeUpperPrice}
+        allowedPolicies={allowedPolicies}
       />
 
       {!disabled && (

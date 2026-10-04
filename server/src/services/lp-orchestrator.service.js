@@ -207,6 +207,9 @@ class LpOrchestratorService {
     protectionConfig,
     protectionFailureMode = 'strict',
     creationOperationId = null,
+    // Adopción de un LP que ya tiene cobertura: se vincula la existente en
+    // vez de abrir un segundo short sobre la misma posición.
+    existingProtectedPoolId = null,
   }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
@@ -221,8 +224,8 @@ class LpOrchestratorService {
     }
     const refreshedSnapshot = finalizeResult?.refreshedSnapshot || null;
 
-    let protectedPoolId = null;
-    if (protectionConfig && protectionConfig.enabled !== false) {
+    let protectedPoolId = existingProtectedPoolId != null ? Number(existingProtectedPoolId) : null;
+    if (protectedPoolId == null && protectionConfig && protectionConfig.enabled !== false) {
       try {
         const pool = refreshedSnapshot
           || await this._loadProtectionSnapshot(orch, newPositionIdentifier);

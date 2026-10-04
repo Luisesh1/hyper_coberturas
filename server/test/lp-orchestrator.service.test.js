@@ -1568,3 +1568,31 @@ test('_recoverMissingProtection NO reutiliza una proteccion delta-neutral activa
   const after = await repo.getById(3, id);
   assert.equal(after.activeProtectedPoolId, null);
 });
+
+test('attachLp con existingProtectedPoolId vincula esa cobertura sin crear otra', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    activePositionIdentifier: null,
+    activePoolAddress: null,
+    phase: 'idle',
+  });
+  // Si intentara crear una protección, este servicio lanzaría.
+  const service = makeServiceWithFailingProtection(repo);
+
+  await service.attachLp({
+    userId: 1,
+    orchestratorId: id,
+    finalizeResult: {
+      txHashes: [],
+      positionChanges: { newPositionIdentifier: '999' },
+      refreshedSnapshot: { identifier: '999', poolAddress: '0xpool2' },
+    },
+    protectionConfig: { enabled: true, accountId: 2, leverage: 3 },
+    existingProtectedPoolId: 31,
+    protectionFailureMode: 'strict',
+  });
+
+  const orch = await repo.getById(1, id);
+  assert.equal(orch.phase, 'lp_active');
+  assert.equal(orch.activeProtectedPoolId, 31);
+});

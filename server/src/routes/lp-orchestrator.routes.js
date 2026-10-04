@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const asyncHandler = require('../middleware/async-handler');
 const { authenticate } = require('../middleware/auth.middleware');
-const { validate } = require('../middleware/validate.middleware');
+const { validate, validateQuery } = require('../middleware/validate.middleware');
 const { requireIntParam } = require('../middleware/parse-params');
 const lpOrchestratorService = require('../services/lp-orchestrator.service');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
@@ -17,12 +17,16 @@ const {
   createIntentSchema,
   commitIntentSchema,
   retryCommitSchema,
+  adoptionCandidatesQuerySchema,
+  adoptLpSchema,
 } = require('../schemas/lp-orchestrator.schema');
+const { LpAdoptionService } = require('../services/lp-orchestrator/adoption');
 
 const router = Router();
 router.use(authenticate);
 
 const createSaga = new LpCreateSaga();
+const adoptionService = new LpAdoptionService();
 
 // ── Wizard unificado ───────────────────────────────────────────────────────
 
@@ -68,6 +72,25 @@ router.post('/retry-commit', validate(retryCommitSchema), asyncHandler(async (re
     protection: req.body.protection || null,
   });
   res.json({ success: true, data });
+}));
+
+// ── Adopción de un LP existente por un orquestador nuevo ──────────────────
+
+// Posiciones de la wallet en la red, con la configuración precargada que
+// saldría de cada una y el motivo si no se puede adoptar.
+router.get('/adoption-candidates', validateQuery(adoptionCandidatesQuerySchema), asyncHandler(async (req, res) => {
+  const data = await adoptionService.listCandidates({
+    userId: req.user.userId,
+    network: req.query.network,
+    walletAddress: req.query.walletAddress,
+  });
+  res.json({ success: true, data });
+}));
+
+// Crea el orquestador sobre la posición. No firma nada on-chain.
+router.post('/adopt', validate(adoptLpSchema), asyncHandler(async (req, res) => {
+  const data = await adoptionService.adopt({ userId: req.user.userId, ...req.body });
+  res.status(201).json({ success: true, data });
 }));
 
 router.get('/', asyncHandler(async (req, res) => {

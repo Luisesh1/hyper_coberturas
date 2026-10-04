@@ -316,6 +316,13 @@ export const lpOrchestratorApi = {
       operationKey,
       ...(protection ? { protection } : {}),
     }, { timeoutMs: 120_000 }),
+  // Adopción de un LP existente por un orquestador nuevo (sin firmas).
+  listAdoptionCandidates: ({ network, walletAddress }) => {
+    const params = new URLSearchParams({ network, walletAddress });
+    return request('GET', `/lp-orchestrators/adoption-candidates?${params.toString()}`, null, { timeoutMs: 90_000 });
+  },
+  adoptExistingLp: (payload) =>
+    request('POST', '/lp-orchestrators/adopt', payload, { timeoutMs: 120_000 }),
   evaluate: (id) => request('POST', `/lp-orchestrators/${id}/evaluate`, {}),
   reconcile: (id) => request('POST', `/lp-orchestrators/${id}/reconcile`, {}, { timeoutMs: 60_000 }),
   attachLp: (id, payload) => request('POST', `/lp-orchestrators/${id}/attach-lp`, payload),

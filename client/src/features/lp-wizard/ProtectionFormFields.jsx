@@ -52,6 +52,14 @@ export const TERMINAL_RANGE_PROFILE = Object.freeze({ threshold: 0.4, confirmMin
 // margen se dimensiona para ese pico, igual que el preflight del servidor.
 export const TERMINAL_MAX_HEDGE = 1.5;
 
+const POLICY_OPTIONS = [
+  { value: 'legacy_zones_v1', label: 'Zonas legacy — motor en producción' },
+  { value: 'net_profit_v1', label: 'Net profit — bandas por coste neto' },
+  { value: 'net_profit_v2', label: 'Net profit V2 — ajuste parcial y límites de rotación' },
+  { value: 'range_exit_v1', label: 'Borde de rango — cubre al abrir y sólo reajusta al salir/entrar' },
+  { value: 'terminal_range_v1', label: 'Terminal — resultado en dólares a cero al llegar al borde' },
+];
+
 const DEFAULT_PROTECTION = Object.freeze({
   enabled: false,
   accountId: '',
@@ -308,6 +316,9 @@ export default function ProtectionFormFields({
   currentPrice = null,
   rangeLowerPrice = null,
   rangeUpperPrice = null,
+  // Políticas permitidas por el pool (p. ej. un hook con deltas en swaps).
+  // `null` = todas. Las demás se muestran deshabilitadas, no se esconden.
+  allowedPolicies = null,
 }) {
   const raw = value || {};
   // Las protecciones persistidas antes de que existiera el modo auto no traen
@@ -564,11 +575,14 @@ export default function ProtectionFormFields({
             <div className={styles.field}>
               <label>Política de cobertura</label>
               <select value={v.policyVersion} onChange={(e) => handlePolicyChange(e.target.value)}>
-                <option value="legacy_zones_v1">Zonas legacy — motor en producción</option>
-                <option value="net_profit_v1">Net profit — bandas por coste neto</option>
-                <option value="net_profit_v2">Net profit V2 — ajuste parcial y límites de rotación</option>
-                <option value="range_exit_v1">Borde de rango — cubre al abrir y sólo reajusta al salir/entrar</option>
-                <option value="terminal_range_v1">Terminal — resultado en dólares a cero al llegar al borde</option>
+                {POLICY_OPTIONS.map((option) => {
+                  const blocked = Array.isArray(allowedPolicies) && !allowedPolicies.includes(option.value);
+                  return (
+                    <option key={option.value} value={option.value} disabled={blocked}>
+                      {option.label}{blocked ? ' (no admitida por el hook del pool)' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
