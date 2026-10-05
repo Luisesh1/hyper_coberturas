@@ -708,6 +708,26 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
     expect(result.current.version).toBe('v4');
   });
 
+  it('expone la recomendación ATR para ETH/USDG (Robinhood) sin recomendar net_profit_v2', () => {
+    const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
+    const { result } = renderFlow({
+      token1Address: USDG,
+      tokenList: [
+        { symbol: 'WETH', address: WETH, decimals: 18 },
+        { symbol: 'USDG', address: USDG, decimals: 6 },
+      ],
+      suggestions: {
+        token0: { symbol: 'WETH', address: WETH, decimals: 18 },
+        token1: { symbol: 'USDG', address: USDG, decimals: 6 },
+        currentPrice: 2000,
+        ethUsdcRangeRecommendation: { halfWidthPct: 4.2, widthPct: 8.4, requiresConfirmation: false },
+      },
+    });
+    expect(result.current.ethUsdcRangeRecommendation.halfWidthPct).toBe(4.2);
+    expect(result.current.ethUsdcRangeRecommendation.pairLabel).toBe('ETH/USDG');
+    expect(result.current.protection.policyVersion).not.toBe('net_profit_v2');
+  });
+
   it('no expone la recomendación ATR en standalone ni para otros pares', () => {
     const standalone = renderHook(() => useUnifiedLpFlow({
       mode: 'standalone',
@@ -745,5 +765,40 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
       executionIntent: 'live',
     }));
     expect(result.current.buildPlan().protection.policyVersion).toBe('legacy_zones_v1');
+  });
+});
+
+describe('useUnifiedLpFlow — capital de la cobertura', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lpOrchestratorApi.preflightProtection.mockResolvedValue({ ok: true, checks: [] });
+    smartContractRegistryApi.listVerifiedHooks.mockResolvedValue([]);
+    uniswapApi.getSmartCreatePools.mockResolvedValue({ pools: [] });
+  });
+
+  // Prueba real en Base (2026-10-04): objetivo $520, desplegable ~$456. El
+  // notional y el margen se calculaban sobre los $520.
+  const FUNDED = { fundingPlan: { fundingPlan: { totalUsdTarget: 520, deployableUsd: 456 } }, totalUsdTarget: '520' };
+
+  it('usa lo desplegable del plan de fondeo y no el objetivo', async () => {
+    const { result } = renderFlow(FUNDED);
+    expect(result.current.hedgeCapitalUsd).toBe(456);
+
+    await act(async () => {
+      await result.current.runPreflight();
+    });
+    expect(lpOrchestratorApi.preflightProtection.mock.calls[0][0].capitalUsd).toBe(456);
+  });
+
+  it('cae al objetivo mientras no hay plan de fondeo', () => {
+    const { result } = renderFlow({ totalUsdTarget: '520', fundingPlan: null });
+    expect(result.current.hedgeCapitalUsd).toBe(520);
+  });
+
+  it('el notional sugerido sigue a lo desplegable', () => {
+    const funded = renderFlow(FUNDED);
+    const reference = renderFlow({ totalUsdTarget: '456', fundingPlan: null });
+    expect(funded.result.current.protection.configuredNotionalUsd)
+      .toBe(reference.result.current.protection.configuredNotionalUsd);
   });
 });

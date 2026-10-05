@@ -390,7 +390,7 @@ export default function UnifiedLpWizard({
               accounts={accounts}
               lpWalletAddress={ownerWalletAddress}
               defaultLeverage={isOrchestrated ? '10' : '5'}
-              capitalUsd={Number(flow.totalUsdTarget) || 0}
+              capitalUsd={unified.hedgeCapitalUsd || 0}
               rangeWidthPct={unified.effectiveRangeWidthPct}
               currentPrice={flow.suggestions?.currentPrice}
               rangeLowerPrice={flow.activeRange?.rangeLowerPrice}

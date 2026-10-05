@@ -257,6 +257,14 @@ export default function useUnifiedLpFlow({
     if ((v4DynamicFeeHook || existingV4Pool) && Number(selectedFee) !== DYNAMIC_FEE_FLAG) setSelectedFee(DYNAMIC_FEE_FLAG);
   }, [v4DynamicFeeHook, existingV4Pool, selectedFee, setSelectedFee]);
 
+  // Capital que de verdad entra en el LP: lo desplegable del plan de fondeo
+  // cuando ya existe, y el objetivo mientras no. La cobertura se dimensiona
+  // sobre él, y es también el capital que persiste el orquestador.
+  const deployableUsd = Number(flow.fundingPlan?.fundingPlan?.deployableUsd);
+  const hedgeCapitalUsd = Number.isFinite(deployableUsd) && deployableUsd > 0
+    ? deployableUsd
+    : Number(flow.totalUsdTarget);
+
   const resetProtection = useCallback((targetUsd = 0) => {
     protectionDirtyRef.current = false;
     setProtectionState(buildDefaultProtection(
@@ -271,7 +279,7 @@ export default function useUnifiedLpFlow({
   // cobertura manualmente.
   useEffect(() => {
     if (!isOrchestrated || protectionDirtyRef.current) return;
-    const targetUsd = Number(flow.totalUsdTarget);
+    const targetUsd = hedgeCapitalUsd;
     if (!Number.isFinite(targetUsd) || targetUsd <= 0) return;
     const suggested = buildDefaultProtection(targetUsd, null, { enabled: true, leverage: '10' });
     setProtectionState((current) => {
@@ -287,7 +295,7 @@ export default function useUnifiedLpFlow({
         configuredNotionalUsd: suggested.configuredNotionalUsd,
       };
     });
-  }, [flow.totalUsdTarget, isOrchestrated]);
+  }, [hedgeCapitalUsd, isOrchestrated]);
 
   // Cambiar de wallet invalida la intención, el pre-flight y cualquier dato
   // preparado para la dirección anterior. El hook base también limpia sus
@@ -414,7 +422,7 @@ export default function useUnifiedLpFlow({
         hooks: v4DynamicFeeHook.address,
         v4DynamicFeeHookVersionId: Number(v4DynamicFeeHook.versionId),
       } : {}),
-      capitalUsd: Number(flow.totalUsdTarget),
+      capitalUsd: hedgeCapitalUsd,
       rangeLowerPrice: Number(flow.activeRange?.rangeLowerPrice),
       rangeUpperPrice: Number(flow.activeRange?.rangeUpperPrice),
       priceCurrent: Number(
@@ -437,7 +445,7 @@ export default function useUnifiedLpFlow({
   }, [
     mode, isOrchestrated, effectiveName, wallet, protection, strategy,
     effectiveRangeWidthPct, v4TickSpacingOverride, flow.network, flow.version, flow.token0Address,
-    flow.token1Address, effectiveFeeTier, flow.totalUsdTarget, flow.activeRange,
+    flow.token1Address, effectiveFeeTier, hedgeCapitalUsd, flow.activeRange,
     flow.suggestions, symbolForAddress, v4DynamicFeeHook, existingV4Pool,
   ]);
 
@@ -644,6 +652,7 @@ export default function useUnifiedLpFlow({
     setStrategy,
     protection,
     setProtection: handleProtectionChange,
+    hedgeCapitalUsd,
 
     derivedRangeWidthPct,
     effectiveRangeWidthPct,
