@@ -417,9 +417,12 @@ async function getReceiptWithFallback(provider, networkConfig, txHash, apiKey = 
   }
 }
 
-async function findV3MintTxFromLogs({ provider, networkConfig, tokenId }) {
+// v3 y v4 son ERC-721: el mint emite Transfer(0x0 -> owner, tokenId) desde su
+// PositionManager. Sirve cuando la posicion llega sin tx de mint (p. ej. los
+// IDs v4 que salen de la API NFT de Alchemy).
+async function findMintTxFromLogs({ provider, networkConfig, version = 'v3', tokenId }) {
   if (!provider || !tokenId) return null;
-  const positionManagerAddress = networkConfig?.deployments?.v3?.positionManager;
+  const positionManagerAddress = networkConfig?.deployments?.[version]?.positionManager;
   if (!positionManagerAddress) return null;
   try {
     const tokenIdHex = ethers.zeroPadValue(ethers.toBeHex(BigInt(tokenId)), 32);
@@ -445,7 +448,7 @@ async function findV3MintTxFromLogs({ provider, networkConfig, tokenId }) {
       if (latest - to > 200_000) break;
     }
   } catch (err) {
-    logger.warn('find_v3_mint_tx_failed', { tokenId: String(tokenId), error: err.message });
+    logger.warn('find_mint_tx_failed', { version, tokenId: String(tokenId), error: err.message });
   }
   return null;
 }
@@ -497,10 +500,11 @@ async function resolveInitialValuation({
   };
 
   let resolvedTxHash = record?.txHash || null;
-  if (!resolvedTxHash && record?.identifier && record?.version === 'v3') {
-    const discovered = await findV3MintTxFromLogs({
+  if (!resolvedTxHash && record?.identifier && (record?.version === 'v3' || record?.version === 'v4')) {
+    const discovered = await findMintTxFromLogs({
       provider,
       networkConfig,
+      version: record.version,
       tokenId: record.identifier,
     });
     if (discovered) {
@@ -795,6 +799,7 @@ module.exports = {
   normalizeReceiptShape,
   inferSpotPriceFromLpAmounts,
   extractMintInputAmounts,
+  findMintTxFromLogs,
   resolveInitialValuation,
   decodeV4PositionInfo,
   resolveHistoricalSpotPrice,

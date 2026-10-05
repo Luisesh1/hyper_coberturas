@@ -51,8 +51,10 @@ export function getProtectionButtonState(pool, hasAccounts) {
 export function getRangeBarData(pool) {
   const lower = Number(pool.rangeLowerPrice);
   const upper = Number(pool.rangeUpperPrice);
-  const open = Number(pool.priceAtOpen);
-  const current = Number(pool.priceCurrent);
+  // Number(null) es 0: sin este filtro una apertura desconocida se pintaba
+  // como precio 0, pegada al borde izquierdo de la barra.
+  const open = pool.priceAtOpen == null ? NaN : Number(pool.priceAtOpen);
+  const current = pool.priceCurrent == null ? NaN : Number(pool.priceCurrent);
 
   if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower === upper) return null;
 
