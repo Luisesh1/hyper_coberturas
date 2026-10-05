@@ -774,6 +774,47 @@ test('recordTxFinalized NO recalcula gas si el cliente ya envió gasCostUsd', as
   assert.equal(o.accounting.gasSpentUsd, 1.25);
 });
 
+// Regresion del orquestador #57: tras reinvertir $20.6 de fees el P&L neto
+// salto de +$19.68 a +$35.76. Las fees ya estaban en `lpFeesUsd` y, al pasar
+// al principal, la siguiente evaluacion las contaba otra vez como deriva.
+test('recordTxFinalized reinvest-fees mueve la baseline de deriva y no toca el P&L', async () => {
+  const repo = makeFakeRepo();
+  const id = await bootstrapOrchestrator(repo, {
+    accounting: { ...accounting.DEFAULT_ACCOUNTING, lpFeesUsd: 20.6, priceDriftUsd: 0.75 },
+    lastEvaluation: { poolSnapshot: { currentValueUsd: 215, unclaimedFeesUsd: 20.6 } },
+  });
+  const service = new LpOrchestratorService({
+    lpOrchestratorRepository: repo,
+    notifier: makeFakeNotifier(),
+    logger: { warn: () => {}, info: () => {}, error: () => {} },
+    db: fakeDb,
+  });
+
+  await service.recordTxFinalized({
+    userId: 1,
+    orchestratorId: id,
+    action: 'reinvest-fees',
+    finalizeResult: {
+      txHashes: ['0xreinvest'],
+      refreshedSnapshot: { currentValueUsd: 235.4, unclaimedFeesUsd: 0 },
+    },
+    expected: { gasCostUsd: 0.01, slippageCostUsd: 0 },
+  });
+
+  const o = await repo.getById(1, id);
+  assert.equal(o.lastEvaluation.poolSnapshot.currentValueUsd, 235.4);
+  assert.ok(Math.abs(o.accounting.capitalAdjustmentsUsd - 20.4) < 1e-9);
+  assert.equal(o.accounting.lpFeesUsd, 20.6, 'las fees no se cuentan dos veces');
+
+  // La siguiente evaluacion, sin movimiento de precio, no agrega deriva.
+  const delta = accounting.computeAccountingDelta(
+    o.lastEvaluation.poolSnapshot,
+    { currentValueUsd: 235.4, unclaimedFeesUsd: 0 }
+  );
+  assert.equal(delta.priceDriftDelta, 0);
+  assert.equal(delta.lpFeesDelta, 0);
+});
+
 // ─── Flujo del botón "Cerrar y archivar" (kill mode 'keep' + archive) ───────
 // El botón encadena: killLp(mode:'keep') → firma en la wallet →
 // recordTxFinalized → archive. Los tests cubren cada eslabón y los dos

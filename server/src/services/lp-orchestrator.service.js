@@ -850,7 +850,13 @@ class LpOrchestratorService {
     // `capitalAdjustmentsUsd` y se usa para resetear el baseline de
     // price-drift abajo, así la próxima evaluación no contabiliza el cambio
     // de capital como deriva de precio.
-    const isCapitalAction = action === 'increase-liquidity' || action === 'decrease-liquidity';
+    // reinvest-fees tambien: las fees ya se contaron en `lpFeesUsd` al crecer
+    // sin cobrar, y al pasar al principal suben `currentValueUsd` (que no las
+    // incluye). Sin el reset, la siguiente evaluacion las sumaba otra vez como
+    // deriva de precio.
+    const isCapitalAction = action === 'increase-liquidity'
+      || action === 'decrease-liquidity'
+      || action === 'reinvest-fees';
     let capitalDeltaUsd = 0;
     if (isCapitalAction && refreshedSnapshot && orch.lastEvaluation?.poolSnapshot) {
       const prevValue = Number(orch.lastEvaluation.poolSnapshot.currentValueUsd) || 0;
