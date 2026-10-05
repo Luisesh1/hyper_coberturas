@@ -12,6 +12,7 @@ const {
   pickTargetTokenByUsdDeficit,
   sortTokensByAddress,
   sumSelectedFundingUsd,
+  sumUsableFundingUsd,
 } = require('../src/services/smart-pool-creator.service');
 
 // Caso real: una wallet con $167 en Arbitrum (USDC 63.92, USDT 50.43, WETH
@@ -59,7 +60,7 @@ test('computeRangeSuggestions genera presets ATR y fallback validos', () => {
   assert.ok(fallbackSuggestions[2].widthPct > 0);
 });
 
-test('la sugerencia del wizard sólo publica el rango ATR para ETH/WETH+USDC', () => {
+test('la sugerencia del wizard sólo publica el rango ATR para ETH/WETH+USDC|USDG', () => {
   assert.deepEqual(
     buildEthUsdcRangeRecommendation({ token0Symbol: 'WETH', token1Symbol: 'USDC', atr14: 100, currentPrice: 2000 }),
     {
@@ -68,6 +69,14 @@ test('la sugerencia del wizard sólo publica el rango ATR para ETH/WETH+USDC', (
       source: 'max_4_2pct_or_3atr',
       requiresConfirmation: true,
     }
+  );
+  assert.equal(
+    buildEthUsdcRangeRecommendation({ token0Symbol: 'ETH', token1Symbol: 'USDG', atr14: 100, currentPrice: 2000 }).halfWidthPct,
+    15
+  );
+  assert.equal(
+    buildEthUsdcRangeRecommendation({ token0Symbol: 'WETH', token1Symbol: 'USDT', atr14: 100, currentPrice: 2000 }),
+    null
   );
   assert.equal(
     buildEthUsdcRangeRecommendation({ token0Symbol: 'ARB', token1Symbol: 'USDC', atr14: 100, currentPrice: 2 }),
@@ -305,4 +314,20 @@ test('pickTargetTokenByUsdDeficit prioriza el deficit económico real y no el ra
   });
 
   assert.equal(picked.symbol, 'USDC');
+});
+
+// El «Total disponible» del paso de fondeo salía en $0 con saldo: la cifra
+// solo se calculaba en los diagnósticos de un plan fallido, y la respuesta
+// exitosa no la traía.
+test('sumUsableFundingUsd suma el USD de todos los activos disponibles', () => {
+  assert.equal(sumUsableFundingUsd([
+    { symbol: 'ETH', usdValue: 259.4 },
+    { symbol: 'USDC', usdValue: '233.1' },
+    { symbol: 'XYZ', usdValue: null },
+  ]), 492.5);
+});
+
+test('sumUsableFundingUsd devuelve 0 sin activos', () => {
+  assert.equal(sumUsableFundingUsd(undefined), 0);
+  assert.equal(sumUsableFundingUsd([{ usdValue: 'NaN' }]), 0);
 });

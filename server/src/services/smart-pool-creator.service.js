@@ -213,10 +213,13 @@ function resolveVolatileAsset(token0Symbol, token1Symbol) {
 // La recomendación especial debe viajar en la misma respuesta que el precio y
 // el ATR que la originan. No se infiere en el cliente: así se conserva la
 // fórmula versionada y el fallback de servidor para todos los wizard.
+// USDG es el stable de Robinhood Chain: ETH/USDG es el mismo par económico.
+const ETH_RANGE_RECOMMENDATION_QUOTES = ['USDC', 'USDG'];
 function buildEthUsdcRangeRecommendation({ token0Symbol, token1Symbol, atr14, currentPrice } = {}) {
   const symbols = [token0Symbol, token1Symbol].map((symbol) => normalizeSymbol(symbol));
-  const isEthUsdc = symbols.includes('USDC') && symbols.some((symbol) => symbol === 'ETH' || symbol === 'WETH');
-  if (!isEthUsdc) return null;
+  const isEthStable = symbols.some((symbol) => ETH_RANGE_RECOMMENDATION_QUOTES.includes(symbol))
+    && symbols.some((symbol) => symbol === 'ETH' || symbol === 'WETH');
+  if (!isEthStable) return null;
   return recommendEthUsdcHalfWidthPct({ atr14h: atr14, price: currentPrice });
 }
 
@@ -478,6 +481,20 @@ function sumSelectedFundingUsd(selectedAssets = []) {
   }, 0);
 }
 
+/**
+ * USD total de los activos de fondeo disponibles en la red. Es el «Total
+ * disponible» del paso de fondeo, así que va tanto en la respuesta del plan
+ * como en los diagnósticos de uno fallido.
+ */
+function sumUsableFundingUsd(availableFundingAssets) {
+  const total = (availableFundingAssets || []).reduce((sum, asset) => {
+    const usdValue = Number(asset?.usdValue || 0);
+    if (!Number.isFinite(usdValue)) return sum;
+    return sum + usdValue;
+  }, 0);
+  return Number(total.toFixed(2));
+}
+
 function summarizeFundingDiagnostics({
   network,
   fundingUniverse,
@@ -490,11 +507,7 @@ function summarizeFundingDiagnostics({
   const totalTarget = Number(totalUsdTarget || 0);
   const nativeAsset = (availableFundingAssets || []).find((asset) => asset.isNative) || null;
   const gasReserve = fundingUniverse?.gasReserve || null;
-  const usableFundingUsd = (availableFundingAssets || []).reduce((sum, asset) => {
-    const usdValue = Number(asset.usdValue || 0);
-    if (!Number.isFinite(usdValue)) return sum;
-    return sum + usdValue;
-  }, 0);
+  const usableFundingUsd = sumUsableFundingUsd(availableFundingAssets);
 
   return {
     network,
@@ -517,7 +530,7 @@ function summarizeFundingDiagnostics({
     totalUsdTarget: totalTarget,
     deployableUsd: Number(Number(deployableUsd || 0).toFixed(2)),
     missingUsd: Number(Math.max(totalTarget - Number(deployableUsd || 0), 0).toFixed(2)),
-    usableFundingUsd: Number(usableFundingUsd.toFixed(2)),
+    usableFundingUsd,
     selectedUsd: selectedUsd == null ? null : Number(Number(selectedUsd).toFixed(2)),
     warnings,
     sameNetworkOnly: true,
@@ -1989,6 +2002,7 @@ async function buildFundingPlan({
     targetWeightToken0Pct: Number(targetWeightToken0Pct),
     gasReserve: fundingUniverse.gasReserve,
     availableFundingAssets: fundingUniverse.assets,
+    usableFundingUsd: sumUsableFundingUsd(fundingUniverse.assets),
     selectedFundingAssets,
     fundingPlan: {
       totalUsdTarget: Number(totalUsdTarget),
@@ -2402,4 +2416,5 @@ module.exports = {
   resolveBestRoute,
   sortTokensByAddress,
   sumSelectedFundingUsd,
+  sumUsableFundingUsd,
 };
