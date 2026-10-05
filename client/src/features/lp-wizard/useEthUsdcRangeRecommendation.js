@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+
+const RANGE_RECOMMENDATION_QUOTES = ['USDC', 'USDG'];
 
 /**
- * Recomendación de rango ATR y política de cobertura para ETH/WETH + USDC.
+ * Recomendación de rango ATR para ETH/WETH + USDC|USDG.
  *
  * Vive fuera de `useUnifiedLpFlow` porque es una regla acotada a un par y a un
  * modo (orquestado): mezclarla con el resto del flujo la volvía invisible
@@ -11,56 +13,25 @@ export default function useEthUsdcRangeRecommendation({
   isOrchestrated,
   flow,
   symbolForAddress,
-  setProtectionState,
-  protectionDirtyRef,
 }) {
-  const isEthUsdcPair = useMemo(() => {
-    const symbols = [
-      symbolForAddress(flow.token0Address),
-      symbolForAddress(flow.token1Address),
-    ].map((symbol) => String(symbol || '').toUpperCase());
-    return symbols.includes('USDC') && symbols.some((symbol) => symbol === 'ETH' || symbol === 'WETH');
-  }, [flow.token0Address, flow.token1Address, symbolForAddress]);
+  const pairSymbols = useMemo(() => [
+    symbolForAddress(flow.token0Address),
+    symbolForAddress(flow.token1Address),
+  ].map((symbol) => String(symbol || '').toUpperCase()), [flow.token0Address, flow.token1Address, symbolForAddress]);
 
-  // La recomendación es un default del wizard, no una regla que sobrescriba
-  // una selección del usuario. Al cambiar de par, sólo se restablece mientras
-  // la protección siga intacta desde el valor recomendado.
-  useEffect(() => {
-    if (!isOrchestrated || protectionDirtyRef.current) return;
-    // La recomendacion es una POLITICA, no un modo de ejecucion: ya no entra
-    // en sombra, porque el formulario dejo de ofrecer sombra y lo que se ve
-    // seleccionado es lo que opera. El usuario la ve en el desplegable y la
-    // puede cambiar; dejarla recomendada pero corriendo legacy seria otra vez
-    // la UI diciendo una cosa y el hedge haciendo otra.
-    setProtectionState((current) => {
-      if (isEthUsdcPair) {
-        if (current.policyVersion === 'net_profit_v2') return current;
-        return {
-          ...current,
-          policyVersion: 'net_profit_v2',
-          executionIntent: 'live',
-          activationConfirmed: true,
-        };
-      }
-      // Al salir del par solo se deshace la recomendacion, no una eleccion
-      // manual: si el usuario ya habia elegido otra, no se toca.
-      if (current.policyVersion !== 'net_profit_v2') return current;
-      return {
-        ...current,
-        policyVersion: 'legacy_zones_v1',
-        executionIntent: 'live',
-        activationConfirmed: true,
-      };
-    });
-  }, [isOrchestrated, isEthUsdcPair, protectionDirtyRef, setProtectionState]);
+  const isEthPair = pairSymbols.some((symbol) => symbol === 'ETH' || symbol === 'WETH');
+  // El rango ATR también aplica a ETH/USDG (el stable de Robinhood Chain).
+  const rangeQuoteSymbol = isEthPair
+    ? RANGE_RECOMMENDATION_QUOTES.find((symbol) => pairSymbols.includes(symbol)) || null
+    : null;
 
-  // El backend publica esta recomendación sólo para ETH/WETH+USDC junto con
+  // El backend publica esta recomendación sólo para ETH/WETH+USDC|USDG junto con
   // el ATR y el precio usados para calcularla. Se vuelve a verificar el par
   // por símbolo para que una respuesta cacheada o ajena nunca altere otro
   // wizard ni el flujo standalone.
   const ethUsdcRangeRecommendation = useMemo(() => {
     const recommendation = flow.suggestions?.ethUsdcRangeRecommendation;
-    if (!isOrchestrated || !isEthUsdcPair || !recommendation) return null;
+    if (!isOrchestrated || !rangeQuoteSymbol || !recommendation) return null;
     const halfWidthPct = Number(recommendation.halfWidthPct);
     const widthPct = Number(recommendation.widthPct);
     if (!Number.isFinite(halfWidthPct) || halfWidthPct <= 0 || !Number.isFinite(widthPct) || widthPct <= 0) return null;
@@ -69,8 +40,9 @@ export default function useEthUsdcRangeRecommendation({
       halfWidthPct,
       widthPct,
       requiresConfirmation: recommendation.requiresConfirmation === true,
+      pairLabel: `ETH/${rangeQuoteSymbol}`,
     };
-  }, [isOrchestrated, isEthUsdcPair, flow.suggestions]);
+  }, [isOrchestrated, rangeQuoteSymbol, flow.suggestions]);
 
   const [ethUsdcRangeRecommendationApplied, setEthUsdcRangeRecommendationApplied] = useState(false);
   const [ethUsdcRangeConfirmed, setEthUsdcRangeConfirmedState] = useState(false);
@@ -118,7 +90,6 @@ export default function useEthUsdcRangeRecommendation({
   }, [ethUsdcRangeRecommendationApplied, ethUsdcRangeRecommendation, ethUsdcRangeConfirmed, flow]);
 
   return {
-    isEthUsdcPair,
     ethUsdcRangeRecommendation,
     ethUsdcRangeRecommendationApplied,
     ethUsdcRangeConfirmed,

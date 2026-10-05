@@ -301,6 +301,8 @@ describe('useUnifiedLpFlow — símbolos del par en el pre-flight', () => {
     const { result } = renderFlow({ network: 'robinhood', version: 'v4' }, { network: 'robinhood' });
     await act(async () => {});
     act(() => result.current.selectExistingV4Pool(pool.poolId));
+    // El default ya es borde de rango: se fuerza una política delta a mano.
+    act(() => result.current.setProtection({ ...result.current.protection, policyVersion: 'legacy_zones_v1' }));
     let preflight;
     await act(async () => { preflight = await result.current.runPreflight(); });
     expect(preflight.ok).toBe(false);
@@ -708,7 +710,7 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
     expect(result.current.version).toBe('v4');
   });
 
-  it('expone la recomendación ATR para ETH/USDG (Robinhood) sin recomendar net_profit_v2', () => {
+  it('expone la recomendación ATR para ETH/USDG (Robinhood)', () => {
     const USDG = '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168';
     const { result } = renderFlow({
       token1Address: USDG,
@@ -725,7 +727,6 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
     });
     expect(result.current.ethUsdcRangeRecommendation.halfWidthPct).toBe(4.2);
     expect(result.current.ethUsdcRangeRecommendation.pairLabel).toBe('ETH/USDG');
-    expect(result.current.protection.policyVersion).not.toBe('net_profit_v2');
   });
 
   it('no expone la recomendación ATR en standalone ni para otros pares', () => {
@@ -753,10 +754,10 @@ describe('useUnifiedLpFlow — rango ATR ETH/USDC', () => {
     expect(otherPair.result.current.ethUsdcRangeRecommendation).toBe(null);
   });
 
-  it('recomienda net_profit_v2 para ETH/USDC —operando, no en sombra— sin pisar una elección explícita', () => {
+  it('arranca con borde de rango —operando, no en sombra— sin pisar una elección explícita', () => {
     const { result } = renderFlow();
-    expect(result.current.protection.policyVersion).toBe('net_profit_v2');
-    // Ya no entra en sombra: lo que el desplegable muestra es lo que opera.
+    expect(result.current.protection.policyVersion).toBe('range_exit_v1');
+    // Lo que el desplegable muestra es lo que opera.
     expect(result.current.protection.executionIntent).toBe('live');
 
     act(() => result.current.setProtection({

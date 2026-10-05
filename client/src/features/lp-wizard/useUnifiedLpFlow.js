@@ -364,8 +364,6 @@ export default function useUnifiedLpFlow({
     isOrchestrated,
     flow,
     symbolForAddress,
-    setProtectionState,
-    protectionDirtyRef,
   });
 
   const derivedRangeWidthPct = useMemo(

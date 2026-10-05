@@ -1,7 +1,7 @@
 import styles from '../UnifiedLpWizard.module.css';
 
 /**
- * Recomendación de rango ATR para ETH/WETH + USDC.
+ * Recomendación de rango ATR para ETH/WETH + USDC (o USDG en Robinhood Chain).
  *
  * Se renderiza *antes* del selector de rango: es una sugerencia sobre la que
  * decidir, y colocarla debajo dejaba la casilla que bloquea "Continuar a
@@ -23,7 +23,7 @@ export default function EthUsdcRangeCard({
   return (
     <section className={`${styles.card} ${tone}`}>
       <div className={styles.cardHead}>
-        <h4 className={styles.cardTitle}>Rango recomendado ETH/USDC</h4>
+        <h4 className={styles.cardTitle}>Rango recomendado {recommendation.pairLabel || 'ETH/USDC'}</h4>
         {applied && <span className={styles.markOk}>✓ aplicado</span>}
       </div>
 

@@ -74,7 +74,8 @@ const DEFAULT_PROTECTION = Object.freeze({
   maxSlippageBps: '20',
   twapMinNotionalUsd: '10000',
   preset: 'adaptive',
-  policyVersion: 'legacy_zones_v1',
+  // Borde de rango es la cobertura por defecto de todo LP nuevo.
+  policyVersion: 'range_exit_v1',
   executionIntent: 'live',
   activationConfirmed: true,
   autoTunedFor: null,
@@ -385,8 +386,8 @@ export default function ProtectionFormFields({
     });
   };
 
-  // La política de cobertura no es un parámetro de tuning: la elige el par
-  // (el wizard recomienda net_profit_v2 para ETH/USDC) o el usuario a mano.
+  // La política de cobertura no es un parámetro de tuning: parte del default
+  // (range_exit_v1) o la elige el usuario a mano.
   // Reconstruir los defaults por apagar y encender la protección o por
   // re-aplicar el auto-tune la devolvía a legacy en silencio, y como el cambio
   // marca la protección como "sucia", la recomendación ya no volvía nunca.
@@ -569,8 +570,8 @@ export default function ProtectionFormFields({
           )}
 
           {/* La política decide qué motor cubre la posición, así que no puede
-              vivir dentro de "Configuración avanzada": el wizard la cambia solo
-              para ETH/USDC y el usuario tiene que ver ese cambio sin abrir nada. */}
+              vivir dentro de "Configuración avanzada": el usuario tiene que ver
+              qué política opera sin abrir nada. */}
           <div className={`${styles.policyCard} ${isNetProfit ? styles.policyCardNew : ''}`}>
             <div className={styles.field}>
               <label>Política de cobertura</label>
