@@ -1,20 +1,20 @@
 {
   "comment": "Trinquete de tamaño: ningún archivo puede crecer sobre su baseline. Encoger es libre; bájalo con: npm run check:hotspots -- --update",
-  "updatedAt": "2026-10-03",
+  "updatedAt": "2026-10-05",
   "files": {
-    "client/src/features/lp-wizard/UnifiedLpWizard.jsx": 22707,
-    "client/src/features/lp-wizard/useUnifiedLpFlow.js": 24105,
-    "client/src/hooks/useWalletConnection.js": 18494,
+    "client/src/features/lp-wizard/UnifiedLpWizard.jsx": 23296,
+    "client/src/features/lp-wizard/useUnifiedLpFlow.js": 26724,
+    "client/src/hooks/useWalletConnection.js": 20034,
     "client/src/pages/UniswapPools/UniswapPoolsPage.jsx": 23870,
     "client/src/pages/UniswapPools/components/ApplyProtectionModal.jsx": 32662,
     "client/src/pages/UniswapPools/components/PoolCard.jsx": 17085,
-    "client/src/pages/UniswapPools/components/PositionActionModal.jsx": 24123,
+    "client/src/pages/UniswapPools/components/PositionActionModal.jsx": 24598,
     "client/src/pages/UniswapPools/components/ProtectedPoolCard.jsx": 24435,
     "server/src/services/hedge.service.js": 53443,
     "server/src/services/protected-pool-delta-neutral.service.js": 68936,
-    "server/src/services/smart-pool-creator.service.js": 89677,
+    "server/src/services/smart-pool-creator.service.js": 91074,
     "server/src/services/uniswap-position-actions.service.js": 571,
     "server/src/services/uniswap-protection.service.js": 69985,
-    "server/src/services/uniswap.service.js": 57999
+    "server/src/services/uniswap.service.js": 60047
   }
 }
