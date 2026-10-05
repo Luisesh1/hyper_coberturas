@@ -194,6 +194,27 @@ function applyMintSlippageCeiling(amountRaw, slippageBps) {
 }
 
 /**
+ * Recorta la liquidez a reinvertir para que lo que pida el pool quepa en las
+ * fees cobradas en la misma tx.
+ *
+ * Al reinvertir, el tope de INCREASE_LIQUIDITY no se puede inflar como en un
+ * mint: las fees son lo unico acreditado en el PoolManager y el plan no lleva
+ * `value` ni approvals, asi que cualquier exceso revierte con
+ * `MaximumAmountExceeded`. La liquidez sale de las fees exactas, y basta el
+ * redondeo hacia arriba de v4 o un tick de movimiento para pasarse. Se deja el
+ * margen de slippage del lado de la liquidez; el sobrante vuelve a la wallet
+ * con CLOSE_CURRENCY.
+ */
+function applyReinvestLiquidityHaircut(liquidity, slippageBps) {
+  const value = BigInt(liquidity || 0n);
+  if (value <= 0n) return value;
+  const bps = Number.isFinite(Number(slippageBps)) && Number(slippageBps) > 0
+    ? BigInt(Math.min(Math.round(Number(slippageBps)), 9_999))
+    : BigInt(DEFAULT_SLIPPAGE_BPS);
+  return (value * (10_000n - bps)) / 10_000n;
+}
+
+/**
  * Encoge los montos deseados para que el TECHO de gasto quepa en la wallet.
  *
  * `amountMax` es lo que el PositionManager puede llegar a tirar por Permit2.
@@ -748,14 +769,17 @@ async function prepareReinvestFeesV4(payload) {
     throw new ValidationError('No hay fees pendientes para reinvertir');
   }
 
-  const liquidityDelta = estimateLiquidityForAmounts({
+  const liquidityDelta = applyReinvestLiquidityHaircut(estimateLiquidityForAmounts({
     amount0Raw: amount0Fees,
     amount1Raw: amount1Fees,
     tickCurrent: ctx.currentTick,
     sqrtPriceX96: ctx.sqrtPriceX96,
     tickLower: ctx.tickLower,
     tickUpper: ctx.tickUpper,
-  });
+  }), payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS);
+  if (liquidityDelta <= 0n) {
+    throw new ValidationError('Las fees pendientes son demasiado chicas para reinvertir');
+  }
 
   return {
     action: 'reinvest-fees',
@@ -1936,6 +1960,9 @@ module.exports = {
   // Exportado para test: sin margen, el mint v4 revierte con
   // MaximumAmountExceeded ante cualquier redondeo hacia arriba.
   applyMintSlippageCeiling,
+  // Exportado para test: reinvertir las fees exactas revertia con
+  // MaximumAmountExceeded por redondeo o un tick de movimiento.
+  applyReinvestLiquidityHaircut,
   // Exportado para test: aportar el saldo entero de un token hacia que el
   // techo no cupiera y el mint reventaba con TRANSFER_FROM_FAILED.
   fitDesiredAmountsToBalance,
