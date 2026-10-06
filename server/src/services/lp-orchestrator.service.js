@@ -23,6 +23,20 @@ const logger = require('./logger.service');
 const onChainManager = require('./onchain-manager.service');
 const { ValidationError } = require('../errors/app-error');
 const { computeSnapshotHash } = require('./delta-neutral-snapshot.service');
+const gasCalibration = require('./cross-chain/gas-calibration');
+const { rpcSender } = require('./cross-chain/fee-oracle');
+const { getNetworkConfig } = require('./uniswap/networks');
+
+function observeFinalizedGas(network, txHashes) {
+  if (!network || !txHashes?.length) return;
+  Promise.resolve()
+    .then(() => gasCalibration.observeTxHashes({
+      network,
+      provider: rpcSender(onChainManager.getProvider(getNetworkConfig(network), { scope: 'cross-chain' })),
+      txHashes,
+    }))
+    .catch((err) => logger.warn('lp_orchestrator_gas_observation_failed', { network, error: err?.message }));
+}
 
 // ABIs mínimos usados por `_inspectPositionTokensOwed` y el chequeo
 // directo `ownerOf`. NO toca otras funciones del PositionManager.
@@ -829,6 +843,10 @@ class LpOrchestratorService {
         };
       }
     }
+
+    // Calibra el oráculo de comisiones con el gas real de estas txs. Fuera
+    // del camino crítico: un fallo solo se registra.
+    observeFinalizedGas(orch.network, incomingTxHashes);
 
     await this.repo.updatePhase(userId, orchestratorId, { phase: 'verifying' });
 

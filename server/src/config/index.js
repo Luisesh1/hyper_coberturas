@@ -118,6 +118,13 @@ const config = {
     maxStaleCandleMs: parseInt(process.env.BOT_MAX_STALE_CANDLE_MS, 10) || 120_000,
     maxStaleBalanceMs: parseInt(process.env.BOT_MAX_STALE_BALANCE_MS, 10) || 120_000,
   },
+  // Fondeo cross-chain del asistente LP: off | read (solo análisis) | execute.
+  crossChainFunding: {
+    mode: ['off', 'read', 'execute'].includes(process.env.CROSS_CHAIN_FUNDING)
+      ? process.env.CROSS_CHAIN_FUNDING
+      : 'off',
+    monitorIntervalMs: parseInt(process.env.CROSS_CHAIN_MONITOR_INTERVAL_MS, 10) || 20_000,
+  },
   intervals: {
     hedgeMonitorMs: parseInt(process.env.HEDGE_MONITOR_INTERVAL_MS, 10) || 10_000,
     hedgeClosingTimeoutMs: parseInt(process.env.HEDGE_CLOSING_TIMEOUT_MS, 10) || 90_000,

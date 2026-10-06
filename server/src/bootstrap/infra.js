@@ -8,6 +8,8 @@ const protectedPoolDynamicService = require('../services/protected-pool-dynamic.
 const protectedPoolDeltaNeutralService = require('../services/protected-pool-delta-neutral.service');
 const deltaNeutralIntegrityService = require('../services/delta-neutral-integrity.service');
 const lpOrchestratorMonitorService = require('../services/lp-orchestrator-monitor.service');
+const crossChainMonitorService = require('../services/cross-chain/cross-chain-monitor.service');
+const config = require('../config');
 const orchestratorMetricsService = require('../services/orchestrator-metrics.service');
 const uniswapOperationService = require('../services/uniswap-operation.service');
 const telegramCommandService = require('../services/telegram-command.service');
@@ -70,6 +72,8 @@ async function bootstrapInfra(httpServer) {
   deltaNeutralIntegrityService.start();
   protectedPoolDeltaNeutralService.start();
   lpOrchestratorMonitorService.start();
+  // Los envíos ya firmados se siguen vigilando aunque el modo sea solo lectura.
+  if (config.crossChainFunding.mode !== 'off') crossChainMonitorService.start();
   orchestratorMetricsService.start();
   uniswapOperationService.start();
   telegramCommandService.start();
@@ -86,6 +90,7 @@ async function bootstrapInfra(httpServer) {
       deltaNeutralIntegrityService.stop();
       protectedPoolDeltaNeutralService.stop();
       lpOrchestratorMonitorService.stop();
+      crossChainMonitorService.stop();
       orchestratorMetricsService.stop();
       uniswapOperationService.stop();
       telegramCommandService.stop();
