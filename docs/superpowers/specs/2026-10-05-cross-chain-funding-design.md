@@ -81,14 +81,14 @@ Precio del gas:
 - La reserva de una red = Σ del costo máximo de las txs pendientes del plan en esa red. Sustituye a `resolveGasReserveRaw` en el flujo cross-chain. El fondeo de una sola red no cambia hasta que se migre en una tarea aparte.
 
 Reglas por red:
-- **Arbitrum y Robinhood** (Orbit, el secuenciador procesa por orden de llegada): prio = 0 en todos los perfiles. Componente L1 vía `NodeInterface.gasEstimateComponents` (`0x…C8`). La UI avisa que los perfiles casi no cambian el costo.
+- **Arbitrum y Robinhood** (Orbit, el secuenciador procesa por orden de llegada): prio = 0 en todos los perfiles. Componente L1 vía `NodeInterface.gasEstimateL1Component` (`0x…C8`). En Orbit, `eth_estimateGas` ya incluye las unidades de L1, así que esa parte solo se muestra desglosada y no se suma otra vez. La UI avisa que los perfiles casi no cambian el costo.
 - **Base y Optimism** (OP Stack): L1 data fee = `GasPriceOracle.getL1Fee(serializedTx)` (`0x420000000000000000000000000000000000000F`), en una línea propia del desglose.
 - **Polygon:** prio ≥ el mínimo de red (constante configurable, inicial 25 gwei).
 - **Ethereum:** sin ajustes.
 
 Gas units, en este orden:
 1. `eth_estimateGas` de la tx real.
-2. Si depende de una tx previa (approve → swap/bridge), se simula el lote con la simulación de Alchemy cuando la red usa el RPC de Alchemy del usuario.
+2. Si `estimateGas` falla porque depende de una tx previa (approve → bridge), se usa el `gasLimit` que devuelve el proveedor del bridge (Li.Fi lo trae en `transactionRequest.gasLimit`). Revisión 2026-10-05: sustituye a la simulación con Alchemy, cuyo formato de respuesta no se verificó; ese gas del proveedor cubre el caso real (approve → bridge).
 3. Si no, la tabla calibrada (`gas_observations` p95 por red y tipo, con `GAS_PER_TX_TYPE` como semilla). Se marca `source: 'table'` y la UI la muestra como «estimado por tabla».
 
 **Calibración:** tabla `gas_observations` (network, kind, profile, gas estimado y real, `effectiveGasPrice`, l1Fee, bloques de espera, fecha). Se alimenta desde `recordTxFinalized` y desde los recibos de los pasos de bridge. Si el `effectiveGasPrice` real se aparta de forma sistemática del perfil enviado (la wallet ignoró las fees, como puede pasar con SafePal por WalletConnect), la UI lo avisa.
