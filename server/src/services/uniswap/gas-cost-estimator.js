@@ -27,6 +27,8 @@ const GAS_PER_TX_TYPE = {
   mint_position: 350_000,
   mint_position_v4: 420_000,
   modify_range_v4: 460_000,
+  // Depósito de bridge (Li.Fi / Across), con margen sobre lo observado.
+  bridge: 300_000,
 };
 
 const DEFAULT_GAS_PER_UNKNOWN_TX = 150_000;
