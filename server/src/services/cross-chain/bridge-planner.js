@@ -365,4 +365,4 @@ async function buildBridgePlan({
   };
 }
 
-module.exports = { buildBridgePlan, orderSteps, rawToUsd, usdToRaw, ZERO_ADDRESS };
+module.exports = { buildBridgePlan, orderSteps, bridgeTxsFor, rawToUsd, usdToRaw, ZERO_ADDRESS };

@@ -13,7 +13,10 @@ const { getNetworkConfig } = require('../uniswap/networks');
 const { PROFILE_IDS, nextProfile, bumpReplacementFees } = require('./fee-profiles');
 const { computeSideDeficits, deliveryTokenFor } = require('./side-deficits');
 const { usdPriceForSymbol } = require('./pricing');
-const { ZERO_ADDRESS } = require('./bridge-planner');
+const { ZERO_ADDRESS, bridgeTxsFor, rawToUsd } = require('./bridge-planner');
+
+const ERC20_ALLOWANCE = new ethers.Interface(['function allowance(address owner, address spender) view returns (uint256)']);
+const IN_FLIGHT = new Set(['signed', 'source_confirmed']);
 
 const DEFAULT_THRESHOLD_PCT = 3;
 const DEFAULT_SLIPPAGE_BPS = 50;
@@ -351,12 +354,321 @@ function createCrossChainFundingService({
     });
   }
 
+  // ── Ejecución ────────────────────────────────────────────────────────
+
+  function notFound() {
+    return new AppError('Plan de fondeo no encontrado.', { status: 404, code: 'PLAN_NOT_FOUND' });
+  }
+
+  async function loadPlan(userId, planId) {
+    const plan = await repo.getPlan(userId, planId);
+    if (!plan) throw notFound();
+    return plan;
+  }
+
+  function findStep(plan, order) {
+    const step = plan.steps.find((entry) => entry.order === Number(order));
+    if (!step) throw new AppError('Paso no encontrado.', { status: 404, code: 'STEP_NOT_FOUND' });
+    return step;
+  }
+
+  function assertExecuting(plan) {
+    if (plan.status !== 'executing') {
+      throw new AppError('El plan ya no está en curso.', { status: 409, code: 'PLAN_NOT_ACTIVE' });
+    }
+  }
+
+  function unitPriceFromSnapshot(step) {
+    const snapshot = step.quote || {};
+    const units = Number(ethers.formatUnits(BigInt(step.amountRaw), step.token.decimals));
+    return units > 0 && snapshot.amountUsd != null ? snapshot.amountUsd / units : null;
+  }
+
+  async function quoteWithFallback(step, plan, amountRaw) {
+    const args = {
+      fromNetwork: step.sourceNetwork,
+      toNetwork: plan.destinationNetwork,
+      fromToken: step.token.isNative ? ZERO_ADDRESS : step.token.address,
+      toToken: step.deliveryTokenAddress,
+      fromAmountRaw: amountRaw.toString(),
+      walletAddress: plan.walletAddress,
+      slippageBps: step.quote?.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
+    };
+    const ordered = [providers[step.provider], ...Object.values(providers).filter((p) => p.id !== step.provider)].filter(Boolean);
+    let firstError = null;
+    for (const provider of ordered) {
+      try {
+        return await provider.quote(args);
+      } catch (err) {
+        firstError = firstError || err;
+        logger.warn('cross_chain_requote_failed', { provider: provider.id, planId: plan.id, order: step.order, error: err?.message });
+      }
+    }
+    throw firstError;
+  }
+
+  async function dropSatisfiedApprovals(rpc, plan, approvals, amountRaw) {
+    const needed = [];
+    for (const approval of approvals) {
+      try {
+        const out = await rpc.call({
+          to: approval.to,
+          data: ERC20_ALLOWANCE.encodeFunctionData('allowance', [plan.walletAddress, approval.spender]),
+        });
+        const [allowance] = ERC20_ALLOWANCE.decodeFunctionResult('allowance', out);
+        if (BigInt(allowance) >= BigInt(amountRaw)) continue;
+      } catch {
+        // Sin lectura de allowance se pide el approve: nunca de menos.
+      }
+      needed.push(approval);
+    }
+    return needed;
+  }
+
+  function signable(tx, { chainId, gasLimit, fees, nonce = null, replacement = false }) {
+    return {
+      kind: tx.kind,
+      label: tx.label || tx.kind,
+      chainId,
+      to: tx.to,
+      data: tx.data,
+      value: String(tx.value || '0'),
+      gas: String(gasLimit),
+      maxFeePerGas: String(fees.maxFeePerGas),
+      maxPriorityFeePerGas: String(fees.maxPriorityFeePerGas),
+      ...(nonce != null ? { nonce } : {}),
+      ...(replacement ? { replacement: true } : {}),
+    };
+  }
+
+  async function prepareSpeedUp(plan, step) {
+    if (step.status !== 'signed' || step.nonce == null || !step.sentFees) {
+      throw new AppError('Solo se puede acelerar un envío firmado que aún no entró en un bloque.', { status: 409, code: 'STEP_NOT_REPLACEABLE' });
+    }
+    const profile = nextProfile(step.sentFees.profile || plan.profile);
+    const fees = await feeOracle.getProfileFees({ network: step.sourceNetwork, profile });
+    const bumped = bumpReplacementFees(step.sentFees, fees);
+    const bridgeTx = (step.quote?.txs || []).find((tx) => tx.kind === 'bridge');
+    const gasLimit = step.sentFees.gasLimit || bridgeTx?.providerGasLimit || '300000';
+    return {
+      requiresReconfirm: false,
+      speedUp: true,
+      profile,
+      txs: [signable(bridgeTx, {
+        chainId: getNetworkConfig(step.sourceNetwork).chainId,
+        gasLimit,
+        fees: bumped,
+        nonce: step.nonce,
+        replacement: true,
+      })],
+    };
+  }
+
+  async function prepareStep({ userId, planId, order, speedUp = false }) {
+    const plan = await loadPlan(userId, planId);
+    assertExecuting(plan);
+    const step = findStep(plan, order);
+    if (speedUp) return prepareSpeedUp(plan, step);
+    if (step.status !== 'pending') {
+      throw new AppError('Este paso ya se envió: no se firma otra vez.', { status: 409, code: 'STEP_ALREADY_SUBMITTED' });
+    }
+    const earlierPending = plan.steps.some((entry) => entry.sourceNetwork === step.sourceNetwork
+      && entry.order < step.order && entry.status === 'pending');
+    if (earlierPending) {
+      throw new AppError('Primero hay que enviar los pasos anteriores de esta red.', { status: 409, code: 'STEP_OUT_OF_ORDER' });
+    }
+
+    const network = step.sourceNetwork;
+    const rpc = getProvider(network);
+    const prices = await getPrices().catch(() => ({}));
+    const nativePrice = usdPriceForSymbol(getNetworkConfig(network).nativeSymbol, prices);
+    let amountRaw = BigInt(step.amountRaw);
+
+    if (step.token.isNative) {
+      // El gas de los envíos previos ya salió de este saldo: se recorta a lo
+      // que queda por encima de la reserva de los pasos pendientes de la red.
+      const pendingHere = plan.steps.filter((entry) => entry.sourceNetwork === network && entry.status === 'pending');
+      const reserveTxs = pendingHere.flatMap((entry) => (entry.quote?.txs || [{ kind: 'bridge' }]).map((tx) => ({ kind: tx.kind })));
+      const reserve = BigInt((await feeOracle.estimateTxCosts({
+        network, profile: plan.profile, txs: reserveTxs, nativeUsdPrice: nativePrice,
+      })).totalMaxWei || 0);
+      const balance = BigInt(await rpc.getBalance(plan.walletAddress));
+      const available = balance > reserve ? balance - reserve : 0n;
+      if (available <= 0n) {
+        throw new AppError(
+          `No queda ${step.token.symbol} por encima de la reserva de gas en ${getNetworkConfig(network).label}.`,
+          { status: 400, code: 'INSUFFICIENT_NATIVE_FOR_GAS' }
+        );
+      }
+      if (available < amountRaw) amountRaw = available;
+    }
+
+    const unitPrice = unitPriceFromSnapshot(step);
+    const quote = await quoteWithFallback(step, plan, amountRaw);
+    const approvals = await dropSatisfiedApprovals(rpc, plan, quote.approvalTxs, amountRaw);
+    const txs = bridgeTxsFor({ ...quote, approvalTxs: approvals }, step.token.symbol);
+    const gas = await feeOracle.estimateTxCosts({
+      network, profile: plan.profile, from: plan.walletAddress, nativeUsdPrice: nativePrice, txs,
+    });
+    const fees = await feeOracle.getProfileFees({ network, profile: plan.profile });
+
+    const delivery = step.quote?.deliveryToken || {};
+    const fromUsd = unitPrice != null ? Number(ethers.formatUnits(amountRaw, step.token.decimals)) * unitPrice : null;
+    const toUsd = rawToUsd(quote.toAmountRaw, delivery.decimals ?? 18, delivery.priceUsd ?? null);
+    const extraFees = quote.feeCosts.filter((fee) => !fee.included).reduce((acc, fee) => acc + fee.amountUsd, 0);
+    const bridgeCostUsd = fromUsd != null && toUsd != null ? Math.max(0, fromUsd - toUsd) + extraFees : extraFees;
+    const newCostUsd = round(bridgeCostUsd + (gas.totalExpectedUsd ?? 0));
+    const previousCostUsd = step.estCostUsd;
+    const requiresReconfirm = newCostUsd > previousCostUsd * RECONFIRM_RATIO
+      && newCostUsd - previousCostUsd > RECONFIRM_MIN_DELTA_USD;
+
+    const chainId = getNetworkConfig(network).chainId;
+    const signables = txs.map((tx, index) => signable(tx, { chainId, gasLimit: gas.txs[index].gasLimit, fees }));
+    await repo.updateStep(plan.id, step.order, {
+      amountRaw: amountRaw.toString(),
+      provider: quote.provider,
+      estCostUsd: newCostUsd,
+      etaSec: quote.etaSec ?? step.etaSec,
+      quote: {
+        ...step.quote,
+        quote,
+        txs,
+        amountUsd: fromUsd != null ? round(fromUsd) : step.quote?.amountUsd,
+        receivedUsd: toUsd != null ? round(toUsd) : step.quote?.receivedUsd,
+        costs: { ...(step.quote?.costs || {}), bridgeCostUsd: round(bridgeCostUsd), expectedUsd: newCostUsd },
+      },
+    });
+
+    return {
+      requiresReconfirm,
+      previousCostUsd,
+      newCostUsd,
+      profile: plan.profile,
+      amountRaw: amountRaw.toString(),
+      txs: signables,
+    };
+  }
+
+  async function submitStep({ userId, planId, order, kind, txHash, nonce = null, fees = null }) {
+    const plan = await loadPlan(userId, planId);
+    const step = findStep(plan, order);
+    if (kind === 'approval') {
+      if (step.status !== 'pending') return step;
+      return repo.updateStep(plan.id, step.order, { approvalTxHash: txHash });
+    }
+    if (step.txHash === txHash) return step;
+    if (step.status === 'pending') {
+      assertExecuting(plan);
+      return repo.updateStep(plan.id, step.order, {
+        status: 'signed', txHash, nonce, sentFees: fees, signedAt: now(),
+      });
+    }
+    if (step.status === 'signed' && fees?.replacement === true && Number(nonce) === step.nonce) {
+      return repo.updateStep(plan.id, step.order, { txHash, sentFees: fees });
+    }
+    throw new AppError('Este paso ya tiene otra transacción enviada.', { status: 409, code: 'STEP_ALREADY_SUBMITTED' });
+  }
+
+  async function skipStep({ userId, planId, order }) {
+    const plan = await loadPlan(userId, planId);
+    const step = findStep(plan, order);
+    if (IN_FLIGHT.has(step.status)) {
+      throw new AppError('El envío ya salió: no se puede saltar.', { status: 409, code: 'STEP_IN_FLIGHT' });
+    }
+    if (step.status === 'pending' || step.status === 'failed' || step.status === 'refunded') {
+      await repo.updateStep(plan.id, step.order, { status: 'skipped' });
+    }
+    await repo.recomputePlanStatus(plan.id);
+    return getPlanView({ userId, planId });
+  }
+
+  async function continueWithArrived({ userId, planId }) {
+    const plan = await loadPlan(userId, planId);
+    assertExecuting(plan);
+    for (const step of plan.steps) {
+      if (step.status === 'pending' || step.status === 'failed' || step.status === 'refunded') {
+        await repo.updateStep(plan.id, step.order, { status: 'skipped' });
+      }
+    }
+    await repo.updatePlan(plan.id, { status: 'partial' });
+    return getPlanView({ userId, planId });
+  }
+
+  async function discardPlan({ userId, planId }) {
+    const plan = await loadPlan(userId, planId);
+    if (plan.status === 'executing') await repo.updatePlan(plan.id, { status: 'discarded' });
+    return getPlanView({ userId, planId });
+  }
+
+  function stepView(step) {
+    const snapshot = step.quote || {};
+    const isSlow = IN_FLIGHT.has(step.status) && step.signedAt != null && step.etaSec != null
+      && now() - step.signedAt > step.etaSec * 2_000 + SLOW_GRACE_MS;
+    return {
+      order: step.order,
+      sourceNetwork: step.sourceNetwork,
+      token: step.token,
+      amountRaw: step.amountRaw,
+      amountUsd: snapshot.amountUsd ?? null,
+      receivedUsd: snapshot.receivedUsd ?? null,
+      deliveryToken: snapshot.deliveryToken || { address: step.deliveryTokenAddress },
+      side: snapshot.side || null,
+      provider: step.provider,
+      carriesDestinationGas: step.carriesDestinationGas,
+      status: step.status,
+      approvalTxHash: step.approvalTxHash,
+      txHash: step.txHash,
+      nonce: step.nonce,
+      sentProfile: step.sentFees?.profile || null,
+      estCostUsd: step.estCostUsd,
+      realCostUsd: step.realCostUsd,
+      receivedRaw: step.receivedRaw,
+      etaSec: step.etaSec,
+      signedAt: step.signedAt,
+      isSlow,
+      errorMessage: step.errorMessage,
+      walletOverrodeFees: step.walletOverrodeFees,
+      alternative: snapshot.alternative || null,
+    };
+  }
+
+  function planView(plan) {
+    return {
+      id: plan.id,
+      walletAddress: plan.walletAddress,
+      destinationNetwork: plan.destinationNetwork,
+      profile: plan.profile,
+      thresholdPct: plan.thresholdPct,
+      status: plan.status,
+      request: plan.request,
+      analysis: plan.analysis,
+      createdAt: plan.createdAt,
+      finishedAt: plan.finishedAt,
+      steps: plan.steps.map(stepView),
+    };
+  }
+
+  async function getPlanView({ userId, planId }) {
+    return planView(await loadPlan(userId, planId));
+  }
+
+  async function getActivePlan({ userId, walletAddress }) {
+    const plan = await repo.findActivePlan(userId, walletAddress);
+    return plan ? planView(plan) : null;
+  }
+
   return {
     analyze,
     createPlan,
     toPublicAnalysis,
-    // Usados por la parte de ejecución (más abajo) y sus tests.
-    _deps: { balances, feeOracle, planner, repo, providers, getPrices, getWrappedNativeToken, getProvider, now },
+    prepareStep,
+    submitStep,
+    skipStep,
+    continueWithArrived,
+    discardPlan,
+    getPlanView,
+    getActivePlan,
+    planView,
   };
 }
 
@@ -365,8 +677,5 @@ module.exports = {
   toPublicAnalysis,
   LP_TX_KINDS,
   RECONFIRM_RATIO,
-  RECONFIRM_MIN_DELTA_USD,
   SLOW_GRACE_MS,
-  // Reexportados para la ejecución.
-  _internal: { nextProfile, bumpReplacementFees, logger },
 };
