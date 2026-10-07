@@ -48,7 +48,7 @@ function round(value, digits = 6) {
 }
 
 function formatPct(value) {
-  return `${value.toFixed(1).replace('.', ',')} %`;
+  return `${value.toFixed(1)} %`;
 }
 
 function orderSteps(steps) {
