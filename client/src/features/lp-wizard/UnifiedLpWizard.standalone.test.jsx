@@ -80,6 +80,8 @@ const { executionController } = vi.hoisted(() => {
 vi.mock('../../services/api', () => ({
   uniswapApi,
   smartContractRegistryApi,
+  // Fondeo cross-chain apagado: estos tests cubren el fondeo de una sola red.
+  crossChainApi: { getConfig: async () => ({ mode: 'off' }) },
 }));
 
 vi.mock('../../hooks/useWalletConnection', () => ({

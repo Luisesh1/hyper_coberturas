@@ -1,7 +1,8 @@
 import useUnifiedLpFlow, { UNIFIED_STEP } from './useUnifiedLpFlow';
 import StepPoolSelection from '../../pages/UniswapPools/components/smart-create/StepPoolSelection';
 import StepRangeConfig from '../../pages/UniswapPools/components/smart-create/StepRangeConfig';
-import StepFunding from '../../pages/UniswapPools/components/smart-create/StepFunding';
+import FundingStepSection from './FundingStepSection';
+import useCrossChainStep from './useCrossChainStep';
 import StepSigning from '../../pages/UniswapPools/components/smart-create/StepSigning';
 import StepDone from '../../pages/UniswapPools/components/smart-create/StepDone';
 import StepError from '../../pages/UniswapPools/components/smart-create/StepError';
@@ -68,6 +69,7 @@ export default function UnifiedLpWizard({
     : { ...(wallet || {}), address: walletConnection?.address || '' };
   const unified = useUnifiedLpFlow({ mode, wallet: effectiveWallet, defaults, onCompleted });
   const { flow, step, isOrchestrated } = unified;
+  const crossChain = useCrossChainStep({ flow, walletAddress: effectiveWallet.address, onFunding: step === FUNDING });
 
   const networkOptions = Array.isArray(meta?.networks) && meta.networks.length
     ? meta.networks
@@ -355,31 +357,8 @@ export default function UnifiedLpWizard({
         )}
 
         {!flow.isBusy && step === FUNDING && (
-          <StepFunding
-            selectedNetwork={selectedNetwork}
-            network={flow.network}
-            totalUsdTarget={flow.totalUsdTarget}
-            fundingDiagnostics={flow.fundingDiagnostics}
-            fundingIssue={flow.fundingIssue}
-            fundingPlan={flow.fundingPlan}
-            availableAssets={flow.availableAssets}
-            assetSelections={flow.assetSelections}
-            setAssetSelections={flow.setAssetSelections}
-            setHasFundingEdits={flow.setHasFundingEdits}
-            importTokenAddress={flow.importTokenAddress}
-            setImportTokenAddress={flow.setImportTokenAddress}
-            handleAddFundingImport={flow.handleAddFundingImport}
-            maxSlippageBps={flow.maxSlippageBps}
-            setMaxSlippageBps={flow.setMaxSlippageBps}
-            error={flow.error}
-            isBusy={flow.isBusy}
-            setStep={flow.setStep}
-            onClose={onClose}
-            refreshFundingPlan={flow.refreshFundingPlan}
-            handleApplyRecommended={flow.handleApplyRecommended}
-            handleRetryFunding={flow.handleRetryFunding}
-            handlePrepareReview={flow.handlePrepareReview}
-          />
+          <FundingStepSection flow={flow} unified={unified} crossChain={crossChain} selectedNetwork={selectedNetwork} onClose={onClose}
+            wallet={walletConnection} accounts={accounts} ownerWalletAddress={ownerWalletAddress} />
         )}
 
         {!flow.isBusy && step === PROTECTION && (

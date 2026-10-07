@@ -22,6 +22,15 @@ const fundingAnalysisSchema = z.object({
   maxSlippageBps: z.number().int().positive().max(1000).optional(),
   forcedSources: sourceIds,
   disabledSources: sourceIds,
+  // Lo que el asistente necesita para reabrirse en este pool al reanudar.
+  wizardContext: z.object({
+    fee: z.number().int().nonnegative().optional(),
+    tickSpacing: z.number().int().positive().nullable().optional(),
+    hooks: z.string().nullable().optional(),
+    poolId: z.string().nullable().optional(),
+    token0Address: z.string().optional(),
+    token1Address: z.string().optional(),
+  }).optional(),
 });
 
 const prepareStepSchema = z.object({
