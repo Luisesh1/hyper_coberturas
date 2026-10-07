@@ -440,6 +440,27 @@ export const alertsApi = {
 };
 
 // ------------------------------------------------------------------
+// Fondeo cross-chain del asistente LP
+// ------------------------------------------------------------------
+export const crossChainApi = {
+  getConfig: () => request('GET', '/cross-chain/config'),
+  getBalances: (walletAddress) =>
+    request('GET', `/cross-chain/balances?walletAddress=${encodeURIComponent(walletAddress)}`),
+  analyze: (payload) => request('POST', '/cross-chain/funding-analysis', payload),
+  createPlan: (payload) => request('POST', '/cross-chain/plans', payload),
+  getActivePlan: (walletAddress) =>
+    request('GET', `/cross-chain/plans/active?walletAddress=${encodeURIComponent(walletAddress)}`),
+  getPlan: (planId) => request('GET', `/cross-chain/plans/${planId}`),
+  prepareStep: (planId, order, { speedUp = false } = {}) =>
+    request('POST', `/cross-chain/plans/${planId}/steps/${order}/prepare`, { speedUp }),
+  submitStep: (planId, order, payload) =>
+    request('POST', `/cross-chain/plans/${planId}/steps/${order}/submitted`, payload),
+  skipStep: (planId, order) => request('POST', `/cross-chain/plans/${planId}/steps/${order}/skip`, {}),
+  continueWithArrived: (planId) => request('POST', `/cross-chain/plans/${planId}/continue`, {}),
+  discardPlan: (planId) => request('POST', `/cross-chain/plans/${planId}/discard`, {}),
+};
+
+// ------------------------------------------------------------------
 // Dev (sólo en NODE_ENV=development en el server)
 // ------------------------------------------------------------------
 export const devApi = {

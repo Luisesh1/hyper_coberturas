@@ -190,6 +190,11 @@ export function buildTransactionParams({ address, tx, includeGas = true }) {
     if (gas) txParams.gas = toRpcQuantity(gas);
   }
 
+  // Perfil de gas del fondeo cross-chain y reemplazo por nonce («Acelerar»).
+  if (tx.maxFeePerGas != null) txParams.maxFeePerGas = toRpcQuantity(tx.maxFeePerGas);
+  if (tx.maxPriorityFeePerGas != null) txParams.maxPriorityFeePerGas = toRpcQuantity(tx.maxPriorityFeePerGas);
+  if (tx.nonce != null) txParams.nonce = toRpcQuantity(tx.nonce);
+
   return txParams;
 }
 

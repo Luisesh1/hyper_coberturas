@@ -100,6 +100,27 @@ describe('buildTransactionParams', () => {
     expect(params).toMatchObject({ from: '0xme', to: VALID_TO, data: '0xabcdef', value: '0x0' });
   });
 
+  // Fondeo cross-chain: el perfil de gas (Bajo/Medio/Alto) viaja en la tx y
+  // acelerar reemplaza por nonce. Van siempre, pida o no gas el caller.
+  it('incluye las fees EIP-1559 y el nonce cuando la tx los trae', () => {
+    const tx = validTx({ maxFeePerGas: '1000000000', maxPriorityFeePerGas: '0x05', nonce: 12 });
+    const params = buildTransactionParams({ address: '0xme', tx, includeGas: false });
+    expect(params.maxFeePerGas).toBe('0x3b9aca00');
+    expect(params.maxPriorityFeePerGas).toBe('0x5');
+    expect(params.nonce).toBe('0xc');
+  });
+
+  it('una priority fee 0 se envía como 0x0 (Arbitrum/Robinhood)', () => {
+    const params = buildTransactionParams({ address: '0xme', tx: validTx({ maxFeePerGas: '10', maxPriorityFeePerGas: '0' }) });
+    expect(params.maxPriorityFeePerGas).toBe('0x0');
+  });
+
+  it('sin fees ni nonce no agrega esas claves', () => {
+    const params = buildTransactionParams({ address: '0xme', tx: validTx() });
+    expect(params).not.toHaveProperty('maxFeePerGas');
+    expect(params).not.toHaveProperty('nonce');
+  });
+
   it('incluye gas solo cuando se pide', () => {
     const tx = validTx({ gas: '0x5208' });
     expect(buildTransactionParams({ address: '0xme', tx, includeGas: true }).gas).toBe('0x5208');
