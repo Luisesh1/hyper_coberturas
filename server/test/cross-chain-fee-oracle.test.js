@@ -52,11 +52,26 @@ function fakeProvider({ estimateGas = null, l1Fee = 0n, l1Upper = 0n, l1Gas = 0n
 const TX = { kind: 'bridge', to: '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE', data: '0x1234', value: '0' };
 const FROM = '0x1ecC8f8db20cEc65749200F711279FA2aeFC9fde';
 
-test('rpcSender usa el primer JsonRpcProvider de un FallbackProvider', () => {
-  const inner = { send: async () => 'ok' };
-  assert.equal(rpcSender({ providerConfigs: [{ provider: inner }] }), inner);
+test('rpcSender usa el provider directo si tiene send', async () => {
   const direct = { send: async () => 'ok' };
   assert.equal(rpcSender(direct), direct);
+});
+
+test('rpcSender recorre los RPC de un FallbackProvider hasta que uno responde', async () => {
+  const calls = [];
+  const failing = { send: async (method) => { calls.push(`a:${method}`); throw new Error('403 network not enabled'); } };
+  const working = { send: async (method) => { calls.push(`b:${method}`); return 'ok'; } };
+  const sender = rpcSender({ providerConfigs: [{ provider: failing }, { provider: working }] });
+  assert.equal(await sender.send('eth_feeHistory', []), 'ok');
+  assert.deepEqual(calls, ['a:eth_feeHistory', 'b:eth_feeHistory']);
+});
+
+test('rpcSender propaga el primer error si ningún RPC responde', async () => {
+  const sender = rpcSender({ providerConfigs: [
+    { provider: { send: async () => { throw new Error('primero'); } } },
+    { provider: { send: async () => { throw new Error('segundo'); } } },
+  ] });
+  await assert.rejects(sender.send('eth_chainId', []), /primero/);
 });
 
 test('feeHistory se cachea 15 s por red', async () => {

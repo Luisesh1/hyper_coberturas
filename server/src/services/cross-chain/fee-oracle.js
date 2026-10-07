@@ -56,13 +56,29 @@ const OP_L1_MAX_MARGIN_DEN = 10n;
 
 /**
  * `onChainManager.getProvider` devuelve un FallbackProvider cuando la red tiene
- * varios RPC, y ese no expone `send`. Para los métodos crudos se usa el primero.
+ * varios RPC, y ese no expone `send`. Para los métodos crudos se prueban sus
+ * RPC en orden: si el principal no sirve la red (p. ej. una app de Alchemy
+ * sin Robinhood habilitada), responde el de respaldo.
  */
 function rpcSender(provider) {
   if (provider && typeof provider.send === 'function') return provider;
-  const inner = provider?.providerConfigs?.[0]?.provider;
-  if (inner && typeof inner.send === 'function') return inner;
-  throw new Error('El provider no permite llamadas JSON-RPC crudas');
+  const inners = (provider?.providerConfigs || [])
+    .map((config) => config?.provider)
+    .filter((inner) => inner && typeof inner.send === 'function');
+  if (!inners.length) throw new Error('El provider no permite llamadas JSON-RPC crudas');
+  return {
+    async send(method, params) {
+      let firstError = null;
+      for (const inner of inners) {
+        try {
+          return await inner.send(method, params);
+        } catch (err) {
+          firstError = firstError || err;
+        }
+      }
+      throw firstError;
+    },
+  };
 }
 
 function defaultGetProvider(network) {
