@@ -8,6 +8,7 @@ const { getNetworkConfig } = require('../../uniswap/networks');
 const { assertAllowedTarget } = require('../bridge-allowlist');
 const { buildApprovalTx } = require('./approval');
 const { getJson, quoteFailed } = require('./http');
+const { assertMinOut } = require('./quote-guards');
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -42,6 +43,8 @@ function createLifiProvider({
 
     const { transactionRequest: request, estimate = {}, tool } = response.body;
     assertAllowedTarget({ provider: 'lifi', network: fromNetwork, to: request.to });
+
+    assertMinOut({ provider: 'Li.Fi', toAmountRaw: estimate.toAmount, toAmountMinRaw: estimate.toAmountMin, slippageBps });
 
     let approvalTxs = [];
     if (!isNativeToken(fromToken)) {

@@ -169,3 +169,24 @@ test('NOT_FOUND del status llega como 404 y sigue siendo pendiente', async () =>
   });
   assert.equal(result.status, 'pending');
 });
+
+test('una cotización cuyo mínimo recibido excede el slippage se rechaza', async () => {
+  // 50 bps sobre 99.750.000 permite hasta 99.251.250; 90.000.000 es demasiado.
+  const fetchImpl = fakeFetch(async () => ({ body: quoteBody({ estimate: { toAmountMin: '90000000' } }) }));
+  await assert.rejects(
+    createLifiProvider({ fetchImpl }).quote({
+      fromNetwork: 'arbitrum', toNetwork: 'base', fromToken: ARB_USDC, toToken: BASE_USDC,
+      fromAmountRaw: '100000000', walletAddress: WALLET, slippageBps: 50,
+    }),
+    (err) => err.code === 'BRIDGE_SLIPPAGE_TOO_HIGH'
+  );
+});
+
+test('el redondeo del proveedor en el borde del slippage se acepta (caso real de Li.Fi: 50,0045 bps)', async () => {
+  const fetchImpl = fakeFetch(async () => ({ body: quoteBody({ estimate: { toAmount: '19948200000000000', toAmountMin: '19848450000000000' } }) }));
+  const quote = await createLifiProvider({ fetchImpl }).quote({
+    fromNetwork: 'arbitrum', toNetwork: 'base', fromToken: ARB_USDC, toToken: BASE_USDC,
+    fromAmountRaw: '100000000', walletAddress: WALLET, slippageBps: 50,
+  });
+  assert.equal(quote.toAmountMinRaw, '19848450000000000');
+});

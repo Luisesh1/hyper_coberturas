@@ -7,6 +7,7 @@ const { getNetworkConfig } = require('../../uniswap/networks');
 const { assertAllowedTarget } = require('../bridge-allowlist');
 const { decodeApproval } = require('./approval');
 const { getJson, quoteFailed } = require('./http');
+const { assertMinOut } = require('./quote-guards');
 
 function toDecimal(value) {
   return value == null ? null : BigInt(value).toString();
@@ -48,6 +49,8 @@ function createAcrossProvider({
 
     const body = response.body;
     assertAllowedTarget({ provider: 'across', network: fromNetwork, to: body.swapTx.to });
+
+    assertMinOut({ provider: 'Across', toAmountRaw: body.expectedOutputAmount, toAmountMinRaw: body.minOutputAmount, slippageBps });
 
     const approvalTxs = (body.approvalTxns || []).map((approval) => {
       const decoded = decodeApproval(approval.data);

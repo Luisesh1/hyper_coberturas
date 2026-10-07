@@ -125,3 +125,10 @@ test('estados de depósito de Across', async () => {
   assert.equal(url.searchParams.get('originChainId'), '42161');
   assert.equal(url.searchParams.get('depositTxHash'), '0xabc');
 });
+
+test('Across: un mínimo recibido fuera del slippage se rechaza', async () => {
+  const body = approvalBody();
+  body.minOutputAmount = '90000000';
+  const fetchImpl = fakeFetch(async () => ({ body }));
+  await assert.rejects(createAcrossProvider({ fetchImpl }).quote(QUOTE_ARGS), (err) => err.code === 'BRIDGE_SLIPPAGE_TOO_HIGH');
+});
