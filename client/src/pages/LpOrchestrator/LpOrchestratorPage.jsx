@@ -14,6 +14,7 @@ import PositionActionModal from '../UniswapPools/components/PositionActionModal'
 import UnifiedLpWizard from '../../features/lp-wizard/UnifiedLpWizard';
 import AdoptLpWizard from '../../features/lp-adopt/AdoptLpWizard';
 import CreateOrchestratorChooser from '../../features/lp-adopt/CreateOrchestratorChooser';
+import { wizardDefaultsFromPlan } from '../../features/cross-chain-funding/ResumePlanCard';
 import SmartAddLiquidityModal from '../UniswapPools/components/SmartAddLiquidityModal';
 import WalletConnectSetupModal from '../../components/shared/WalletConnectSetupModal';
 import { formatUsd } from '../UniswapPools/utils/pool-formatters';
@@ -35,6 +36,8 @@ export default function LpOrchestratorPage() {
   const [meta, setMeta] = useState(null);
   const [showCreateChoice, setShowCreateChoice] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  // Un plan de fondeo cross-chain a medias reabre el asistente en su pool.
+  const [wizardDefaults, setWizardDefaults] = useState({ network: 'arbitrum', version: 'v4' });
   const [showAdoptWizard, setShowAdoptWizard] = useState(false);
   // Orquestador que ya existe pero se quedo sin LP: el wizard crea la posicion
   // y luego se le adjunta con attach-lp.
@@ -730,8 +733,10 @@ export default function LpOrchestratorPage() {
       {showCreateChoice && (
         <CreateOrchestratorChooser
           onClose={() => setShowCreateChoice(false)}
-          onCreateNew={() => { setShowCreateChoice(false); setShowWizard(true); }}
+          walletAddress={walletConn.address || ''}
+          onCreateNew={() => { setShowCreateChoice(false); setWizardDefaults({ network: 'arbitrum', version: 'v4' }); setShowWizard(true); }}
           onAdoptExisting={() => { setShowCreateChoice(false); setShowAdoptWizard(true); }}
+          onResumeFunding={(plan) => { setShowCreateChoice(false); setWizardDefaults(wizardDefaultsFromPlan(plan)); setShowWizard(true); }}
         />
       )}
 
@@ -752,7 +757,7 @@ export default function LpOrchestratorPage() {
         <UnifiedLpWizard
           mode="orchestrated"
           wallet={walletState}
-          defaults={{ network: 'arbitrum', version: 'v4' }}
+          defaults={wizardDefaults}
           meta={meta}
           accounts={accounts}
           onClose={() => setShowWizard(false)}

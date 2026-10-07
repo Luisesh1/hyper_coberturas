@@ -1,12 +1,13 @@
 import wizardStyles from '../lp-wizard/UnifiedLpWizard.module.css';
 import styles from './AdoptLpWizard.module.css';
+import ResumePlanCard from '../cross-chain-funding/ResumePlanCard';
 
 /**
  * Primer paso de «Crear orquestador»: de dónde sale el LP. Crear uno nuevo
  * lleva al asistente con firma del mint; adoptar uno de la wallet, al
  * asistente sin firmas que precarga la configuración desde la posición.
  */
-export default function CreateOrchestratorChooser({ onCreateNew, onAdoptExisting, onClose }) {
+export default function CreateOrchestratorChooser({ onCreateNew, onAdoptExisting, onClose, walletAddress = '', onResumeFunding }) {
   return (
     <div className={wizardStyles.overlay} onClick={onClose}>
       <div
@@ -27,6 +28,7 @@ export default function CreateOrchestratorChooser({ onCreateNew, onAdoptExisting
           </div>
         </header>
         <div className={wizardStyles.stepBody}>
+          <ResumePlanCard walletAddress={walletAddress} onResume={onResumeFunding} />
           <div className={styles.modes}>
             <button type="button" className={styles.mode} onClick={onCreateNew}>
               <strong>Crear un LP nuevo</strong>
