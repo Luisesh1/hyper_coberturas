@@ -17,7 +17,8 @@
     "seed:strategy:ma-cross": "node src/scripts/seed-ma-crossover-strategy.js",
     "seed:strategy:sqzmom-ema55": "node src/scripts/seed-sqzmom-ema55-strategy.js",
     "seed:indicator:sqzmom-lb": "node src/scripts/seed-sqzmom-lb-indicator.js",
-    "optimize:strategy:sqzmom": "node src/scripts/optimize-sqzmom-strategy.js"
+    "optimize:strategy:sqzmom": "node src/scripts/optimize-sqzmom-strategy.js",
+    "test:providers": "node --test test-contract/*.contract.js"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",

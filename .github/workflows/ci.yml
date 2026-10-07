@@ -31,6 +31,22 @@ jobs:
       - run: npm ci --prefix server
       - run: npm run test --prefix server
 
+  # Cotizaciones reales de Li.Fi y Across (fondeo cross-chain). Detecta cambios
+  # de formato o de contratos de los proveedores; no bloquea el CI porque
+  # depende de servicios de terceros.
+  provider-contracts:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --prefix server
+      - run: npm run test:providers --prefix server
+
   lint-client:
     runs-on: ubuntu-latest
     steps:
