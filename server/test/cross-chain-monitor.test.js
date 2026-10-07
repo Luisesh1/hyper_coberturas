@@ -3,8 +3,6 @@ const assert = require('node:assert/strict');
 
 const { CrossChainMonitorService } = require('../src/services/cross-chain/cross-chain-monitor.service');
 
-const ZERO = '0x0000000000000000000000000000000000000000';
-
 function step(overrides = {}) {
   return {
     planId: 1,

@@ -62,7 +62,7 @@ function toPublicAnalysis(analysis) {
   if (!analysis) return analysis;
   return {
     ...analysis,
-    steps: (analysis.steps || []).map(({ quote, txs, ...step }) => ({
+    steps: (analysis.steps || []).map(({ quote: _quote, txs: _txs, ...step }) => ({
       ...step,
       costs: step.costs
         ? {
@@ -657,7 +657,14 @@ function createCrossChainFundingService({
     return plan ? planView(plan) : null;
   }
 
+  /** Saldos de todas las redes, sin plan: para el panel antes de elegir pool. */
+  async function getBalances({ walletAddress }) {
+    const multichain = await balances.getMultichainBalances({ walletAddress });
+    return { walletAddress, ...multichain };
+  }
+
   return {
+    getBalances,
     analyze,
     createPlan,
     toPublicAnalysis,

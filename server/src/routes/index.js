@@ -16,6 +16,7 @@ const botsRoutes = require('./bots.routes');
 const backtestingRoutes = require('./backtesting.routes');
 const alertsRoutes = require('./alerts.routes');
 const smartContractsRoutes = require('./smart-contracts.routes');
+const crossChainRoutes = require('./cross-chain.routes');
 
 const router = Router();
 
@@ -35,6 +36,7 @@ router.use('/bots', botsRoutes);
 router.use('/backtesting', backtestingRoutes);
 router.use('/alerts', alertsRoutes);
 router.use('/smart-contracts', smartContractsRoutes);
+router.use('/cross-chain', crossChainRoutes);
 
 // Endpoints solo dev: snapshot/stream de logs y batch upload de errores
 // del cliente. En producción la ruta literalmente no se monta para que
