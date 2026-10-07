@@ -15,6 +15,7 @@
 
 const { ethers } = require('ethers');
 const { PROFILE_IDS } = require('./fee-profiles');
+const { safeErrorMessage } = require('./safe-error');
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 // Por debajo de esto el resto del déficit no compensa otro envío.
@@ -104,6 +105,8 @@ async function buildBridgePlan({
   const disabled = new Set(disabledSources);
   const reserveCache = new Map();
 
+  // Reserva de gas de cada red de origen. Si su RPC no responde, la red
+  // entera queda fuera (con motivo) en vez de tumbar todo el análisis.
   async function nativeReserveRaw(network) {
     if (!reserveCache.has(network)) {
       reserveCache.set(network, feeOracle.estimateTxCosts({
@@ -111,7 +114,10 @@ async function buildBridgePlan({
         profile,
         txs: NATIVE_RESERVE_TX_KINDS.map((kind) => ({ kind })),
         nativeUsdPrice: nativePrices[network] ?? null,
-      }).then((costs) => BigInt(costs.totalMaxWei || 0)));
+      }).then(
+        (costs) => ({ ok: true, raw: BigInt(costs.totalMaxWei || 0) }),
+        (err) => ({ ok: false, error: safeErrorMessage(err) })
+      ));
     }
     return reserveCache.get(network);
   }
@@ -135,7 +141,12 @@ async function buildBridgePlan({
       forced: forced.has(source.id),
     };
     let availableRaw = BigInt(source.balanceRaw || 0);
-    if (disabled.has(source.id)) {
+    const reserve = await nativeReserveRaw(source.network);
+    if (!reserve.ok) {
+      view.role = 'no_route';
+      view.reason = `No se pudo leer el gas de ${source.network}: ${reserve.error}`;
+      availableRaw = 0n;
+    } else if (disabled.has(source.id)) {
       view.role = 'disabled';
       view.reason = 'Desactivado por el usuario';
       availableRaw = 0n;
@@ -144,8 +155,7 @@ async function buildBridgePlan({
       view.reason = 'Sin precio: no se puede valorar';
       availableRaw = 0n;
     } else if (source.isNative) {
-      const reserve = await nativeReserveRaw(source.network);
-      availableRaw = availableRaw > reserve ? availableRaw - reserve : 0n;
+      availableRaw = availableRaw > reserve.raw ? availableRaw - reserve.raw : 0n;
       if (availableRaw === 0n) {
         view.role = 'gas_reserve';
         view.reason = 'Por debajo de la reserva de gas del perfil';
@@ -174,17 +184,23 @@ async function buildBridgePlan({
     const errors = [];
     for (const result of settled) {
       if (result.status === 'rejected') {
-        errors.push(result.reason?.message || String(result.reason));
+        errors.push(safeErrorMessage(result.reason));
         continue;
       }
       const quote = result.value;
-      const gas = await feeOracle.estimateTxCosts({
-        network: source.network,
-        profile,
-        from: walletAddress,
-        nativeUsdPrice: nativePrices[source.network] ?? null,
-        txs: bridgeTxsFor(quote, source.symbol),
-      });
+      let gas;
+      try {
+        gas = await feeOracle.estimateTxCosts({
+          network: source.network,
+          profile,
+          from: walletAddress,
+          nativeUsdPrice: nativePrices[source.network] ?? null,
+          txs: bridgeTxsFor(quote, source.symbol),
+        });
+      } catch (err) {
+        errors.push(`gas no estimable: ${safeErrorMessage(err)}`);
+        continue;
+      }
       const toUsd = rawToUsd(quote.toAmountRaw, side.deliveryToken.decimals, side.deliveryToken.priceUsd);
       const extraFeesUsd = quote.feeCosts.filter((fee) => !fee.included).reduce((acc, fee) => acc + fee.amountUsd, 0);
       const bridgeCostUsd = Math.max(0, fromUsd - toUsd) + extraFeesUsd;
@@ -332,15 +348,16 @@ async function buildBridgePlan({
   for (const step of steps) {
     step.costsByProfile = {};
     for (const id of PROFILE_IDS) {
+      const selected = { totalExpectedUsd: step.costs.gasOrigin.expectedUsd, totalMaxUsd: step.costs.gasOrigin.maxUsd };
       const gas = id === profile
-        ? { totalExpectedUsd: step.costs.gasOrigin.expectedUsd, totalMaxUsd: step.costs.gasOrigin.maxUsd }
+        ? selected
         : await feeOracle.estimateTxCosts({
           network: step.sourceNetwork,
           profile: id,
           from: walletAddress,
           nativeUsdPrice: nativePrices[step.sourceNetwork] ?? null,
           txs: step.txs,
-        });
+        }).catch(() => selected);
       step.costsByProfile[id] = {
         gasOriginExpectedUsd: round(gas.totalExpectedUsd ?? 0),
         gasOriginMaxUsd: round(gas.totalMaxUsd ?? 0),

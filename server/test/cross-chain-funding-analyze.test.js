@@ -209,3 +209,11 @@ test('createPlan guarda los pasos con su cotización y el análisis público', a
   assert.equal(saved.steps[0].quoteSnapshot.amountUsd, 345);
   assert.ok(!JSON.stringify(saved.analysis).includes('0xsecret'));
 });
+
+test('si no se puede leer el gas de la red destino, el error es claro y sin la URL del RPC', async () => {
+  const feeOracle = {
+    async estimateTxCosts() { throw new Error('boom (info={ "requestUrl": "https://base-mainnet.g.alchemy.com/v2/SECRETKEY" })'); },
+  };
+  const { svc } = service({ feeOracle });
+  await assert.rejects(svc.analyze(INPUT), (err) => err.code === 'DESTINATION_UNREADABLE' && !err.message.includes('SECRETKEY'));
+});

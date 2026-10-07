@@ -89,3 +89,12 @@ test('se puede limitar a un subconjunto de redes', async () => {
   await service.getMultichainBalances({ walletAddress: WALLET, networks: ['polygon'] });
   assert.deepEqual(seen, ['polygon']);
 });
+
+test('el error de una red no expone la URL del RPC', async () => {
+  const service = createMultichainBalances({
+    networks: ['robinhood'],
+    getWalletAssets: async () => { throw new Error('403 Forbidden (info={ "requestUrl": "https://x.g.alchemy.com/v2/SECRETKEY" })'); },
+  });
+  const result = await service.getMultichainBalances({ walletAddress: WALLET });
+  assert.ok(!result.networks[0].error.includes('SECRETKEY'));
+});

@@ -8,6 +8,7 @@
 
 const smartPoolCreatorService = require('../smart-pool-creator.service');
 const { SUPPORTED_NETWORKS } = require('../uniswap/networks');
+const { safeErrorMessage } = require('./safe-error');
 
 const MAINNET_NETWORKS = Object.keys(SUPPORTED_NETWORKS).filter((id) => id !== 'base-sepolia');
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -46,7 +47,7 @@ function createMultichainBalances({
         assets: result?.assets || [],
       };
     } catch (err) {
-      return { ...base, status: 'error', error: err?.message || String(err), nativeBalanceRaw: '0', assets: [] };
+      return { ...base, status: 'error', error: safeErrorMessage(err), nativeBalanceRaw: '0', assets: [] };
     }
   }
 

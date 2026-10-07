@@ -14,6 +14,7 @@ const { PROFILE_IDS, nextProfile, bumpReplacementFees } = require('./fee-profile
 const { computeSideDeficits, deliveryTokenFor } = require('./side-deficits');
 const { usdPriceForSymbol } = require('./pricing');
 const { ZERO_ADDRESS, bridgeTxsFor, rawToUsd } = require('./bridge-planner');
+const { safeErrorMessage } = require('./safe-error');
 
 const ERC20_ALLOWANCE = new ethers.Interface(['function allowance(address owner, address spender) view returns (uint256)']);
 const IN_FLIGHT = new Set(['signed', 'source_confirmed']);
@@ -124,7 +125,15 @@ function createCrossChainFundingService({
     ]));
     const nativePriceUsd = nativePrices[network];
 
-    const lpByProfile = await estimateLp({ network, version: input.version, nativeUsdPrice: nativePriceUsd });
+    let lpByProfile;
+    try {
+      lpByProfile = await estimateLp({ network, version: input.version, nativeUsdPrice: nativePriceUsd });
+    } catch (err) {
+      throw new AppError(
+        `No se pudo leer el gas de ${destConfig.label}: ${safeErrorMessage(err)}.`,
+        { status: 502, code: 'DESTINATION_UNREADABLE' }
+      );
+    }
     const gasNeededRaw = BigInt(lpByProfile[profile].totalMaxWei || 0);
     const destNativeRaw = BigInt(dest.nativeBalanceRaw || 0);
 

@@ -76,6 +76,8 @@ services:
     env_file:
       - ./server/.env
     environment:
+      # Fondeo cross-chain del asistente LP: off | read | execute.
+      CROSS_CHAIN_FUNDING: ${CROSS_CHAIN_FUNDING:-execute}
       NODE_ENV: development
       CLIENT_URL: "https://hypercover.luisesh1.duckdns.org"
       PGHOST: postgres

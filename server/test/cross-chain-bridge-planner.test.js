@@ -251,3 +251,48 @@ test('USDG de destino con 6 decimales: el monto recibido se valora bien', async 
   assert.ok(Math.abs(result.steps[0].receivedUsd - 100 * 0.9995) < 1e-6);
   assert.ok(Math.abs(result.deliveredUsd - 99.95) < 1e-6);
 });
+
+test('si el gas de una red de origen no se puede leer, sus orígenes quedan fuera y el resto sigue', async () => {
+  const brokenOracle = {
+    async estimateTxCosts(args) {
+      if (args.network === 'robinhood') throw new Error('ROBINHOOD_MAINNET is not enabled for this app');
+      return fakeOracle.estimateTxCosts(args);
+    },
+  };
+  const rhNative = { id: 'robinhood:native', network: 'robinhood', address: ZERO, symbol: 'ETH', decimals: 18, isNative: true, balanceRaw: e18(1).toString(), priceUsd: ETH_PRICE };
+  const rhUsdg = { ...ARB_USDC_SRC, id: 'robinhood:usdg', network: 'robinhood', address: RH_USDG, symbol: 'USDG', balanceRaw: e6(5000).toString() };
+  const result = await plan({ sources: [rhNative, rhUsdg, ARB_USDC_SRC], feeOracle: brokenOracle });
+  assert.equal(result.steps.length, 1);
+  assert.equal(result.steps[0].sourceId, 'arbitrum:usdc');
+  for (const id of ['robinhood:native', 'robinhood:usdg']) {
+    const view = result.sourcesView.find((s) => s.id === id);
+    assert.equal(view.role, 'no_route', id);
+    assert.match(view.reason, /gas/i);
+  }
+});
+
+test('el motivo nunca expone la URL del RPC (ni su API key)', async () => {
+  const leaky = {
+    async estimateTxCosts(args) {
+      if (args.network === 'robinhood') {
+        const err = new Error('server response 403 Forbidden (request={  }, info={ "requestUrl": "https://robinhood-mainnet.g.alchemy.com/v2/SECRETKEY123" })');
+        err.shortMessage = 'server response 403 Forbidden';
+        throw err;
+      }
+      return fakeOracle.estimateTxCosts(args);
+    },
+  };
+  const noShort = {
+    async estimateTxCosts(args) {
+      if (args.network === 'robinhood') throw new Error('fallo en https://rpc.example.com/v2/SECRETKEY123 al leer');
+      return fakeOracle.estimateTxCosts(args);
+    },
+  };
+  const rh = { ...ARB_USDC_SRC, id: 'robinhood:usdg', network: 'robinhood', address: RH_USDG, symbol: 'USDG' };
+  for (const feeOracle of [leaky, noShort]) {
+    const result = await plan({ sources: [rh, ARB_USDC_SRC], feeOracle });
+    const reason = result.sourcesView.find((s) => s.id === 'robinhood:usdg').reason;
+    assert.ok(!reason.includes('SECRETKEY123'), reason);
+    assert.ok(!/https?:\/\//.test(reason), reason);
+  }
+});

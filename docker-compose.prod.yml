@@ -158,6 +158,8 @@ services:
     env_file:
       - ./server/.env
     environment:
+      # Fondeo cross-chain del asistente LP: off | read | execute.
+      CROSS_CHAIN_FUNDING: ${CROSS_CHAIN_FUNDING:-execute}
       NODE_ENV: production
       CLIENT_URL: "${CLIENT_URL:?CLIENT_URL requerido (ej: https://tudominio.com) — ver DEPLOYMENT.md}"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-testbot}:${POSTGRES_PASSWORD:?requerido}@postgres:5432/${POSTGRES_DB:-testbot}"
