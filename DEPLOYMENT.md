@@ -182,6 +182,17 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
+**Fondeo cross-chain del asistente LP** (opcional, `server/.env` o `.env` de la raíz):
+
+| Variable | Valores | Uso |
+|---|---|---|
+| `CROSS_CHAIN_FUNDING` | `off` · `read` · `execute` | `read` muestra saldos multi-red, plan y costos sin ejecutar bridges; `execute` permite firmarlos. Los docker-compose lo fijan en `execute` salvo que la raíz defina otro valor. |
+| `CROSS_CHAIN_MONITOR_INTERVAL_MS` | ms (20000) | Cada cuánto se consulta el estado de los envíos en vuelo. |
+| `LIFI_API_KEY` | opcional | Sube el límite de peticiones de Li.Fi. |
+| `LIFI_API_URL`, `ACROSS_API_URL` | URLs | Solo para apuntar a otra instancia de las APIs. |
+
+La migración `030_cross_chain_funding.sql` crea `cross_chain_plans`, `cross_chain_steps` y `gas_observations`. Los RPC de cada red (`UNI_RPC_*` y `UNI_FALLBACK_RPC_*`) se usan también para leer el gas: si la app de Alchemy no tiene una red habilitada, se usa el respaldo.
+
 ### 3.4 Construir y desplegar
 
 ```bash
