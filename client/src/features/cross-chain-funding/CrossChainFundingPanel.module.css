@@ -97,3 +97,4 @@
 .totals { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; border-top: 1px solid var(--uni-divider); padding-top: 14px; }
 .total { font-size: 1.4rem; font-weight: 600; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.progress { width: 100%; height: 10px; accent-color: var(--uni-cyan); }
