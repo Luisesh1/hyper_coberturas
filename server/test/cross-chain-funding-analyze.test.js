@@ -217,3 +217,16 @@ test('si no se puede leer el gas de la red destino, el error es claro y sin la U
   const { svc } = service({ feeOracle });
   await assert.rejects(svc.analyze(INPUT), (err) => err.code === 'DESTINATION_UNREADABLE' && !err.message.includes('SECRETKEY'));
 });
+
+
+test('en un pool de ETH nativo el WETH local no cuenta como un swap de la fase 2', async () => {
+  const b = balances();
+  b.networks[0].assets.push(
+    { id: BASE_WETH.toLowerCase(), address: BASE_WETH, symbol: 'WETH', decimals: 18, isNative: false, balanceRaw: e18(0.01), usdPrice: 2000, usdValue: 20 },
+    { id: 'dai', address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', symbol: 'DAI', decimals: 18, isNative: false, balanceRaw: e18(30), usdPrice: 1, usdValue: 30 }
+  );
+  const { svc, feeOracle } = service({ balances: b });
+  await svc.analyze(INPUT);
+  const swapCall = feeOracle.calls.find((c) => c.kinds.includes('swap'));
+  assert.equal(swapCall.kinds.length, 1, 'solo el DAI se swapea; el WETH se desenvuelve');
+});

@@ -296,3 +296,13 @@ test('el motivo nunca expone la URL del RPC (ni su API key)', async () => {
     assert.ok(!/https?:\/\//.test(reason), reason);
   }
 });
+
+
+test('un lado cuyo token de destino no tiene precio queda sin cubrir, sin NaN ni envíos', async () => {
+  const dest = destination({
+    sides: [{ side: 'token0', deficitUsd: 100, deliveryToken: { address: '0x00000000000000000000000000000000000000aa', symbol: 'RARO', decimals: 18, isNative: false, priceUsd: null } }],
+  });
+  const result = await plan({ destination: dest, sources: [ARB_USDC_SRC], forcedSources: ['arbitrum:usdc'] });
+  assert.equal(result.steps.length, 0);
+  assert.equal(result.uncoveredUsd, 100);
+});

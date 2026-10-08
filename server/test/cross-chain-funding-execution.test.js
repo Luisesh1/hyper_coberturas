@@ -113,10 +113,17 @@ const oracle = {
   },
 };
 
-function rpc({ balance = e18(0.3), allowance = 0n } = {}) {
+const BALANCE_OF = new ethers.Interface(['function balanceOf(address) view returns (uint256)']);
+
+function rpc({ balance = e18(0.3), allowance = 0n, tokenBalance = 10n ** 30n } = {}) {
   return {
     async getBalance() { return balance; },
-    async call() { return ERC20.encodeFunctionResult('allowance', [allowance]); },
+    async call({ data }) {
+      if (data.startsWith(BALANCE_OF.getFunction('balanceOf').selector)) {
+        return BALANCE_OF.encodeFunctionResult('balanceOf', [tokenBalance]);
+      }
+      return ERC20.encodeFunctionResult('allowance', [allowance]);
+    },
   };
 }
 
@@ -291,4 +298,65 @@ test('la vista marca como lento un paso que tarda más del doble de lo previsto'
 test('un plan ajeno o inexistente es 404', async () => {
   const { svc } = service();
   await assert.rejects(svc.getPlanView({ userId: 99, planId: 1 }), (err) => err.code === 'PLAN_NOT_FOUND');
+});
+
+
+// ── Bugs hallados en la revisión del 2026-10-08 ─────────────────────────
+
+test('la reconfirmación se mide contra el costo mostrado, no contra la última recotización', async () => {
+  const plan = makePlan();
+  plan.steps[0].quote = { ...plan.steps[0].quote, shownCostUsd: 0.37 };
+  const { svc } = service({ plan, providers: { across: fakeProvider('across', { costFactor: 0.99 }) } });
+  const first = await svc.prepareStep({ userId: 7, planId: 1, order: 1 });
+  assert.equal(first.requiresReconfirm, true);
+  // El usuario dijo «Detener» y vuelve a intentar: el costo sigue siendo el doble del mostrado.
+  const second = await svc.prepareStep({ userId: 7, planId: 1, order: 1 });
+  assert.equal(second.requiresReconfirm, true);
+  assert.equal(second.previousCostUsd, 0.37);
+});
+
+test('sin shownCostUsd (planes viejos) la base es el costo estimado al crear el plan', async () => {
+  const { svc, plan } = service({ providers: { across: fakeProvider('across', { costFactor: 0.99 }) } });
+  await svc.prepareStep({ userId: 7, planId: 1, order: 1 });
+  assert.equal(plan.steps[0].quote.shownCostUsd, 0.37);
+});
+
+test('una tx firmada se registra aunque el plan se haya descartado mientras se firmaba', async () => {
+  const plan = makePlan();
+  plan.status = 'discarded';
+  const { svc } = service({ plan });
+  await svc.submitStep({ userId: 7, planId: 1, order: 1, kind: 'bridge', txHash: '0xlate', nonce: 2, fees: null });
+  assert.equal(plan.steps[0].status, 'signed');
+  assert.equal(plan.steps[0].txHash, '0xlate');
+});
+
+test('una tx firmada se registra aunque «seguir con lo que llegó» haya saltado su paso', async () => {
+  const plan = makePlan();
+  plan.steps[0].status = 'skipped';
+  plan.status = 'partial';
+  const { svc } = service({ plan });
+  await svc.submitStep({ userId: 7, planId: 1, order: 1, kind: 'bridge', txHash: '0xlate', nonce: 2, fees: null });
+  assert.equal(plan.steps[0].status, 'signed');
+});
+
+test('si el saldo del ERC20 bajó desde el análisis, el monto se recorta al saldo', async () => {
+  const { svc, plan } = service({ rpcProvider: rpc({ tokenBalance: 300_000_000n }) });
+  const result = await svc.prepareStep({ userId: 7, planId: 1, order: 1 });
+  assert.equal(result.amountRaw, '300000000');
+  assert.equal(plan.steps[0].amountRaw, '300000000');
+});
+
+test('sin saldo del ERC20 se rechaza antes de firmar', async () => {
+  const { svc } = service({ rpcProvider: rpc({ tokenBalance: 0n }) });
+  await assert.rejects(svc.prepareStep({ userId: 7, planId: 1, order: 1 }), (err) => err.code === 'INSUFFICIENT_BALANCE');
+});
+
+test('acelerar guarda los hashes anteriores: el original aún puede ser el que entre', async () => {
+  const plan = makePlan();
+  Object.assign(plan.steps[0], { status: 'signed', txHash: '0xa1', nonce: 4, sentFees: { profile: 'low', maxFeePerGas: '100', maxPriorityFeePerGas: '0' } });
+  const { svc } = service({ plan });
+  await svc.submitStep({ userId: 7, planId: 1, order: 1, kind: 'bridge', txHash: '0xa2', nonce: 4, fees: { profile: 'medium', maxFeePerGas: '200', maxPriorityFeePerGas: '1', replacement: true } });
+  await svc.submitStep({ userId: 7, planId: 1, order: 1, kind: 'bridge', txHash: '0xa3', nonce: 4, fees: { profile: 'high', maxFeePerGas: '300', maxPriorityFeePerGas: '2', replacement: true } });
+  assert.equal(plan.steps[0].txHash, '0xa3');
+  assert.deepEqual(plan.steps[0].sentFees.previousTxHashes, ['0xa1', '0xa2']);
 });

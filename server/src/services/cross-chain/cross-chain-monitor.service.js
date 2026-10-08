@@ -80,18 +80,29 @@ class CrossChainMonitorService {
         network: step.sourceNetwork, provider: rpc, txHash: step.approvalTxHash, kind: 'approval', profile: step.sentFees?.profile || null,
       }).catch(() => {});
     }
-    const observation = await this.calibration.observeReceipt({
-      network: step.sourceNetwork,
-      provider: rpc,
-      txHash: step.txHash,
-      kind: 'bridge',
-      profile: step.sentFees?.profile || null,
-      estimatedGas: step.sentFees?.gasLimit || null,
-    });
+    // Tras «Acelerar» puede entrar cualquiera de las txs con ese nonce.
+    const candidates = [step.txHash, ...[...(step.sentFees?.previousTxHashes || [])].reverse()];
+    let observation = null;
+    let minedHash = null;
+    for (const txHash of candidates) {
+      observation = await this.calibration.observeReceipt({
+        network: step.sourceNetwork,
+        provider: rpc,
+        txHash,
+        kind: 'bridge',
+        profile: step.sentFees?.profile || null,
+        estimatedGas: step.sentFees?.gasLimit || null,
+      });
+      if (observation) {
+        minedHash = txHash;
+        break;
+      }
+    }
     if (!observation) return false;
     if (observation.status !== 'success') {
       await this.repo.updateStep(step.planId, step.order, {
         status: 'failed',
+        ...(minedHash !== step.txHash ? { txHash: minedHash } : {}),
         errorMessage: 'La transacción revirtió en la red de origen: los fondos no salieron.',
       });
       return true;
@@ -101,6 +112,7 @@ class CrossChainMonitorService {
     const maxFee = step.sentFees?.maxFeePerGas != null ? BigInt(step.sentFees.maxFeePerGas) : null;
     await this.repo.updateStep(step.planId, step.order, {
       status: 'source_confirmed',
+      ...(minedHash !== step.txHash ? { txHash: minedHash } : {}),
       realCostUsd: nativePrice != null ? Number(ethers.formatEther(gasWei)) * nativePrice : null,
       walletOverrodeFees: maxFee != null && BigInt(observation.effectiveGasPriceWei) > maxFee,
     });

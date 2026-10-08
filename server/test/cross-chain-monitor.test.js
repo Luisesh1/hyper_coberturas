@@ -131,3 +131,30 @@ test('tick no se solapa consigo mismo', async () => {
   release();
   await first;
 });
+
+
+test('si el reemplazo nunca entra pero el hash original sí, el paso avanza con el original', async () => {
+  const observed = [];
+  const updates = [];
+  const monitor = new CrossChainMonitorService({
+    repo: {
+      listInFlightSteps: async () => [step({ txHash: '0xnew', sentFees: { profile: 'medium', maxFeePerGas: '1000', previousTxHashes: ['0xold'] } })],
+      updateStep: async (planId, order, patch) => updates.push(patch),
+      recomputePlanStatus: async () => {},
+    },
+    providers: {},
+    calibration: {
+      observeReceipt: async (args) => {
+        observed.push(args.txHash);
+        return args.txHash === '0xold' ? { status: 'success', gasUsed: '1', effectiveGasPriceWei: '1', l1FeeWei: null } : null;
+      },
+    },
+    getRpc: () => ({}),
+    getPrices: async () => ({ ETH: '2000' }),
+    logger: { warn() {}, error() {}, info() {} },
+  });
+  await monitor.tick();
+  assert.deepEqual(observed, ['0xnew', '0xold']);
+  assert.equal(updates[0].status, 'source_confirmed');
+  assert.equal(updates[0].txHash, '0xold');
+});

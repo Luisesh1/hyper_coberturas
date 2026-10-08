@@ -7,7 +7,7 @@ import { networkLabelsFrom } from '../cross-chain-funding/networks';
 import styles from './UnifiedLpWizard.module.css';
 
 function BringFunds({ crossChain, wallet, protectionSlot }) {
-  const run = useBringFunds({ planId: crossChain.planId, wallet });
+  const run = useBringFunds({ planId: crossChain.planId, wallet, onExit: crossChain.exit });
   return (
     <BringFundsStep
       plan={run.plan}

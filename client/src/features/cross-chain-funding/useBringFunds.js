@@ -15,7 +15,7 @@ function errorMessage(err) {
  * de inmediato. Cada hash se registra en el servidor en cuanto existe, así un
  * cierre de la ventana nunca deja un envío sin rastro.
  */
-export default function useBringFunds({ planId, wallet, api = crossChainApi, pollMs = 5_000 }) {
+export default function useBringFunds({ planId, wallet, api = crossChainApi, pollMs = 5_000, onExit = null }) {
   const [plan, setPlan] = useState(null);
   const [running, setRunning] = useState(false);
   const [activeOrder, setActiveOrder] = useState(null);
@@ -50,7 +50,12 @@ export default function useBringFunds({ planId, wallet, api = crossChainApi, pol
 
   async function sendAndRecord(order, tx, profile, { replacement = false } = {}) {
     const chainId = Number(tx.chainId);
-    await wallet.switchChain(chainId);
+    // Si la wallet no cambió de red, la tx saldría en otra cadena con un
+    // calldata pensado para esta: nunca se envía.
+    const switched = await wallet.switchChain(chainId);
+    if (switched === false) {
+      throw new Error(`La wallet no cambió a la red del envío (chainId ${chainId}). Cámbiala y vuelve a intentar.`);
+    }
     const hash = await wallet.sendTransaction(tx);
     if (!hash) throw new Error('La wallet no devolvió el hash de la transacción.');
     if (tx.kind === 'approval') {
@@ -154,7 +159,11 @@ export default function useBringFunds({ planId, wallet, api = crossChainApi, pol
     speedUp,
     skip: act((order) => api.skipStep(planId, order)),
     continueWithArrived: act(() => api.continueWithArrived(planId)),
-    discard: act(() => api.discardPlan(planId)),
+    discard: async () => {
+      const next = await act(() => api.discardPlan(planId))();
+      if (next) onExit?.();
+      return next;
+    },
     refresh,
   };
 }

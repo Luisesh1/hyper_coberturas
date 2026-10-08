@@ -70,5 +70,11 @@ export default function useCrossChainStep({ flow, walletAddress, onFunding }) {
     await flow.retryFromChain();
   }, [flow]);
 
-  return { funding, planId, bringing: Boolean(planId), bringFunds, finish, busy, startError };
+  // Descartar el plan vuelve al fondeo normal; lo que ya llegó se ve al recalcular.
+  const exit = useCallback(() => {
+    setPlanId(null);
+    funding.refresh();
+  }, [funding]);
+
+  return { funding, planId, bringing: Boolean(planId), bringFunds, finish, exit, busy, startError };
 }

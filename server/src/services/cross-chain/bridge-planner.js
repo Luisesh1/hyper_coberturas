@@ -256,6 +256,11 @@ async function buildBridgePlan({
   const steps = [];
   let uncoveredUsd = 0;
   for (const side of sides) {
+    // Sin precio del token de destino no se puede medir lo que llega.
+    if (!(Number(side.deliveryToken.priceUsd) > 0)) {
+      uncoveredUsd += side.deficitUsd;
+      continue;
+    }
     let remaining = side.deficitUsd;
     const skipped = new Set();
     while (remaining > MIN_REMAINING_USD) {

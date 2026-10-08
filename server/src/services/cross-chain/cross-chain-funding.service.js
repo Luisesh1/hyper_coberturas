@@ -11,12 +11,13 @@ const { AppError, ValidationError } = require('../../errors/app-error');
 const logger = require('../logger.service');
 const { getNetworkConfig } = require('../uniswap/networks');
 const { PROFILE_IDS, nextProfile, bumpReplacementFees } = require('./fee-profiles');
-const { computeSideDeficits, deliveryTokenFor } = require('./side-deficits');
+const { computeSideDeficits, deliveryTokenFor, isDirectFor } = require('./side-deficits');
 const { usdPriceForSymbol } = require('./pricing');
 const { ZERO_ADDRESS, bridgeTxsFor, rawToUsd } = require('./bridge-planner');
 const { safeErrorMessage } = require('./safe-error');
 
 const ERC20_ALLOWANCE = new ethers.Interface(['function allowance(address owner, address spender) view returns (uint256)']);
+const ERC20_BALANCE = new ethers.Interface(['function balanceOf(address owner) view returns (uint256)']);
 const IN_FLIGHT = new Set(['signed', 'source_confirmed']);
 
 const DEFAULT_THRESHOLD_PCT = 3;
@@ -231,8 +232,8 @@ function createCrossChainFundingService({
     // Swaps de la fase 2: los activos locales que no son de ningún lado.
     const swapCount = deficits.otherLocalUsd > 0
       ? dest.assets.filter((asset) => !asset.isNative
-        && lower(asset.address) !== lower(input.token0.address)
-        && lower(asset.address) !== lower(input.token1.address)
+        && !isDirectFor(asset, input.token0, wrapped?.address || null)
+        && !isDirectFor(asset, input.token1, wrapped?.address || null)
         && Number(asset.usdValue) > 0).length
       : 0;
     const swapsByProfile = {};
@@ -356,6 +357,8 @@ function createCrossChainFundingService({
           receivedUsd: step.receivedUsd,
           deliveryToken: step.deliveryToken,
           costs: step.costs,
+          // Lo que vio el usuario: la reconfirmación siempre se mide contra esto.
+          shownCostUsd: step.costs?.expectedUsd ?? null,
           alternative: step.alternative,
           slippageBps: analysis.maxSlippageBps,
         },
@@ -510,6 +513,21 @@ function createCrossChainFundingService({
         );
       }
       if (available < amountRaw) amountRaw = available;
+    } else {
+      // El saldo pudo bajar desde el análisis: un bridge por más del saldo
+      // revierte y quema el gas.
+      const out = await rpc.call({
+        to: step.token.address,
+        data: ERC20_BALANCE.encodeFunctionData('balanceOf', [plan.walletAddress]),
+      });
+      const [tokenBalance] = ERC20_BALANCE.decodeFunctionResult('balanceOf', out);
+      if (BigInt(tokenBalance) <= 0n) {
+        throw new AppError(
+          `No queda ${step.token.symbol} en ${getNetworkConfig(network).label} para este envío.`,
+          { status: 400, code: 'INSUFFICIENT_BALANCE' }
+        );
+      }
+      if (BigInt(tokenBalance) < amountRaw) amountRaw = BigInt(tokenBalance);
     }
 
     const unitPrice = unitPriceFromSnapshot(step);
@@ -527,7 +545,7 @@ function createCrossChainFundingService({
     const extraFees = quote.feeCosts.filter((fee) => !fee.included).reduce((acc, fee) => acc + fee.amountUsd, 0);
     const bridgeCostUsd = fromUsd != null && toUsd != null ? Math.max(0, fromUsd - toUsd) + extraFees : extraFees;
     const newCostUsd = round(bridgeCostUsd + (gas.totalExpectedUsd ?? 0));
-    const previousCostUsd = step.estCostUsd;
+    const previousCostUsd = step.quote?.shownCostUsd ?? step.estCostUsd;
     const requiresReconfirm = newCostUsd > previousCostUsd * RECONFIRM_RATIO
       && newCostUsd - previousCostUsd > RECONFIRM_MIN_DELTA_USD;
 
@@ -540,6 +558,7 @@ function createCrossChainFundingService({
       etaSec: quote.etaSec ?? step.etaSec,
       quote: {
         ...step.quote,
+        shownCostUsd: previousCostUsd,
         quote,
         txs,
         amountUsd: fromUsd != null ? round(fromUsd) : step.quote?.amountUsd,
@@ -566,14 +585,17 @@ function createCrossChainFundingService({
       return repo.updateStep(plan.id, step.order, { approvalTxHash: txHash });
     }
     if (step.txHash === txHash) return step;
-    if (step.status === 'pending') {
-      assertExecuting(plan);
+    // Una tx ya firmada se registra siempre, aunque el plan se haya descartado
+    // o su paso se haya saltado mientras tanto: si no, nadie la vigila.
+    if (step.status === 'pending' || (step.status === 'skipped' && !step.txHash)) {
       return repo.updateStep(plan.id, step.order, {
         status: 'signed', txHash, nonce, sentFees: fees, signedAt: now(),
       });
     }
     if (step.status === 'signed' && fees?.replacement === true && Number(nonce) === step.nonce) {
-      return repo.updateStep(plan.id, step.order, { txHash, sentFees: fees });
+      // El original (o un reemplazo anterior) todavía puede ser el que entre.
+      const previousTxHashes = [...(step.sentFees?.previousTxHashes || []), step.txHash].filter(Boolean);
+      return repo.updateStep(plan.id, step.order, { txHash, sentFees: { ...fees, previousTxHashes } });
     }
     throw new AppError('Este paso ya tiene otra transacción enviada.', { status: 409, code: 'STEP_ALREADY_SUBMITTED' });
   }

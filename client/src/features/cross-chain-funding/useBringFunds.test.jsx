@@ -121,4 +121,24 @@ describe('useBringFunds', () => {
     await act(async () => { await result.current.discard(); });
     expect(result.current.plan.status).toBe('discarded');
   });
+
+  it('si la wallet no cambia de red, no envía nada (la tx es de otra red)', async () => {
+    const api = fakeApi([plan([STEP_1])]);
+    const wallet = fakeWallet();
+    wallet.switchChain = vi.fn(async () => false);
+    const { result } = renderHook(() => useBringFunds({ planId: 3, wallet, api, pollMs: 60_000 }));
+    await waitFor(() => expect(result.current.plan).not.toBeNull());
+    await act(async () => { await result.current.start(); });
+    expect(wallet.sendTransaction).not.toHaveBeenCalled();
+    expect(result.current.error).toMatch(/red/i);
+  });
+
+  it('descartar el plan sale de «Traer fondos»', async () => {
+    const api = fakeApi([plan([STEP_1])]);
+    const onExit = vi.fn();
+    const { result } = renderHook(() => useBringFunds({ planId: 3, wallet: fakeWallet(), api, pollMs: 60_000, onExit }));
+    await waitFor(() => expect(result.current.plan).not.toBeNull());
+    await act(async () => { await result.current.discard(); });
+    expect(onExit).toHaveBeenCalled();
+  });
 });
