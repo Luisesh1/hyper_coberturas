@@ -1,0 +1,76 @@
+/* Fila deslizable: el botón «Quitar» queda debajo, anclado a la derecha, y
+   el contenido se desplaza hacia la izquierda para descubrirlo. */
+.swipeRow {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.removeAction {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 96px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: #dc2626;
+  color: #fff;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+/* Capa opaca que se desplaza: el fondo de .activeItem es translúcido y,
+   sin ella, el rojo de «Quitar» se transparentaría a través de la fila. */
+.swipeTrack {
+  position: relative;
+  background: #171a1f;
+  border-radius: var(--radius-md);
+  transition: transform 0.2s ease;
+}
+.swipeTrackDragging { transition: none; }
+
+.paramsLine {
+  /* Si aun así no cabe, como mucho dos renglones. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.rowText { flex: 1; min-width: 0; }
+
+@media (max-width: 768px) {
+  /* pan-y: el navegador sigue haciendo scroll vertical; el gesto horizontal
+     queda para nosotros. */
+  .swipeTrack { touch-action: pan-y; }
+
+  /* El deslizamiento sustituye a la papelera, pero esta se queda en el
+     árbol accesible como alternativa sin gesto (teclado, lector de
+     pantalla, control por voz) y aparece al recibir el foco. Doble clase
+     para ganar en especificidad a `.activeItemActions button`. */
+  .trashBtn.trashBtn:not(:focus-visible) {
+    position: absolute;
+    width: 1px;
+    min-width: 0;
+    height: 1px;
+    min-height: 0;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swipeTrack { transition: none; }
+}
