@@ -1,0 +1,271 @@
+/* Formulario de edición de un indicador. Base táctil (filas y botones de
+   44px, texto de 16px en los inputs para que iOS no haga zoom); en escritorio
+   se compacta al final del archivo para encajar en la columna del modal. */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.header {
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+.title { font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--text-bright); }
+.subtitle { font-size: var(--fs-xs); color: var(--text-secondary); }
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.sectionLabel {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  font-weight: var(--fw-bold);
+  padding-left: 2px;
+}
+
+/* Lista agrupada: filas separadas por una línea fina, como un panel de ajustes. */
+.card {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 56px;
+  padding: 6px var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.row:last-child { border-bottom: none; }
+.rowStacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  padding-bottom: var(--sp-3);
+}
+.rowLabel {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-bright);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+/* ---- Stepper numérico ---- */
+
+.stepper {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+.stepper:focus-within { border-color: var(--indigo); }
+.stepBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation; /* sin retardo de doble toque al pulsar seguido */
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.stepBtn:hover:not(:disabled) { color: var(--text-bright); background: rgba(255, 255, 255, 0.06); }
+.stepBtn:active:not(:disabled) { background: rgba(99, 102, 241, 0.2); }
+.stepBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+.stepBtn:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.stepInput {
+  width: 64px;
+  height: 44px;
+  padding: 0 4px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-bright);
+  font-family: inherit;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.stepInput:focus { outline: none; background: rgba(99, 102, 241, 0.08); }
+
+/* ---- Interruptor ---- */
+
+.switchRow {
+  width: 100%;
+  margin: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--transition-fast);
+}
+.switchRow:hover { background: rgba(255, 255, 255, 0.04); }
+.switchRow:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.track {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: rgba(154, 163, 176, 0.35);
+  transition: background var(--transition-fast);
+}
+.trackOn { background: var(--indigo); }
+.thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform var(--transition-fast);
+}
+.trackOn .thumb { transform: translateX(18px); }
+
+/* ---- Color ---- */
+
+.colorControl {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+.hexInput {
+  width: 96px;
+  height: 44px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-bright);
+  font-family: var(--font-mono, monospace);
+  font-size: 16px;
+  text-transform: lowercase;
+}
+.hexInput:focus { outline: none; border-color: var(--indigo); }
+.swatch {
+  position: relative;
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+.swatch:focus-within { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.colorInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* ---- Control segmentado (grosor / tipo de línea) ---- */
+
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.3);
+}
+.segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.segment:hover { color: var(--text-bright); background: rgba(255, 255, 255, 0.05); }
+.segment:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.segmentActive,
+.segmentActive:hover {
+  color: var(--text-bright);
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.6);
+}
+.widthSample {
+  display: block;
+  width: 28px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.styleSample {
+  display: block;
+  width: 18px;
+  flex-shrink: 0;
+  border-top: 2px solid currentColor;
+}
+.segmentText { white-space: nowrap; }
+
+.empty {
+  margin: 0;
+  padding: var(--sp-4);
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+/* Escritorio con ratón: misma estructura, más compacta, para que quepa en la
+   columna derecha del modal de dos columnas sin hacer scroll de más. */
+@media (min-width: 769px) and (pointer: fine) {
+  .form { gap: var(--sp-3); }
+  .row { min-height: 44px; padding: 4px var(--sp-3); }
+  .rowStacked { padding-top: 6px; padding-bottom: var(--sp-2); }
+  .stepBtn { width: 32px; height: 32px; }
+  .stepInput { width: 60px; height: 32px; font-size: var(--fs-sm); }
+  .hexInput { width: 88px; height: 32px; font-size: var(--fs-sm); }
+  .swatch { width: 32px; height: 32px; }
+  .segment { min-height: 30px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thumb, .track, .stepBtn, .segment, .switchRow { transition: none; }
+}

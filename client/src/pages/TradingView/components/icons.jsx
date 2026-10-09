@@ -60,3 +60,6 @@ export const DRAWING_TOOL_ICONS = {
   rectangle: RectangleIcon,
   fib: FibIcon,
 };
+
+// Stepper numérico del formulario de indicadores (pareja de PlusIcon).
+export const MinusIcon = (p) => <Svg {...p}><path d="M5 12h14" /></Svg>;
