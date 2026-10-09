@@ -14,8 +14,12 @@ import MobileDrawingBar, { MobileDrawingBanner } from './components/MobileDrawin
 import MobileSettingsSheet from './components/MobileSettingsSheet';
 import {
   ChevronDownIcon, CollapseIcon, ExpandIcon, EyeIcon, EyeOffIcon,
-  IndicatorsIcon, RefreshIcon, ReplayIcon, SlidersIcon,
+  IndicatorsIcon, MoreIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
 } from './components/icons';
+import BottomSheet from './components/BottomSheet';
+import mobileStyles from './components/MobileChrome.module.css';
+import { computePriceChange } from './priceChange';
+import { loadFavorites, rowItems, saveFavorites, toggleFavorite } from './timeframeFavorites';
 import { formatIndicatorLabel } from './indicators/formatLabel';
 import { MOBILE_QUERY, useMediaQuery } from './useMediaQuery';
 import { useReplayController } from './replay/useReplayController';
@@ -121,6 +125,7 @@ const TIMEFRAMES = [
   { value: '1w',  label: '1W'  },
   { value: '1M',  label: '1M'  },
 ];
+const TIMEFRAME_VALUES = TIMEFRAMES.map((t) => t.value);
 const DEFAULT_TIMEFRAME = '15m';
 const CANDLE_LIMIT = 500;
 const DEFAULT_RIGHT_OFFSET = 12;
@@ -296,6 +301,10 @@ export default function TradingViewPage() {
   const [drawMode, setDrawMode] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
   const [ohlcExpanded, setOhlcExpanded] = useState(false);
+  // Móvil: la fila de temporalidades sólo muestra las favoritas; el resto
+  // (y la edición de favoritas) vive en una hoja inferior.
+  const [tfFavorites, setTfFavorites] = useState(() => loadFavorites(TIMEFRAME_VALUES));
+  const [tfSheetOpen, setTfSheetOpen] = useState(false);
 
   useEffect(() => {
     try { localStorage.setItem(OVERLAYS_HIDDEN_STORAGE_KEY, overlaysHidden ? '1' : '0'); } catch { /* noop */ }
@@ -438,6 +447,8 @@ export default function TradingViewPage() {
   useEffect(() => {
     try { localStorage.setItem(TIMEFRAME_STORAGE_KEY, timeframe); } catch { /* noop */ }
   }, [timeframe]);
+
+  useEffect(() => { saveFavorites(tfFavorites); }, [tfFavorites]);
 
   // Aplica el modo de escala de precio (regular/log) SÓLO al pane 0 (precio).
   // Los sub-panes de osciladores fuerzan su propia escala Normal al crearse
@@ -824,7 +835,7 @@ export default function TradingViewPage() {
     ['C', displayedOhlc.close],
   ] : [];
 
-  const timeframeButtons = (btnClass, activeClass) => TIMEFRAMES.map((t) => (
+  const timeframeButtons = (btnClass, activeClass, items = TIMEFRAMES) => items.map((t) => (
     <button
       key={t.value}
       type="button"
@@ -965,6 +976,12 @@ export default function TradingViewPage() {
     </div>
   );
 
+  // Variación 24h de la cabecera móvil. Se recalcula en cada render (cada
+  // tick de lastPrice); recorre las velas desde el final, así que es barato.
+  const priceChange = isMobile ? computePriceChange(candlesRef.current, lastPrice) : null;
+  const isLogScale = priceScaleMode === PriceScaleMode.Logarithmic;
+  const favoriteCount = tfFavorites.length;
+
   // Cabecera móvil: par + precio + pantalla completa, y debajo las
   // temporalidades (scroll horizontal). Las herramientas viven abajo.
   const mobileHeader = (
@@ -987,8 +1004,18 @@ export default function TradingViewPage() {
             {lastPrice != null ? formatPrice(Number(lastPrice), pricePrecision) : '—'}
           </span>
           <span className={styles.mPriceMeta}>
-            <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
-            {replayActive ? 'Replay' : (liveActive ? 'En vivo' : 'Último')}
+            {priceChange && (
+              <span
+                className={`${styles.mChange} ${priceChange.change > 0 ? styles.mChangeUp : ''} ${priceChange.change < 0 ? styles.mChangeDown : ''}`}
+              >
+                {formatChange(priceChange.change, pricePrecision)} {formatPercent(priceChange.percent)}
+                <span className={styles.mChangeWindow}>24h</span>
+              </span>
+            )}
+            <span className={styles.mLiveStatus}>
+              <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
+              {replayActive ? 'Replay' : (liveActive ? 'En vivo' : 'Último')}
+            </span>
             {loadingHistory && <span className={styles.histSpinner}>↻</span>}
           </span>
         </div>
@@ -1003,7 +1030,26 @@ export default function TradingViewPage() {
         </button>
       </div>
       <nav className={styles.mTfRow} aria-label="Temporalidad">
-        {timeframeButtons(styles.mTfBtn, styles.mTfBtnActive)}
+        {timeframeButtons(styles.mTfBtn, styles.mTfBtnActive, rowItems(TIMEFRAMES, tfFavorites, timeframe))}
+        <button
+          type="button"
+          className={styles.mTfMore}
+          onClick={() => setTfSheetOpen(true)}
+          aria-label="Más temporalidades"
+          aria-haspopup="dialog"
+        >
+          <MoreIcon size={18} />
+        </button>
+        <span className={styles.mTfSpacer} aria-hidden="true" />
+        <button
+          type="button"
+          className={`${styles.mTfBtn} ${styles.mLogBtn} ${isLogScale ? styles.mTfBtnActive : ''}`}
+          onClick={() => setPriceScaleMode(isLogScale ? PriceScaleMode.Normal : PriceScaleMode.Logarithmic)}
+          aria-pressed={isLogScale}
+          aria-label="Escala logarítmica"
+        >
+          Log
+        </button>
       </nav>
     </>
   );
@@ -1209,6 +1255,47 @@ export default function TradingViewPage() {
           onSettings={() => setSettingsSheetOpen(true)}
         />
       ))}
+
+      {isMobile && (
+        <BottomSheet open={tfSheetOpen} title="Temporalidad" onClose={() => setTfSheetOpen(false)}>
+          <div className={mobileStyles.field}>
+            <span className={mobileStyles.fieldHint}>
+              La estrella fija la temporalidad en la barra superior.
+            </span>
+            <ul className={mobileStyles.tfList}>
+              {TIMEFRAMES.map((t) => {
+                const active = timeframe === t.value;
+                const fav = tfFavorites.includes(t.value);
+                // La última favorita no se puede quitar: la fila nunca queda vacía.
+                const locked = fav && favoriteCount <= 1;
+                return (
+                  <li key={t.value} className={mobileStyles.tfItem}>
+                    <button
+                      type="button"
+                      className={`${mobileStyles.tfSelect} ${active ? mobileStyles.tfSelectActive : ''}`}
+                      onClick={() => { setTimeframe(t.value); setTfSheetOpen(false); }}
+                      aria-pressed={active}
+                    >
+                      {t.label}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${mobileStyles.iconBtn} ${fav ? mobileStyles.starOn : ''}`}
+                      onClick={() => setTfFavorites((f) => toggleFavorite(f, t.value, TIMEFRAME_VALUES))}
+                      aria-pressed={fav}
+                      aria-label={fav ? `Quitar ${t.label} de favoritas` : `Marcar ${t.label} como favorita`}
+                      disabled={locked}
+                      title={locked ? 'Debe quedar al menos una favorita' : undefined}
+                    >
+                      <StarIcon filled={fav} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </BottomSheet>
+      )}
 
       {isMobile && (
         <MobileSettingsSheet

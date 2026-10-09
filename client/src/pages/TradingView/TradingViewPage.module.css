@@ -422,8 +422,30 @@
 .mPriceMeta {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   font-size: 0.72rem;
   color: #9aa3b0;
+  white-space: nowrap;
+}
+/* Variación 24h: mismo verde/rojo que los bordes de vela. */
+.mChange {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  color: #9aa3b0;
+}
+.mChangeUp { color: #2fbfae; }
+.mChangeDown { color: #ff6b68; }
+.mChangeWindow {
+  font-family: inherit;
+  font-size: 0.62rem;
+  color: #6b7380;
+}
+.mLiveStatus {
+  display: inline-flex;
+  align-items: center;
 }
 
 .mIconBtn {
@@ -472,6 +494,33 @@
   background: rgba(74, 158, 255, 0.16);
   color: #8cc2ff;
   font-weight: 600;
+}
+
+.mTfMore {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9aa3b0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mTfMore:active { background: rgba(120, 130, 145, 0.14); }
+
+/* Empuja «Log» al extremo derecho; si la fila desborda, scroll interno. */
+.mTfSpacer {
+  flex: 1 0 4px;
+}
+
+.mLogBtn {
+  font-family: inherit;
+  border: 1px solid rgba(120, 130, 145, 0.25);
 }
 
 /* Leyenda compacta sobre el gráfico (arriba a la izquierda, sin tapar la

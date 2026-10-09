@@ -321,3 +321,48 @@
 .rowBtn:disabled { opacity: 0.6; cursor: wait; }
 .rowBtnText { flex: 1; }
 .rowBtnMeta { font-size: 0.8rem; color: #9aa3b0; }
+
+/* ── Hoja de temporalidades ────────────────────────────────────── */
+.fieldHint {
+  font-size: 0.8rem;
+  color: #9aa3b0;
+}
+
+.tfList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tfItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tfSelect {
+  flex: 1;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid rgba(120, 130, 145, 0.2);
+  border-radius: 12px;
+  background: #1a1e24;
+  color: #e6e8ec;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+}
+.tfSelectActive {
+  border-color: rgba(74, 158, 255, 0.55);
+  background: rgba(74, 158, 255, 0.16);
+  color: #8cc2ff;
+  font-weight: 600;
+}
+
+.starOn { color: #f5c451; }
+/* Última favorita: bloqueada pero reconocible como favorita. */
+.starOn:disabled { color: #f5c451; opacity: 0.45; cursor: not-allowed; }
