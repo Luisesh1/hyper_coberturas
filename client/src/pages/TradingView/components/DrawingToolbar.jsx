@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { TOOLS } from '../drawings/catalog';
 import styles from './DrawingToolbar.module.css';
+import { CloseIcon, DRAWING_TOOL_ICONS, PencilIcon, TrashIcon } from './icons';
 
 const TOOL_ORDER = ['select', 'ruler', 'trendline', 'horizontal', 'rectangle', 'fib'];
 // v2: cambia el default a "colapsado" en todos los viewports, así la barra
@@ -19,15 +20,8 @@ function loadStoredExpanded() {
 }
 
 function ToolIcon({ toolId }) {
-  switch (toolId) {
-    case 'select':     return <span className={styles.iconSelect}>↖</span>;
-    case 'ruler':      return <span className={styles.iconRuler}>📏</span>;
-    case 'trendline':  return <span className={styles.iconLine} />;
-    case 'horizontal': return <span className={styles.iconHLine} />;
-    case 'rectangle':  return <span className={styles.iconRect} />;
-    case 'fib':        return <span className={styles.iconFib}>φ</span>;
-    default:           return <span>{TOOLS[toolId]?.icon || '?'}</span>;
-  }
+  const Icon = DRAWING_TOOL_ICONS[toolId];
+  return Icon ? <Icon size={18} /> : <span>{TOOLS[toolId]?.icon || '?'}</span>;
 }
 
 export default function DrawingToolbar({
@@ -55,7 +49,7 @@ export default function DrawingToolbar({
           aria-expanded="false"
           onClick={() => setExpanded(true)}
         >
-          <span className={styles.iconExpand}>✏️</span>
+          <PencilIcon size={18} />
           {activeTool && <span className={styles.activeDot} aria-hidden="true" />}
         </button>
       </div>
@@ -72,7 +66,7 @@ export default function DrawingToolbar({
         aria-expanded="true"
         onClick={() => setExpanded(false)}
       >
-        <span className={styles.iconCollapse}>✕</span>
+        <CloseIcon size={18} />
       </button>
       <div className={styles.separator} />
 
@@ -86,6 +80,7 @@ export default function DrawingToolbar({
             type="button"
             className={`${styles.tool} ${isActive ? styles.toolActive : ''}`}
             title={meta.label}
+            aria-label={meta.label}
             onClick={() => onSelectTool?.(isActive ? null : id)}
             aria-pressed={isActive}
           >
@@ -101,9 +96,10 @@ export default function DrawingToolbar({
           type="button"
           className={styles.tool}
           title="Eliminar seleccionado (Delete)"
+          aria-label="Eliminar seleccionado"
           onClick={onDeleteSelected}
         >
-          <span className={styles.iconTrash}>🗑️</span>
+          <TrashIcon size={18} />
         </button>
       )}
 
@@ -112,9 +108,10 @@ export default function DrawingToolbar({
           type="button"
           className={styles.tool}
           title="Limpiar todos los dibujos"
+          aria-label="Limpiar todos los dibujos"
           onClick={onClear}
         >
-          <span className={styles.iconTrash}>✕</span>
+          <CloseIcon size={18} />
         </button>
       )}
     </div>

@@ -17,6 +17,12 @@
   gap: 8px;
   transition: transform 0.15s ease;
 }
+/* TradingView en móvil ocupa el borde inferior con su barra de pestañas o
+   de dibujo: el botón sube para no tapar sus acciones. */
+:global(body.tv-mobile-chrome) .fab {
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  right: 72px;
+}
 .fab:hover {
   transform: translateY(-1px);
 }

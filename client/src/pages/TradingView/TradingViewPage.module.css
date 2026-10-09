@@ -11,7 +11,7 @@
    (ej. iOS Safari), cubrimos toda la ventana con position: fixed + z-index
    alto. Los modales (z-index 1100) siguen por encima.
    Sólo aplicamos insets horizontales aquí; los verticales los manejan el
-   topBar y el bottomBar respectivamente para evitar doble padding. */
+   la cabecera y la barra inferior respectivamente para evitar doble padding. */
 .pageFullscreen {
   position: fixed;
   inset: 0;
@@ -42,7 +42,7 @@
 }
 
 /* Subsecciones de la barra superior. En desktop las tres viven inline dentro
-   de la misma fila flex; en mobile las reestructuramos (ver @media abajo). */
+   de la misma fila flex. En móvil no se usan: hay una cabecera propia (.mHeader). */
 .toolbarMain,
 .toolbarSecondary,
 .toolbarDesktop {
@@ -53,25 +53,6 @@
 }
 .toolbarMain { flex-shrink: 0; }
 .toolbarDesktop { flex: 1 1 auto; flex-wrap: wrap; }
-
-/* Barra inferior (mobile-only por defecto está oculta; se muestra en @media). */
-.bottomBar {
-  display: none;
-}
-.bottomBarTf {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-}
-.bottomBarTf::-webkit-scrollbar { display: none; }
-.bottomBarActions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-  align-items: center;
-}
 
 .toolGroup {
   display: flex;
@@ -337,21 +318,15 @@
   gap: 6px;
 }
 .btnIcon { display: inline-flex; }
-.btnText { display: inline; }
-/* Badge visible SÓLO en mobile (sustituye al texto "Indicadores (N)"). */
-.btnBadge { display: none; }
 
-/* Grupos secundarios (crosshair, escala) y stats secundarias (candles)
-   tienen prioridad baja: el usuario puede ocultarlos con el botón de ajustes
-   y en mobile están ocultos por defecto. */
-.toolGroupSecondary {}
-.statsItemSecondary {}
+.settingsBtn {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #c7d2fe;
+}
 
-/* Cuando el usuario oculta los ajustes, desaparecen los grupos secundarios
-   en cualquier viewport (también desktop). El botón toggle queda resaltado
-   cuando los ajustes están visibles. */
-.settingsHidden .toolGroupSecondary { display: none; }
-.settingsVisible .settingsBtn {
+/* El botón de ajustes queda resaltado mientras crosshair y escala están visibles. */
+.settingsBtn[aria-pressed="true"] {
   background: rgba(99, 102, 241, 0.15);
   border-color: rgba(99, 102, 241, 0.5);
   color: #c7d2fe;
@@ -376,161 +351,191 @@
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Responsive — Mobile (≤ 768px): layout estilo TradingView mobile.
-   - Top: sólo asset + precio (una fila compacta).
-   - Chart rellena el medio.
-   - Bottom bar sticky: timeframes con scroll + botones de acción.
-   - Crosshair/Escala aparecen como fila extra dentro del topBar cuando
-     el usuario activa el toggle de ajustes.
-   - Targets táctiles ≥ 38px.
+   Móvil (≤ 768px) — cabecera y temporalidades. El resto de la UI móvil
+   (pestañas, modo dibujo, hojas) vive en components/MobileChrome.module.css.
+   Se renderizan sólo en móvil (useMediaQuery), así que no necesitan @media.
    ──────────────────────────────────────────────────────────────── */
-@media (max-width: 768px) {
-  .toolbar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-    padding: 6px 10px;
-    padding-top: max(6px, env(safe-area-inset-top, 0));
-    flex-wrap: nowrap;
-  }
-
-  /* Oculta el bloque desktop (timeframes + acciones) — aparecen abajo. */
-  .toolbarDesktop { display: none; }
-
-  /* Fila principal: asset a la izquierda, precio a la derecha. */
-  .toolbarMain {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-  }
-
-  /* Fila de ajustes: visible sólo cuando el usuario los activa.
-     La regla global `.settingsHidden .toolGroupSecondary` oculta los hijos,
-     pero aquí también ocultamos el wrapper para ahorrar espacio vertical. */
-  .toolbarSecondary {
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-  .settingsHidden .toolbarSecondary { display: none; }
-
-  .toolGroup {
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  .toolGroup label { display: none; }
-
-  .assetButton {
-    padding: 8px 10px;
-    min-height: 40px;
-    font-size: 0.88rem;
-    border-radius: 8px;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .assetButtonSymbol { font-size: 0.95rem; }
-
-  /* Botones de acción comunes. */
-  .refreshBtn {
-    min-height: 40px;
-    min-width: 40px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    -webkit-tap-highlight-color: transparent;
-  }
-  /* En mobile los botones muestran sólo el ícono; el texto se oculta. */
-  .btnText { display: none; }
-  .btnBadge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    margin-left: -2px;
-    background: var(--accent, #4a9eff);
-    color: #fff;
-    border-radius: 999px;
-    font-size: 0.66rem;
-    font-weight: 700;
-    line-height: 1;
-  }
-
-  /* Stats compactas en el topBar: sólo precio + live dot. */
-  .stats {
-    gap: 6px;
-    font-size: 0.82rem;
-    flex-wrap: nowrap;
-    flex-shrink: 0;
-    margin-left: 0;
-    text-align: right;
-  }
-  .statsLabel { display: none; }
-  .statsItemSecondary { display: none; }
-  .lastPrice {
-    font-family: var(--font-mono, monospace);
-    font-size: 1rem;
-    font-weight: 700;
-    color: #f1f5f9;
-    margin-left: 4px;
-  }
-
-  /* Barra inferior sticky con timeframes + acciones. */
-  .bottomBar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    padding-bottom: max(6px, env(safe-area-inset-bottom, 0));
-    padding-left: max(8px, env(safe-area-inset-left, 0));
-    padding-right: max(8px, env(safe-area-inset-right, 0));
-    border-top: 1px solid rgba(120, 130, 145, 0.25);
-    background: #0f1114;
-    flex-shrink: 0;
-    z-index: 2;
-  }
-
-  /* Los timeframes ocupan todo el espacio disponible a la izquierda,
-     con scroll horizontal si sobran. */
-  .bottomBarTf .tfGroup {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    max-width: none;
-    border: none;
-    border-radius: 0;
-  }
-  .bottomBarTf .tfGroup::-webkit-scrollbar { display: none; }
-
-  .tfBtn {
-    padding: 9px 12px;
-    min-height: 40px;
-    min-width: 40px;
-    font-size: 0.82rem;
-    flex-shrink: 0;
-    -webkit-tap-highlight-color: transparent;
-    border-radius: 6px;
-  }
-  .tfBtnActive { border-radius: 6px; }
+.mHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 60px;
+  padding: 6px 4px 6px 4px;
+  padding-top: max(6px, env(safe-area-inset-top, 0));
+  border-bottom: 1px solid rgba(120, 130, 145, 0.18);
+  flex-shrink: 0;
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Responsive — Mobile angosto (≤ 420px): tipografías y targets un poco
-   más chicos para iPhone SE y similares.
-   ──────────────────────────────────────────────────────────────── */
-@media (max-width: 420px) {
-  .toolbar { padding: 6px 8px; }
-  .assetButton { padding: 7px 9px; font-size: 0.82rem; min-height: 38px; }
-  .assetButtonSymbol { font-size: 0.9rem; }
-  .tfBtn { padding: 9px 10px; font-size: 0.78rem; min-width: 38px; min-height: 38px; }
-  .refreshBtn { padding: 7px 9px; min-width: 38px; min-height: 38px; }
-  .bottomBar { gap: 6px; padding-left: max(6px, env(safe-area-inset-left, 0)); padding-right: max(6px, env(safe-area-inset-right, 0)); }
-  .stats { gap: 4px; }
-  .lastPrice { font-size: 0.9rem; }
+.mAssetBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #9aa3b0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mAssetBtn:active { background: rgba(120, 130, 145, 0.14); }
+
+.mAssetText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.mAssetSymbol {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text-bright, #f1f5f9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mAssetSource {
+  font-size: 0.72rem;
+  color: #9aa3b0;
+  text-transform: capitalize;
 }
 
+.mPrice {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+.mPriceValue {
+  font-family: var(--font-mono, monospace);
+  font-size: 1.15rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-bright, #f1f5f9);
+}
+.mPriceMeta {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  color: #9aa3b0;
+}
+
+.mIconBtn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #9aa3b0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mTfRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  padding-left: max(6px, env(safe-area-inset-left, 0));
+  border-bottom: 1px solid rgba(120, 130, 145, 0.18);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.mTfRow::-webkit-scrollbar { display: none; }
+
+.mTfBtn {
+  flex-shrink: 0;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9aa3b0;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mTfBtnActive {
+  background: rgba(74, 158, 255, 0.16);
+  color: #8cc2ff;
+  font-weight: 600;
+}
+
+/* Leyenda compacta sobre el gráfico (arriba a la izquierda, sin tapar la
+   escala de precios). El contenedor deja pasar los toques al gráfico. */
+.mLegend {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 64px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.mOhlcChip {
+  pointer-events: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid rgba(120, 130, 145, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 17, 20, 0.8);
+  color: var(--text, #e6e7ea);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mChevron {
+  display: inline-flex;
+  color: #9aa3b0;
+  transition: transform 120ms;
+}
+.mChevronOpen { transform: rotate(180deg); }
+
+.mLegendChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mLegendChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid rgba(120, 130, 145, 0.18);
+  border-radius: 999px;
+  background: rgba(15, 17, 20, 0.72);
+  color: #c9ced6;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
 
 /* ────────────────────────────────────────────────────────────────
    Modo Replay — panel flotante encima del chart cuando el usuario
@@ -638,6 +643,21 @@
   color-scheme: dark;
 }
 
+/* Botones de icono del panel: el SVG queda centrado. */
+.replayCloseBtn,
+.replayMiniBtn,
+.replayPrimaryBtn,
+.replayDangerBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Fila de transporte (replay activo): reiniciar, play/pausa, paso, salir. */
+.replayTransport {
+  flex-wrap: nowrap;
+}
+
 .replayMiniBtn {
   padding: 5px 9px;
   border-radius: 4px;
@@ -720,15 +740,81 @@
   word-break: break-word;
 }
 
-/* En mobile, baja el panel un poco y limita altura para no tapar los
-   controles de la barra superior. */
+/* Móvil: el panel se acopla abajo como hoja (encima de la barra de
+   pestañas) y sin scrim, para que el gráfico siga visible y se pueda mover. */
 @media (max-width: 768px) {
   .replayPanel {
-    top: 70px;                /* mobile: deja espacio al overlay OHLC */
-    right: 8px;
-    left: 8px;
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1050;
     width: auto;
     max-width: none;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow-y: auto;
+    gap: 14px;
+    padding: 12px 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0));
+    background: #171a1f;
+    border-width: 1px 0 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
+    font-size: 0.9rem;
+  }
+  .replayCloseBtn {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 1.4rem;
+  }
+  .replayLabel { min-width: 72px; }
+  /* 16px evita el zoom automático de iOS al enfocar el campo. */
+  .replayRow .select,
+  .replayDatetime {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .replayTransport {
+    justify-content: center;
+    gap: 14px;
+  }
+  .replayMiniBtn,
+  .replayDangerBtn {
+    min-width: 52px;
+    min-height: 52px;
+    border-radius: 50%;
+  }
+  .replayPrimaryBtn {
+    min-height: 52px;
+    border-radius: 12px;
+    font-size: 1rem;
+  }
+  .replayTransport .replayPrimaryBtn {
+    flex: 0 0 auto;
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+  }
+  .replaySpeedGroup {
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 3px;
+    padding: 3px;
+    border: 0;
+    border-radius: 10px;
+    background: #0f1114;
+  }
+  .replaySpeedBtn {
+    min-height: 40px;
+    border-radius: 8px;
+    background: transparent;
+  }
+  .replaySpeedBtnActive {
+    background: #2a2d52;
+    color: #c7c8ff;
   }
 }
 
@@ -799,25 +885,6 @@
   opacity: 0.85;
   padding-left: 6px;
   border-left: 0;
-}
-
-/* En mobile, el overlay se sitúa abajo del toolbar y reduce tamaño. */
-@media (max-width: 768px) {
-  .ohlcOverlay {
-    top: 6px;
-    right: 6px;
-    left: 6px;
-    gap: 8px;
-    padding: 4px 8px;
-    font-size: 0.7rem;
-  }
-  .ohlcSymbol {
-    flex-basis: 100%;
-    padding-right: 0;
-    border-right: 0;
-    border-bottom: 1px solid rgba(120, 130, 145, 0.14);
-    padding-bottom: 2px;
-  }
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -897,20 +964,6 @@
   opacity: 0.6;
 }
 
-@media (max-width: 768px) {
-  .indicatorLegend {
-    top: 64px;                /* mobile: debajo del ohlcOverlay más alto */
-    right: 6px;
-    left: 6px;
-    align-items: flex-end;
-    font-size: 0.7rem;
-  }
-  .legendRow {
-    padding: 2px 6px;
-    gap: 4px;
-  }
-}
-
 /* ────────────────────────────────────────────────────────────────
    Botón flotante para ocultar/mostrar overlays informativos
    (OHLC, legend de indicadores, etiqueta de tiempo futuro).
@@ -954,13 +1007,4 @@
 .overlaysToggleHidden {
   color: var(--text-muted, #8690a0);
   background: rgba(20, 22, 28, 0.62);
-}
-
-@media (max-width: 768px) {
-  .overlaysToggle {
-    bottom: 30px;
-    right: 56px;
-    width: 36px;
-    height: 36px;        /* target táctil mayor en mobile */
-  }
 }

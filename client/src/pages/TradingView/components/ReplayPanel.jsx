@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getLowerTimeframes, defaultLowerTimeframe, pickRandomAnchor } from '../replay/replayUtils';
 import styles from '../TradingViewPage.module.css';
+import {
+  CloseIcon, DiceIcon, PauseIcon, PlayIcon, ResetIcon, StepIcon, StopIcon,
+} from './icons';
 
 const SPEED_PRESETS = [0.25, 0.5, 1, 2, 4, 8, 16];
 
@@ -69,7 +72,7 @@ export default function ReplayPanel({
           }}
           aria-label="Cerrar replay"
           title="Cerrar"
-        >×</button>
+        ><CloseIcon size={18} /></button>
       </div>
 
       {noLowerAvailable && (
@@ -107,10 +110,11 @@ export default function ReplayPanel({
           onClick={handleRandom}
           disabled={controller.active}
           title="Anchor aleatorio"
-        >🎲</button>
+          aria-label="Anchor aleatorio"
+        ><DiceIcon size={18} /></button>
       </div>
 
-      <div className={styles.replayRow}>
+      <div className={`${styles.replayRow} ${controller.active ? styles.replayTransport : ''}`}>
         {!controller.active ? (
           <button
             type="button"
@@ -118,44 +122,49 @@ export default function ReplayPanel({
             onClick={handleStart}
             disabled={noLowerAvailable || controller.loading}
           >
-            {controller.loading ? 'Cargando…' : '▶ Iniciar'}
+            {controller.loading ? 'Cargando…' : 'Iniciar replay'}
           </button>
         ) : (
           <>
+            <button
+              type="button"
+              className={styles.replayMiniBtn}
+              onClick={controller.reset}
+              title="Volver al anchor original"
+              aria-label="Volver al anchor original"
+            ><ResetIcon size={20} /></button>
             {controller.paused ? (
               <button
                 type="button"
                 className={styles.replayPrimaryBtn}
                 onClick={controller.play}
                 title="Reproducir"
-              >▶ Play</button>
+                aria-label="Reproducir"
+              ><PlayIcon size={22} /></button>
             ) : (
               <button
                 type="button"
                 className={styles.replayPrimaryBtn}
                 onClick={controller.pause}
                 title="Pausar"
-              >⏸ Pause</button>
+                aria-label="Pausar"
+              ><PauseIcon size={22} /></button>
             )}
             <button
               type="button"
               className={styles.replayMiniBtn}
               onClick={controller.step}
               title="Avanzar 1 sub-vela"
+              aria-label="Avanzar 1 sub-vela"
               disabled={!controller.paused}
-            >⏭</button>
-            <button
-              type="button"
-              className={styles.replayMiniBtn}
-              onClick={controller.reset}
-              title="Volver al anchor original"
-            >↺</button>
+            ><StepIcon size={20} /></button>
             <button
               type="button"
               className={styles.replayDangerBtn}
               onClick={() => controller.stop()}
               title="Salir del modo replay"
-            >⏹</button>
+              aria-label="Salir del modo replay"
+            ><StopIcon size={18} /></button>
           </>
         )}
       </div>

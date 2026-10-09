@@ -1,5 +1,6 @@
 import { INDICATORS } from '../indicators/catalog';
 import styles from './IndicatorConfigModal.module.css';
+import { EyeIcon, EyeOffIcon, PlusIcon, TrashIcon } from './icons';
 
 function formatParams(entry) {
   const meta = INDICATORS[entry.type];
@@ -16,7 +17,7 @@ export default function ActiveIndicatorList({ indicators, selectedUid, onSelect,
     <>
       <p className={styles.columnTitle}>Activos ({indicators.length})</p>
       {indicators.length === 0 && (
-        <div className={styles.empty}>Sin indicadores. Agrega uno desde el catálogo →</div>
+        <div className={styles.empty}>Sin indicadores. Agrega uno desde el catálogo.</div>
       )}
       {indicators.map((ind) => {
         const meta = INDICATORS[ind.type];
@@ -36,22 +37,25 @@ export default function ActiveIndicatorList({ indicators, selectedUid, onSelect,
               <button
                 type="button"
                 title={ind.visible ? 'Ocultar' : 'Mostrar'}
+                aria-label={`${ind.visible ? 'Ocultar' : 'Mostrar'} ${meta.label}`}
+                aria-pressed={ind.visible}
                 onClick={() => onToggleVisible(ind.uid)}
               >
-                {ind.visible ? '◉' : '◎'}
+                {ind.visible ? <EyeIcon size={18} /> : <EyeOffIcon size={18} />}
               </button>
               <button
                 type="button"
                 title="Eliminar"
+                aria-label={`Eliminar ${meta.label}`}
                 onClick={() => onRemove(ind.uid)}
               >
-                ✕
+                <TrashIcon size={18} />
               </button>
             </div>
           </div>
         );
       })}
-      <button type="button" className={styles.addBtn} onClick={onAddNew}>+ Agregar desde catálogo</button>
+      <button type="button" className={styles.addBtn} onClick={onAddNew}><PlusIcon size={16} /> Agregar desde catálogo</button>
     </>
   );
 }

@@ -23,7 +23,8 @@ export default function IndicatorCatalogPanel({ onAdd }) {
       <input
         type="text"
         className={styles.search}
-        placeholder="🔍 Buscar indicador..."
+        placeholder="Buscar indicador…"
+        aria-label="Buscar indicador"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
@@ -33,10 +34,10 @@ export default function IndicatorCatalogPanel({ onAdd }) {
           <div key={cat} className={styles.catalogCategory}>
             <p className={styles.catalogCategoryLabel}>{INDICATOR_CATEGORIES[cat] || cat}</p>
             {items.map((meta) => (
-              <div key={meta.id} className={styles.catalogItem} onClick={() => onAdd(meta.id)}>
+              <button key={meta.id} type="button" className={styles.catalogItem} onClick={() => onAdd(meta.id)}>
                 <span className={styles.catalogItemLabel}>{meta.label}</span>
                 <span className={styles.catalogItemFull}>{meta.fullName}</span>
-              </div>
+              </button>
             ))}
           </div>
         );

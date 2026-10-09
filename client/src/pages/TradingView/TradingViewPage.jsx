@@ -9,6 +9,15 @@ import IndicatorConfigModal from './components/IndicatorConfigModal';
 import AssetPickerModal from './components/AssetPickerModal';
 import DrawingToolbar from './components/DrawingToolbar';
 import ReplayPanel from './components/ReplayPanel';
+import MobileTabBar from './components/MobileTabBar';
+import MobileDrawingBar, { MobileDrawingBanner } from './components/MobileDrawingBar';
+import MobileSettingsSheet from './components/MobileSettingsSheet';
+import {
+  ChevronDownIcon, CollapseIcon, ExpandIcon, EyeIcon, EyeOffIcon,
+  IndicatorsIcon, RefreshIcon, ReplayIcon, SlidersIcon,
+} from './components/icons';
+import { formatIndicatorLabel } from './indicators/formatLabel';
+import { MOBILE_QUERY, useMediaQuery } from './useMediaQuery';
 import { useReplayController } from './replay/useReplayController';
 import { useDrawings } from './drawings/use-drawings';
 import { TOOLS } from './drawings/catalog';
@@ -45,8 +54,8 @@ function loadStoredSettingsVisible() {
 }
 
 const PRICE_SCALE_MODES = [
-  { value: PriceScaleMode.Normal,      label: 'Regular' },
-  { value: PriceScaleMode.Logarithmic, label: 'Logarítmica' },
+  { value: PriceScaleMode.Normal,      label: 'Regular',     short: 'Regular' },
+  { value: PriceScaleMode.Logarithmic, label: 'Logarítmica', short: 'Log' },
 ];
 const DEFAULT_PRICE_SCALE_MODE = PriceScaleMode.Normal;
 
@@ -63,10 +72,10 @@ function loadStoredPriceScaleMode() {
 }
 
 const CROSSHAIR_MODES = [
-  { value: CrosshairMode.Magnet,    label: 'Imán (close)' },
-  { value: CrosshairMode.MagnetOHLC, label: 'Imán OHLC' },
-  { value: CrosshairMode.Normal,    label: 'Libre' },
-  { value: CrosshairMode.Hidden,    label: 'Oculto' },
+  { value: CrosshairMode.Magnet,     label: 'Imán (close)', short: 'Imán' },
+  { value: CrosshairMode.MagnetOHLC, label: 'Imán OHLC',    short: 'OHLC' },
+  { value: CrosshairMode.Normal,     label: 'Libre',        short: 'Libre' },
+  { value: CrosshairMode.Hidden,     label: 'Oculto',       short: 'Oculto' },
 ];
 const DEFAULT_CROSSHAIR_MODE = CrosshairMode.Magnet;
 
@@ -201,20 +210,6 @@ function formatPercent(n) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-// Etiqueta compacta de un indicador para el legend overlay.
-// Convierte type+params en algo como "EMA 20", "MACD 12/26/9", "BB 20/2".
-function formatIndicatorLabel(type, params, label) {
-  const p = params || {};
-  if (type === 'macd') return `${label} ${p.fastPeriod || 12}/${p.slowPeriod || 26}/${p.signalPeriod || 9}`;
-  if (type === 'bollinger') return `${label} ${p.length || 20}/${p.stdDev || 2}`;
-  if (type === 'keltner') return `${label} ${p.length || 20}/${p.atrLength || 10}`;
-  if (type === 'stoch') return `${label} ${p.kPeriod || 14}/${p.signalPeriod || 3}`;
-  if (type === 'volume') return 'Vol';
-  if (type === 'vwap') return 'VWAP';
-  if (p.length != null) return `${label} ${p.length}`;
-  return label;
-}
-
 // Intervalo de polling en tiempo real por timeframe.
 // Compromiso entre frescura y carga de red (el backend cachea 10s).
 const LIVE_POLL_MS = {
@@ -295,6 +290,12 @@ export default function TradingViewPage() {
   const [replayPanelOpen, setReplayPanelOpen] = useState(false);
   const [hoveredOhlc, setHoveredOhlc] = useState(null);
   const [overlaysHidden, setOverlaysHidden] = useState(loadStoredOverlaysHidden);
+  const isMobile = useMediaQuery(MOBILE_QUERY);
+  // Móvil: modo dibujo explícito (la barra de pestañas pasa a ser la de
+  // herramientas), hoja de ajustes y leyenda OHLC plegable.
+  const [drawMode, setDrawMode] = useState(false);
+  const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
+  const [ohlcExpanded, setOhlcExpanded] = useState(false);
 
   useEffect(() => {
     try { localStorage.setItem(OVERLAYS_HIDDEN_STORAGE_KEY, overlaysHidden ? '1' : '0'); } catch { /* noop */ }
@@ -757,6 +758,24 @@ export default function TradingViewPage() {
     onNotify: addNotification,
   });
 
+  const exitDrawMode = useCallback(() => {
+    setActiveTool(null);
+    setDrawMode(false);
+  }, []);
+
+  // El modo dibujo es sólo móvil: al pasar a escritorio se descarta.
+  useEffect(() => {
+    if (!isMobile) setDrawMode(false);
+  }, [isMobile]);
+
+  // Marca <body> mientras la UI móvil ocupa el borde inferior, para que
+  // elementos flotantes globales (p. ej. el panel de logs de dev) se aparten.
+  useEffect(() => {
+    if (!isMobile) return undefined;
+    document.body.classList.add('tv-mobile-chrome');
+    return () => document.body.classList.remove('tv-mobile-chrome');
+  }, [isMobile]);
+
   // La cursor y el pointer-events del canvas dependen del estado de la herramienta.
   const canvasInteractive = activeTool !== null && activeTool !== 'select';
   const canvasCursor = activeTool && TOOLS[activeTool] ? TOOLS[activeTool].cursor : 'default';
@@ -783,188 +802,218 @@ export default function TradingViewPage() {
     ? indicatorsControllerRef.current.getValuesAt(Math.floor(displayedOhlc.time / 1000))
     : [];
 
-  // Helpers reutilizables: los mismos controles se renderizan en la barra
-  // superior (desktop) y en la inferior (mobile). Son stateless/sin IDs
-  // propios, así que duplicarlos en el árbol no introduce conflictos.
-  const renderTimeframes = (extraClass = '') => (
-    <div className={`${styles.tfGroup} ${extraClass}`}>
-      {TIMEFRAMES.map((t) => (
-        <button
-          key={t.value}
-          type="button"
-          className={`${styles.tfBtn} ${timeframe === t.value ? styles.tfBtnActive : ''}`}
-          onClick={() => setTimeframe(t.value)}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
+  // Datos de la vela mostrada (cambio intra-vela y respecto a la anterior),
+  // compartidos por el overlay de escritorio y la leyenda compacta móvil.
+  let ohlcInfo = null;
+  if (displayedOhlc) {
+    const intra = displayedOhlc.close - displayedOhlc.open;
+    const inter = prevCandle ? displayedOhlc.close - prevCandle.close : null;
+    ohlcInfo = {
+      intra,
+      intraPct: displayedOhlc.open ? (intra / displayedOhlc.open) * 100 : null,
+      inter,
+      interPct: prevCandle?.close ? (inter / prevCandle.close) * 100 : null,
+      upBar: displayedOhlc.close >= displayedOhlc.open,
+    };
+  }
 
-  const renderActionButtons = () => (
-    <>
-      <button
-        type="button"
-        className={styles.refreshBtn}
-        onClick={loadData}
-        disabled={loading}
-        title="Refrescar datos"
-        aria-label="Refrescar"
-      >
-        <span className={styles.btnIcon}>⟳</span>
-        <span className={styles.btnText}>{loading ? 'Cargando…' : 'Refrescar'}</span>
-      </button>
-      <button
-        type="button"
-        className={styles.refreshBtn}
-        onClick={() => setModalOpen(true)}
-        title="Configurar indicadores"
-        aria-label="Indicadores"
-      >
-        <span className={styles.btnIcon}>⚙️</span>
-        <span className={styles.btnText}>Indicadores ({visibleIndicatorsCount})</span>
-        <span className={styles.btnBadge} aria-hidden="true">{visibleIndicatorsCount}</span>
-      </button>
-      <button
-        type="button"
-        className={`${styles.refreshBtn} ${replayActive || replayPanelOpen ? styles.replayBtnActive : ''}`}
-        onClick={() => setReplayPanelOpen((v) => !v)}
-        title={replayActive ? 'Replay activo — abrir panel' : 'Modo Replay (simular formación de vela)'}
-        aria-label="Modo Replay"
-        aria-pressed={replayPanelOpen}
-      >
-        <span className={styles.btnIcon}>⏯</span>
-        <span className={styles.btnText}>Replay{replayActive ? ' ●' : ''}</span>
-      </button>
-      <button
-        type="button"
-        className={`${styles.refreshBtn} ${styles.settingsBtn}`}
-        onClick={() => setSettingsVisible((v) => !v)}
-        title={settingsVisible ? 'Ocultar ajustes (crosshair, escala)' : 'Mostrar ajustes (crosshair, escala)'}
-        aria-label={settingsVisible ? 'Ocultar ajustes' : 'Mostrar ajustes'}
-        aria-pressed={settingsVisible}
-      >
-        <svg className={styles.fsIcon} width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="8" cy="8" r="2.25" />
-          <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        className={`${styles.refreshBtn} ${styles.fullscreenBtn}`}
-        onClick={toggleFullscreen}
-        title={fullscreen ? 'Salir de pantalla completa (Esc)' : 'Pantalla completa'}
-        aria-label={fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
-        aria-pressed={fullscreen}
-      >
-        {fullscreen ? (
-          <svg className={styles.fsIcon} width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-            <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
-          </svg>
-        ) : (
-          <svg className={styles.fsIcon} width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-            <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
-          </svg>
-        )}
-      </button>
-    </>
-  );
+  const ohlcValues = displayedOhlc ? [
+    ['O', displayedOhlc.open],
+    ['H', displayedOhlc.high],
+    ['L', displayedOhlc.low],
+    ['C', displayedOhlc.close],
+  ] : [];
 
-  // Los selects con id= (crosshair-mode, price-scale-mode) se renderizan una
-  // sola vez para evitar ids duplicados en el DOM. Aparecen inline en desktop
-  // y como fila adicional en mobile cuando el usuario activa los ajustes.
-  const secondaryControlsNode = (
-    <>
-      <div className={`${styles.toolGroup} ${styles.toolGroupSecondary}`}>
-        <label htmlFor="crosshair-mode">Crosshair:</label>
-        <select
-          id="crosshair-mode"
-          className={styles.select}
-          value={crosshairMode}
-          onChange={(e) => setCrosshairMode(Number(e.target.value))}
-          title="Modo del crosshair"
-        >
-          {CROSSHAIR_MODES.map((m) => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
-      </div>
-      <div className={`${styles.toolGroup} ${styles.toolGroupSecondary}`}>
-        <label htmlFor="price-scale-mode">Escala:</label>
-        <select
-          id="price-scale-mode"
-          className={styles.select}
-          value={priceScaleMode}
-          onChange={(e) => setPriceScaleMode(Number(e.target.value))}
-          title="Escala de precio"
-        >
-          {PRICE_SCALE_MODES.map((m) => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
-      </div>
-    </>
-  );
+  const timeframeButtons = (btnClass, activeClass) => TIMEFRAMES.map((t) => (
+    <button
+      key={t.value}
+      type="button"
+      className={`${btnClass} ${timeframe === t.value ? activeClass : ''}`}
+      onClick={() => setTimeframe(t.value)}
+      aria-pressed={timeframe === t.value}
+    >
+      {t.label}
+    </button>
+  ));
 
-  const statsNode = (
-    <div className={styles.stats}>
-      {lastPrice != null && (
-        <span className={styles.statsItem}>
-          <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
-          <span className={styles.statsLabel}>{liveActive ? 'En vivo' : 'Último'}:</span>
-          <span className={styles.lastPrice}>
-            ${formatPrice(Number(lastPrice), pricePrecision)}
+  // Barra superior de escritorio: par, precio, temporalidades, acciones y
+  // (opcionalmente) crosshair + escala.
+  const desktopToolbar = (
+    <div className={styles.toolbar}>
+      <div className={styles.toolbarMain}>
+        <div className={styles.toolGroup}>
+          <label>Par:</label>
+          <button
+            type="button"
+            className={styles.assetButton}
+            onClick={() => setAssetPickerOpen(true)}
+            title={asset.name || asset.symbol}
+          >
+            <span className={styles.assetButtonSymbol}>{asset.symbol}</span>
+            <span className={styles.assetButtonSource}>{asset.datasource}</span>
+            <span className={styles.assetButtonCaret}>▾</span>
+          </button>
+        </div>
+        <div className={styles.stats}>
+          {lastPrice != null && (
+            <span className={styles.statsItem}>
+              <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
+              <span className={styles.statsLabel}>{liveActive ? 'En vivo' : 'Último'}:</span>
+              <span className={styles.lastPrice}>
+                ${formatPrice(Number(lastPrice), pricePrecision)}
+              </span>
+            </span>
+          )}
+          <span className={styles.statsItem}>
+            <span className={styles.statsLabel}>Candles:</span> {candleCount}
+            {loadingHistory && <span className={styles.histSpinner}>↻</span>}
+            {reachedHistoryEndRef.current && <span className={styles.histEnd} title="No hay más historia">·</span>}
           </span>
-        </span>
+        </div>
+      </div>
+
+      {settingsVisible && (
+        <div className={styles.toolbarSecondary}>
+          <div className={styles.toolGroup}>
+            <label htmlFor="crosshair-mode">Crosshair:</label>
+            <select
+              id="crosshair-mode"
+              className={styles.select}
+              value={crosshairMode}
+              onChange={(e) => setCrosshairMode(Number(e.target.value))}
+              title="Modo del crosshair"
+            >
+              {CROSSHAIR_MODES.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className={styles.toolGroup}>
+            <label htmlFor="price-scale-mode">Escala:</label>
+            <select
+              id="price-scale-mode"
+              className={styles.select}
+              value={priceScaleMode}
+              onChange={(e) => setPriceScaleMode(Number(e.target.value))}
+              title="Escala de precio"
+            >
+              {PRICE_SCALE_MODES.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
       )}
-      <span className={`${styles.statsItem} ${styles.statsItemSecondary}`}>
-        <span className={styles.statsLabel}>Candles:</span> {candleCount}
-        {loadingHistory && <span className={styles.histSpinner}>↻</span>}
-        {reachedHistoryEndRef.current && <span className={styles.histEnd} title="No hay más historia">·</span>}
-      </span>
+
+      <div className={styles.toolbarDesktop}>
+        <div className={styles.toolGroup}>
+          <label>Timeframe:</label>
+          <div className={styles.tfGroup}>
+            {timeframeButtons(styles.tfBtn, styles.tfBtnActive)}
+          </div>
+        </div>
+        <button
+          type="button"
+          className={styles.refreshBtn}
+          onClick={loadData}
+          disabled={loading}
+          title="Refrescar datos"
+        >
+          <span className={styles.btnIcon}><RefreshIcon size={14} /></span>
+          <span>{loading ? 'Cargando…' : 'Refrescar'}</span>
+        </button>
+        <button
+          type="button"
+          className={styles.refreshBtn}
+          onClick={() => setModalOpen(true)}
+          title="Configurar indicadores"
+        >
+          <span className={styles.btnIcon}><IndicatorsIcon size={14} /></span>
+          <span>Indicadores ({visibleIndicatorsCount})</span>
+        </button>
+        <button
+          type="button"
+          className={`${styles.refreshBtn} ${replayActive || replayPanelOpen ? styles.replayBtnActive : ''}`}
+          onClick={() => setReplayPanelOpen((v) => !v)}
+          title={replayActive ? 'Replay activo — abrir panel' : 'Modo Replay (simular formación de vela)'}
+          aria-pressed={replayPanelOpen}
+        >
+          <span className={styles.btnIcon}><ReplayIcon size={14} /></span>
+          <span>Replay{replayActive ? ' ●' : ''}</span>
+        </button>
+        <button
+          type="button"
+          className={`${styles.refreshBtn} ${styles.settingsBtn}`}
+          onClick={() => setSettingsVisible((v) => !v)}
+          title={settingsVisible ? 'Ocultar ajustes (crosshair, escala)' : 'Mostrar ajustes (crosshair, escala)'}
+          aria-label={settingsVisible ? 'Ocultar ajustes' : 'Mostrar ajustes'}
+          aria-pressed={settingsVisible}
+        >
+          <SlidersIcon size={14} />
+        </button>
+        <button
+          type="button"
+          className={`${styles.refreshBtn} ${styles.fullscreenBtn}`}
+          onClick={toggleFullscreen}
+          title={fullscreen ? 'Salir de pantalla completa (Esc)' : 'Pantalla completa'}
+          aria-label={fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+          aria-pressed={fullscreen}
+        >
+          {fullscreen ? <CollapseIcon size={14} /> : <ExpandIcon size={14} />}
+        </button>
+      </div>
     </div>
+  );
+
+  // Cabecera móvil: par + precio + pantalla completa, y debajo las
+  // temporalidades (scroll horizontal). Las herramientas viven abajo.
+  const mobileHeader = (
+    <>
+      <div className={styles.mHeader}>
+        <button
+          type="button"
+          className={styles.mAssetBtn}
+          onClick={() => setAssetPickerOpen(true)}
+          aria-label={`Cambiar par (actual: ${asset.symbol})`}
+        >
+          <span className={styles.mAssetText}>
+            <span className={styles.mAssetSymbol}>{asset.symbol}</span>
+            <span className={styles.mAssetSource}>{asset.datasource}</span>
+          </span>
+          <ChevronDownIcon size={16} />
+        </button>
+        <div className={styles.mPrice}>
+          <span className={styles.mPriceValue}>
+            {lastPrice != null ? formatPrice(Number(lastPrice), pricePrecision) : '—'}
+          </span>
+          <span className={styles.mPriceMeta}>
+            <span className={liveActive ? styles.liveDot : styles.liveDotIdle} />
+            {replayActive ? 'Replay' : (liveActive ? 'En vivo' : 'Último')}
+            {loadingHistory && <span className={styles.histSpinner}>↻</span>}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={styles.mIconBtn}
+          onClick={toggleFullscreen}
+          aria-label={fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+          aria-pressed={fullscreen}
+        >
+          {fullscreen ? <CollapseIcon /> : <ExpandIcon />}
+        </button>
+      </div>
+      <nav className={styles.mTfRow} aria-label="Temporalidad">
+        {timeframeButtons(styles.mTfBtn, styles.mTfBtnActive)}
+      </nav>
+    </>
   );
 
   return (
     <div
       ref={pageRef}
-      className={`${styles.page} ${fullscreen ? styles.pageFullscreen : ''} ${settingsVisible ? styles.settingsVisible : styles.settingsHidden}`}
+      className={`${styles.page} ${fullscreen ? styles.pageFullscreen : ''}`}
     >
-      <div className={styles.toolbar}>
-        {/* Siempre visible: asset + precio. En mobile es la única fila del top. */}
-        <div className={styles.toolbarMain}>
-          <div className={styles.toolGroup}>
-            <label>Par:</label>
-            <button
-              type="button"
-              className={styles.assetButton}
-              onClick={() => setAssetPickerOpen(true)}
-              title={asset.name || asset.symbol}
-            >
-              <span className={styles.assetButtonSymbol}>{asset.symbol}</span>
-              <span className={styles.assetButtonSource}>{asset.datasource}</span>
-              <span className={styles.assetButtonCaret}>▾</span>
-            </button>
-          </div>
-          {statsNode}
-        </div>
-
-        {/* Crosshair + escala: inline en desktop; en mobile, nueva fila
-            colapsable controlada por el toggle de ajustes. */}
-        <div className={styles.toolbarSecondary}>
-          {secondaryControlsNode}
-        </div>
-
-        {/* Timeframes + botones de acción: en desktop quedan inline arriba;
-            en mobile se ocultan y aparecen duplicados en la barra inferior. */}
-        <div className={styles.toolbarDesktop}>
-          <div className={styles.toolGroup}>
-            <label>Timeframe:</label>
-            {renderTimeframes()}
-          </div>
-          {renderActionButtons()}
-        </div>
-      </div>
+      {isMobile ? mobileHeader : desktopToolbar}
 
       <div ref={widgetContainerRef} className={styles.widgetContainer}>
         {error && <div className={styles.error}>{error}</div>}
@@ -982,46 +1031,36 @@ export default function TradingViewPage() {
             pointerEvents: canvasInteractive || drawings.selectedUid ? 'auto' : (activeTool === 'select' ? 'auto' : 'none'),
             cursor: canvasCursor,
           }}
-          onMouseDown={drawings.onMouseDown}
-          onMouseMove={drawings.onMouseMove}
-          onMouseUp={drawings.onMouseUp}
+          onPointerDown={drawings.onPointerDown}
+          onPointerMove={drawings.onPointerMove}
+          onPointerUp={drawings.onPointerUp}
         />
 
-        <DrawingToolbar
-          activeTool={activeTool}
-          onSelectTool={setActiveTool}
-          onClear={drawings.clearAll}
-          selectedUid={drawings.selectedUid}
-          onDeleteSelected={drawings.deleteSelected}
-          hasDrawings={drawings.drawings.length > 0}
-        />
+        {!isMobile && (
+          <DrawingToolbar
+            activeTool={activeTool}
+            onSelectTool={setActiveTool}
+            onClear={drawings.clearAll}
+            selectedUid={drawings.selectedUid}
+            onDeleteSelected={drawings.deleteSelected}
+            hasDrawings={drawings.drawings.length > 0}
+          />
+        )}
 
-        {/* Botón flotante para ocultar/mostrar overlays informativos
-            (OHLC + indicador legend + etiqueta de tiempo futuro). El botón
-            siempre está visible para poder volver a activarlos.
-            ReplayPanel y DrawingToolbar son herramientas, no se ocultan. */}
-        <button
-          type="button"
-          className={`${styles.overlaysToggle} ${overlaysHidden ? styles.overlaysToggleHidden : ''}`}
-          onClick={() => setOverlaysHidden((v) => !v)}
-          title={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
-          aria-label={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
-          aria-pressed={overlaysHidden}
-        >
-          {overlaysHidden ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-              <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-              <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-              <line x1="1" y1="1" x2="23" y2="23" />
-            </svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          )}
-        </button>
+        {/* Escritorio: botón flotante para ocultar/mostrar overlays
+            informativos. En móvil la opción vive en la hoja de Ajustes. */}
+        {!isMobile && (
+          <button
+            type="button"
+            className={`${styles.overlaysToggle} ${overlaysHidden ? styles.overlaysToggleHidden : ''}`}
+            onClick={() => setOverlaysHidden((v) => !v)}
+            title={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
+            aria-label={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
+            aria-pressed={overlaysHidden}
+          >
+            {overlaysHidden ? <EyeOffIcon size={16} /> : <EyeIcon size={16} />}
+          </button>
+        )}
 
         {!overlaysHidden && futureTimeLabel && (
           <div
@@ -1032,54 +1071,31 @@ export default function TradingViewPage() {
           </div>
         )}
 
-        {!overlaysHidden && displayedOhlc && (() => {
-          const intra = displayedOhlc.close - displayedOhlc.open;
-          const intraPct = displayedOhlc.open ? (intra / displayedOhlc.open) * 100 : null;
-          const inter = prevCandle ? displayedOhlc.close - prevCandle.close : null;
-          const interPct = prevCandle?.close ? (inter / prevCandle.close) * 100 : null;
-          const upBar = displayedOhlc.close >= displayedOhlc.open;
-          return (
-            <div className={styles.ohlcOverlay} aria-label="Valores OHLC">
-              <span className={styles.ohlcSymbol}>
-                {asset.symbol} · {timeframe.toUpperCase()} · {asset.datasource}
-              </span>
-              <span className={styles.ohlcGroup}>
-                <span className={styles.ohlcLabel}>O</span>
-                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.open, pricePrecision)}
+        {!isMobile && !overlaysHidden && ohlcInfo && (
+          <div className={styles.ohlcOverlay} aria-label="Valores OHLC">
+            <span className={styles.ohlcSymbol}>
+              {asset.symbol} · {timeframe.toUpperCase()} · {asset.datasource}
+            </span>
+            {ohlcValues.map(([label, value]) => (
+              <span key={label} className={styles.ohlcGroup}>
+                <span className={styles.ohlcLabel}>{label}</span>
+                <span className={`${styles.ohlcVal} ${ohlcInfo.upBar ? styles.ohlcUp : styles.ohlcDown}`}>
+                  {formatPrice(value, pricePrecision)}
                 </span>
               </span>
-              <span className={styles.ohlcGroup}>
-                <span className={styles.ohlcLabel}>H</span>
-                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.high, pricePrecision)}
-                </span>
+            ))}
+            <span className={`${styles.ohlcChange} ${ohlcInfo.intra >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
+              {formatChange(ohlcInfo.intra, pricePrecision)} ({formatPercent(ohlcInfo.intraPct)})
+            </span>
+            {ohlcInfo.inter != null && (
+              <span className={`${styles.ohlcChange} ${styles.ohlcChangeSecondary} ${ohlcInfo.inter >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
+                {formatChange(ohlcInfo.inter, pricePrecision)} ({formatPercent(ohlcInfo.interPct)})
               </span>
-              <span className={styles.ohlcGroup}>
-                <span className={styles.ohlcLabel}>L</span>
-                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.low, pricePrecision)}
-                </span>
-              </span>
-              <span className={styles.ohlcGroup}>
-                <span className={styles.ohlcLabel}>C</span>
-                <span className={`${styles.ohlcVal} ${upBar ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatPrice(displayedOhlc.close, pricePrecision)}
-                </span>
-              </span>
-              <span className={`${styles.ohlcChange} ${intra >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
-                {formatChange(intra, pricePrecision)} ({formatPercent(intraPct)})
-              </span>
-              {inter != null && (
-                <span className={`${styles.ohlcChange} ${styles.ohlcChangeSecondary} ${inter >= 0 ? styles.ohlcUp : styles.ohlcDown}`}>
-                  {formatChange(inter, pricePrecision)} ({formatPercent(interPct)})
-                </span>
-              )}
-            </div>
-          );
-        })()}
+            )}
+          </div>
+        )}
 
-        {!overlaysHidden && indicatorLegend.length > 0 && (
+        {!isMobile && !overlaysHidden && indicatorLegend.length > 0 && (
           <div className={styles.indicatorLegend} aria-label="Valores de indicadores">
             {indicatorLegend.map((ind) => (
               <div key={ind.uid} className={styles.legendRow}>
@@ -1111,6 +1127,62 @@ export default function TradingViewPage() {
           </div>
         )}
 
+        {/* Móvil: leyenda compacta. Una línea con el cierre y el cambio de la
+            vela (toca para ver O/H/L/C) y chips con el valor de cada
+            indicador. Deja libre casi todo el alto del gráfico. */}
+        {isMobile && drawMode && (
+          <MobileDrawingBanner
+            activeTool={activeTool}
+            canUndo={drawings.canUndo}
+            onUndo={drawings.undo}
+            onDone={exitDrawMode}
+          />
+        )}
+
+        {isMobile && !drawMode && !overlaysHidden && ohlcInfo && (
+          <div className={styles.mLegend}>
+            <button
+              type="button"
+              className={styles.mOhlcChip}
+              onClick={() => setOhlcExpanded((v) => !v)}
+              aria-expanded={ohlcExpanded}
+              aria-label={ohlcExpanded ? 'Ocultar valores OHLC' : 'Ver valores OHLC'}
+            >
+              {(ohlcExpanded ? ohlcValues : ohlcValues.slice(3)).map(([label, value]) => (
+                <span key={label} className={styles.ohlcGroup}>
+                  <span className={styles.ohlcLabel}>{label}</span>
+                  <span className={styles.ohlcVal}>{formatPrice(value, pricePrecision)}</span>
+                </span>
+              ))}
+              <span className={ohlcInfo.intra >= 0 ? styles.ohlcUp : styles.ohlcDown}>
+                {formatPercent(ohlcInfo.intraPct)}
+              </span>
+              <span className={`${styles.mChevron} ${ohlcExpanded ? styles.mChevronOpen : ''}`}>
+                <ChevronDownIcon size={12} />
+              </span>
+            </button>
+            {indicatorLegend.length > 0 && (
+              <div className={styles.mLegendChips}>
+                {indicatorLegend.map((ind) => (
+                  <span key={ind.uid} className={styles.mLegendChip}>
+                    <span
+                      className={styles.legendDot}
+                      style={{ background: ind.values[0]?.color || '#94a3b8' }}
+                      aria-hidden="true"
+                    />
+                    {formatIndicatorLabel(ind.type, ind.params, ind.label)}
+                    {ind.values[0] && (
+                      <span style={{ color: ind.values[0].color }}>
+                        {formatPrice(ind.values[0].value, pricePrecision)}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <ReplayPanel
           open={replayPanelOpen}
           onClose={() => setReplayPanelOpen(false)}
@@ -1119,17 +1191,44 @@ export default function TradingViewPage() {
         />
       </div>
 
-      {/* Barra inferior: sólo visible en mobile. Contiene los timeframes
-          (scroll horizontal) y los botones de acción, al estilo de la app
-          de TradingView en móvil. */}
-      <div className={styles.bottomBar}>
-        <div className={styles.bottomBarTf}>
-          {renderTimeframes(styles.tfGroupMobile)}
-        </div>
-        <div className={styles.bottomBarActions}>
-          {renderActionButtons()}
-        </div>
-      </div>
+      {isMobile && (drawMode ? (
+        <MobileDrawingBar
+          activeTool={activeTool}
+          onSelectTool={setActiveTool}
+          selectedUid={drawings.selectedUid}
+          onDeleteSelected={drawings.deleteSelected}
+        />
+      ) : (
+        <MobileTabBar
+          indicatorsCount={visibleIndicatorsCount}
+          replayActive={replayActive}
+          replayOpen={replayPanelOpen}
+          onIndicators={() => setModalOpen(true)}
+          onDraw={() => { setReplayPanelOpen(false); setDrawMode(true); }}
+          onReplay={() => setReplayPanelOpen((v) => !v)}
+          onSettings={() => setSettingsSheetOpen(true)}
+        />
+      ))}
+
+      {isMobile && (
+        <MobileSettingsSheet
+          open={settingsSheetOpen}
+          onClose={() => setSettingsSheetOpen(false)}
+          crosshairModes={CROSSHAIR_MODES}
+          crosshairMode={crosshairMode}
+          onCrosshairMode={setCrosshairMode}
+          priceScaleModes={PRICE_SCALE_MODES}
+          priceScaleMode={priceScaleMode}
+          onPriceScaleMode={setPriceScaleMode}
+          overlaysHidden={overlaysHidden}
+          onToggleOverlays={() => setOverlaysHidden((v) => !v)}
+          onRefresh={loadData}
+          loading={loading}
+          candleCount={candleCount}
+          hasDrawings={drawings.drawings.length > 0}
+          onClearDrawings={drawings.clearAll}
+        />
+      )}
 
       <IndicatorConfigModal
         open={modalOpen}

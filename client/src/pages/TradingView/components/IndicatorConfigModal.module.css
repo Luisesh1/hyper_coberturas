@@ -39,6 +39,9 @@
 }
 
 .closeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
   color: var(--text-secondary);
@@ -138,6 +141,87 @@
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes scaleIn { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
+/* Sólo móvil: asa de la hoja y botón «atrás» del paso de detalle. */
+.grabber { display: none; }
+.backBtn { display: none; }
+.bodyDetail {}
+
+/* Móvil: el modal pasa a hoja inferior de una columna. Primero la lista de
+   activos; tocar uno (o «Agregar») muestra su edición o el catálogo. */
+@media (max-width: 768px) {
+  .overlay {
+    align-items: flex-end;
+    backdrop-filter: none;
+    background: rgba(5, 6, 8, 0.55);
+  }
+  /* Fondo opaco: en escritorio la tarjeta es translúcida sobre el scrim
+     oscuro, pero como hoja dejaría ver el gráfico a través. */
+  .dialog,
+  .column,
+  .actions { background: #171a1f; }
+  .dialog {
+    width: 100%;
+    max-width: none;
+    max-height: 88vh;
+    max-height: 88dvh;
+    border-width: 1px 0 0;
+    border-radius: 18px 18px 0 0;
+    animation: sheetUp 0.2s ease;
+  }
+  .grabber {
+    display: block;
+    width: 40px;
+    height: 5px;
+    margin: 8px auto 0;
+    border-radius: 3px;
+    background: rgba(154, 163, 176, 0.45);
+    flex-shrink: 0;
+  }
+  .header {
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  }
+  .title { flex: 1; }
+  .backBtn,
+  .closeBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .body {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    max-height: none;
+    overflow: hidden;
+  }
+  .column { max-height: none; padding: var(--sp-3) var(--sp-4); }
+  .body:not(.bodyDetail) > .column:last-child,
+  .bodyDetail > .column:first-child { display: none; }
+  .activeItem { min-height: 56px; }
+  .activeItemActions button { min-width: 44px; min-height: 44px; }
+  .addBtn,
+  .catalogItem { min-height: 48px; }
+  /* 16px evita el zoom automático de iOS al enfocar el campo. */
+  .search,
+  .formInput { min-height: 44px; font-size: 16px; }
+  .actions {
+    padding: var(--sp-3) var(--sp-4);
+    padding-bottom: max(var(--sp-3), env(safe-area-inset-bottom, 0));
+  }
+  .cancelBtn,
+  .saveBtn { flex: 1; min-height: 48px; }
+}
+
+@keyframes sheetUp { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
 @media (prefers-reduced-motion: reduce) {
   .overlay, .dialog { animation: none; }
 }
@@ -162,6 +246,9 @@
 .activeItemParams { font-size: var(--fs-xs); color: var(--text-secondary); }
 .activeItemActions { display: flex; gap: 4px; }
 .activeItemActions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
   color: var(--text-secondary);
@@ -173,6 +260,10 @@
 .activeItemActions button:hover { color: var(--text-bright); background: rgba(255,255,255,0.06); }
 
 .addBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   width: 100%;
   padding: var(--sp-2);
   background: transparent;
@@ -221,6 +312,10 @@
   font-weight: var(--fw-bold);
 }
 .catalogItem {
+  width: 100%;
+  font-family: inherit;
+  text-align: left;
+  color: inherit;
   display: flex;
   justify-content: space-between;
   align-items: center;

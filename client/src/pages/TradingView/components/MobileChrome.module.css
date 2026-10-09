@@ -1,0 +1,323 @@
+/* ────────────────────────────────────────────────────────────────
+   UI móvil del gráfico (≤ 768px): barra de pestañas inferior, barra
+   contextual de dibujo y hojas inferiores. Todo en la zona del pulgar,
+   con áreas táctiles de al menos 44px.
+   ──────────────────────────────────────────────────────────────── */
+
+/* ── Barra de pestañas ─────────────────────────────────────────── */
+.tabBar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px 8px;
+  padding-bottom: max(6px, env(safe-area-inset-bottom, 0));
+  padding-left: max(8px, env(safe-area-inset-left, 0));
+  padding-right: max(8px, env(safe-area-inset-right, 0));
+  border-top: 1px solid rgba(120, 130, 145, 0.22);
+  background: #13161a;
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+.tab {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 52px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #c9ced6;
+  font-family: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tab:active { background: rgba(120, 130, 145, 0.14); }
+.tabActive { color: #8cc2ff; }
+.tabActive::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 30%;
+  right: 30%;
+  height: 2px;
+  border-radius: 2px;
+  background: #4a9eff;
+}
+
+.tabBadge {
+  position: absolute;
+  top: 3px;
+  left: calc(50% + 6px);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: #4a9eff;
+  color: #04111f;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.tabDot {
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 8px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #818cf8;
+  box-shadow: 0 0 0 2px #13161a;
+}
+
+/* ── Modo dibujo ───────────────────────────────────────────────── */
+/* Barra inferior: misma altura que la de pestañas (el gráfico no salta). */
+.drawBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  min-height: 64px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  padding-bottom: max(6px, env(safe-area-inset-bottom, 0));
+  padding-left: max(8px, env(safe-area-inset-left, 0));
+  padding-right: max(8px, env(safe-area-inset-right, 0));
+  border-top: 1px solid rgba(74, 158, 255, 0.4);
+  background: #171a1f;
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+.drawDivider {
+  width: 1px;
+  height: 28px;
+  background: rgba(120, 130, 145, 0.3);
+}
+
+/* Banner superior sobre el gráfico: pista, deshacer y salir. */
+.drawBanner {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  z-index: 16;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid rgba(74, 158, 255, 0.45);
+  border-radius: 14px;
+  background: rgba(23, 26, 31, 0.94);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  color: #e6e8ec;
+}
+
+.drawBannerText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawBannerTitle {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.drawHint {
+  font-size: 0.72rem;
+  color: #9aa3b0;
+}
+
+.iconBtn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #c9ced6;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.iconBtn:active { background: rgba(120, 130, 145, 0.16); }
+.iconBtn:disabled { color: #4f5661; cursor: default; background: transparent; }
+.iconBtnActive {
+  background: rgba(74, 158, 255, 0.18);
+  color: #8cc2ff;
+}
+.iconBtnDanger { color: #ff8a87; }
+
+.doneBtn {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: #4a9eff;
+  color: #04111f;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ── Hoja inferior ─────────────────────────────────────────────── */
+.sheetLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(5, 6, 8, 0.55);
+  cursor: default;
+  animation: sheetFade 0.16s ease;
+}
+
+.sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  max-height: 85dvh;
+  background: #171a1f;
+  border-top: 1px solid rgba(120, 130, 145, 0.28);
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
+  color: #e6e8ec;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  animation: sheetUp 0.2s ease;
+}
+
+.grabber {
+  width: 40px;
+  height: 5px;
+  margin: 8px auto 4px;
+  border-radius: 3px;
+  background: rgba(154, 163, 176, 0.45);
+  flex-shrink: 0;
+}
+
+.sheetHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px 6px 20px;
+  flex-shrink: 0;
+}
+
+.sheetTitle {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.sheetAction {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #8cc2ff;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sheetBody {
+  overflow-y: auto;
+  padding: 4px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+@keyframes sheetUp { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes sheetFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .sheet, .scrim { animation: none; }
+}
+
+/* ── Contenido de hojas: grupos, segmentados, filas ────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9aa3b0;
+}
+
+.segmented {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: #0f1114;
+}
+
+.segment {
+  min-height: 40px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9aa3b0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.segmentActive {
+  background: #262b33;
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.rowBtn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 1px solid rgba(120, 130, 145, 0.2);
+  border-radius: 12px;
+  background: #1a1e24;
+  color: #e6e8ec;
+  font-family: inherit;
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+}
+.rowBtn:disabled { opacity: 0.6; cursor: wait; }
+.rowBtnText { flex: 1; }
+.rowBtnMeta { font-size: 0.8rem; color: #9aa3b0; }

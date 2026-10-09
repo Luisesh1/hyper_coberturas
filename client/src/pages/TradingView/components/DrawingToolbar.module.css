@@ -60,16 +60,6 @@
   box-shadow: 0 0 0 2px rgba(15, 17, 20, 0.88);
 }
 
-.iconExpand {
-  font-size: 14px;
-  line-height: 1;
-}
-.iconCollapse {
-  font-size: 18px;
-  line-height: 1;
-  font-weight: 600;
-}
-
 .tool {
   width: 32px;
   height: 32px;
@@ -104,81 +94,4 @@
   margin: 4px 0;
 }
 
-.iconLine {
-  display: inline-block;
-  width: 18px;
-  height: 2px;
-  background: currentColor;
-  transform: rotate(-30deg);
-  border-radius: 1px;
-}
-.iconHLine {
-  display: inline-block;
-  width: 18px;
-  height: 2px;
-  background: currentColor;
-  border-radius: 1px;
-}
-.iconRect {
-  display: inline-block;
-  width: 16px;
-  height: 12px;
-  border: 1.5px solid currentColor;
-  border-radius: 2px;
-}
-.iconFib {
-  display: inline-block;
-  font-size: 16px;
-  font-weight: 700;
-  font-family: 'Times New Roman', serif;
-}
-.iconRuler {
-  font-size: 15px;
-}
-.iconSelect {
-  font-size: 14px;
-}
-.iconTrash {
-  font-size: 14px;
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Responsive — Mobile: la barra de dibujo queda dentro del widgetContainer
-   (que no toca el bottomBar). La ponemos arriba a la izquierda con targets
-   más grandes y disposición horizontal. No necesita safe-area insets porque
-   vive por encima del chart, no al borde de la pantalla.
-   ──────────────────────────────────────────────────────────────── */
-@media (max-width: 768px) {
-  .toolbar {
-    top: 8px;
-    left: 8px;
-    flex-direction: row;
-    gap: 2px;
-    padding: 4px;
-    background: rgba(15, 17, 20, 0.94);
-    border-radius: 10px;
-    flex-wrap: wrap;
-    max-width: calc(100vw - 16px);
-  }
-  .toolbarCollapsed {
-    top: 8px;
-    left: 8px;
-    padding: 3px;
-    background: rgba(15, 17, 20, 0.94);
-    border-radius: 10px;
-  }
-  .tool {
-    width: 44px;
-    height: 44px;
-    font-size: 16px;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .separator {
-    width: 1px;
-    height: auto;
-    margin: 0 2px;
-    align-self: stretch;
-  }
-  .iconExpand { font-size: 18px; }
-  .iconCollapse { font-size: 22px; }
-}
+/* En móvil esta barra no se renderiza: el modo dibujo usa MobileDrawingBar. */

@@ -4,7 +4,7 @@ import { TOOLS, newDrawing } from './catalog';
 import { renderDrawing } from './renderer';
 import { findHitDrawing } from './hit-test';
 
-// Convierte un evento mouse a coordenadas relativas al canvas.
+// Convierte un evento de puntero (ratón, dedo o lápiz) a coordenadas relativas al canvas.
 function eventToLocal(event, canvas) {
   const rect = canvas.getBoundingClientRect();
   return {
@@ -74,6 +74,8 @@ function makeInverseProjector(chartRef, seriesRef, candlesRef, timeframe) {
   };
 }
 
+const HISTORY_LIMIT = 50;
+
 function guessSecondsPerBar(timeframe) {
   const map = {
     '1m': 60, '5m': 300, '15m': 900, '1h': 3600,
@@ -106,6 +108,9 @@ export function useDrawings({
   const saveTimerRef = useRef(null);
   const drawingsRef = useRef(drawings);
   drawingsRef.current = drawings;
+  // Historial para deshacer: listas anteriores a cada cambio confirmado.
+  const historyRef = useRef([]);
+  const [canUndo, setCanUndo] = useState(false);
 
   // --------------- Carga inicial por símbolo ---------------
   useEffect(() => {
@@ -116,6 +121,8 @@ export function useDrawings({
         if (cancelled) return;
         const list = Array.isArray(res?.drawings) ? res.drawings : [];
         setDrawings(list);
+        historyRef.current = [];
+        setCanUndo(false);
         setSelectedUid(null);
         draftRef.current = null;
         setRulerSnapshot(null);
@@ -136,6 +143,26 @@ export function useDrawings({
       });
     }, 300);
   }, [symbol, onNotify]);
+
+  // Aplica una lista nueva guardando la anterior en el historial.
+  const commit = useCallback((nextList) => {
+    historyRef.current = [...historyRef.current.slice(-(HISTORY_LIMIT - 1)), drawingsRef.current];
+    setCanUndo(true);
+    drawingsRef.current = nextList;
+    setDrawings(nextList);
+    schedulePersist(nextList);
+  }, [schedulePersist]);
+
+  const undo = useCallback(() => {
+    const previous = historyRef.current[historyRef.current.length - 1];
+    if (!previous) return;
+    historyRef.current = historyRef.current.slice(0, -1);
+    setCanUndo(historyRef.current.length > 0);
+    drawingsRef.current = previous;
+    setDrawings(previous);
+    schedulePersist(previous);
+    setSelectedUid(null);
+  }, [schedulePersist]);
 
   // --------------- Helpers de render ---------------
   const redraw = useCallback(() => {
@@ -221,10 +248,12 @@ export function useDrawings({
     };
   }, [chartRef, containerRef, redraw]);
 
-  // --------------- Mouse handlers ---------------
-  const onMouseDown = useCallback((event) => {
+  // --------------- Pointer handlers (ratón y táctil) ---------------
+  const onPointerDown = useCallback((event) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    // Captura el puntero para recibir el `up` aunque el dedo salga del canvas.
+    try { event.currentTarget?.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
     const local = eventToLocal(event, canvas);
     cursorRef.current = local;
 
@@ -248,9 +277,7 @@ export function useDrawings({
     if (activeTool === 'horizontal') {
       const next = newDrawing('horizontal');
       next.anchors = [{ price: coords.price }];
-      const updated = [...drawingsRef.current, next];
-      setDrawings(updated);
-      schedulePersist(updated);
+      commit([...drawingsRef.current, next]);
       setActiveTool?.(null);
       return;
     }
@@ -274,9 +301,9 @@ export function useDrawings({
     // trendline, rectangle, fib: drag (mousedown=A, mouseup=B)
     draftRef.current = { type: activeTool, anchors: [coords], style: { ...(meta.defaultStyle || {}) } };
     redraw();
-  }, [activeTool, canvasRef, chartRef, seriesRef, candlesRef, timeframe, schedulePersist, setActiveTool, redraw]);
+  }, [activeTool, canvasRef, chartRef, seriesRef, candlesRef, timeframe, commit, setActiveTool, redraw]);
 
-  const onMouseMove = useCallback((event) => {
+  const onPointerMove = useCallback((event) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     cursorRef.current = eventToLocal(event, canvas);
@@ -285,7 +312,7 @@ export function useDrawings({
     }
   }, [canvasRef, activeTool, selectedUid, redraw]);
 
-  const onMouseUp = useCallback((event) => {
+  const onPointerUp = useCallback((event) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const local = eventToLocal(event, canvas);
@@ -316,13 +343,11 @@ export function useDrawings({
       const next = newDrawing(draft.type);
       if (!next) { draftRef.current = null; return; }
       next.anchors = [draft.anchors[0], coords];
-      const updated = [...drawingsRef.current, next];
-      setDrawings(updated);
-      schedulePersist(updated);
       draftRef.current = null;
+      commit([...drawingsRef.current, next]);
       setActiveTool?.(null);
     }
-  }, [canvasRef, chartRef, seriesRef, candlesRef, timeframe, schedulePersist, setActiveTool, redraw]);
+  }, [canvasRef, chartRef, seriesRef, candlesRef, timeframe, commit, setActiveTool, redraw]);
 
   const onKeyDown = useCallback((event) => {
     if (event.key === 'Escape') {
@@ -334,13 +359,11 @@ export function useDrawings({
       setActiveTool?.(null);
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
       if (selectedUid) {
-        const updated = drawingsRef.current.filter((d) => d.uid !== selectedUid);
-        setDrawings(updated);
-        schedulePersist(updated);
+        commit(drawingsRef.current.filter((d) => d.uid !== selectedUid));
         setSelectedUid(null);
       }
     }
-  }, [rulerSnapshot, selectedUid, schedulePersist, setActiveTool, redraw]);
+  }, [rulerSnapshot, selectedUid, commit, setActiveTool, redraw]);
 
   useEffect(() => {
     window.addEventListener('keydown', onKeyDown);
@@ -348,30 +371,29 @@ export function useDrawings({
   }, [onKeyDown]);
 
   const clearAll = useCallback(() => {
-    setDrawings([]);
-    schedulePersist([]);
+    if (drawingsRef.current.length > 0) commit([]);
     setSelectedUid(null);
     setRulerSnapshot(null);
     draftRef.current = null;
-  }, [schedulePersist]);
+  }, [commit]);
 
   const deleteSelected = useCallback(() => {
     if (!selectedUid) return;
-    const updated = drawingsRef.current.filter((d) => d.uid !== selectedUid);
-    setDrawings(updated);
-    schedulePersist(updated);
+    commit(drawingsRef.current.filter((d) => d.uid !== selectedUid));
     setSelectedUid(null);
-  }, [selectedUid, schedulePersist]);
+  }, [selectedUid, commit]);
 
   return {
     drawings,
     selectedUid,
     rulerSnapshot,
-    onMouseDown,
-    onMouseMove,
-    onMouseUp,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
     clearAll,
     deleteSelected,
+    undo,
+    canUndo,
     redraw,
   };
 }

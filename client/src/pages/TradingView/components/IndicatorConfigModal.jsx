@@ -4,12 +4,15 @@ import ActiveIndicatorList from './ActiveIndicatorList';
 import IndicatorCatalogPanel from './IndicatorCatalogPanel';
 import IndicatorSettingsForm from './IndicatorSettingsForm';
 import { makeIndicatorEntry, INDICATORS } from '../indicators/catalog';
+import { ChevronLeftIcon, CloseIcon } from './icons';
 
 export default function IndicatorConfigModal({ open, initialIndicators, onSave, onCancel }) {
   const [draft, setDraft] = useState([]);
   const [selectedUid, setSelectedUid] = useState(null);
   const [rightMode, setRightMode] = useState('catalog'); // 'catalog' | 'edit'
   const [saving, setSaving] = useState(false);
+  // Móvil (una sola columna): false = lista de activos, true = catálogo o edición.
+  const [showDetail, setShowDetail] = useState(false);
 
   // Resetea estado al abrir
   useEffect(() => {
@@ -17,6 +20,7 @@ export default function IndicatorConfigModal({ open, initialIndicators, onSave, 
       setDraft(Array.isArray(initialIndicators) ? JSON.parse(JSON.stringify(initialIndicators)) : []);
       setSelectedUid(null);
       setRightMode('catalog');
+      setShowDetail(false);
       setSaving(false);
     }
   }, [open, initialIndicators]);
@@ -43,11 +47,13 @@ export default function IndicatorConfigModal({ open, initialIndicators, onSave, 
     setDraft((prev) => [...prev, entry]);
     setSelectedUid(entry.uid);
     setRightMode('edit');
+    setShowDetail(true);
   };
 
   const handleSelect = (uid) => {
     setSelectedUid(uid);
     setRightMode('edit');
+    setShowDetail(true);
   };
 
   const handleToggleVisible = (uid) => {
@@ -78,12 +84,18 @@ export default function IndicatorConfigModal({ open, initialIndicators, onSave, 
   return (
     <div className={styles.overlay} onClick={onCancel} role="dialog" aria-modal="true" aria-label="Configurar indicadores">
       <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.grabber} aria-hidden="true" />
         <div className={styles.header}>
-          <span className={styles.title}>⚙️ Indicadores</span>
-          <button type="button" className={styles.closeBtn} onClick={onCancel} aria-label="Cerrar">✕</button>
+          {showDetail && (
+            <button type="button" className={styles.backBtn} onClick={() => setShowDetail(false)} aria-label="Volver a la lista">
+              <ChevronLeftIcon size={20} />
+            </button>
+          )}
+          <span className={styles.title}>Indicadores</span>
+          <button type="button" className={styles.closeBtn} onClick={onCancel} aria-label="Cerrar"><CloseIcon size={18} /></button>
         </div>
 
-        <div className={styles.body}>
+        <div className={`${styles.body} ${showDetail ? styles.bodyDetail : ''}`}>
           <div className={styles.column}>
             <ActiveIndicatorList
               indicators={draft}
@@ -91,7 +103,7 @@ export default function IndicatorConfigModal({ open, initialIndicators, onSave, 
               onSelect={handleSelect}
               onToggleVisible={handleToggleVisible}
               onRemove={handleRemove}
-              onAddNew={() => { setSelectedUid(null); setRightMode('catalog'); }}
+              onAddNew={() => { setSelectedUid(null); setRightMode('catalog'); setShowDetail(true); }}
             />
           </div>
           <div className={styles.column}>
