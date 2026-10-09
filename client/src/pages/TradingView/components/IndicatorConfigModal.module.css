@@ -210,8 +210,7 @@
   .addBtn,
   .catalogItem { min-height: 48px; }
   /* 16px evita el zoom automático de iOS al enfocar el campo. */
-  .search,
-  .formInput { min-height: 44px; font-size: 16px; }
+  .search { min-height: 44px; font-size: 16px; }
   .actions {
     padding: var(--sp-3) var(--sp-4);
     padding-bottom: max(var(--sp-3), env(safe-area-inset-bottom, 0));
@@ -331,29 +330,3 @@
 .catalogItemLabel { color: var(--text-bright); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
 .catalogItemFull { color: var(--text-secondary); font-size: var(--fs-xs); }
 
-/* ----------- SettingsForm ----------- */
-
-.form { display: flex; flex-direction: column; gap: var(--sp-3); }
-.formRow { display: flex; flex-direction: column; gap: 4px; }
-.formLabel { font-size: var(--fs-xs); color: var(--text-secondary); }
-.formInput {
-  padding: var(--sp-2) var(--sp-3);
-  background: rgba(0,0,0,0.3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text-bright);
-  font-size: var(--fs-sm);
-}
-.formInput:focus { outline: none; border-color: var(--indigo); }
-.formInputRow { display: flex; align-items: center; gap: var(--sp-2); }
-.colorInput { width: 40px; height: 32px; padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
-.checkboxLabel { display: flex; align-items: center; gap: var(--sp-2); color: var(--text-bright); font-size: var(--fs-sm); cursor: pointer; }
-.formHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-bottom: var(--sp-2);
-  border-bottom: 1px solid var(--border);
-}
-.formTitle { font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--text-bright); }
-.formType { font-size: var(--fs-xs); color: var(--text-secondary); }

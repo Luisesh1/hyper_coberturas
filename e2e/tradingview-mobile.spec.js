@@ -179,6 +179,48 @@ test.describe('TradingView en móvil (390px)', () => {
   });
 });
 
+test.describe('TradingView en móvil — temporalidades e indicadores', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('favoritas + «más» y el botón Log sincronizado con Ajustes', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/trading-view?symbol=ETH&datasource=hyperliquid&tf=15m');
+    const row = page.getByRole('navigation', { name: 'Temporalidad' });
+    await expect(row.getByRole('button', { name: '1W', exact: true })).toHaveCount(0);
+
+    await row.getByRole('button', { name: 'Más temporalidades' }).click();
+    const sheet = page.getByRole('dialog', { name: 'Temporalidad' });
+    await sheet.getByRole('button', { name: /Marcar 1W como favorita/ }).click();
+    await sheet.getByRole('button', { name: '1W', exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(row.getByRole('button', { name: '1W', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+    await row.getByRole('button', { name: 'Log' }).click();
+    await expect(row.getByRole('button', { name: 'Log' })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Ajustes' }).click();
+    await expect(page.getByRole('radio', { name: 'Log' })).toHaveAttribute('aria-checked', 'true');
+    expect(await horizontalOverflow(page)).toBe(0);
+  });
+
+  test('deslizar una fila de indicador muestra «Quitar» y lo elimina', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/trading-view?symbol=ETH&datasource=hyperliquid&tf=15m');
+    await page.getByRole('button', { name: /Indicadores/ }).click();
+    const sheet = page.getByRole('dialog', { name: 'Configurar indicadores' });
+    await expect(sheet.getByText('Activos (1)')).toBeVisible();
+
+    const label = sheet.getByText(/Squeeze/).first();
+    const b = await label.boundingBox();
+    await page.mouse.move(b.x + 200, b.y + 10);
+    await page.mouse.down();
+    await page.mouse.move(b.x + 20, b.y + 12, { steps: 8 });
+    await page.mouse.up();
+
+    await sheet.getByRole('button', { name: /^Quitar / }).click();
+    await expect(sheet.getByText('Activos (0)')).toBeVisible();
+  });
+});
+
 test.describe('TradingView en escritorio', () => {
   test.use({ viewport: { width: 1400, height: 900 } });
 
