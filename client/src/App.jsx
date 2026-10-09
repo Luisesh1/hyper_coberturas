@@ -86,7 +86,7 @@ function AppContent() {
   }, [location.pathname]);
 
   return (
-    <div className={styles.app}>
+    <div className={`${styles.app} ${isFullscreen ? styles.appFullscreen : ''}`}>
 
       {menuOpen && (
         <div className={styles.offCanvasOverlay} onClick={() => setMenuOpen(false)} aria-hidden="true" />

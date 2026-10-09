@@ -600,7 +600,9 @@
 .replayPanel {
   position: absolute;
   top: 52px;                  /* deja espacio al overlay OHLC */
-  right: 12px;
+  /* A la izquierda, junto a la barra de dibujo: a la derecha tapaba la
+     leyenda de indicadores y las velas más recientes. */
+  left: 64px;
   z-index: 20;
   width: 320px;
   max-width: calc(100% - 24px);
@@ -679,8 +681,10 @@
   min-width: 64px;
 }
 
+/* Base 0: la fecha cede ancho para que el botón del dado quepa en la
+   misma línea (con base auto, el campo empujaba el botón a otra fila). */
 .replayDatetime {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   padding: 5px 8px;
   border-radius: 4px;

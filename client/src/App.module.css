@@ -41,6 +41,30 @@ canvas {
   overflow-x: clip;
 }
 
+/* Rutas a pantalla completa (TradingView): la app mide exactamente la
+   ventana y el contenido rellena lo que deje la cabecera. Así, si la
+   cabecera cambia de alto (estado WS, badges que se reacomodan), el
+   gráfico se encoge en vez de empujar la página y provocar scroll. */
+.appFullscreen {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.appFullscreen .mainFullscreen {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+  /* Sin margen en móvil: el gráfico va de borde a borde (las reglas
+     responsive de .main añadían 10-16px alrededor). */
+  padding: 0 env(safe-area-inset-right, 0) 0 env(safe-area-inset-left, 0);
+}
+.appFullscreen .content.contentFullscreen {
+  overflow: hidden;
+  height: 100%;
+}
+
 /* ── Header ────────────────────────────────────────────────────── */
 .header {
   display: flex;
