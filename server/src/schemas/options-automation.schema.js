@@ -47,7 +47,31 @@ const createBacktestSchema = z.object({
   volPremiumPct: z.number().min(-90).max(500).optional(),
 }).refine((v) => v.strategyId != null || v.template, { message: 'Indica strategyId o template', path: ['template'] });
 
+// Bots por alertas: los rangos de params los valida el template `alert_signal`.
+const alertIds = z.array(z.number().int().positive()).min(1).max(50);
+const autoBotParams = z.record(
+  z.string(),
+  z.union([z.number(), z.string(), z.null(), z.array(z.number().int().positive())])
+).optional();
+
+const createAutoBotSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  underlying,
+  alertIds,
+  params: autoBotParams,
+  limits,
+});
+
+const updateAutoBotSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  alertIds: alertIds.optional(),
+  params: autoBotParams,
+  limits,
+});
+
 module.exports = {
+  createAutoBotSchema,
+  updateAutoBotSchema,
   createStrategySchema,
   updateStrategySchema,
   strategyModeSchema,

@@ -142,13 +142,18 @@ function createOptionsStrategiesService(deps = {}) {
     return strategy;
   }
 
-  async function list(userId) {
-    const [strategies, pnl, openCounts, lastEvents] = await Promise.all([
+  /**
+   * Listado con PnL 30 d, posiciones abiertas y estado. Por defecto excluye
+   * los bots por alertas (`alert_signal`); `{ alertBots: true }` devuelve solo esos.
+   */
+  async function list(userId, { alertBots = false } = {}) {
+    const [all, pnl, openCounts, lastEvents] = await Promise.all([
       repo.listStrategies(userId),
       repo.pnlByStrategySince(userId, now() - 30 * DAY_MS),
       repo.openCountsByStrategy(userId),
       repo.lastEventsByUser(userId),
     ]);
+    const strategies = all.filter((s) => templates.isSignalDriven(s.template) === alertBots);
     return strategies.map((s) => {
       const pnl30d = { shadow: 0, live: 0 };
       for (const row of pnl) if (row.strategyId === s.id) pnl30d[row.mode] = round(row.pnlUsdt);
@@ -163,8 +168,12 @@ function createOptionsStrategiesService(deps = {}) {
     });
   }
 
-  async function create(userId, body = {}) {
+  /** `opts.alertBots`: lo llama el servicio de bots por alertas, que ya validó las alertas. */
+  async function create(userId, body = {}, opts = {}) {
     const template = templates.getTemplate(body.template);
+    if (template.signalDriven && !opts.alertBots) {
+      throw new ValidationError('Los bots por alertas se crean desde /options/auto-bots');
+    }
     if (body.mode === 'live') {
       throw new ValidationError('Una estrategia nueva no puede nacer en modo real: créala en sombra y cámbiala con PUT /:id/mode');
     }
@@ -199,8 +208,12 @@ function createOptionsStrategiesService(deps = {}) {
     };
   }
 
-  async function update(userId, id, body = {}) {
+  async function update(userId, id, body = {}, opts = {}) {
     const strategy = await requireStrategy(userId, id);
+    if (templates.isSignalDriven(strategy.template) && !opts.alertBots
+      && (body.underlying !== undefined || (body.params && body.params.alertIds !== undefined))) {
+      throw new ValidationError('Las alertas y el subyacente de un bot se editan desde /options/auto-bots');
+    }
     const patch = {};
     if (body.name !== undefined) {
       const name = String(body.name || '').trim();

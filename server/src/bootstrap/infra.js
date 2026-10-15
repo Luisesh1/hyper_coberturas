@@ -21,6 +21,7 @@ const botRegistry = require('../services/bot.registry');
 const optionsStrategyRunner = require('../services/options/options-strategy-runner.service');
 const optionsIvRecorder = require('../services/options/options-iv-recorder.service');
 const optionsBacktestService = require('../services/options/options-backtest.service');
+const optionsAutoTradingService = require('../services/options/options-auto-trading.service');
 
 // Hooks de proceso para capturar promesas/errores no manejados.
 // Se instalan en todos los entornos: en prod un reject silencioso en un
@@ -88,6 +89,7 @@ async function bootstrapInfra(httpServer) {
   // limpieza de backtests que murieron con el proceso anterior.
   optionsStrategyRunner.start();
   optionsIvRecorder.start();
+  optionsAutoTradingService.start();
   optionsBacktestService.start().catch((err) =>
     logger.warn('options_backtests_start_failed', { error: err.message })
   );
@@ -109,6 +111,7 @@ async function bootstrapInfra(httpServer) {
       alertsSchedulerService.stop();
       optionsStrategyRunner.stop();
       optionsIvRecorder.stop();
+      optionsAutoTradingService.stop();
       optionsBacktestService.stop();
       await hedgeRegistry.destroyAll().catch((err) =>
         logger.warn('hedge_registry_shutdown_error', { error: err.message })

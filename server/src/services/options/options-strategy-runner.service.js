@@ -94,6 +94,20 @@ class OptionsStrategyRunner {
     this.intervalMs = deps.intervalMs || DEFAULT_INTERVAL_MS;
     this.interval = null;
     this.running = false;
+    // Cola por estrategia: el tick y una señal no evalúan la misma a la vez.
+    this.locks = new Map();
+  }
+
+  async withLock(strategyId, fn) {
+    const previous = this.locks.get(strategyId) || Promise.resolve();
+    const run = previous.catch(() => {}).then(fn);
+    const tail = run.catch(() => {});
+    this.locks.set(strategyId, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(strategyId) === tail) this.locks.delete(strategyId);
+    }
   }
 
   start() {
@@ -120,7 +134,7 @@ class OptionsStrategyRunner {
       const strategies = await this.repo.listActiveStrategies();
       for (const strategy of strategies) {
         try {
-          await this.runStrategy(strategy, tickCtx);
+          await this.withLock(strategy.id, () => this.runStrategy(strategy, tickCtx));
         } catch (err) {
           this.logger.warn('options_strategy_eval_failed', { strategyId: strategy.id, error: err.message });
           await this.recordOutcome(strategy, 'shadow', { type: 'error', reason: 'eval_error', detail: `Error al evaluar: ${err.message}` }, tickCtx);
@@ -130,6 +144,17 @@ class OptionsStrategyRunner {
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Evalúa una estrategia con una señal (bots por alertas) al momento, con el
+   * mismo contexto que el tick. Devuelve las acciones del template por modo y
+   * lo que produjeron: llenados (`booked`) y motivos de skip/hold/error.
+   */
+  async runForSignal(strategy, signal) {
+    const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
+    const actions = await this.withLock(strategy.id, () => this.runStrategy(strategy, tickCtx));
+    return { actions, produced: tickCtx.produced };
   }
 
   // ---------- datos de mercado (caché por pasada) ----------
@@ -187,11 +212,16 @@ class OptionsStrategyRunner {
     const { base, chain } = await this.targetChain(strategy, params, tickCtx);
     const spot = num(chain?.spot) ?? num(base?.spot);
     const modes = strategy.mode === 'live' ? ['shadow', 'live'] : ['shadow'];
+    const byMode = {};
 
     for (const mode of modes) {
       const open = await this.repo.listOpenPositions(strategy.id, mode);
       const positions = await this.enrichPositions(open, chain);
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
+      // Solo los bots por alertas limitan operaciones por día.
+      const tradesToday = template.signalDriven
+        ? await this.repo.countEventsSince(strategy.id, mode, 'open', utcDayStart(tickCtx.now))
+        : undefined;
       const actions = template.evaluate({
         now: tickCtx.now,
         underlying: strategy.underlying,
@@ -201,7 +231,10 @@ class OptionsStrategyRunner {
         params,
         lastOpenedAt,
         mode,
+        signal: tickCtx.signal || null,
+        tradesToday,
       });
+      byMode[mode] = actions;
       const ctx = { ...tickCtx, spot, positions, params, mode };
       for (const action of actions) {
         try {
@@ -218,6 +251,7 @@ class OptionsStrategyRunner {
         }
       }
     }
+    return byMode;
   }
 
   /**
@@ -225,6 +259,7 @@ class OptionsStrategyRunner {
    * tabla de eventos con una fila cada 5 minutos.
    */
   async recordOutcome(strategy, mode, action, tickCtx) {
+    tickCtx.produced?.push({ mode, type: action.type, reason: action.reason, detail: action.detail || action.reason });
     const state = strategy.state || {};
     const lastReasons = { ...(state.lastReasons || {}) };
     const key = `${action.type}:${action.reason}:${action.type === 'error' ? action.detail : ''}`;
@@ -321,6 +356,7 @@ class OptionsStrategyRunner {
       createdAt: ctx.now,
     });
     await this.resetOutcome(strategy, mode);
+    ctx.produced?.push({ mode, type: action.type, reason: action.reason, detail: action.detail || action.reason, booked: true, event });
     return event;
   }
 
