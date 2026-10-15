@@ -61,6 +61,13 @@ class OptionsLiveExecution {
     if (!this.enabled) return { status: 'disabled' };
     if (!['open', 'close'].includes(action.type)) throw new Error('Unsupported live action');
     const client = await this.credentials.getClientForUser(strategy.userId);
+    if (typeof client.getPositions !== 'function' ||
+        typeof this.repo.assertExchangeExposure !== 'function') {
+      throw new Error('Binance position reconciliation is unavailable');
+    }
+    // No enviar órdenes si existen posiciones ajenas o fills que todavía
+    // no figuran en el ledger local.
+    await this.repo.assertExchangeExposure(strategy.userId, await client.getPositions());
     const legs = action.legs || [];
     if (!legs.length || legs.length > 20) throw new Error('Invalid order batch');
     if (legs.some((leg) => !leg.symbol || !['BUY', 'SELL'].includes(leg.side) ||
