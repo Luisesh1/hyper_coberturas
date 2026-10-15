@@ -10,6 +10,7 @@ const settingsService = require('../src/services/settings.service');
 const tgRegistry = require('../src/services/telegram.registry');
 const telegramCommandService = require('../src/services/telegram-command.service');
 const hyperliquidAccountsService = require('../src/services/hyperliquid-accounts.service');
+const optionsCredentials = require('../src/services/options/options-credentials.service');
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -48,7 +49,9 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
   const originalGetAlchemy = settingsService.getAlchemy;
   const originalGetDeltaNeutralRiskControls = settingsService.getDeltaNeutralRiskControls;
   const originalListAccounts = hyperliquidAccountsService.listAccounts;
+  const originalGetBinanceOptions = optionsCredentials.get;
 
+  optionsCredentials.get = async () => ({ configured: true, alias: 'Opciones', apiKeyMasked: 'AAAA…4444' });
   settingsService.getTelegram = async () => ({
     token: '1234567890',
     chatId: '999',
@@ -93,7 +96,9 @@ test('GET /api/settings devuelve defaults resumidos y mascara el token de Telegr
       count: 2,
       hasDefault: true,
     });
+    assert.deepEqual(json.data.binanceOptions, { configured: true, alias: 'Opciones' });
   } finally {
+    optionsCredentials.get = originalGetBinanceOptions;
     authService.validateSessionToken = originalValidateSessionToken;
     settingsService.getTelegram = originalGetTelegram;
     settingsService.getWallet = originalGetWallet;

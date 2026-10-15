@@ -119,6 +119,18 @@ test('errores de red, rate limit, rechazo y 5xx tienen su clase', async () => {
   assert.equal(server.status, 502);
 });
 
+test('los orderId grandes se conservan como string exacto', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => '[{"orderId":4611875134427365377,"price":"100","createTime":1700000000000}]',
+  });
+  const client = createBinanceOptionsClient({ apiKey: API_KEY, apiSecret: API_SECRET, fetchImpl });
+  const [order] = await client.getOpenOrders();
+  assert.equal(order.orderId, '4611875134427365377');
+  assert.equal(order.createTime, 1700000000000);
+});
+
 test('getApiRestrictions usa el host spot con firma', async () => {
   const { calls, fetchImpl } = recordingFetch(() => jsonResponse({ ipRestrict: true }));
   const client = createBinanceOptionsClient({ apiKey: API_KEY, apiSecret: API_SECRET, fetchImpl });

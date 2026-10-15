@@ -47,6 +47,26 @@ function buildQuery(params = {}) {
 }
 
 /**
+ * Parsea JSON conservando como string los enteros de 16+ dígitos: los
+ * orderId de Binance Opciones superan Number.MAX_SAFE_INTEGER y perderían
+ * precisión (y con ello no se podría cancelar la orden).
+ */
+function parseJsonPreservingBigInts(text) {
+  if (!text) return null;
+  const safe = String(text).replace(/([:[,]\s*)(-?\d{16,})(?=\s*[,\]}])/g, '$1"$2"');
+  return JSON.parse(safe);
+}
+
+async function readBody(res) {
+  try {
+    if (typeof res.text === 'function') return parseJsonPreservingBigInts(await res.text());
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Elimina de un texto cualquier aparición de credenciales o firmas.
  */
 function scrubSecrets(text, secrets = []) {
@@ -140,7 +160,7 @@ function createBinanceOptionsClient({
       clearTimeout(timer);
     }
 
-    const body = await res.json().catch(() => null);
+    const body = await readBody(res);
     if (!res.ok || (body && typeof body === 'object' && !Array.isArray(body) && Number(body.code) < 0)) {
       const appErr = normalizeBinanceError({ httpStatus: res.ok ? 400 : res.status, body, path, secrets });
       logger.warn('binance_options_request_failed', {
@@ -234,6 +254,7 @@ module.exports = {
   buildQuery,
   normalizeBinanceError,
   scrubSecrets,
+  parseJsonPreservingBigInts,
   DEFAULT_BASE_URL,
   DEFAULT_SPOT_BASE_URL,
 };

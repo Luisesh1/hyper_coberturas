@@ -8,6 +8,9 @@
  * POST /api/settings/telegram/test→ envía mensaje de prueba
  * GET  /api/settings/wallet       → address del usuario (privateKey no se devuelve)
  * PUT  /api/settings/wallet       → guarda privateKey + address del usuario
+ * GET|PUT|DELETE /api/settings/binance-options → credenciales de Binance Opciones (enmascaradas)
+ * POST /api/settings/binance-options/test      → comprueba firma, cuenta y restricciones de la key
+ * GET|PUT /api/settings/options-limits         → límites globales del módulo de opciones
  */
 
 const { Router } = require('express');
@@ -20,6 +23,7 @@ const balanceCacheService = require('../services/balance-cache.service');
 const hyperliquidAccountsService = require('../services/hyperliquid-accounts.service');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const settingsService = require('../services/settings.service');
+const optionsCredentials = require('../services/options/options-credentials.service');
 const uniswapService  = require('../services/uniswap.service');
 const logger = require('../services/logger.service');
 const { authenticate } = require('../middleware/auth.middleware');
@@ -59,6 +63,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const wallet = await settingsService.getWallet(userId);
   const accounts = await hyperliquidAccountsService.listAccounts(userId);
   const deltaNeutralRiskControls = await settingsService.getDeltaNeutralRiskControls(userId);
+  const binanceOptions = await optionsCredentials.get(userId);
   res.json({
     success: true,
     data: {
@@ -80,6 +85,10 @@ router.get('/', asyncHandler(async (req, res) => {
         hasApiKey: !!(await settingsService.getAlchemy(userId)).apiKey,
       },
       deltaNeutralRiskControls,
+      binanceOptions: {
+        configured: binanceOptions.configured,
+        alias: binanceOptions.alias,
+      },
       hyperliquidAccounts: {
         count: accounts.length,
         hasDefault: accounts.some((account) => account.isDefault),
@@ -294,6 +303,55 @@ router.post('/alchemy/test', asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const result = await uniswapService.testUserAlchemyKey(userId);
   res.json({ success: true, data: result });
+}));
+
+// ------------------------------------------------------------------
+// Binance Opciones (credenciales + límites globales)
+// ------------------------------------------------------------------
+
+function optionalString(value, field) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new ValidationError(`${field} debe ser texto`);
+  return value;
+}
+
+router.get('/binance-options', asyncHandler(async (req, res) => {
+  const data = await optionsCredentials.get(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.put('/binance-options', asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const data = await optionsCredentials.set(req.user.userId, {
+    alias: optionalString(body.alias, 'alias'),
+    apiKey: optionalString(body.apiKey, 'apiKey'),
+    apiSecret: optionalString(body.apiSecret, 'apiSecret'),
+  });
+  res.json({ success: true, data });
+}));
+
+router.delete('/binance-options', asyncHandler(async (req, res) => {
+  const data = await optionsCredentials.remove(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.post('/binance-options/test', asyncHandler(async (req, res) => {
+  const data = await optionsCredentials.test(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.get('/options-limits', asyncHandler(async (req, res) => {
+  const data = await optionsCredentials.getLimits(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.put('/options-limits', asyncHandler(async (req, res) => {
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new ValidationError('Límites inválidos');
+  }
+  const data = await optionsCredentials.setLimits(req.user.userId, body);
+  res.json({ success: true, data });
 }));
 
 router.get('/delta-neutral-risk-controls', asyncHandler(async (req, res) => {
