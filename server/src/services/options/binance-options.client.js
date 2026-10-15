@@ -234,8 +234,11 @@ function createBinanceOptionsClient({
         },
       });
     },
-    cancelOrder({ symbol, orderId }) {
-      return request('DELETE', '/eapi/v1/order', { signed: true, params: { symbol, orderId } });
+    getOrder({ symbol, orderId, clientOrderId }) {
+      return request('GET', '/eapi/v1/order', { signed: true, params: { symbol, orderId, clientOrderId } });
+    },
+    cancelOrder({ symbol, orderId, clientOrderId }) {
+      return request('DELETE', '/eapi/v1/order', { signed: true, params: { symbol, orderId, clientOrderId } });
     },
     getUserTrades({ symbol, startTime, endTime, limit = 1000 } = {}) {
       return request('GET', '/eapi/v1/userTrades', {
