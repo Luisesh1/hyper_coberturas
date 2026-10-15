@@ -210,9 +210,9 @@ class OptionsStrategyRunner {
     return { base, chain };
   }
 
-  async quoteFor(symbol) {
+  async quoteFor(symbol, { fresh = false } = {}) {
     try {
-      return await this.market.getQuote(symbol);
+      return await this.market.getQuote(symbol, { fresh });
     } catch (err) {
       this.logger.warn('options_quote_failed', { symbol, error: err.message });
       return null;
@@ -317,10 +317,10 @@ class OptionsStrategyRunner {
 
   // ---------- ejecutor sombra ----------
 
-  async quoteLegs(legs) {
+  async quoteLegs(legs, { fresh = false } = {}) {
     const quotes = [];
     for (const leg of legs) {
-      const quote = await this.quoteFor(leg.symbol);
+      const quote = await this.quoteFor(leg.symbol, { fresh });
       const price = fillPrice(quote, leg.side);
       if (price == null) return { missing: leg.symbol };
       quotes.push({ quote, price });
@@ -471,7 +471,7 @@ class OptionsStrategyRunner {
       }, ctx);
       return null;
     }
-    const { quotes, missing } = await this.quoteLegs(action.legs);
+    const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
       await this.recordOutcome(strategy, 'live', {
         type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
