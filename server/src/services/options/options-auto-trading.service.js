@@ -146,6 +146,8 @@ function createOptionsAutoTradingService(deps = {}) {
         score: payload.score ?? null,
         eventId: payload.eventId ?? null,
         triggeredAt: payload.triggeredAt ?? null,
+        optionExpiryMinDays: payload.optionExpiryMinDays ?? null,
+        optionExpiryMaxDays: payload.optionExpiryMaxDays ?? null,
       });
       outcome = decide(bot, produced);
     } catch (err) {
