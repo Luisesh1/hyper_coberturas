@@ -205,6 +205,13 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           [locked.position_id]
         );
         if (!position) throw new Error('Position missing/already closed: manual reconciliation required');
+        if (Number(position.strategy_id) !== Number(locked.strategy_id) ||
+            Number(position.user_id) !== Number(locked.user_id) ||
+            position.symbol !== locked.symbol ||
+            position.side === locked.side ||
+            position.mode !== 'live') {
+          throw new Error('Live close order does not belong to the target position');
+        }
         const held = Number(position.quantity);
         if (quantity > held + 1e-9) throw new Error('Fill larger than open position');
         const allocatedEntryFee = Number(position.fees_usdt) * (quantity / held);
