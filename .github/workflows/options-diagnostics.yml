@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p -m 700 ~/.ssh
-          printf '%s\\n' "$SERVER_SSH_KEY" > ~/.ssh/id_rsa
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           # Mismo mecanismo de host-key del deploy existente.
           # Se recomienda sustituirlo por una huella SSH fijada fuera de banda.
