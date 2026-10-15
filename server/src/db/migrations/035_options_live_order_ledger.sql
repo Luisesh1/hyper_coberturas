@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS options_live_orders (
   created_at BIGINT NOT NULL,
   deadline_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
+  reconcile_lease_until BIGINT NOT NULL DEFAULT 0,
   last_error TEXT,
   CHECK (processed_qty >= 0 AND processed_qty <= requested_qty)
 );
