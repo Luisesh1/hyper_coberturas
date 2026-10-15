@@ -17,6 +17,8 @@ const backtestingRoutes = require('./backtesting.routes');
 const alertsRoutes = require('./alerts.routes');
 const smartContractsRoutes = require('./smart-contracts.routes');
 const crossChainRoutes = require('./cross-chain.routes');
+const optionsStrategiesRoutes = require('./options-strategies.routes');
+const optionsBacktestsRoutes = require('./options-backtests.routes');
 
 const router = Router();
 
@@ -37,6 +39,9 @@ router.use('/backtesting', backtestingRoutes);
 router.use('/alerts', alertsRoutes);
 router.use('/smart-contracts', smartContractsRoutes);
 router.use('/cross-chain', crossChainRoutes);
+// Opciones: las subrutas de automatización van antes del montaje general de /options.
+router.use('/options/strategies', optionsStrategiesRoutes);
+router.use('/options/backtests', optionsBacktestsRoutes);
 
 // Endpoints solo dev: snapshot/stream de logs y batch upload de errores
 // del cliente. En producción la ruta literalmente no se monta para que
