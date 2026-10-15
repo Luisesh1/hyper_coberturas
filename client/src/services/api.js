@@ -34,7 +34,7 @@ if (import.meta.env.DEV) {
   }).catch(() => { /* noop si el módulo no está disponible */ });
 }
 
-const request = createHttpClient({
+export const request = createHttpClient({
   baseUrl: BASE_URL,
   getToken,
   onUnauthorized: clearSession,

@@ -1,0 +1,130 @@
+.wrap {
+  --series-primary: #a5b4fc;
+  --series-live: #fbbf24;
+  --series-muted: var(--text-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+:global(:root[data-theme='light']) .wrap {
+  --series-primary: var(--indigo);
+  --series-live: var(--amber);
+}
+
+.plot {
+  position: relative;
+  width: 100%;
+  touch-action: pan-y;
+  cursor: crosshair;
+  outline: none;
+  border-radius: var(--radius-sm);
+}
+.plot:focus-visible { box-shadow: var(--focus-ring); }
+
+.svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+.grid { stroke: var(--border-subtle); stroke-width: 1; }
+.zero { stroke: var(--border); stroke-width: 1; }
+.marker { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 2 4; }
+
+.line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.line_primary { stroke: var(--series-primary); }
+.line_live { stroke: var(--series-live); }
+.line_muted { stroke: var(--series-muted); }
+
+.tick {
+  position: absolute;
+  left: 0;
+  transform: translateY(-100%);
+  padding: 0 4px 1px 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+  background: transparent;
+}
+
+.markerLabel {
+  position: absolute;
+  bottom: 0;
+  padding-left: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.markerLabelLeft { transform: translateX(-100%); padding: 0 4px 0 0; }
+
+.crosshair {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-strong);
+  pointer-events: none;
+}
+
+.dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg-card);
+  pointer-events: none;
+}
+.dot_primary { background: var(--series-primary); }
+.dot_live { background: var(--series-live); }
+.dot_muted { background: var(--series-muted); }
+
+.tooltip {
+  position: absolute;
+  top: 4px;
+  transform: translateX(10px);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 140px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-dropdown);
+  font-size: 12px;
+  pointer-events: none;
+}
+.tooltipLeft { transform: translateX(calc(-100% - 10px)); }
+.tooltipTime { color: var(--text-secondary); font-size: 11px; }
+.tooltipRow { display: flex; align-items: center; gap: 6px; }
+.tooltipLabel { color: var(--text-secondary); flex: 1; }
+.tooltipValue { color: var(--text-bright); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-secondary); }
+.legendItem { display: inline-flex; align-items: center; gap: 6px; }
+
+.swatch { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--series-primary); flex-shrink: 0; }
+.swatch_primary { border-top-color: var(--series-primary); }
+.swatch_live { border-top-color: var(--series-live); }
+.swatch_muted { border-top-color: var(--series-muted); }
+.swatchDashed { border-top-style: dashed; }
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  text-align: center;
+  padding: 0 16px;
+}

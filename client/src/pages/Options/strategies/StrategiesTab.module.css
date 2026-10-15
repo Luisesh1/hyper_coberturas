@@ -1,0 +1,283 @@
+/* Pestaña Estrategias. Escritorio: lista a la izquierda + detalle.
+   Móvil (≤768px): tiles de resumen, tarjetas, FAB y detalle a pantalla
+   completa. Ver docs/superpowers/specs/2026-10-14-options-module-design.md */
+
+/* ── Escritorio ───────────────────────────────────────────────── */
+.desktopRoot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.aside {
+  flex: 1 1 300px;
+  min-width: 0;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.newBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px;
+  border: 1px dashed var(--indigo);
+  border-radius: var(--radius-lg);
+  background: var(--indigo-bg);
+  color: #c7d2fe;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.newBtn:hover { background: rgba(99, 102, 241, 0.16); }
+.newBtn:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+:global(:root[data-theme='light']) .newBtn { color: var(--indigo); }
+
+.detail {
+  flex: 999 1 640px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.detailHead {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.detailTitle { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.h2 { margin: 0; font-size: 18px; font-weight: 650; color: var(--text-bright); overflow-wrap: anywhere; }
+.detailActions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+.twoCol { display: flex; flex-wrap: wrap; gap: 16px; }
+.colWide { flex: 1 1 340px; }
+.colNarrow { flex: 1 1 280px; }
+.prose { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+
+/* ── Tarjetas de la lista ─────────────────────────────────────── */
+.cardList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.card:hover { border-color: var(--border-strong); }
+.card:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.cardSelected, .cardSelected:hover { background: var(--indigo-dark-bg); border-color: var(--indigo); }
+.cardMobile { gap: 8px; border-radius: 14px; }
+.cardMobile:active { background: var(--bg-hover); }
+.cardTop { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
+.cardName { font-size: 14px; font-weight: 600; color: var(--text-bright); min-width: 0; overflow-wrap: anywhere; }
+.cardMobile .cardName { font-size: 15px; }
+.cardMeta { font-size: 12px; color: var(--text-secondary); }
+.cardBottom { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+.cardPnlBig { font-size: 15px; }
+
+.skeletons { display: flex; flex-direction: column; gap: 10px; }
+
+/* ── Estado vacío ─────────────────────────────────────────────── */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  text-align: center;
+}
+.emptyTitle { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-bright); }
+.emptyText { margin: 0; max-width: 460px; font-size: 13px; line-height: 1.5; }
+
+/* ── Patas, parámetros, límites ───────────────────────────────── */
+.legs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.leg {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  font-size: 13px;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+.legSymbol { overflow-wrap: anywhere; color: var(--text-muted); }
+
+.params { margin: 0; display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 8px 14px; font-size: 13px; }
+.paramRow { display: contents; }
+.paramRow dt { color: var(--text-secondary); }
+.paramRow dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+
+.limit { display: flex; flex-direction: column; gap: 6px; }
+.limitHead { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.limitTrack { height: 6px; background: var(--bg-input); border-radius: var(--radius-pill); overflow: hidden; }
+.limitBar { height: 100%; border-radius: inherit; transition: width var(--transition); }
+.bar_indigo { background: var(--indigo); }
+.bar_red { background: var(--red); }
+.bar_green { background: var(--green); }
+.bar_cyan { background: var(--cyan); }
+
+/* ── Registro de decisiones ───────────────────────────────────── */
+.eventAction { font-weight: 600; white-space: nowrap; }
+.eventDetail { color: var(--text-muted); min-width: 200px; }
+.eventCards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.eventCard {
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.eventCardTop { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.eventCardTop .eventAction { font-size: 13px; color: var(--text-bright); display: inline-flex; gap: 6px; align-items: center; }
+.eventTime { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+.eventCardDetail { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+/* ── Formulario ───────────────────────────────────────────────── */
+.form { display: flex; flex-direction: column; gap: var(--sp-4); }
+.templateSet { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.legend {
+  padding: 0 0 0 2px;
+  margin-bottom: 8px;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  font-weight: var(--fw-bold);
+}
+.choiceCard {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.choiceCard:hover:not(:disabled) { border-color: var(--border-strong); }
+.choiceCard:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.choiceCard:disabled { opacity: 0.5; cursor: not-allowed; }
+.choiceCardOn, .choiceCardOn:hover:not(:disabled) { border-color: var(--indigo); background: var(--indigo-dark-bg); }
+.choiceTitle { display: block; font-size: 14px; font-weight: 600; color: var(--text-bright); }
+.choiceHint { display: block; margin-top: 3px; font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.fieldError { color: var(--red-light); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+
+.confirmList { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+.confirmAck { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+
+/* ── Móvil ────────────────────────────────────────────────────── */
+.mobileRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  min-width: 0;
+}
+.upper { text-transform: uppercase; letter-spacing: 0.06em; }
+.tileBig { font-size: 18px; }
+.shadowValue { color: #c7d2fe; }
+:global(:root[data-theme='light']) .shadowValue { color: var(--indigo); }
+
+.fab {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--indigo-hover);
+  color: #f8fafc;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.fab:active { transform: scale(0.97); }
+.fab:focus-visible { outline: 2px solid #c7d2fe; outline-offset: 3px; }
+
+.mobileDetail {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  animation: slideIn 0.2s ease;
+}
+.mobileDetailHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 60px;
+  padding: 8px 4px;
+  padding-top: max(8px, env(safe-area-inset-top, 0px));
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+.mobileDetailTitle { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mobileDetailName { font-size: 16px; font-weight: 650; color: var(--text-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mobileDetailSub { font-size: 12px; color: var(--text-secondary); }
+.mobileDetailBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.mobileSection { display: flex; flex-direction: column; gap: 8px; }
+.mobileH2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-bright); }
+.mobileBox {
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.mobileBox .leg { background: var(--bg-card); }
+
+@keyframes slideIn { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .mobileDetail { animation: none; }
+  .limitBar, .card { transition: none; }
+}

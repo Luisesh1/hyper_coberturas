@@ -1,0 +1,215 @@
+/* Controles de formulario táctiles. Base para el dedo; en escritorio con
+   ratón se compactan al final del archivo. */
+
+.group { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+.groupLabel {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  font-weight: var(--fw-bold);
+  padding-left: 2px;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 56px;
+  padding: 6px var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  min-width: 0;
+}
+.row:last-child { border-bottom: none; }
+.rowStacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+  padding-top: 10px;
+  padding-bottom: var(--sp-3);
+}
+.rowInvalid { background: var(--red-bg); }
+
+.rowText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.rowLabel { color: var(--text-bright); font-size: var(--fs-sm); }
+.rowHelp { color: var(--text-tertiary); font-size: var(--fs-xs); line-height: var(--lh-normal); }
+.rowError { color: var(--red-light); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+
+/* ── Stepper ─────────────────────────────────────────────── */
+.stepper {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+.stepper:focus-within { border-color: var(--indigo); }
+.stepBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.stepBtn:hover:not(:disabled) { color: var(--text-bright); background: var(--overlay-strong); }
+.stepBtn:active:not(:disabled) { background: var(--indigo-bg); }
+.stepBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+.stepBtn:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.stepValue {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.stepInput {
+  width: 72px;
+  height: 100%;
+  padding: 0 4px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.stepInput:focus { outline: none; background: var(--indigo-bg); }
+.unit { padding-right: 8px; color: var(--text-tertiary); font-size: var(--fs-xs); white-space: nowrap; }
+
+/* ── Switch ──────────────────────────────────────────────── */
+.switchRow {
+  width: 100%;
+  margin: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.switchRow:hover { background: var(--overlay-soft); }
+.switchRow:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.switchRow:disabled { opacity: 0.5; cursor: not-allowed; }
+.track {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--border-strong);
+  transition: background var(--transition-fast);
+}
+.trackOn { background: var(--indigo); }
+.thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform var(--transition-fast);
+}
+.trackOn .thumb { transform: translateX(18px); }
+
+/* ── Segmentado / select / texto ─────────────────────────── */
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+}
+.segmentedGrid { grid-auto-flow: row; }
+.segment {
+  min-height: 44px;
+  min-width: 0;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  touch-action: manipulation;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.segment:hover:not(:disabled) { color: var(--text-bright); background: var(--overlay-soft); }
+.segment:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.segment:disabled { opacity: 0.4; cursor: not-allowed; }
+.segmentActive,
+.segmentActive:hover:not(:disabled) {
+  color: var(--text-bright);
+  background: var(--indigo-bg);
+  border-color: var(--indigo);
+}
+
+.select,
+.textInput {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-bright);
+  font-family: inherit;
+  font-size: 16px;
+  box-sizing: border-box;
+  min-width: 0;
+}
+.select { max-width: 60%; }
+.textInput { width: 100%; }
+.select:focus,
+.textInput:focus { outline: none; border-color: var(--indigo); box-shadow: var(--focus-ring); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.empty {
+  margin: 0;
+  padding: var(--sp-4);
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+@media (min-width: 769px) and (pointer: fine) {
+  .row { min-height: 48px; }
+  .stepBtn { width: 36px; height: 36px; }
+  .stepValue { height: 36px; }
+  .stepInput { font-size: var(--fs-sm); }
+  .segment { min-height: 36px; }
+  .select, .textInput { min-height: 38px; font-size: var(--fs-sm); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thumb, .track, .stepBtn { transition: none; }
+}
