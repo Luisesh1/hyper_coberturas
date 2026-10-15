@@ -144,7 +144,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
 
   async function listUnresolved() {
     const { rows } = await db.query(
-      "SELECT * FROM options_live_orders WHERE status <> 'final' ORDER BY created_at,id"
+      "SELECT * FROM options_live_orders WHERE status <> 'final' AND (status <> 'queued' OR deadline_at <= $1) ORDER BY created_at,id",
+      [now()]
     );
     return rows.map(map);
   }
@@ -166,7 +167,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
 
   async function markSending(id) {
     const { rows } = await db.query(
-      "UPDATE options_live_orders SET status='sending',updated_at=$2 WHERE id=$1 AND status='queued' RETURNING *",
+      "UPDATE options_live_orders SET status='sending',updated_at=$2 WHERE id=$1 AND status='queued' AND reconcile_lease_until < $2 RETURNING *",
       [id, now()]
     );
     return rows[0] ? map(rows[0]) : null;
@@ -307,6 +308,11 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         'SELECT * FROM options_live_orders WHERE id=$1 FOR UPDATE', [id]
       );
       if (!locked || locked.status === 'final') return;
+      // Sin identificador del exchange, solo puede finalizar una orden
+      // que sigue en cola y nunca pasó por el estado sending.
+      if (exchangeOrderId == null && locked.status !== 'queued') {
+        throw new Error('Cannot finalize possibly submitted order without Binance identity');
+      }
       if (Math.abs(Number(locked.processed_qty) - Number(executedQuantity)) > 1e-8) {
         throw new Error('Execution and trade ledger quantities differ');
       }
