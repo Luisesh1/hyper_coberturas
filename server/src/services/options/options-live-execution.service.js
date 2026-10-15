@@ -226,7 +226,7 @@ class OptionsLiveExecution {
         });
         await this.repo.markAttention(order.id, `Conciliacion: ${err.message}`);
       } finally {
-        await this.repo.releaseReconcile(order.id);
+        await this.repo.releaseReconcile(order.id, locked.leaseUntil);
       }
     }
     return { checked: orders.length, reconciled, errors };
