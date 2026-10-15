@@ -156,7 +156,8 @@ class OptionsLiveExecution {
   }
 
   async reconcilePending() {
-    if (!this.enabled) return { disabled: true };
+    // Aun con nuevas entradas deshabilitadas, se cancelan y concilian
+    // órdenes ya enviadas antes de cambiar el feature flag.
     const orders = await this.repo.listUnresolved();
     let reconciled = 0;
     let errors = 0;
