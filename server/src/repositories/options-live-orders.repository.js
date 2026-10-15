@@ -11,6 +11,7 @@ const map = (r) => r && ({
   symbol: r.symbol, side: r.side, quantity: Number(r.requested_qty),
   limitPrice: Number(r.limit_price), processedQty: Number(r.processed_qty),
   clientOrderId: r.client_order_id, orderId: r.exchange_order_id, status: r.status,
+  leaseUntil: Number(r.reconcile_lease_until || 0),
   createdAt: Number(r.created_at), deadlineAt: Number(r.deadline_at),
   error: r.last_error,
 });
@@ -80,6 +81,34 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       // el preflight, abortar: jamás confiar en límites calculados antes.
       const { rows: currentExposure } = await tx.query(EXPOSURE_SQL, [strategy.userId]);
       compareExposure(currentExposure, exchangePositions);
+      // Un cierre no puede vender/comprar más contratos que los realmente
+      // abiertos ni cerrar posiciones de otro bot. Validar ANTES del POST.
+      if (action === 'close') {
+        const ids = legs.map((leg) => Number(leg.positionId));
+        if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+            new Set(ids).size !== ids.length) {
+          throw new Error('Invalid or duplicate closing position');
+        }
+        const { rows: held } = await tx.query(
+          `SELECT id, strategy_id, user_id, mode, symbol, side, quantity
+             FROM options_strategy_positions
+            WHERE id = ANY($1::bigint[]) AND closed_at IS NULL FOR UPDATE`,
+          [ids]
+        );
+        const byId = new Map(held.map((p) => [Number(p.id), p]));
+        for (const leg of legs) {
+          const p = byId.get(Number(leg.positionId));
+          if (!p || Number(p.strategy_id) !== Number(strategy.id) ||
+              Number(p.user_id) !== Number(strategy.userId) ||
+              p.mode !== 'live' || p.symbol !== leg.symbol ||
+              p.side === leg.side ||
+              !Number.isFinite(Number(leg.quantity)) ||
+              Number(leg.quantity) <= 0 ||
+              Number(leg.quantity) > Number(p.quantity) + 1e-9) {
+            throw new Error('Closing order exceeds verified live position');
+          }
+        }
+      }
       const { rows: existing } = await tx.query(
         'SELECT id FROM options_live_batches WHERE strategy_id=$1 AND action_key=$2',
         [strategy.id, key]
@@ -156,7 +185,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
 
   async function markAttention(id, error) {
     await db.query(
-      "UPDATE options_live_orders SET status='attention',last_error=$2,updated_at=$3,reconcile_lease_until=0 WHERE id=$1 AND status<>'final'",
+      "UPDATE options_live_orders SET status='attention',last_error=$2,updated_at=$3 WHERE id=$1 AND status<>'final'",
       [id, String(error).slice(0, 1000), now()]
     );
     await db.query(
@@ -175,8 +204,14 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows[0] ? map(rows[0]) : null;
   }
 
-  async function releaseReconcile(id) {
-    await db.query('UPDATE options_live_orders SET reconcile_lease_until=0 WHERE id=$1', [id]);
+  async function releaseReconcile(id, leaseUntil) {
+    // No liberar el lease de otra réplica que lo haya renovado tras caducar.
+    if (!Number.isFinite(Number(leaseUntil)) || Number(leaseUntil) <= 0) return false;
+    const { rowCount } = await db.query(
+      'UPDATE options_live_orders SET reconcile_lease_until=0 WHERE id=$1 AND reconcile_lease_until=$2',
+      [id, leaseUntil]
+    );
+    return rowCount === 1;
   }
 
   /** Transacción única para el fill, la posición y el evento. */
