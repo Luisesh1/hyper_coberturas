@@ -53,6 +53,7 @@ class OptionsLiveExecution {
     this.credentials = deps.credentials || credentialsDefault;
     this.logger = deps.logger || loggerDefault;
     this.now = deps.now || Date.now;
+    this.lastExternalScanAt = null;
     this.settlement = deps.settlement || require('./options-live-settlement.service');
     this.notify = deps.notify || (async (userId, message) => {
       const registry = require('../telegram.registry');
@@ -234,6 +235,69 @@ class OptionsLiveExecution {
     return this.settlement.reconcileExpired();
   }
 
+  async scanExternalAccounts() {
+    // Auditoría periódica de todas las cuentas con bots live o órdenes
+    // pendientes, incluso si no hay ninguna orden enviada esta semana.
+    if (typeof this.repo.listMonitorUsers !== 'function' ||
+        typeof this.repo.listUserOrderIds !== 'function' ||
+        typeof this.repo.claimIncidentNotification !== 'function') return { checked: 0 };
+    const users = await this.repo.listMonitorUsers(50);
+    let incidents = 0;
+    for (const userId of users) {
+      try {
+        const client = await this.credentials.getClientForUser(userId);
+        const [open, positions, known] = await Promise.all([
+          client.getOpenOrders(), client.getPositions(), this.repo.listUserOrderIds(userId),
+        ]);
+        if (!Array.isArray(open) || !Array.isArray(positions)) {
+          throw new Error('Binance account returned invalid exposure or order list');
+        }
+        const tracked = new Map(known.map((o) => [o.clientOrderId, o.status]));
+        const orphaned = open.filter((o) =>
+          !o.clientOrderId || !tracked.has(o.clientOrderId) || tracked.get(o.clientOrderId) === 'final');
+        if (orphaned.length) {
+          const claimed = await this.repo.claimIncidentNotification(
+            userId, 'ORPHAN_OPEN_ORDERS', 'account'
+          );
+          if (claimed) {
+            await this.notify(userId,
+              '<b>ALERTA · Órdenes Binance sin seguimiento</b>\\n' +
+              'Existen ' + orphaned.length + ' órdenes abiertas no conciliadas. ' +
+              'Bloquear nuevas entradas y revisar manualmente.');
+          }
+          incidents++;
+        }
+        try {
+          await this.repo.assertExchangeExposure(userId, positions);
+        } catch (err) {
+          incidents++;
+          if (await this.repo.claimIncidentNotification(userId, 'EXPOSURE_MISMATCH', 'account')) {
+            await this.notify(userId,
+              '<b>ALERTA · Exposición Binance distinta del libro</b>\\n' +
+              'No abrir nuevas órdenes hasta investigar los fills y posiciones.');
+          }
+        }
+      } catch (err) {
+        incidents++;
+        this.logger.warn('options_live_account_audit_failed', {
+          userId, error: err.message,
+        });
+        try {
+          if (await this.repo.claimIncidentNotification(userId, 'ACCOUNT_AUDIT_UNAVAILABLE', 'account')) {
+            await this.notify(userId,
+              '<b>ALERTA · Verificación Binance no disponible</b>\\n' +
+              'Falló la consulta de posiciones/órdenes o credenciales. Revisar la cuenta.');
+          }
+        } catch (notifyErr) {
+          this.logger.warn('options_live_account_audit_notify_failed', {
+            userId, error: notifyErr.message,
+          });
+        }
+      }
+    }
+    return { checked: users.length, incidents };
+  }
+
   async alertAttention() {
     if (typeof this.repo.listAttentionOrders !== 'function' ||
         typeof this.repo.claimAttentionNotification !== 'function') return 0;
@@ -296,7 +360,18 @@ class OptionsLiveExecution {
     } catch (err) {
       this.logger.warn('options_live_attention_scan_failed', { error: err.message });
     }
-    return { checked: orders.length, reconciled, errors, alerts };
+    // Auditoría de cuenta cada cinco minutos. No depende del flag de envío.
+    let accountAudit = null;
+    if (this.lastExternalScanAt == null ||
+        this.now() - this.lastExternalScanAt >= 5 * 60_000) {
+      this.lastExternalScanAt = this.now();
+      try {
+        accountAudit = await this.scanExternalAccounts();
+      } catch (err) {
+        this.logger.warn('options_live_account_audit_scan_failed', { error: err.message });
+      }
+    }
+    return { checked: orders.length, reconciled, errors, alerts, accountAudit };
   }
 }
 
