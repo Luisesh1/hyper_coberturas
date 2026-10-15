@@ -19,11 +19,19 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   async function beginBatch({ strategy, action, legs, key, detail, deadlineAt }) {
     if (!legs.length || !['open', 'close'].includes(action)) throw new Error('Invalid live batch');
     return db.transaction(async (tx) => {
-      // Serializa las decisiones de la misma estrategia ENTRE procesos.
-      await tx.query('SELECT id FROM options_strategies WHERE id=$1 FOR UPDATE', [strategy.id]);
-      const { rows: pending } = await tx.query(
-        "SELECT id FROM options_live_batches WHERE strategy_id=$1 AND status <> 'completed' LIMIT 1",
+      // Locks entre réplicas: un solo lote sin conciliar por usuario,
+      // incluso cuando pertenece a distintos bots.
+      const { rows: [current] } = await tx.query(
+        'SELECT id,user_id,mode,underlying FROM options_strategies WHERE id=$1 FOR UPDATE',
         [strategy.id]
+      );
+      if (!current || Number(current.user_id) !== Number(strategy.userId) || current.mode !== 'live') {
+        throw new Error('Live strategy is no longer active or owned by this user');
+      }
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
+      const { rows: pending } = await tx.query(
+        "SELECT id FROM options_live_batches WHERE user_id=$1 AND status <> 'completed' LIMIT 1",
+        [strategy.userId]
       );
       if (pending.length) return null;
       const { rows: existing } = await tx.query(
@@ -41,6 +49,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       const orders = [];
       for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
+        if (!String(leg.symbol).startsWith(current.underlying + '-')) {
+          throw new Error('Option symbol does not match strategy underlying');
+        }
         const clientId = `HC${BigInt(batch.id).toString(36)}L${i.toString(36)}`;
         const { rows: [row] } = await tx.query(
           `INSERT INTO options_live_orders
@@ -87,10 +98,14 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
 
   async function markActive(id, orderId) {
-    await db.query(
-      "UPDATE options_live_orders SET status='active',exchange_order_id=COALESCE($2,exchange_order_id),updated_at=$3 WHERE id=$1 AND status IN ('sending','active','attention')",
+    const { rowCount } = await db.query(
+      `UPDATE options_live_orders SET status='active',
+        exchange_order_id=COALESCE(exchange_order_id,$2),updated_at=$3
+       WHERE id=$1 AND status IN ('sending','active','attention')
+         AND (exchange_order_id IS NULL OR exchange_order_id=$2)`,
       [id, orderId == null ? null : String(orderId), now()]
     );
+    if (rowCount !== 1) throw new Error('Live order identity conflict or finalized order');
   }
 
   async function markAttention(id, error) {
@@ -104,7 +119,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     );
   }
 
-  async function claimReconcile(id, leaseMs = 25_000) {
+  async function claimReconcile(id, leaseMs = 300_000) {
     const time = now();
     const { rows } = await db.query(
       `UPDATE options_live_orders SET reconcile_lease_until=$2
