@@ -65,6 +65,8 @@ function tick() {
       assets.map((asset) => alertsService.evaluateAlertOnAsset(alert, asset, {
         ignoreCooldown: false,
         sendTelegram: true,
+        // Disparo real: los bots de Opciones reciben la señal.
+        emitSignal: true,
       }))
     ).then((results) => {
       // Refrescar dto en cache si hubo trigger (para actualizar lastTriggeredAt).

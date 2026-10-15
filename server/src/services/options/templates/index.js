@@ -9,8 +9,9 @@ const { validateParams, pickExpiry } = require('./helpers');
 const shortStrangle = require('./short-strangle');
 const coveredCall = require('./covered-call');
 const protectivePut = require('./protective-put');
+const alertSignal = require('./alert-signal');
 
-const TEMPLATES = [shortStrangle, coveredCall, protectivePut];
+const TEMPLATES = [shortStrangle, coveredCall, protectivePut, alertSignal];
 const BY_ID = new Map(TEMPLATES.map((t) => [t.id, t]));
 
 function getTemplate(templateId) {
@@ -19,8 +20,14 @@ function getTemplate(templateId) {
   return template;
 }
 
+/** ¿Lo dispara una señal externa (bots por alertas) en vez del reloj? */
+function isSignalDriven(templateId) {
+  return Boolean(BY_ID.get(templateId)?.signalDriven);
+}
+
+/** Plantillas de la pestaña Estrategias (sin los bots por alertas). */
 function listTemplates() {
-  return TEMPLATES.map((t) => ({
+  return TEMPLATES.filter((t) => !t.signalDriven).map((t) => ({
     id: t.id,
     label: t.label,
     description: t.description,
@@ -34,6 +41,10 @@ module.exports = {
   TEMPLATE_IDS: TEMPLATES.map((t) => t.id),
   getTemplate,
   listTemplates,
-  validateParams: (templateId, params) => validateParams(getTemplate(templateId), params),
+  isSignalDriven,
+  validateParams: (templateId, params) => {
+    const template = getTemplate(templateId);
+    return template.validateParams ? template.validateParams(params) : validateParams(template, params);
+  },
   pickExpiry,
 };

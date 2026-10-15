@@ -405,6 +405,9 @@ function createOptionsBacktestService(deps = {}) {
       params = input.params || {};
     }
     templates.getTemplate(template);
+    if (templates.isSignalDriven(template)) {
+      throw new ValidationError('Los bots por alertas no se pueden backtestear: dependen de señales en vivo');
+    }
     params = templates.validateParams(template, params);
     if (!underlying) throw new ValidationError('underlying es obligatorio');
 

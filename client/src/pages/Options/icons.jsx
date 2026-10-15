@@ -20,6 +20,7 @@ function Svg({ size = 16, strokeWidth = 2, children }) {
 
 export const ManualIcon = (p) => <Svg {...p}><path d="M3 3v18h18" /><path d="M7 14l4-4 4 4 5-6" /></Svg>;
 export const StrategiesIcon = (p) => <Svg {...p}><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M9 9h6v6H9z" /></Svg>;
+export const AutoIcon = (p) => <Svg {...p}><path d="M13 2L4 14h7l-1 8 9-12h-7z" /></Svg>;
 export const BacktestIcon = (p) => <Svg {...p}><path d="M12 8v4l3 2" /><path d="M3.05 11a9 9 0 1 1 .5 4" /><path d="M3 4v5h5" /></Svg>;
 export const ChevronDownIcon = (p) => <Svg {...p}><path d="M6 9l6 6 6-6" /></Svg>;
 export const LinkIcon = (p) => <Svg {...p}><path d="M9 6h9v9" /><path d="M18 6L6 18" /></Svg>;

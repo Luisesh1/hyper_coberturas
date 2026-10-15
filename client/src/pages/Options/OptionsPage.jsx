@@ -7,13 +7,15 @@ import { usePolling } from './manual/hooks/usePolling';
 import ManualTradingTab from './manual/ManualTradingTab';
 import StrategiesTab from './strategies/StrategiesTab';
 import BacktestingTab from './backtesting/BacktestingTab';
+import AutoTradingTab from './auto/AutoTradingTab';
 import { fmtPct, fmtSpot, toneOf } from './format';
-import { BacktestIcon, ChevronDownIcon, ManualIcon, StrategiesIcon } from './icons';
+import { AutoIcon, BacktestIcon, ChevronDownIcon, ManualIcon, StrategiesIcon } from './icons';
 import styles from './OptionsPage.module.css';
 
 export const OPTION_TABS = [
   { key: 'manual', label: 'Trading manual', short: 'Manual', Icon: ManualIcon },
   { key: 'strategies', label: 'Estrategias', short: 'Estrategias', Icon: StrategiesIcon },
+  { key: 'auto', label: 'Trading automatizado', short: 'Auto', Icon: AutoIcon },
   { key: 'backtesting', label: 'Backtesting', short: 'Backtest', Icon: BacktestIcon },
 ];
 const TAB_KEYS = new Set(OPTION_TABS.map((t) => t.key));
@@ -136,6 +138,7 @@ export default function OptionsPage() {
               aria-current={tab === t.key ? 'page' : undefined}
               className={`${styles.segLink} ${tab === t.key ? styles.segLinkOn : ''}`}
             >
+              {t.key === 'auto' && <t.Icon size={12} strokeWidth={2.5} />}
               {t.short}
             </Link>
           ))}
@@ -162,6 +165,7 @@ export default function OptionsPage() {
           <ManualTradingTab underlying={underlying} configured={connection.configured} isMobile={isMobile} />
         )}
         {tab === 'strategies' && <StrategiesTab {...shared} />}
+        {tab === 'auto' && <AutoTradingTab {...shared} />}
         {tab === 'backtesting' && <BacktestingTab {...shared} />}
       </div>
 

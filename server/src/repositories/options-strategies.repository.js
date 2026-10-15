@@ -64,6 +64,24 @@ function mapEvent(row) {
   };
 }
 
+function mapAutoSignal(row) {
+  return {
+    id: Number(row.id),
+    strategyId: Number(row.strategy_id),
+    alertId: numberOrNull(row.alert_id),
+    alertEventId: numberOrNull(row.alert_event_id),
+    alertName: row.alert_name || null,
+    direction: row.direction || null,
+    asset: row.asset || null,
+    score: numberOrNull(row.score),
+    decision: row.decision,
+    detail: row.detail || null,
+    createdAt: Number(row.created_at),
+  };
+}
+
+const TRADED_DECISIONS = ['opened', 'closed', 'reversed'];
+
 function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = {}) {
   // ---------- estrategias ----------
 
@@ -96,6 +114,17 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
   async function listActiveStrategies() {
     const { rows } = await db.query(
       "SELECT * FROM options_strategies WHERE mode IN ('shadow', 'live') ORDER BY id"
+    );
+    return rows.map(mapStrategy);
+  }
+
+  /** Bots `alert_signal` del usuario que no están en pausa. */
+  async function listActiveAlertBots(userId) {
+    const { rows } = await db.query(
+      `SELECT * FROM options_strategies
+        WHERE user_id = $1 AND template = 'alert_signal' AND mode IN ('shadow', 'live')
+        ORDER BY id`,
+      [userId]
     );
     return rows.map(mapStrategy);
   }
@@ -282,6 +311,16 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return rows.map(mapEvent);
   }
 
+  /** Eventos de una acción (`open`, `close`…) desde `since`, por estrategia y modo. */
+  async function countEventsSince(strategyId, mode, action, since) {
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM options_strategy_events
+        WHERE strategy_id = $1 AND mode = $2 AND action = $3 AND created_at >= $4`,
+      [strategyId, mode, action, since]
+    );
+    return Number(rows[0]?.n || 0);
+  }
+
   /**
    * Órdenes enviadas desde `since`: patas con `orderId` en eventos open/close
    * (las liquidaciones al vencimiento no llevan `orderId`).
@@ -299,8 +338,65 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return Number(rows[0]?.n || 0);
   }
 
+  // ---------- señales de los bots por alertas ----------
+
+  /**
+   * Reserva el procesamiento de un disparo para un bot. Devuelve la fila, o
+   * null si ese `alertEventId` ya se procesó (índice único por bot y evento).
+   */
+  async function claimAutoSignal({ strategyId, userId, alertId, alertEventId, alertName, direction, asset, score, decision, detail = null, createdAt }) {
+    const { rows } = await db.query(
+      `INSERT INTO options_auto_signals
+         (strategy_id, user_id, alert_id, alert_event_id, alert_name, direction, asset, score, decision, detail, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (strategy_id, alert_event_id) DO NOTHING
+       RETURNING *`,
+      [strategyId, userId, alertId ?? null, alertEventId ?? null, alertName ?? null, direction ?? null, asset ?? null, score ?? null, decision, detail, createdAt ?? now()]
+    );
+    return rows[0] ? mapAutoSignal(rows[0]) : null;
+  }
+
+  async function finishAutoSignal(id, { decision, detail }) {
+    const { rows } = await db.query(
+      'UPDATE options_auto_signals SET decision = $2, detail = $3 WHERE id = $1 RETURNING *',
+      [id, decision, detail ?? null]
+    );
+    return rows[0] ? mapAutoSignal(rows[0]) : null;
+  }
+
+  /** `filter`: 'all' | 'traded' (abrió, cerró o dio la vuelta) | 'ignored'. */
+  async function listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {
+    let decisions = null;
+    if (filter === 'traded') decisions = TRADED_DECISIONS;
+    else if (filter === 'ignored') decisions = ['ignored'];
+    const { rows } = await db.query(
+      `SELECT * FROM options_auto_signals
+        WHERE strategy_id = $1 AND ($3::text[] IS NULL OR decision = ANY($3::text[]))
+        ORDER BY created_at DESC, id DESC LIMIT $2`,
+      [strategyId, limit, decisions]
+    );
+    return rows.map(mapAutoSignal);
+  }
+
+  /** Última señal de cada bot del usuario. */
+  async function lastAutoSignalsByUser(userId) {
+    const { rows } = await db.query(
+      `SELECT DISTINCT ON (strategy_id) * FROM options_auto_signals
+        WHERE user_id = $1
+        ORDER BY strategy_id, created_at DESC, id DESC`,
+      [userId]
+    );
+    return rows.map(mapAutoSignal);
+  }
+
   return {
     createStrategy,
+    listActiveAlertBots,
+    countEventsSince,
+    claimAutoSignal,
+    finishAutoSignal,
+    listAutoSignals,
+    lastAutoSignalsByUser,
     getStrategy,
     getStrategyById,
     listStrategies,
