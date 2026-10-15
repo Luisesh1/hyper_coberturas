@@ -246,6 +246,20 @@ function createBinanceOptionsClient({
         params: { symbol, fromId, startTime, endTime, limit },
       });
     },
+    // Registro de ejercicio efectivamente contabilizado por el exchange.
+    // Nunca inferir liquidaciones reales del precio spot/mark.
+    getExerciseRecords({ symbol, startTime, endTime, limit = 1000 } = {}) {
+      return request('GET', '/eapi/v1/exerciseRecord', {
+        signed: true, params: { symbol, startTime, endTime, limit },
+      });
+    },
+    // Movimientos contables: corroborar EXERCISE_PNL y EXERCISE_FEE,
+    // sin confundir comisiones de entrada/salida o transferencias.
+    getBills({ currency = 'USDT', recordId, startTime, endTime, limit = 1000 } = {}) {
+      return request('GET', '/eapi/v1/bill', {
+        signed: true, params: { currency, recordId, startTime, endTime, limit },
+      });
+    },
     // Endpoint spot, firmado con la misma key.
     getApiRestrictions() {
       return request('GET', '/sapi/v1/account/apiRestrictions', { signed: true, base: spotBaseUrl });
