@@ -4,6 +4,20 @@ import styles from './LineChart.module.css';
 const VIEW_W = 1000;
 const PAD_Y = 10;
 
+// Marcas «redondas» (1, 2, 2,5, 5 × 10^n) dentro de [min, max].
+export function niceTicks(min, max, count = 3) {
+  const span = max - min;
+  if (!(span > 0)) return [min];
+  const raw = span / count;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || 10 * mag;
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) {
+    ticks.push(Number(v.toFixed(10)));
+  }
+  return ticks;
+}
+
 // Gráfico de líneas ligero en SVG (sin lightweight-charts: son curvas de
 // decenas o cientos de puntos y no necesitan zoom). El SVG se estira al
 // ancho del contenedor con trazos que no escalan; los textos, el punto y el
@@ -54,7 +68,7 @@ export default function LineChart({
     return d.trim();
   };
 
-  const ticks = [scale.max, (scale.max + scale.min) / 2, scale.min];
+  const ticks = niceTicks(scale.min, scale.max, height < 150 ? 2 : 3);
 
   const indexFromEvent = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();

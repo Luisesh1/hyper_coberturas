@@ -90,8 +90,8 @@ export default function BacktestForm({ form, onChange, strategies, templates, er
           disabled={disabled}
         />
         <div className={styles.dateRow}>
-          <TextField label="Desde" type="date" mono value={form.from} onChange={(from) => set({ from })} error={errors.from} disabled={disabled} />
-          <TextField label="Hasta" type="date" mono value={form.to} onChange={(to) => set({ to })} error={errors.to} disabled={disabled} />
+          <TextField label="Desde" type="date" value={form.from} onChange={(from) => set({ from })} error={errors.from} disabled={disabled} />
+          <TextField label="Hasta" type="date" value={form.to} onChange={(to) => set({ to })} error={errors.to} disabled={disabled} />
         </div>
         <NumberField
           label="Capital inicial"

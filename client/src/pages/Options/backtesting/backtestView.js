@@ -1,6 +1,6 @@
 // Lógica pura de la pestaña Backtesting: fuentes de precios, formulario →
 // payload de POST /options/backtests, normalización del resultado y CSV.
-import { formatDay, formatMonthYear, formatPct, formatUsdt, pick, toMs, toNumber } from '../strategies/common/format';
+import { formatMonthYear, formatPct, formatUsdt, pick, toMs, toNumber } from '../strategies/common/format';
 import { validateParams } from '../strategies/common/paramSchema';
 import { templateLabel } from '../strategies/strategyView';
 
@@ -169,11 +169,21 @@ export function runTitle(run, { strategies = [], templates = [] } = {}) {
   return cfg.template ? templateLabel(templates, cfg.template) : 'Backtest';
 }
 
+const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+// «1 oct 2025» en UTC: el periodo del backtest se define en días UTC.
+export function formatUtcDay(value) {
+  const ms = toMs(value);
+  if (ms === null) return '—';
+  const d = new Date(ms);
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
 export function runSubtitle(run) {
   const cfg = run.config || {};
   const parts = [];
   if (cfg.underlying) parts.push(cfg.underlying);
-  if (cfg.from && cfg.to) parts.push(`${formatDay(cfg.from)} → ${formatDay(cfg.to)}`);
+  if (cfg.from && cfg.to) parts.push(`${formatUtcDay(cfg.from)} → ${formatUtcDay(cfg.to)}`);
   if (cfg.source) parts.push(sourceByKey(cfg.source).short);
   return parts.join(' · ');
 }

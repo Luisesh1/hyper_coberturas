@@ -21,6 +21,7 @@
 
 .row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
@@ -38,9 +39,11 @@
   padding-top: 10px;
   padding-bottom: var(--sp-3);
 }
+.rowStacked { flex-wrap: nowrap; }
+.rowStacked .rowText { flex: none; }
 .rowInvalid { background: var(--red-bg); }
 
-.rowText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.rowText { flex: 1 1 120px; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
 .rowLabel { color: var(--text-bright); font-size: var(--fs-sm); }
 .rowHelp { color: var(--text-tertiary); font-size: var(--fs-xs); line-height: var(--lh-normal); }
 .rowError { color: var(--red-light); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
@@ -50,6 +53,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
+  margin-left: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-input);

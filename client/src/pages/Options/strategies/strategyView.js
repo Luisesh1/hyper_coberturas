@@ -109,9 +109,10 @@ export function buildKpis(detail = {}) {
     }
     out.push(kpiFromDef(def, value, { limits }));
   }
-  // Lo que el servidor añada y no conozcamos se muestra tal cual.
+  // Lo que el servidor añada y no conozcamos se muestra tal cual (salvo los
+  // consumos de límites, que van en las barras de «Límites de riesgo»).
   for (const [k, v] of Object.entries(obj)) {
-    if (used.has(k) || (typeof v !== 'number' && typeof v !== 'string')) continue;
+    if (used.has(k) || LIMIT_USAGE_KEYS.has(k) || (typeof v !== 'number' && typeof v !== 'string')) continue;
     out.push({ label: humanizeKey(k), value: typeof v === 'number' ? formatUsdt(v) : v, tone: 'neutral', hint: '' });
   }
   return out;
@@ -181,6 +182,8 @@ const LIMIT_DEFS = [
   { limit: ['maxNetDelta', 'max_net_delta'], usage: ['netDelta', 'net_delta'], label: '|Δ| neto máx.', unit: '', bar: 'green', abs: true },
   { limit: ['maxOrdersPerDay', 'max_orders_per_day'], usage: ['ordersToday', 'orders_today'], label: 'Órdenes por día', unit: '', bar: 'cyan', integer: true },
 ];
+
+const LIMIT_USAGE_KEYS = new Set(LIMIT_DEFS.flatMap((d) => d.usage));
 
 export function buildLimits(detail = {}) {
   const limits = detail.limits || {};

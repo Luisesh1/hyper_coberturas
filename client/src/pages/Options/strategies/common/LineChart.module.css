@@ -1,7 +1,14 @@
-.wrap {
+.wrap,
+.legend {
   --series-primary: #a5b4fc;
   --series-live: #fbbf24;
   --series-muted: var(--text-tertiary);
+}
+:global(:root[data-theme='light']) .legend {
+  --series-primary: var(--indigo);
+  --series-live: var(--amber);
+}
+.wrap {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -42,7 +49,9 @@
   font-size: 10px;
   color: var(--text-tertiary);
   pointer-events: none;
-  background: transparent;
+  background: var(--bg-card);
+  border-radius: 3px;
+  margin-top: -2px;
 }
 
 .markerLabel {

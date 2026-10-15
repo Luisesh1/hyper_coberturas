@@ -25,6 +25,7 @@ export function SourceNote({ source, note, mobile = false }) {
 function EquityChart({ result, underlying, height }) {
   const eq = useMemo(() => buildBacktestEquity(result?.equity), [result]);
   const hodlLabel = `Mantener ${underlying || 'subyacente'}`;
+  const longSpan = eq.times.length > 1 && eq.times[eq.times.length - 1] - eq.times[0] > 90 * 86400000;
   return (
     <LineChart
       times={eq.times}
@@ -34,7 +35,7 @@ function EquityChart({ result, underlying, height }) {
       ]}
       height={height}
       formatValue={(v) => formatUsdt(v, { decimals: 0 })}
-      formatTime={(t) => (height < 150 ? formatDay(t) : formatMonthYear(t))}
+      formatTime={(t) => (longSpan ? formatMonthYear(t) : formatDay(t))}
       ariaLabel={`Curva de capital del backtest comparada con ${hodlLabel.toLowerCase()}`}
       emptyText="El backtest no generó curva de capital."
     />
