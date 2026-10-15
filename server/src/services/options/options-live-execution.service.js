@@ -59,6 +59,7 @@ class OptionsLiveExecution {
 
   async submit(strategy, action, ctx) {
     if (!this.enabled) return { status: 'disabled' };
+    if (!['open', 'close'].includes(action.type)) throw new Error('Unsupported live action');
     const client = await this.credentials.getClientForUser(strategy.userId);
     const legs = action.legs || [];
     if (!legs.length || legs.length > 20) throw new Error('Invalid order batch');
@@ -76,6 +77,11 @@ class OptionsLiveExecution {
     if (!orders) return { status: 'duplicate_or_unresolved' };
     let sent = 0;
     for (const order of orders) {
+      // No enviar patas restantes si la ventana expiró mientras se procesaban
+      // otras órdenes. Quedan 'queued' y el reconciliador las finaliza a cero.
+      if (this.now() >= order.deadlineAt) {
+        return { status: 'deadline', sent };
+      }
       // Si el proceso cae después de este cambio, no se reenvía: se consulta
       // por clientOrderId antes de decidir si la orden existe.
       const claimed = await this.repo.markSending(order.id);
@@ -87,7 +93,12 @@ class OptionsLiveExecution {
           clientOrderId: order.clientOrderId,
         });
         // Resultado = acuse de recepción; NO se registra posición aquí.
-        if (!response?.orderId) throw new Error('Order acknowledgement without orderId');
+        if (response?.orderId == null ||
+            (response.symbol && response.symbol !== order.symbol) ||
+            (response.side && response.side !== order.side) ||
+            (response.clientOrderId && response.clientOrderId !== order.clientOrderId)) {
+          throw new Error('Binance acknowledgement identity mismatch');
+        }
         await this.repo.markActive(order.id, response.orderId);
         sent += 1;
       } catch (err) {
@@ -111,7 +122,8 @@ class OptionsLiveExecution {
     const args = { symbol: order.symbol, ...(order.orderId
       ? { orderId: order.orderId } : { clientOrderId: order.clientOrderId }) };
     let state = await client.getOrder(args);
-    if (!state || !state.orderId || state.symbol !== order.symbol || state.side !== order.side) {
+    if (!state || state.orderId == null || state.symbol !== order.symbol || state.side !== order.side ||
+        (order.orderId != null && clean(state.orderId) !== clean(order.orderId))) {
       throw new Error('Binance order identity mismatch');
     }
     if (state.clientOrderId && state.clientOrderId !== order.clientOrderId) {
@@ -134,19 +146,41 @@ class OptionsLiveExecution {
       }
     }
 
-    const rawTrades = await client.getUserTrades({
-      symbol: order.symbol, startTime: Math.max(0, order.createdAt - 60_000),
-      endTime: this.now(), limit: 1000,
-    });
-    if (!Array.isArray(rawTrades)) throw new Error('Unexpected Binance trade list');
-    if (rawTrades.length === 1000) throw new Error('Trade history pagination required: reconciliation paused');
+    // Paginación por id de trade (entero potencialmente > MAX_SAFE_INTEGER).
+    // Nunca asumir que los primeros 1000 son toda la historia.
+    const rawTrades = [];
+    let fromId;
+    for (let page = 0; page < 20; page++) {
+      const chunk = await client.getUserTrades({
+        symbol: order.symbol,
+        startTime: Math.max(0, order.createdAt - 60_000),
+        endTime: this.now(), limit: 1000,
+        ...(fromId == null ? {} : { fromId }),
+      });
+      if (!Array.isArray(chunk) || chunk.length > 1000) {
+        throw new Error('Invalid Binance trade page');
+      }
+      rawTrades.push(...chunk);
+      if (chunk.length < 1000) break;
+      const lastId = chunk[chunk.length - 1]?.id;
+      if (lastId == null || !/^\\d+$/.test(clean(lastId))) {
+        throw new Error('Trade pagination requires precise numeric id');
+      }
+      const next = (BigInt(clean(lastId)) + 1n).toString();
+      if (fromId != null && BigInt(next) <= BigInt(fromId)) {
+        throw new Error('Binance trade pagination did not advance');
+      }
+      fromId = next;
+      if (page === 19) throw new Error('Trade history exceeds reconciliation page budget');
+    }
     const trades = rawTrades.map((t) => normalizeTrade(t, order, orderId))
       .filter(Boolean).sort((a, b) => a.at - b.at);
     // Comprobar antes de contabilizar: no superar la cantidad ordenada.
     const sum = trades.reduce((total, t) => total + t.quantity, 0);
     const executed = Number(state.executedQty);
+    const alreadyProcessed = Number(order.processedQty || 0);
     if (!Number.isFinite(executed) || executed < 0 || executed > order.quantity + 1e-8 ||
-        sum > executed + 1e-8) {
+        sum > executed + 1e-8 || executed + 1e-8 < alreadyProcessed) {
       throw new Error('Trade quantities disagree with Binance order');
     }
     for (const trade of trades) await this.repo.applyTrade({ ...order, orderId }, trade);
