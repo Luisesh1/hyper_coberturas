@@ -80,6 +80,12 @@ class OptionsLiveSettlement {
     this.credentials = deps.credentials || credentialsDefault;
     this.logger = deps.logger || loggerDefault;
     this.now = deps.now || Date.now;
+    this.notify = deps.notify || (async (userId, message) => {
+      const registry = require('../telegram.registry');
+      const tg = await registry.getOrCreate(userId);
+      if (typeof tg?.send !== 'function') throw new Error('Telegram unavailable');
+      await tg.send(message);
+    });
   }
 
   async reconcileExpired() {
@@ -123,6 +129,21 @@ class OptionsLiveSettlement {
         this.logger.warn('options_live_exercise_attention', {
           userId: group.userId, symbol: group.symbol, error: err.message,
         });
+        // Un vencimiento sin conciliación implica PnL/riesgo desconocidos.
+        // Aviso persistente a lo sumo cada 15 min entre réplicas.
+        try {
+          if (typeof this.orders.claimIncidentNotification === 'function' &&
+              await this.orders.claimIncidentNotification(group.userId, 'EXERCISE_ATTENTION', group.symbol)) {
+            const symbol = String(group.symbol).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+            await this.notify(group.userId,
+              '<b>Binance Opciones · Vencimiento pendiente</b>\\n' +
+              symbol + '\\nNo existe evidencia suficiente de liquidación. Revisar Binance y el libro.');
+          }
+        } catch (notifyErr) {
+          this.logger.warn('options_live_exercise_notify_failed', {
+            userId: group.userId, error: notifyErr.message,
+          });
+        }
       }
     }
     return { checked: Math.min(groups.length, MAX_GROUPS), settled,
