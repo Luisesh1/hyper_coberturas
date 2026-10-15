@@ -40,6 +40,8 @@ const defaultParams = {
   maxOpenPositions: 1,
   maxTradesPerDay: 4,
   maxPremiumUsdt: null,
+  contractCount: 1,
+  capitalUsdt: null,
 };
 
 const NUMERIC_FIELDS = [
@@ -55,6 +57,8 @@ const NUMERIC_FIELDS = [
 ];
 
 const paramSchema = [
+  { key: 'contractCount', label: 'Contratos distintos', type: 'number', integer: true, min: 1, max: 10, step: 1 },
+  { key: 'capitalUsdt', label: 'Capital máximo de entrada', type: 'number', min: 0.01, max: 1e7, nullable: true, unit: 'USDT' },
   { key: 'alertIds', label: 'Alertas', type: 'alerts' },
   { key: 'structure', label: 'Estructura', type: 'enum', options: STRUCTURES },
   { key: 'onOpposite', label: 'Señal contraria', type: 'enum', options: ON_OPPOSITE },
@@ -89,7 +93,11 @@ function validateParams(raw = {}) {
   );
   // La prima máxima solo aplica al comprar.
   if (structure !== 'buy_with') numeric.maxPremiumUsdt = null;
-  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, ...numeric };
+  const contractCount = input.contractCount == null ? 1 : Number(input.contractCount);
+  const capitalUsdt = input.capitalUsdt == null || input.capitalUsdt === '' ? null : Number(input.capitalUsdt);
+  if (!Number.isInteger(contractCount) || contractCount < 1 || contractCount > 10) throw new ValidationError('contractCount debe estar entre 1 y 10');
+  if (capitalUsdt !== null && (!Number.isFinite(capitalUsdt) || capitalUsdt <= 0 || capitalUsdt > 1e7)) throw new ValidationError('capitalUsdt inválido');
+  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, ...numeric, contractCount, capitalUsdt };
 }
 
 /** Pata que abre una señal según la estructura. */
@@ -158,23 +166,27 @@ function openFor(ctx, direction, openCount) {
   const { chain } = ctx;
   if (!chain || !chain.rows?.length) return skip('no_chain', 'Sin cadena para el vencimiento objetivo');
   const leg = legFor(params.structure, direction);
-  const pick = pickLegByDelta(chain, leg.type, params.targetDelta, spot, leg.side === 'BUY' ? 'ask' : 'bid');
-  if (!pick) {
-    return skip('no_legs', `No hay ${leg.type === 'C' ? 'call' : 'put'} OTM con ${leg.side === 'BUY' ? 'ask' : 'bid'} para la delta objetivo`);
+  const candidates = chain.rows.map((row) => ({ row, quote: leg.type === 'C' ? row.call : row.put }))
+    .filter(({ row, quote }) => quote && Number.isFinite(Number(quote.delta))
+      && Number(leg.type === 'C' ? row.strike : -row.strike) > (leg.type === 'C' ? spot : -spot)
+      && Number(quote[leg.side === 'BUY' ? 'ask' : 'bid']) > 0)
+    .sort((a, b) => Math.abs(Math.abs(Number(a.quote.delta)) - params.targetDelta)
+      - Math.abs(Math.abs(Number(b.quote.delta)) - params.targetDelta));
+  const count = params.contractCount || 1;
+  const selected = candidates.slice(0, count);
+  if (selected.length < count) return skip('no_legs', 'No hay suficientes contratos líquidos para la selección');
+  const legs = selected.map(({ row, quote }) => legFromChain(
+    { ...row, ...quote }, { side: leg.side, quantity: params.quantity, type: leg.type, expiry: chain.expiry }
+  ));
+  const capital = legs.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  if (params.capitalUsdt != null && capital > params.capitalUsdt) {
+    return skip('capital_limit', 'La selección supera el capital máximo configurado');
   }
-  const built = legFromChain(pick, { side: leg.side, quantity: params.quantity, type: leg.type, expiry: chain.expiry });
-  if (leg.side === 'BUY' && params.maxPremiumUsdt != null) {
-    const premium = built.price * params.quantity;
-    if (premium > params.maxPremiumUsdt) {
-      return skip('max_premium', `Prima ${premium.toFixed(2)} USDT supera el máximo de ${params.maxPremiumUsdt} USDT`);
-    }
+  if (leg.side === 'BUY' && params.maxPremiumUsdt != null && capital > params.maxPremiumUsdt) {
+    return skip('max_premium', 'La prima supera el máximo configurado');
   }
-  return {
-    type: 'open',
-    reason: 'signal',
-    detail: `Señal ${DIRECTION_LABEL[direction]}: ${describeLeg(leg, pick.strike)} (Δ ${Math.abs(built.delta ?? 0).toFixed(2)}, vence ${chain.expiry})`,
-    legs: [built],
-  };
+  return { type: 'open', reason: 'signal', detail: `Señal ${DIRECTION_LABEL[direction]}: ${legs.length} contratos (vence ${chain.expiry})`, legs };
+
 }
 
 function evaluate(ctx) {
