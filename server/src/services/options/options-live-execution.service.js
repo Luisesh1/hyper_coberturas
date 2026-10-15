@@ -67,7 +67,8 @@ class OptionsLiveExecution {
     }
     // No enviar órdenes si existen posiciones ajenas o fills que todavía
     // no figuran en el ledger local.
-    await this.repo.assertExchangeExposure(strategy.userId, await client.getPositions());
+    const exchangePositions = await client.getPositions();
+    await this.repo.assertExchangeExposure(strategy.userId, exchangePositions);
     const legs = action.legs || [];
     if (!legs.length || legs.length > 20) throw new Error('Invalid order batch');
     if (legs.some((leg) => !leg.symbol || !['BUY', 'SELL'].includes(leg.side) ||
@@ -80,6 +81,7 @@ class OptionsLiveExecution {
     const orders = await this.repo.beginBatch({
       strategy, action: action.type, legs, key: actionKey(strategy, action, ctx),
       detail: action.detail, deadlineAt: this.now() + WINDOW_MS,
+      exchangePositions,
     });
     if (!orders) return { status: 'duplicate_or_unresolved' };
     let sent = 0;
