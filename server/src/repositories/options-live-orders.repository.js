@@ -315,3 +315,4 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
 
 module.exports = createOptionsLiveOrdersRepository();
 module.exports.createOptionsLiveOrdersRepository = createOptionsLiveOrdersRepository;
+module.exports.compareExposure = compareExposure;
