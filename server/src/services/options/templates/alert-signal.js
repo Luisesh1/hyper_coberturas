@@ -193,7 +193,8 @@ function openFor(ctx, direction, openCount) {
   if (leg.side === 'BUY' && params.maxPremiumUsdt != null && premium > params.maxPremiumUsdt) {
     return skip('max_premium', 'La prima supera el máximo configurado');
   }
-  return { type: 'open', reason: 'signal', detail: `Señal ${DIRECTION_LABEL[direction]}: ${legs.length} contratos (vence ${chain.expiry})`, legs };
+  const description = legs.length === 1 ? describeLeg(leg, selected[0].row.strike) : `${legs.length} contratos`;
+  return { type: 'open', reason: 'signal', detail: `Señal ${DIRECTION_LABEL[direction]}: ${description} (vence ${chain.expiry})`, legs };
 
 }
 
