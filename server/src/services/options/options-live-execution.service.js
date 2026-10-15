@@ -53,6 +53,7 @@ class OptionsLiveExecution {
     this.credentials = deps.credentials || credentialsDefault;
     this.logger = deps.logger || loggerDefault;
     this.now = deps.now || Date.now;
+    this.settlement = deps.settlement || require('./options-live-settlement.service');
     // Habilitación explícita: despliegues y migraciones no envían órdenes solos.
     this.enabled = deps.enabled ?? (process.env.OPTIONS_LIVE_TRADING_ENABLED === 'true');
   }
@@ -215,6 +216,12 @@ class OptionsLiveExecution {
     if (TERMINAL.has(status) && Math.abs(sum - executed) < 1e-8) {
       await this.repo.finishOrder(order.id, orderId, executed);
     }
+  }
+
+  async reconcileExpired() {
+    // No requiere flag de trading: la auditoría de operaciones anteriores
+    // debe continuar incluso cuando se bloquean nuevas entradas.
+    return this.settlement.reconcileExpired();
   }
 
   async reconcilePending() {
