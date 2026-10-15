@@ -213,9 +213,28 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         "SELECT COUNT(*)::int AS n FROM options_live_orders WHERE batch_id=$1 AND status<>'final'",
         [locked.batch_id]
       );
-      if (Number(remaining.n) === 0) await tx.query(
-        "UPDATE options_live_batches SET status='completed' WHERE id=$1", [locked.batch_id]
-      );
+      if (Number(remaining.n) === 0) {
+        await tx.query("UPDATE options_live_batches SET status='completed' WHERE id=$1", [locked.batch_id]);
+        const { rows: [batch] } = await tx.query(
+          'SELECT strategy_id,action_key,action FROM options_live_batches WHERE id=$1', [locked.batch_id]
+        );
+        const match = /^alert:(\\d+):(open|close)$/.exec(batch?.action_key || '');
+        if (match) {
+          const { rows: [fills] } = await tx.query(
+            'SELECT COALESCE(SUM(processed_qty),0) AS qty FROM options_live_orders WHERE batch_id=$1',
+            [locked.batch_id]
+          );
+          const executed = Number(fills.qty) > 0;
+          await tx.query(
+            `UPDATE options_auto_signals SET decision=$3,detail=$4
+             WHERE strategy_id=$1 AND alert_event_id=$2 AND decision='pending'`,
+            [batch.strategy_id, match[1],
+              executed ? (batch.action === 'open' ? 'opened' : 'closed') : 'ignored',
+              executed ? 'Ejecución real verificada con Binance (fills conciliados)'
+                : 'Sin ejecuciones tras la ventana LIMIT de diez minutos']
+          );
+        }
+      }
     });
   }
   return { beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
