@@ -20,6 +20,9 @@ test('exposición: posición manual o ledger desactualizado bloquean entradas', 
   assert.throws(() => compareExposure([{ symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: '0.1' }], []), /exposure mismatch/i);
   assert.throws(() => compareExposure([], null), /not an array/);
   assert.throws(() => compareExposure([], [{
+    symbol: 'BTC-261030-60000-C', side: 'INVALID', quantity: '0',
+  }]), /direction/i);
+  assert.throws(() => compareExposure([], [{
     symbol: 'BTC-261030-60000-C', side: 'SHORT', quantity: '0.1',
   }]), /direction disagrees/);
   assert.throws(() => compareExposure([], [{
