@@ -180,6 +180,21 @@ test('modo real: límite de órdenes por día bloquea la entrada real pero no la
   assert.match(notes[0].text, /bloqueada/);
 });
 
+test('modo real: revalida presupuesto al precio LIMIT y bloquea sobrecostes', async () => {
+  const { repo, runner, strategy, credentials, market } = await setup({ mode: 'live' });
+  const symbol = 'BTC-261016-60000-C';
+  const q = await market.getQuote(symbol);
+  const quantity = 0.1;
+  const budget = q.ask * quantity * 0.9;
+  await runner.executeLive(strategy, {
+    type: 'open', detail: 'entry',
+    legs: [{ symbol, side: 'BUY', quantity, optionType: 'C', strike: 60000 }],
+  }, { now: FRIDAY_9, spot: SPOT, positions: [], params: { capitalUsdt: budget } });
+  assert.equal(credentials.orders.length, 0);
+  assert.equal(repo.positions.filter((p) => p.mode === 'live').length, 0);
+  assert.match(repo.events.find((e) => e.mode === 'live').detail, /capital requerido excede/);
+});
+
 test('modo real: las órdenes aceptadas sin fill consumen el cupo diario', async () => {
   const { repo, runner, credentials } = await setup({
     mode: 'live', limits: { maxOrdersPerDay: 2 },
