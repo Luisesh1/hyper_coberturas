@@ -33,7 +33,7 @@ export function orderView(o) {
     price: o.price,
     qty: o.quantity ?? o.origQty,
     filled: o.executedQty ?? 0,
-    created: o.createTime ?? o.createDate ?? o.time,
+    created: o.createdAt ?? o.createTime ?? o.createDate ?? o.time,
   };
 }
 
