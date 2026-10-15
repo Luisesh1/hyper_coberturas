@@ -120,8 +120,20 @@ class OptionsStrategyRunner {
     }, this.intervalMs);
     this.interval.unref?.();
     // La conciliación continúa incluso si se deshabilitan nuevas órdenes.
-    const reconcile = () => this.liveExecutor.reconcilePending()
-      .catch((err) => this.logger.error('options_reconcile_failed', { error: err.message }));
+    const reconcile = async () => {
+      try {
+        await this.liveExecutor.reconcilePending();
+      } catch (err) {
+        this.logger.error('options_reconcile_failed', { error: err.message });
+      }
+      if (typeof this.liveExecutor.reconcileExpired === 'function') {
+        try {
+          await this.liveExecutor.reconcileExpired();
+        } catch (err) {
+          this.logger.error('options_exercise_reconcile_failed', { error: err.message });
+        }
+      }
+    };
     this.reconcileInterval = setInterval(reconcile, RECONCILE_INTERVAL_MS);
     this.reconcileInterval.unref?.();
     reconcile();
