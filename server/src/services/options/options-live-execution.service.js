@@ -28,7 +28,7 @@ function normalizeTrade(raw, order, exchangeOrderId) {
       !Number.isFinite(at)) {
     throw new Error('Binance trade incomplete: cannot book without quantity, price, fee and id');
   }
-  if (raw.quoteAsset && raw.quoteAsset !== 'USDT') throw new Error('Trade fee currency requires conversion');
+  if (raw.quoteAsset !== 'USDT') throw new Error('Trade fee currency is not confirmed as USDT');
   return { id: clean(id), quantity, price, fee: Math.abs(fee), at };
 }
 
@@ -135,6 +135,12 @@ class OptionsLiveExecution {
     }
     if (state.clientOrderId && state.clientOrderId !== order.clientOrderId) {
       throw new Error('Binance clientOrderId mismatch');
+    }
+    if (state.quantity == null || !Number.isFinite(Number(state.quantity)) ||
+        Math.abs(Number(state.quantity) - order.quantity) > 1e-8 ||
+        (state.type != null && state.type !== 'LIMIT') ||
+        (state.timeInForce != null && state.timeInForce !== 'GTC')) {
+      throw new Error('Binance order terms disagree with local ledger');
     }
     const orderId = clean(state.orderId);
     await this.repo.markActive(order.id, orderId);
