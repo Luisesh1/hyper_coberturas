@@ -365,10 +365,10 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
 
   async function finishAutoSignal(id, { decision, detail }) {
     const { rows } = await db.query(
-      \`UPDATE options_auto_signals SET decision = $2, detail = $3
+      `UPDATE options_auto_signals SET decision = $2, detail = $3
        WHERE id = $1
          AND (decision = 'pending' OR $2 IN ('opened', 'closed', 'reversed'))
-       RETURNING *\`,
+       RETURNING *`,
       [id, decision, detail ?? null]
     );
     return rows[0] ? mapAutoSignal(rows[0]) : null;
