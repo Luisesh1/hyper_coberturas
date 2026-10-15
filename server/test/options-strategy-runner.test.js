@@ -58,8 +58,22 @@ async function setup({ mode = 'shadow', limits = {}, globalLimits = {}, template
   const credentials = fakeCredentials({ limits: globalLimits });
   const notes = [];
   const clock = { now };
+  const liveExecutor = {
+    enabled: true,
+    async reconcilePending() { return { checked: 0 }; },
+    async submit(strategy, action) {
+      const client = await credentials.getClientForUser(strategy.userId);
+      for (const leg of action.legs) {
+        await client.placeOrder({ symbol: leg.symbol, side: leg.side,
+          price: leg.price, quantity: leg.quantity, reduceOnly: action.type === 'close' });
+      }
+      // El exchange simuló ACCEPTED (sin fills confirmados).
+      return { status: 'submitted', sent: action.legs.length };
+    },
+  };
   const runner = new OptionsStrategyRunner({
     repo,
+    liveExecutor,
     market,
     credentials,
     notify: async (userId, text) => notes.push({ userId, text }),
@@ -128,13 +142,13 @@ test('hold/skip solo se registran cuando cambia el motivo', async () => {
   assert.equal(repo.events[0].action, 'skip');
 });
 
-test('modo real: abre en sombra y en real; orden LIMIT al bid y aviso por Telegram', async () => {
+test('modo real: acepta órdenes LIMIT sin inventar posiciones ni fills', async () => {
   const { repo, runner, credentials, notes, market } = await setup({ mode: 'live' });
   await runner.tick();
   const shadow = repo.positions.filter((p) => p.mode === 'shadow');
   const live = repo.positions.filter((p) => p.mode === 'live');
   assert.equal(shadow.length, 2);
-  assert.equal(live.length, 2);
+  assert.equal(live.length, 0);
   assert.equal(credentials.orders.length, 2);
   for (const order of credentials.orders) {
     const quote = await market.getQuote(order.symbol);
@@ -144,9 +158,9 @@ test('modo real: abre en sombra y en real; orden LIMIT al bid y aviso por Telegr
     assert.equal(order.quantity, 0.01);
   }
   const liveEvent = repo.events.find((e) => e.mode === 'live' && e.action === 'open');
-  assert.ok(liveEvent.legs.every((l) => l.orderId > 1000));
+  assert.equal(liveEvent, undefined);
   assert.equal(notes.length, 1);
-  assert.match(notes[0].text, /Apertura/);
+  assert.match(notes[0].text, /LIMIT/);
   assert.equal(notes[0].userId, 7);
 });
 
