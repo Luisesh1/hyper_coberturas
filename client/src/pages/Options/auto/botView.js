@@ -141,10 +141,10 @@ export const DECISION_LABEL = {
   closed: 'Cerró',
   reversed: 'Giró',
   ignored: 'Ignorada',
-  pending: 'Pendiente',
+  pending: 'Por confirmar',
   error: 'Error',
 };
-export const DECISION_TONE = { opened: 'open', closed: 'close', reversed: 'close', ignored: 'skip', error: 'error' };
+export const DECISION_TONE = { opened: 'open', closed: 'close', reversed: 'close', ignored: 'skip', pending: 'pending', error: 'error' };
 const TRADED = new Set(['opened', 'closed', 'reversed']);
 export const isTraded = (s) => TRADED.has(s.decision);
 
@@ -181,7 +181,7 @@ export function normalizeSignals(list) {
 // Defensa en el cliente por si el servidor ignora `filter`.
 export function filterSignals(signals, filter) {
   if (filter === 'traded') return signals.filter(isTraded);
-  if (filter === 'ignored') return signals.filter((s) => !isTraded(s));
+  if (filter === 'ignored') return signals.filter((s) => s.decision === 'ignored');
   return signals;
 }
 
