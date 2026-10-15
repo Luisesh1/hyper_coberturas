@@ -1,0 +1,89 @@
+# Diagnóstico manual y estrictamente de solo lectura para el VPS de producción.
+# Reutiliza el acceso SSH de deploy. No consulta balances ni vuelca logs,
+# identificadores de usuarios, contratos o credenciales a GitHub Actions.
+# No ejecuta ni cancela órdenes y no modifica flags de trading.
+name: Options - diagnóstico VPS
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: options-diagnostics-production
+  cancel-in-progress: false
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Preparar SSH con credenciales del despliegue
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p -m 700 ~/.ssh
+          printf '%s\\n' "$SERVER_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          # Mismo mecanismo de host-key del deploy existente.
+          # Se recomienda sustituirlo por una huella SSH fijada fuera de banda.
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Salud Docker y conciliación (sin datos privados)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s" <<'REMOTE'
+          set -euo pipefail
+          compose=(docker compose -f docker-compose.prod.yml)
+
+          healthy=1
+          for service in server postgres nginx; do
+            id="$("${compose[@]}" ps -q "$service")"
+            if [ -z "$id" ]; then
+              echo "service_$service=not_running"
+              healthy=0
+              continue
+            fi
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id")"
+            echo "service_$service=$status"
+            if [ "$status" != "healthy" ]; then healthy=0; fi
+          done
+
+          # El script lee la DB y emite datos internos a stdout: capturarlos
+          # y convertirlos a métricas agregadas ANTES de mostrarlos en CI.
+          audit_status=0
+          audit_output="$("${compose[@]}" exec -T server node src/scripts/options-live-audit.js 2>/dev/null)" || audit_status=$?
+          if [ "$audit_status" -ne 0 ] && [ "$audit_status" -ne 2 ]; then
+            echo "options_audit=unavailable"
+            exit 1
+          fi
+          printf '%s' "$audit_output" | "${compose[@]}" exec -T server node -e '
+            let raw = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { raw += chunk; });
+            process.stdin.on("end", () => {
+              try {
+                const d = JSON.parse(raw);
+                const unresolved = Array.isArray(d.unresolved) ? d.unresolved : null;
+                const expired = Array.isArray(d.expiredLocalLivePositions) ? d.expiredLocalLivePositions : null;
+                if (!unresolved || !expired) throw new Error("invalid shape");
+                console.log("options_unresolved_orders=" + unresolved.length);
+                console.log("options_attention_orders=" + unresolved.filter(o => o.status === "attention").length);
+                console.log("options_expired_positions=" + expired.length);
+                if (unresolved.some(o => o.status === "attention" || o.minutesPastDeadline > 1) || expired.length) process.exitCode = 2;
+              } catch (_) {
+                console.log("options_audit=invalid_response");
+                process.exitCode = 1;
+              }
+            });
+          '
+          if [ "$healthy" -ne 1 ]; then exit 2; fi
+          REMOTE
