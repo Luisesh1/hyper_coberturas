@@ -240,3 +240,25 @@ test('el tick de 5 min evalúa las salidas de los bots (toma de ganancia)', asyn
   assert.ok(p.pnlUsdt > 0);
   assert.match(repo.events.at(-1).detail, /Take profit/);
 });
+
+test('integración: un disparo real de alerts/alert-events llega al bot y abre en sombra', async () => {
+  const alertEvents = require('../src/services/alerts/alert-events');
+  const { repo, runner, bot } = await setup();
+  // Sin `alertEvents` inyectado: start() carga el emisor real de las alertas.
+  const service = createOptionsAutoTradingService({ repo, runner, logger: silent, now: () => NOW, alerts: { listAlerts: async () => [] } });
+  assert.notEqual(service.start(), false);
+  try {
+    alertEvents.emitAlertTriggered(signal({ eventId: 9001 }));
+    // Los listeners corren de forma asíncrona.
+    for (let i = 0; i < 50 && !(await repo.listAutoSignals(bot.id)).some((s) => s.decision !== 'ignored'); i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const [row] = await repo.listAutoSignals(bot.id);
+    assert.equal(row.decision, 'opened');
+    assert.equal(row.alertEventId, 9001);
+    assert.equal(repo.positions.filter((p) => p.mode === 'shadow').length, 1);
+  } finally {
+    service.stop();
+  }
+  assert.equal(alertEvents.listenerCount(), 0);
+});
