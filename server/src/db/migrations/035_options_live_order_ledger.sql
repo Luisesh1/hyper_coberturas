@@ -3,7 +3,7 @@
 -- transaccionalmente; una respuesta ACCEPTED nunca se convierte en posición.
 CREATE TABLE IF NOT EXISTS options_live_batches (
   id BIGSERIAL PRIMARY KEY,
-  strategy_id BIGINT NOT NULL REFERENCES options_strategies(id) ON DELETE CASCADE,
+  strategy_id BIGINT NOT NULL REFERENCES options_strategies(id) ON DELETE RESTRICT,
   user_id INTEGER NOT NULL,
   action_key TEXT NOT NULL,
   action VARCHAR(5) NOT NULL CHECK (action IN ('open', 'close')),
@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS options_live_batches_pending_idx
 CREATE TABLE IF NOT EXISTS options_live_orders (
   id BIGSERIAL PRIMARY KEY,
   batch_id BIGINT NOT NULL REFERENCES options_live_batches(id) ON DELETE CASCADE,
-  strategy_id BIGINT NOT NULL REFERENCES options_strategies(id) ON DELETE CASCADE,
+  strategy_id BIGINT NOT NULL REFERENCES options_strategies(id) ON DELETE RESTRICT,
   user_id INTEGER NOT NULL,
   action VARCHAR(5) NOT NULL CHECK (action IN ('open','close')),
   position_id BIGINT REFERENCES options_strategy_positions(id),
