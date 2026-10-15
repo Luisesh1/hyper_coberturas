@@ -29,7 +29,9 @@ function compareExposure(rows, exchangePositions) {
     const actual = new Map();
     for (const p of exchangePositions) {
       const qty = Number(p.quantity);
-      if (!p.symbol || !Number.isFinite(qty)) throw new Error('Invalid Binance live position');
+      if (!p.symbol || !Number.isFinite(qty) || !['LONG', 'SHORT'].includes(p.side)) {
+        throw new Error('Invalid Binance live position or direction');
+      }
       if (p.quoteAsset != null && p.quoteAsset !== 'USDT') {
         throw new Error('Unsupported Binance options position quote asset');
       }
