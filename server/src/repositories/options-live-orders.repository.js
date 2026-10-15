@@ -218,7 +218,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         const { rows: [batch] } = await tx.query(
           'SELECT strategy_id,action_key,action FROM options_live_batches WHERE id=$1', [locked.batch_id]
         );
-        const match = /^alert:(\\d+):(open|close)$/.exec(batch?.action_key || '');
+        const match = /^alert:([0-9]+):(open|close)$/.exec(batch?.action_key || '');
         if (match) {
           const { rows: [fills] } = await tx.query(
             'SELECT COALESCE(SUM(processed_qty),0) AS qty FROM options_live_orders WHERE batch_id=$1',
