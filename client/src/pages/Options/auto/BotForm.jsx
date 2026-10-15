@@ -283,7 +283,28 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             onChange={(v) => update({ expiryDays: v })}
           />
           <NumberField
-            label="Cantidad"
+            label="Contratos distintos"
+            help="Elegidos por cercanía a la delta objetivo"
+            value={form.contractCount}
+            min={1}
+            max={10}
+            step={1}
+            integer
+            error={errors.contractCount}
+            onChange={(v) => update({ contractCount: v })}
+          />
+          <NumberField
+            label="Capital asignado"
+            help="Se reparte por igual. En compras limita prima; en ventas limita margen estimado. Vacío = usa la cantidad configurada."
+            unit="USDT"
+            value={form.capitalUsdt}
+            min={0}
+            step={10}
+            error={errors.capitalUsdt}
+            onChange={(v) => update({ capitalUsdt: v })}
+          />
+          <NumberField
+            label="Cantidad máxima por contrato"
             unit={form.underlying}
             value={form.quantity}
             min={0.0001}
