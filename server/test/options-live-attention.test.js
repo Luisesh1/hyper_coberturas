@@ -59,3 +59,74 @@ test('alarma de atención persiste timestamp en PostgreSQL con condición atómi
   assert.match(queries[0].sql, /attention_notified_at <= \$3/);
   assert.equal(queries[0].params[2], 10_000_000 - 15 * 60_000);
 });
+
+test('auditoría detecta órdenes huérfanas y no repite alertas al minuto siguiente', async () => {
+  const clock = { now: 500_000 };
+  const sent = [];
+  const calls = { scans: 0, claimed: [] };
+  const repo = {
+    async listUnresolved() { return []; },
+    async listMonitorUsers() { calls.scans++; return [7]; },
+    async listUserOrderIds() { return []; },
+    async assertExchangeExposure() { return true; },
+    async claimIncidentNotification(user, type, resource) {
+      calls.claimed.push({ user, type, resource });
+      return true;
+    },
+  };
+  const client = {
+    async getPositions() { return []; },
+    async getOpenOrders() {
+      return [{ clientOrderId: 'MANUAL-1', symbol: 'BTC-261016-60000-C', status: 'NEW' }];
+    },
+  };
+  const engine = new OptionsLiveExecution({
+    enabled: false, repo, logger: { warn() {}, info() {} },
+    credentials: { async getClientForUser() { return client; } },
+    notify: async (user, msg) => sent.push({ user, msg }), now: () => clock.now,
+  });
+  const first = await engine.reconcilePending();
+  assert.equal(first.accountAudit.checked, 1);
+  assert.equal(first.accountAudit.incidents, 1);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].msg, /sin seguimiento/);
+  assert.deepEqual(calls.claimed.map((c) => c.type), ['ORPHAN_OPEN_ORDERS']);
+  clock.now += 60_000;
+  await engine.reconcilePending();
+  assert.equal(calls.scans, 1);
+  clock.now += 5 * 60_000;
+  await engine.reconcilePending();
+  assert.equal(calls.scans, 2);
+});
+test('caída de credenciales dispara alarma específica sin permitir órdenes nuevas', async () => {
+  const events = [];
+  const engine = new OptionsLiveExecution({
+    enabled: false,
+    logger: { warn() {}, info() {} },
+    repo: {
+      async listMonitorUsers() { return [9]; },
+      async listUserOrderIds() { return []; },
+      async claimIncidentNotification(_u, kind) { events.push(kind); return true; },
+    },
+    credentials: { async getClientForUser() { throw new Error('API unavailable'); } },
+    notify: async (user, msg) => events.push({ user, msg }),
+  });
+  const state = await engine.scanExternalAccounts();
+  assert.equal(state.incidents, 1);
+  assert.equal(events[0], 'ACCOUNT_AUDIT_UNAVAILABLE');
+  assert.match(events[1].msg, /no disponible/);
+});
+test('deduplicación de incidentes usa upsert condicional atómico', async () => {
+  const calls = [];
+  const repo = createOptionsLiveOrdersRepository({
+    now: () => 10_000_000,
+    db: { async query(sql, args) {
+      calls.push({ sql, args });
+      return { rows: [{ user_id: 7 }] };
+    } },
+  });
+  assert.equal(await repo.claimIncidentNotification(7, 'EXPOSURE_MISMATCH', 'account'), true);
+  assert.match(calls[0].sql, /ON CONFLICT/);
+  assert.match(calls[0].sql, /last_notified_at <= \$5/);
+  assert.equal(calls[0].args[4], 10_000_000 - 15 * 60_000);
+});
