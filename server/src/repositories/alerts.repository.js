@@ -27,9 +27,10 @@ async function create(userId, payload) {
   const { rows } = await db.query(
     `INSERT INTO alerts (
        user_id, name, is_active, threshold_percent, asset_list_json, rules_json,
-       telegram_enabled, cooldown_seconds, datasource, created_at, updated_at
+       telegram_enabled, cooldown_seconds, datasource, created_at, updated_at,
+       direction
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)
      RETURNING *`,
     [
       userId,
@@ -42,6 +43,7 @@ async function create(userId, payload) {
       payload.cooldownSeconds,
       payload.datasource,
       payload.now,
+      payload.direction || 'neutral',
     ]
   );
   return rows[0];
@@ -58,7 +60,8 @@ async function update(userId, alertId, payload) {
         telegram_enabled  = $8,
         cooldown_seconds  = $9,
         datasource        = $10,
-        updated_at        = $11
+        updated_at        = $11,
+        direction         = $12
       WHERE user_id = $1 AND id = $2
       RETURNING *`,
     [
@@ -73,6 +76,7 @@ async function update(userId, alertId, payload) {
       payload.cooldownSeconds,
       payload.datasource,
       payload.now,
+      payload.direction || 'neutral',
     ]
   );
   return rows[0] || null;
@@ -100,9 +104,9 @@ async function recordEvent(payload) {
     `INSERT INTO alert_events (
        alert_id, user_id, asset, timeframe, candle_close_time, score,
        threshold_percent, matched_rules_json, message_text, telegram_sent,
-       telegram_error, created_at
+       telegram_error, created_at, direction
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING *`,
     [
       payload.alertId,
@@ -117,6 +121,7 @@ async function recordEvent(payload) {
       payload.telegramSent,
       payload.telegramError,
       payload.now,
+      payload.direction || null,
     ]
   );
   return rows[0];
