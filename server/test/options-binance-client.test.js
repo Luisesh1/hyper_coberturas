@@ -146,3 +146,35 @@ test('getApiRestrictions usa el host spot con firma', async () => {
   assert.ok(calls[0].url.startsWith('https://api.binance.com/sapi/v1/account/apiRestrictions?'));
   assert.ok(calls[0].url.includes('&signature='));
 });
+
+test('endpoints de ejercicios y bills son GET firmados y preservan IDs 64-bit', async () => {
+  const { calls, fetchImpl } = recordingFetch((url) => ({
+    ok: true, status: 200,
+    text: async () => url.includes('/exerciseRecord')
+      ? '[{"id":1125899906842624042,"quantity":"0.1","amount":"0","fee":"0"}]'
+      : '[{"id":1125899906842624043,"type":"EXERCISE_FEE","amount":"0"}]',
+  }));
+  const client = createBinanceOptionsClient({
+    apiKey: API_KEY, apiSecret: API_SECRET, fetchImpl, now: () => 1700000000000,
+  });
+  const [record] = await client.getExerciseRecords({
+    symbol: 'BTC-261016-60000-C', startTime: 123, endTime: 456,
+  });
+  const [bill] = await client.getBills({
+    currency: 'USDT', startTime: 123, endTime: 456,
+  });
+  assert.equal(record.id, '1125899906842624042');
+  assert.equal(bill.id, '1125899906842624043');
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.init.method, 'GET');
+    assert.equal(call.init.headers['X-MBX-APIKEY'], API_KEY);
+    const url = new URL(call.url);
+    assert.equal(url.searchParams.get('startTime'), '123');
+    assert.equal(url.searchParams.get('endTime'), '456');
+    assert.ok(url.searchParams.get('signature'));
+  }
+  assert.match(calls[0].url, /\/eapi\/v1\/exerciseRecord\?/);
+  assert.match(calls[1].url, /\/eapi\/v1\/bill\?/);
+  assert.equal(new URL(calls[1].url).searchParams.get('currency'), 'USDT');
+});
