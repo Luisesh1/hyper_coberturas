@@ -20,7 +20,8 @@
 const { createBinanceOptionsClient } = require('./binance-options.client');
 const { NotFoundError, ValidationError } = require('../../errors/app-error');
 
-const DEFAULT_TTL_MS = 5_000;
+const DEFAULT_TTL_MS = 30_000;
+const METADATA_TTL_MS = 10 * 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UNDERLYING_ORDER = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE'];
 const MONTHS_ES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -123,9 +124,9 @@ function createOptionsMarketService({
     return publicClient;
   }
 
-  function cached(key, loader) {
+  function cached(key, loader, lifetimeMs = ttlMs) {
     const hit = cache.get(key);
-    if (hit && now() - hit.at < ttlMs) return hit.promise;
+    if (hit && now() - hit.at < lifetimeMs) return hit.promise;
     const promise = Promise.resolve().then(loader);
     cache.set(key, { at: now(), promise });
     promise.catch(() => {
@@ -134,7 +135,7 @@ function createOptionsMarketService({
     return promise;
   }
 
-  const getExchangeInfo = () => cached('exchangeInfo', () => getClient().getExchangeInfo());
+  const getExchangeInfo = () => cached('exchangeInfo', () => getClient().getExchangeInfo(), METADATA_TTL_MS);
   const getMarks = () => cached('mark', () => getClient().getMark());
   const getTickers = () => cached('ticker', () => getClient().getTicker());
   const getSpot = (underlying) => cached(`index:${underlying}`, async () => {
@@ -265,23 +266,17 @@ function createOptionsMarketService({
     if (!parsed) throw new ValidationError('symbol inválido (formato BTC-261031-68000-C)');
     const { symbol, underlying, expiry, strike, type } = parsed;
 
-    const [markList, depth, spot, oi] = await Promise.all([
-      cached(`mark:${symbol}`, () => getClient().getMark(symbol)),
-      cached(`depth:${symbol}`, () => getClient().getDepth(symbol, 5)).catch(() => null),
+    // Reutilizar snapshots globales en vez de una petición depth + mark
+    // por contrato: al mostrar una cartera grande eso agotaba el límite IP.
+    const [marks, tickers, spot, oi] = await Promise.all([
+      getMarks(),
+      getTickers(),
       getSpot(underlying).catch(() => null),
       getOpenInterestMap(underlying, expiry),
     ]);
-    const mark = Array.isArray(markList) ? markList.find((m) => m.symbol === symbol) || markList[0] : markList;
+    const mark = bySymbol(marks).get(symbol);
     if (!mark) throw new NotFoundError(`Sin datos de mercado para ${symbol}`);
-
-    let ticker = {
-      bidPrice: Array.isArray(depth?.bids?.[0]) ? depth.bids[0][0] : null,
-      askPrice: Array.isArray(depth?.asks?.[0]) ? depth.asks[0][0] : null,
-    };
-    if (!depth) {
-      const tickers = await getTickers().catch(() => []);
-      ticker = bySymbol(tickers).get(symbol) || {};
-    }
+    const ticker = bySymbol(tickers).get(symbol) || {};
 
     return {
       ...buildLeg(symbol, { mark, ticker, openInterest: oi.get(symbol) }),
