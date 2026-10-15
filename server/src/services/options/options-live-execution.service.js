@@ -8,7 +8,7 @@ const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
 
 const WINDOW_MS = 10 * 60_000;
-const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']);
+const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'REJECTED']);
 const ACTIVE = new Set(['NEW', 'PARTIALLY_FILLED', 'ACCEPTED']);
 const clean = (value) => String(value ?? '');
 
