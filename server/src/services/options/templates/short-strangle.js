@@ -71,11 +71,13 @@ function manage(ctx) {
 }
 
 function evaluate(ctx) {
-  const { now, spot, chain, positions = [], params, lastOpenedAt } = ctx;
+  // `ctx.chain` se lee solo al entrar: en el backtest es perezosa y cara.
+  const { now, spot, positions = [], params, lastOpenedAt } = ctx;
   if (positions.length) return manage(ctx);
 
   const window = entryWindow(now, params, lastOpenedAt);
   if (!window.open) return [skip('outside_window', window.detail)];
+  const { chain } = ctx;
   if (!chain || !chain.rows?.length) return [skip('no_chain', 'Sin cadena para el vencimiento objetivo')];
 
   const iv = atmIv(chain, spot);
