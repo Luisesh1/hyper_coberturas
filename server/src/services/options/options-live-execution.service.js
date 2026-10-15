@@ -163,7 +163,7 @@ class OptionsLiveExecution {
       rawTrades.push(...chunk);
       if (chunk.length < 1000) break;
       const lastId = chunk[chunk.length - 1]?.id;
-      if (lastId == null || !/^\\d+$/.test(clean(lastId))) {
+      if (lastId == null || !/^\d+$/.test(clean(lastId))) {
         throw new Error('Trade pagination requires precise numeric id');
       }
       const next = (BigInt(clean(lastId)) + 1n).toString();
