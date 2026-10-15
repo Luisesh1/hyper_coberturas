@@ -28,9 +28,9 @@ async function create(userId, payload) {
     `INSERT INTO alerts (
        user_id, name, is_active, threshold_percent, asset_list_json, rules_json,
        telegram_enabled, cooldown_seconds, datasource, created_at, updated_at,
-       direction
+       direction, option_expiry_min_days, option_expiry_max_days
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11, $12, $13)
      RETURNING *`,
     [
       userId,
@@ -44,6 +44,8 @@ async function create(userId, payload) {
       payload.datasource,
       payload.now,
       payload.direction || 'neutral',
+      payload.optionExpiryMinDays ?? null,
+      payload.optionExpiryMaxDays ?? null,
     ]
   );
   return rows[0];
@@ -61,7 +63,9 @@ async function update(userId, alertId, payload) {
         cooldown_seconds  = $9,
         datasource        = $10,
         updated_at        = $11,
-        direction         = $12
+        direction         = $12,
+        option_expiry_min_days = $13,
+        option_expiry_max_days = $14
       WHERE user_id = $1 AND id = $2
       RETURNING *`,
     [
@@ -77,6 +81,8 @@ async function update(userId, alertId, payload) {
       payload.datasource,
       payload.now,
       payload.direction || 'neutral',
+      payload.optionExpiryMinDays ?? null,
+      payload.optionExpiryMaxDays ?? null,
     ]
   );
   return rows[0] || null;
