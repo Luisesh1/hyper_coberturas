@@ -23,6 +23,10 @@ const MAX_UINT160 = (1n << 160n) - 1n;
 const UNIVERSAL_ROUTER_ADDRESSES = {
   ethereum: '0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af',
   arbitrum: '0xA51afAFe0263b40EdaEf0Df8781eA9aa03E381a3',
+  // Verificadas en cadena: `poolManager()` devuelve el PoolManager v4 de la red.
+  base: '0x6fF5693b99212Da76ad316178A184AB56D299b43',
+  optimism: '0x851116D9223fabED8E56C0E6b8Ad0c31d98B3507',
+  polygon: '0x1095692A6237d83C6a72F3F5eFEdb9A670C49223',
   'base-sepolia': '0x492E6456D9528771018DeB9E87ef7750EF184104',
   robinhood: '0x8876789976decbfcbbbe364623c63652db8c0904',
 };
