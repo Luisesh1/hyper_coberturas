@@ -71,6 +71,16 @@ Cada orden `attention` genera aviso a Telegram (throttle persistente:
 una vez cada 15 minutos por orden) y bloquea nuevas tandas para el
 usuario mientras continúe pendiente.
 
+El monitor de cuenta consulta Binance cada cinco minutos (aunque
+`OPTIONS_LIVE_TRADING_ENABLED=false`): órdenes abiertas ajenas al ledger,
+exposición distinta de posiciones, credenciales caídas y cortes de red.
+Los avisos se deduplican entre réplicas con
+`options_live_incident_notifications` (15 minutos por incidente). Si
+la cuenta no se puede verificar, no debe habilitarse el trading. El
+proceso de vencimientos también alerta al operador cuando falta
+evidencia; no registra PnL ni cierra la posición. Las alertas por sí
+solas no solucionan el incidente.
+
 ## Respuesta a incidentes
 
 **Orden en `attention` o venció el timeout:**
@@ -109,3 +119,12 @@ de polling a ciegas ni volcar datos firmados en logs.
   puede alterar el riesgo; usar cuenta exclusiva para el bot.
 - El vencimiento real requiere pruebas de contrato en el Binance del
   usuario. Pasar CI con mocks no garantiza compatibilidad de producción.
+
+## Operación desde package.json
+
+- `npm run audit:options-live --prefix server`: auditoría local solo
+  lectura, exit code 2 cuando hay órdenes/posiciones que atender.
+- `npm run check:options-binance --prefix server -- <user-id>`: prueba
+  de contrato con Binance **solo lectura**; hace solicitudes firmadas,
+  no POST de órdenes ni cancelaciones. No ejecutar automáticamente en
+  CI con credenciales reales ni imprimir resultados privados.
