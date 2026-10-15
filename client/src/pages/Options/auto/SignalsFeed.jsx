@@ -29,7 +29,24 @@ export function SignalFilter({ value, onChange }) {
 }
 
 function Decision({ signal }) {
-  return <span className={`${styles.decision} ${styles[`dec_${signal.tone}`]}`}>{signal.decisionLabel}</span>;
+  const hint = signal.decision === 'pending'
+    ? 'La señal se procesó, pero todavía no hay ejecución confirmada por Binance.'
+    : undefined;
+  return (
+    <span className={`${styles.decision} ${styles[`dec_${signal.tone}`]}`} title={hint}>
+      {signal.decisionLabel}
+    </span>
+  );
+}
+
+function SignalDetail({ detail }) {
+  if (!detail) return null;
+  return (
+    <details className={styles.signalDisclosure}>
+      <summary>Detalle</summary>
+      <div className={styles.signalDetail}>{detail}</div>
+    </details>
+  );
 }
 
 // Registro «Señales recibidas y decisiones»: tabla en escritorio, tarjetas en
@@ -55,7 +72,7 @@ export default function SignalsFeed({ signals, filter, loading = false, error = 
               <Decision signal={s} />
               <span className={styles.signalAlert}>{s.alertName}</span>
             </span>
-            {s.detail && <span className={styles.signalDetail}>{s.detail}</span>}
+            <SignalDetail detail={s.detail} />
           </li>
         ))}
       </ul>
@@ -76,7 +93,7 @@ export default function SignalsFeed({ signals, filter, loading = false, error = 
               <td><DirectionChip direction={s.direction} /></td>
               <td className={`${ui.mono} ${ui.num}`}>{formatScore(s.score)}</td>
               <td><Decision signal={s} /></td>
-              <td className={styles.signalDetailCell}>{s.detail}</td>
+              <td className={styles.signalDetailCell}><SignalDetail detail={s.detail} /></td>
             </tr>
           ))}
         </tbody>
