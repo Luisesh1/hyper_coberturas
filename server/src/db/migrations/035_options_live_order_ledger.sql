@@ -58,3 +58,8 @@ CREATE TABLE IF NOT EXISTS options_live_fills (
   traded_at BIGINT NOT NULL,
   UNIQUE (live_order_id, trade_id)
 );
+
+-- Una señal con LIMIT enviada no implica que esté ejecutada.
+ALTER TABLE options_auto_signals DROP CONSTRAINT IF EXISTS options_auto_signals_decision_check;
+ALTER TABLE options_auto_signals ADD CONSTRAINT options_auto_signals_decision_check
+  CHECK (decision IN ('opened','closed','reversed','ignored','error','pending'));
