@@ -159,6 +159,38 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.map(map);
   }
 
+  async function listMonitorUsers(limit = 50) {
+    const { rows } = await db.query(
+      "SELECT user_id FROM (SELECT user_id FROM options_strategies WHERE mode='live' " +
+      "UNION SELECT user_id FROM options_live_orders WHERE status<>'final') users " +
+      "ORDER BY user_id LIMIT $1",
+      [limit]
+    );
+    return rows.map((r) => Number(r.user_id));
+  }
+
+  async function listUserOrderIds(userId, since = now() - 90 * 24 * 60 * 60_000) {
+    const { rows } = await db.query(
+      "SELECT client_order_id,status FROM options_live_orders " +
+      "WHERE user_id=$1 AND created_at >= $2",
+      [userId, since]
+    );
+    return rows.map((r) => ({ clientOrderId: r.client_order_id, status: r.status }));
+  }
+
+  async function claimIncidentNotification(userId, kind, resource, intervalMs = 15 * 60_000) {
+    const time = now();
+    const { rows } = await db.query(
+      "INSERT INTO options_live_incident_notifications " +
+      "(user_id,incident_kind,resource,last_notified_at) VALUES ($1,$2,$3,$4) " +
+      "ON CONFLICT (user_id,incident_kind,resource) DO UPDATE " +
+      "SET last_notified_at=EXCLUDED.last_notified_at " +
+      "WHERE options_live_incident_notifications.last_notified_at <= $5 RETURNING user_id",
+      [userId, kind, resource, time, time - intervalMs]
+    );
+    return rows.length > 0;
+  }
+
   /** Alertas operativas: reclamar envío a Telegram a lo sumo 1/15 minutos.
    * Es atómico entre réplicas, persiste tras reinicios, no contiene secretos.
    */
@@ -376,6 +408,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     claimAttentionNotification, listAttentionOrders,
+    listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
     applyTrade, finishOrder };
 }
