@@ -66,7 +66,12 @@ export default function BacktestingTab({ underlying } = {}) {
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  // StrictMode monta, desmonta y vuelve a montar en desarrollo: hay que
+  // volver a marcar el montaje, o las respuestas se descartan para siempre.
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const ctx = useMemo(() => ({ strategies, templates }), [strategies, templates]);
 

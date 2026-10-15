@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AutoTradingTab, { SIGNALS_POLL_MS } from './AutoTradingTab';
@@ -101,6 +102,11 @@ afterEach(() => {
 });
 
 describe('AutoTradingTab · escritorio', () => {
+  it('carga la lista también en StrictMode (doble montaje de desarrollo)', async () => {
+    render(<StrictMode><MemoryRouter><AutoTradingTab /></MemoryRouter></StrictMode>);
+    expect(await screen.findByRole('heading', { name: 'Momentum BTC' })).toBeTruthy();
+  });
+
   it('lista → detalle con alertas, estructura, KPIs y señales; al pulsar otro bot carga su detalle', async () => {
     renderTab();
     expect(await screen.findByRole('heading', { name: 'Momentum BTC' })).toBeTruthy();

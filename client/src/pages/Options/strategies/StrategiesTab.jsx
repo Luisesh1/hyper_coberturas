@@ -39,7 +39,12 @@ export default function StrategiesTab({ underlying } = {}) {
   const [deleteDialog, setDeleteDialog] = useState({ open: false, submitting: false, error: null });
 
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  // StrictMode monta, desmonta y vuelve a montar en desarrollo: hay que
+  // volver a marcar el montaje, o las respuestas se descartan para siempre.
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   // ── Carga ────────────────────────────────────────────────────────────
   const loadList = useCallback(async () => {

@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import StrategiesTab, { DETAIL_POLL_MS } from './StrategiesTab';
 import { validateStrategyForm } from './StrategyForm';
@@ -91,6 +92,11 @@ afterEach(() => {
 });
 
 describe('StrategiesTab · escritorio', () => {
+  it('carga la lista también en StrictMode (doble montaje de desarrollo)', async () => {
+    render(<StrictMode><StrategiesTab /></StrictMode>);
+    expect(await screen.findByRole('heading', { name: 'Strangle semanal BTC' })).toBeTruthy();
+  });
+
   it('lista → selecciona la primera y muestra su detalle; al pulsar otra carga su detalle', async () => {
     render(<StrategiesTab />);
     expect(await screen.findByRole('heading', { name: 'Strangle semanal BTC' })).toBeTruthy();
