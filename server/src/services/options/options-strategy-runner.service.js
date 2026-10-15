@@ -444,41 +444,16 @@ class OptionsStrategyRunner {
       return null;
     }
 
-    const filled = [];
-    try {
-      for (let i = 0; i < action.legs.length; i += 1) {
-        const leg = action.legs[i];
-        const { quote, price } = quotes[i];
-        const order = await client.placeOrder({
-          symbol: leg.symbol,
-          side: leg.side,
-          quantity: leg.quantity,
-          price,
-          postOnly: false,
-          reduceOnly: action.type === 'close',
-          clientOrderId: `os${strategy.id}-${ctx.now}-${i}`,
-        });
-        // Orden LIMIT al precio del libro: se registra al precio medio si ya llenó.
-        const avg = num(order?.avgPrice);
-        const fillAt = avg && avg > 0 ? avg : price;
-        const spot = num(quote.spot) ?? ctx.spot;
-        filled.push({
-          ...leg,
-          price: fillAt,
-          fee: tradeFee({ spot, quantity: leg.quantity, price: fillAt }),
-          orderId: order?.orderId ?? null,
-        });
-      }
-    } catch (err) {
-      // Lo ya enviado se registra igual: son órdenes reales en el exchange.
-      if (filled.length) await this.book(strategy, 'live', { ...action, detail: `${action.detail || action.reason} (parcial)` }, filled, ctx);
-      throw new Error(`Binance rechazó la orden: ${err.message}`);
-    }
-
-    const event = await this.book(strategy, 'live', action, filled, ctx);
-    const legsText = filled.map((l) => `${l.side} ${l.quantity} ${l.symbol} @ ${l.price}`).join('\n');
-    await this.maybeNotify(strategy, `${action.type === 'open' ? 'Apertura' : 'Cierre'}: ${action.detail || action.reason}\n${legsText}`);
-    return event;
+    // Seguridad: una orden aceptada no equivale a un fill. No contabilizar
+    // posiciones reales sin conciliación verificable con Binance.
+    // Hasta implementar polling, cancelación e idempotencia persistente,
+    // bloquear el envío para evitar órdenes huérfanas y fills ficticios.
+    await this.recordOutcome(strategy, 'live', {
+      type: 'skip',
+      reason: 'live_execution_pending_reconciliation',
+      detail: 'Ejecución real deshabilitada: requiere confirmación de fills, cancelación y conciliación',
+    }, ctx);
+    return null;
   }
 
   async maybeNotify(strategy, message) {
