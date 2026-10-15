@@ -30,7 +30,7 @@ const SMART_PAYLOAD = {
 
 function buildCtx({ token0, token1 }) {
   return {
-    networkConfig: { id: 'arbitrum', chainId: 42161, label: 'Arbitrum' },
+    networkConfig: { id: 'arbitrum', chainId: 42161, label: 'Arbitrum', deployments: { v3: { swapRouter: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45' } } },
     provider: {},
     normalizedWallet: WALLET,
     tokenId: '192675',

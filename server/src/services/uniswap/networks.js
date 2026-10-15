@@ -35,6 +35,7 @@ const SUPPORTED_NETWORKS = {
         eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
         positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
         quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+        swapRouter: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
       },
       v4: {
         kind: 'poolManager',
@@ -64,6 +65,7 @@ const SUPPORTED_NETWORKS = {
         eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
         positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
         quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+        swapRouter: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
       },
       v4: {
         kind: 'poolManager',
@@ -122,6 +124,7 @@ const SUPPORTED_NETWORKS = {
         eventSource: '0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24',
         positionManager: '0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2',
         quoter: '0xC5290058841028F1614F3A6F0F5816cAd0df5E27',
+        swapRouter: '0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4',
       },
       v4: {
         kind: 'poolManager',
@@ -152,6 +155,7 @@ const SUPPORTED_NETWORKS = {
         eventSource: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
         positionManager: '0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1',
         quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
+        swapRouter: '0x2626664c2603336E57B271c5C0b26F421741e481',
       },
       v4: {
         kind: 'poolManager',
@@ -181,6 +185,7 @@ const SUPPORTED_NETWORKS = {
         eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
         positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
         quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+        swapRouter: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
       },
       v4: {
         kind: 'poolManager',
@@ -210,6 +215,7 @@ const SUPPORTED_NETWORKS = {
         eventSource: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
         positionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88',
         quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+        swapRouter: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
       },
       v4: {
         kind: 'poolManager',
