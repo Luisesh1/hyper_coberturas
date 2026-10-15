@@ -84,7 +84,8 @@ describe('señales y KPIs', () => {
     const list = normalizeSignals(raw);
     expect(list.map((s) => s.id)).toEqual([1, 3, 2, 4]);
     expect(filterSignals(list, 'traded').map((s) => s.decisionLabel)).toEqual(['Abrió', 'Cerró']);
-    expect(filterSignals(list, 'ignored').map((s) => s.decisionLabel)).toEqual(['Ignorada', 'Error']);
+    expect(filterSignals(list, 'ignored').map((s) => s.decisionLabel)).toEqual(['Ignorada']);
+    expect(filterSignals(list, 'all').find((s) => s.decision === 'error')?.decisionLabel).toBe('Error');
   });
 
   it('KPIs: señales de 30 días por dirección, operadas, P&L por libro y acierto', () => {
