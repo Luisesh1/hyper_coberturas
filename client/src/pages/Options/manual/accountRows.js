@@ -1,0 +1,51 @@
+// Normalización defensiva de las filas de cuenta (posiciones, órdenes y
+// ejecuciones), para no depender de los nombres exactos de Binance.
+import { isLongPosition } from './hooks/useOrderActions';
+
+export function sideLabel(side) {
+  const s = String(side || '').toUpperCase();
+  return s === 'BUY' || s === 'LONG' ? 'Compra' : 'Venta';
+}
+
+export function positionView(p) {
+  const long = isLongPosition(p);
+  return {
+    key: p.symbol,
+    symbol: p.symbol,
+    long,
+    side: long ? 'Compra' : 'Venta',
+    qty: Math.abs(Number(p.quantity)),
+    entry: p.entryPrice,
+    mark: p.markPrice,
+    pnl: p.unrealizedPnl,
+    delta: p.delta,
+    theta: p.theta,
+    origin: !p.origin || p.origin === 'manual' ? 'Manual' : p.origin,
+  };
+}
+
+export function orderView(o) {
+  return {
+    key: `${o.symbol}-${o.orderId}`,
+    orderId: o.orderId,
+    symbol: o.symbol,
+    side: String(o.side || '').toUpperCase(),
+    price: o.price,
+    qty: o.quantity ?? o.origQty,
+    filled: o.executedQty ?? 0,
+    created: o.createTime ?? o.createDate ?? o.time,
+  };
+}
+
+export function tradeView(t, i) {
+  return {
+    key: t.id ?? t.tradeId ?? `${t.symbol}-${t.time}-${i}`,
+    symbol: t.symbol,
+    side: String(t.side || '').toUpperCase(),
+    price: t.price,
+    qty: t.quantity ?? t.qty,
+    fee: t.fee,
+    pnl: t.realizedProfit ?? t.realizedPnl,
+    time: t.time ?? t.tradeTime,
+  };
+}

@@ -1,0 +1,210 @@
+/* Página de Opciones: cabecera, subnavegación de pestañas y contenido. */
+
+.page {
+  max-width: 1392px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.pageMobile { gap: 0; }
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.up { color: var(--green-light); }
+.down { color: var(--red-light); }
+.neutral { color: var(--text-secondary); }
+
+/* ── Cabecera de escritorio ──────────────────────────────── */
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 24px;
+  justify-content: space-between;
+}
+.headerLeft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 20px;
+  min-width: 0;
+}
+.title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--text-bright);
+  letter-spacing: -0.01em;
+}
+
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill {
+  padding: 8px 12px;
+  min-height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pill:hover { color: var(--text-bright); }
+.pill:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.pillOn {
+  border-color: var(--indigo);
+  background: var(--indigo-dark-bg);
+  color: var(--text-bright);
+}
+
+.spot { display: flex; align-items: baseline; gap: 10px; }
+.spotValue { font-size: 22px; font-weight: 600; color: var(--text-bright); }
+.change { font-size: 13px; white-space: nowrap; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  min-height: 32px;
+  box-sizing: border-box;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.chipOk { background: var(--green-bg); border: 1px solid var(--green-border); color: var(--green-pastel); }
+.chipOk .dot { background: var(--green); }
+.chipWarn { background: var(--amber-bg); border: 1px solid var(--amber-border); color: var(--amber-pastel); }
+.chipWarn .dot { background: var(--amber); }
+.chipWarn:hover { color: var(--text-bright); }
+.chipWarn:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.chipIdle { border: 1px dashed var(--border-strong); color: var(--text-secondary); }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Pestañas de escritorio (subrayado) ──────────────────── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.tabLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  min-height: 44px;
+  box-sizing: border-box;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 14px;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.tabLink:hover { color: var(--text-bright); }
+.tabLink:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.tabLinkOn { color: var(--text-bright); font-weight: 600; border-bottom-color: var(--indigo); }
+
+.content { min-width: 0; }
+
+/* ── Móvil ───────────────────────────────────────────────── */
+.mHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 0 8px;
+  min-width: 0;
+}
+.underlyingChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  font: inherit;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text-bright);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.underlyingChip:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.mHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.mSpot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+}
+.mSpotValue {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-bright);
+  white-space: nowrap;
+}
+.mHeader .change { font-size: 12px; }
+.mHeader .chip { min-height: 44px; padding: 0 10px; }
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-input);
+  border-radius: var(--radius-lg);
+}
+.segLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border-radius: 9px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.segLink:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
+.segLinkOn { background: var(--indigo-dark-bg); color: var(--text-bright); font-weight: 600; }
+
+.pickerList { display: flex; flex-direction: column; gap: 4px; }
+.pickerRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pickerRowOn { border-color: var(--indigo); background: var(--indigo-dark-bg); }
+.pickerName { font-weight: 700; color: var(--text-bright); }
+.pickerSpot { color: var(--text-primary); }
+
+@media (max-width: 360px) {
+  .mSpotValue { font-size: 16px; }
+}
