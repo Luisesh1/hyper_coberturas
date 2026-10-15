@@ -29,6 +29,7 @@ const HidenActionsPage     = lazy(() => import('./pages/HidenActions/HidenAction
 const TradingViewPage      = lazy(() => import('./pages/TradingView/TradingViewPage'));
 const AlertsPage           = lazy(() => import('./pages/Alerts/AlertsPage'));
 const SmartContractsPage   = lazy(() => import('./pages/SmartContracts/SmartContractsPage'));
+const OptionsPage          = lazy(() => import('./pages/Options/OptionsPage'));
 
 // DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
 // completo en build de producción gracias al guard `import.meta.env.DEV`.
@@ -49,10 +50,14 @@ const BASE_NAV = [
   { id: 'smart-contracts', path: '/contratos', label: '◈ Contratos', activeClass: 'modeBtnActive', title: 'Contratos' },
   { id: 'metricas', path: '/metricas', label: '📊 Metricas', activeClass: 'modeBtnActive', title: 'Metricas' },
   { id: 'trading-view', path: '/trading-view', label: '📈 Trading View', activeClass: 'modeBtnActive', title: 'Trading View' },
+  { id: 'options', path: '/opciones', label: '◇ Opciones', activeClass: 'modeBtnActive', title: 'Opciones' },
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
 
 const FULLSCREEN_ROUTES = new Set(['/trading-view']);
+// Rutas a todo el ancho (sin el panel de precios lateral) pero con el
+// padding y el scroll normales del contenido.
+const WIDE_ROUTES = new Set(['/opciones']);
 
 const SUPER_NAV = [
   { id: 'users', path: '/usuarios', label: '👥 Usuarios', activeClass: 'modeBtnActive', title: 'Usuarios' },
@@ -70,6 +75,7 @@ function AppContent() {
   // Rutas que quieren solo el navbar + su contenido edge-to-edge (sin sidebar,
   // sin padding del main). Ej: TradingView a pantalla completa.
   const isFullscreen = FULLSCREEN_ROUTES.has(location.pathname);
+  const isWide = WIDE_ROUTES.has(location.pathname);
 
   const goTo = (path) => {
     navigate(path);
@@ -158,8 +164,8 @@ function AppContent() {
         </div>
       </header>
 
-      <main className={`${styles.main} ${isFullscreen ? styles.mainFullscreen : ''}`}>
-        {!isFullscreen && (
+      <main className={`${styles.main} ${isFullscreen ? styles.mainFullscreen : ''} ${isWide ? styles.mainWide : ''}`}>
+        {!isFullscreen && !isWide && (
           <aside className={styles.sidebar}>
             <PricePanel selectedAsset={selectedAsset} onSelectAsset={setSelectedAsset} />
           </aside>
@@ -181,6 +187,7 @@ function AppContent() {
                 <Route path="/metricas"   element={<MetricasPage />} />
                 <Route path="/trading-view" element={<TradingViewPage />} />
                 <Route path="/alertas"     element={<AlertsPage />} />
+                <Route path="/opciones"    element={<OptionsPage />} />
                 <Route path="/config"     element={<SettingsPage />} />
                 {/* Ruta oculta — no aparece en el navbar. Acciones de
                     recovery / mantenimiento manual. Acceso por URL directo. */}

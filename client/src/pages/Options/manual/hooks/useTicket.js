@@ -1,0 +1,124 @@
+import { useCallback, useMemo, useState } from 'react';
+import { parseNumberInput, stepNumber } from '../../../TradingView/components/stepperMath';
+import { computeTicket, parseSymbol, priceStep, qtyStep, quoteFor, QTY_MIN } from '../ticketMath';
+
+const EMPTY = {
+  symbol: null,
+  type: 'C',
+  strike: null,
+  side: 'BUY',
+  priceText: '',
+  qtyText: '0.1',
+  postOnly: false,
+  reduceOnly: false,
+};
+
+function trimNumber(n) {
+  return String(Number(n.toPrecision(10)));
+}
+
+// Busca la pata por símbolo en la cadena viva (el mark y las griegas se
+// actualizan con cada sondeo; el precio del ticket no).
+export function findLeg(chain, symbol) {
+  if (!chain?.rows || !symbol) return null;
+  for (const row of chain.rows) {
+    if (row.call?.symbol === symbol) return { row, leg: row.call, type: 'C' };
+    if (row.put?.symbol === symbol) return { row, leg: row.put, type: 'P' };
+  }
+  return null;
+}
+
+export function useTicket(chain) {
+  const [t, setT] = useState(EMPTY);
+
+  const found = useMemo(() => findLeg(chain, t.symbol), [chain, t.symbol]);
+  const leg = found?.leg || null;
+
+  const pick = useCallback(({ leg: pickedLeg, strike, type, side }) => {
+    const price = quoteFor(pickedLeg, side);
+    setT((prev) => ({
+      ...prev,
+      symbol: pickedLeg.symbol,
+      strike,
+      type,
+      side,
+      priceText: price != null ? trimNumber(price) : '',
+    }));
+  }, []);
+
+  // Cambiar de lado vuelve a poner el precio del lado contrario del libro.
+  const setSide = useCallback((side) => {
+    setT((prev) => {
+      if (prev.side === side) return prev;
+      const price = quoteFor(leg, side);
+      return { ...prev, side, priceText: price != null ? trimNumber(price) : prev.priceText };
+    });
+  }, [leg]);
+
+  const setPriceText = useCallback((priceText) => setT((p) => ({ ...p, priceText })), []);
+  const setQtyText = useCallback((qtyText) => setT((p) => ({ ...p, qtyText })), []);
+  const setFlag = useCallback((name, value) => setT((p) => ({ ...p, [name]: value })), []);
+
+  const price = parseNumberInput(t.priceText);
+  const qty = parseNumberInput(t.qtyText);
+
+  const stepPrice = useCallback((direction) => {
+    setT((p) => {
+      const current = parseNumberInput(p.priceText) ?? 0;
+      const step = priceStep(current || quoteFor(leg, p.side) || 1);
+      const next = stepNumber(current, direction, { step, min: step });
+      return { ...p, priceText: trimNumber(next) };
+    });
+  }, [leg]);
+
+  const stepQty = useCallback((direction) => {
+    setT((p) => {
+      const current = parseNumberInput(p.qtyText) ?? QTY_MIN;
+      const step = qtyStep(current, direction);
+      const next = stepNumber(current, direction, { step, min: QTY_MIN });
+      return { ...p, qtyText: trimNumber(next) };
+    });
+  }, []);
+
+  const parsed = parseSymbol(t.symbol);
+  const strike = t.strike ?? parsed?.strike ?? null;
+  const type = found?.type || t.type;
+  const summary = computeTicket({
+    side: t.side,
+    type,
+    strike,
+    price,
+    qty,
+    spot: chain?.spot,
+    leg: leg || {},
+  });
+
+  const order = t.symbol && summary.valid
+    ? {
+        symbol: t.symbol,
+        side: t.side,
+        quantity: qty,
+        price,
+        postOnly: t.postOnly,
+        reduceOnly: t.reduceOnly,
+      }
+    : null;
+
+  return {
+    ...t,
+    type,
+    strike,
+    leg,
+    price,
+    qty,
+    summary,
+    order,
+    pick,
+    setSide,
+    setPriceText,
+    setQtyText,
+    setFlag,
+    stepPrice,
+    stepQty,
+  };
+}
