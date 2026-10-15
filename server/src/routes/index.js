@@ -18,6 +18,8 @@ const alertsRoutes = require('./alerts.routes');
 const smartContractsRoutes = require('./smart-contracts.routes');
 const crossChainRoutes = require('./cross-chain.routes');
 const optionsRoutes = require('./options.routes');
+const optionsStrategiesRoutes = require('./options-strategies.routes');
+const optionsBacktestsRoutes = require('./options-backtests.routes');
 
 const router = Router();
 
@@ -38,9 +40,10 @@ router.use('/backtesting', backtestingRoutes);
 router.use('/alerts', alertsRoutes);
 router.use('/smart-contracts', smartContractsRoutes);
 router.use('/cross-chain', crossChainRoutes);
-// Opciones (Binance European Options). Las sub-rutas de estrategias y
-// backtesting (`/options/strategies`, `/options/backtests`) deben montarse
-// AQUÍ, antes de `/options`, para que no las capture el router general.
+// Opciones (Binance European Options). Las subrutas de automatización van
+// antes del montaje general de /options para que no las capture ese router.
+router.use('/options/strategies', optionsStrategiesRoutes);
+router.use('/options/backtests', optionsBacktestsRoutes);
 router.use('/options', optionsRoutes);
 
 // Endpoints solo dev: snapshot/stream de logs y batch upload de errores
