@@ -26,6 +26,10 @@ const DEFAULT_RECV_WINDOW = 5_000;
 
 // Códigos de Binance que indican un problema con la key/firma/permisos.
 const AUTH_ERROR_CODES = new Set([-1002, -1021, -1022, -2008, -2014, -2015]);
+// El enfriamiento es compartido por host entre clientes del mismo proceso.
+// No sustituye un rate limiter distribuido si hay varias réplicas.
+const cooldownByHost = new Map();
+const DEFAULT_COOLDOWN_MS = 60_000;
 
 /**
  * Firma un query string con HMAC-SHA256 (hex), como exige Binance.
@@ -134,6 +138,15 @@ function createBinanceOptionsClient({
   const secrets = [apiKey, apiSecret].filter(Boolean);
 
   async function request(method, path, { params = {}, signed = false, base = baseUrl } = {}) {
+    const host = new URL(base).host;
+    const retryAt = cooldownByHost.get(host) || 0;
+    if (now() < retryAt) {
+      throw new AppError('Binance Opciones: límite de peticiones, consulta aplazada', {
+        status: 429, code: 'BINANCE_OPTIONS_RATE_LIMIT',
+        details: { endpoint: path, retryAfterMs: retryAt - now() },
+      });
+    }
+    if (retryAt) cooldownByHost.delete(host);
     let query = buildQuery(params);
     const headers = { accept: 'application/json' };
 
@@ -162,6 +175,11 @@ function createBinanceOptionsClient({
 
     const body = await readBody(res);
     if (!res.ok || (body && typeof body === 'object' && !Array.isArray(body) && Number(body.code) < 0)) {
+      if (res.status === 429 || res.status === 418) {
+        const retryAfter = Number(res.headers?.get?.('retry-after'));
+        const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : DEFAULT_COOLDOWN_MS;
+        cooldownByHost.set(host, Math.max(cooldownByHost.get(host) || 0, now() + Math.max(DEFAULT_COOLDOWN_MS, delay)));
+      }
       const appErr = normalizeBinanceError({ httpStatus: res.ok ? 400 : res.status, body, path, secrets });
       logger.warn('binance_options_request_failed', {
         method,
