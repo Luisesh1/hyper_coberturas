@@ -13,7 +13,7 @@
 
 const { ValidationError } = require('../../../errors/app-error');
 const {
-  FIELDS, hold, skip, pickLegByDelta, legFromChain, closeLegs, closeValue, hoursToExpiry,
+  FIELDS, hold, skip, legFromChain, closeLegs, closeValue, hoursToExpiry,
   validateParams: validateNumericParams,
 } = require('./helpers');
 
@@ -157,7 +157,7 @@ function exits(ctx) {
 
 function openFor(ctx, direction, openCount) {
   const { spot, params, tradesToday = 0 } = ctx;
-  if (openCount >= params.maxOpenPositions) {
+  if (openCount + (params.contractCount || 1) > params.maxOpenPositions) {
     return skip('max_open_positions', `Máximo de ${params.maxOpenPositions} posición(es) abierta(s) alcanzado`);
   }
   if (tradesToday >= params.maxTradesPerDay) {
@@ -175,14 +175,22 @@ function openFor(ctx, direction, openCount) {
   const count = params.contractCount || 1;
   const selected = candidates.slice(0, count);
   if (selected.length < count) return skip('no_legs', 'No hay suficientes contratos líquidos para la selección');
-  const legs = selected.map(({ row, quote }) => legFromChain(
-    { ...row, ...quote }, { side: leg.side, quantity: params.quantity, type: leg.type, expiry: chain.expiry }
-  ));
-  const capital = legs.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  if (params.capitalUsdt != null && capital > params.capitalUsdt) {
-    return skip('capital_limit', 'La selección supera el capital máximo configurado');
-  }
-  if (leg.side === 'BUY' && params.maxPremiumUsdt != null && capital > params.maxPremiumUsdt) {
+  // Presupuesto repartido por igual. Para ventas es margen estimado, no la prima.
+  // Se redondea siempre hacia abajo; nunca se excede la cantidad configurada.
+  const budget = params.capitalUsdt;
+  const legs = selected.map(({ row, quote }) => {
+    const price = Number(quote[leg.side === 'BUY' ? 'ask' : 'bid']);
+    const otm = leg.type === 'C' ? Math.max(row.strike - spot, 0) : Math.max(spot - row.strike, 0);
+    const unitCapital = leg.side === 'BUY' ? price : price + Math.max(0.15 * spot - otm, 0.1 * spot);
+    const allowedQty = budget == null ? params.quantity : Math.min(params.quantity, budget / count / unitCapital);
+    const quantity = Math.floor((allowedQty + 1e-12) * 10000) / 10000;
+    return quantity >= 0.0001 ? legFromChain({ leg: quote, strike: row.strike }, {
+      side: leg.side, quantity, type: leg.type, expiry: chain.expiry,
+    }) : null;
+  });
+  if (legs.some((item) => !item)) return skip('capital_limit', 'Capital insuficiente para todos los contratos');
+  const premium = legs.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  if (leg.side === 'BUY' && params.maxPremiumUsdt != null && premium > params.maxPremiumUsdt) {
     return skip('max_premium', 'La prima supera el máximo configurado');
   }
   return { type: 'open', reason: 'signal', detail: `Señal ${DIRECTION_LABEL[direction]}: ${legs.length} contratos (vence ${chain.expiry})`, legs };
