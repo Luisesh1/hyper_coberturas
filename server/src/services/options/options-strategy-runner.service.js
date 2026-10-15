@@ -434,7 +434,15 @@ class OptionsStrategyRunner {
     }
 
     if (has(limits.maxNetDelta)) {
-      const current = (ctx.positions || []).reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: p.quote?.delta, quantity: p.quantity }), 0);
+      // Una delta ausente no equivale a cero: si no podemos medir el
+      // riesgo direccional, no se permiten nuevas órdenes reales.
+      const missingDelta = (ctx.positions || []).some((p) =>
+        p.quote?.delta == null || !Number.isFinite(Number(p.quote.delta))) ||
+        legs.some((leg) => leg.delta == null || !Number.isFinite(Number(leg.delta)));
+      if (missingDelta) {
+        return { ok: false, reason: 'Delta no disponible para verificar la exposición neta' };
+      }
+      const current = (ctx.positions || []).reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: p.quote.delta, quantity: p.quantity }), 0);
       const net = legs.reduce((acc, leg) => acc + legDeltaExposure(leg), current);
       if (Math.abs(net) > Number(limits.maxNetDelta)) {
         return { ok: false, reason: `|Δ| neta ${Math.abs(net).toFixed(3)} supera el máximo de ${limits.maxNetDelta}` };
@@ -460,7 +468,10 @@ class OptionsStrategyRunner {
     }
     // El precio LIMIT es la cotización recién consultada, pero el fill
     // SOLO se registra cuando Binance lo confirma en getUserTrades.
-    const quoted = action.legs.map((leg, i) => ({ ...leg, price: quotes[i].price }));
+    const quoted = action.legs.map((leg, i) => ({
+      ...leg, price: quotes[i].price,
+      delta: quotes[i].quote?.delta == null ? null : Number(quotes[i].quote.delta),
+    }));
     if (action.type === 'open') {
       // La prima/margen de la cadena inicial pudo cambiar. Revalidar
       // capital y riesgos utilizando los precios LIMIT realmente enviados.
