@@ -1,11 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { alertsApi } from '../../services/api';
 import { useTradingContext } from '../../context/TradingContext';
+import { MOBILE_QUERY, useMediaQuery } from '../TradingView/useMediaQuery';
 import { AlertRuleRow, emptyCondition } from './components/AlertRuleRow';
 import AssetPickerModal from './components/AssetPickerModal';
+import { DirectionChip, DirectionIcon, DirectionSelector } from './components/Direction';
+import { fetchAlertBotUsage } from './lib/autoBots';
+import {
+  DEFAULT_DIRECTION,
+  DIRECTION_FILTERS,
+  DIRECTION_META,
+  botModeLabel,
+  botOpensLabel,
+  matchesDirectionFilter,
+  normalizeDirection,
+  telegramTitle,
+} from './lib/direction';
 import { COOLDOWN_PRESETS, cooldownLabel } from './lib/labels';
 import { PRESETS } from './lib/presets';
 import styles from './AlertsPage.module.css';
+
+const NO_BOTS = [];
+const TF_ORDER = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M'];
+
+function BackIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
 
 const DATASOURCES = [
   { value: 'binance',     label: 'Binance (ej. BTCUSDT)' },
@@ -64,6 +89,7 @@ function emptyForm() {
     cooldownSeconds: 900,
     telegramEnabled: true,
     datasource: 'binance',
+    direction: DEFAULT_DIRECTION,
     assetList: ['BTCUSDT'],
     rules: [emptyRule()],
   };
@@ -91,6 +117,7 @@ function formToPayload(value) {
     cooldownSeconds: Number(value.cooldownSeconds),
     telegramEnabled: value.telegramEnabled,
     datasource: value.datasource,
+    direction: normalizeDirection(value.direction),
     assetList: value.assetList.slice(),
     rules: value.rules.map((r) => ({
       label: String(r.label || '').trim(),
@@ -112,21 +139,30 @@ export default function AlertsPage() {
   const { addNotification } = useTradingContext();
   const [alerts, setAlerts] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [form, setForm] = useState(emptyForm());
+  const [form, setForm] = useState(emptyForm);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isTogglingActive, setIsTogglingActive] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [assetInput, setAssetInput] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const isMobile = useMediaQuery(MOBILE_QUERY);
+  // En móvil se ve la lista o el editor a pantalla completa, no ambos.
+  const [mobileView, setMobileView] = useState('list');
+  const [directionFilter, setDirectionFilter] = useState('all');
+  // Map alertId → bots que la usan. null = no disponible (se oculta sin error).
+  const [botUsage, setBotUsage] = useState(null);
   const [editorMode, setEditorMode] = useState('visual');
   const [rawText, setRawText] = useState('');
   const [rawError, setRawError] = useState('');
   const [rawTextDirty, setRawTextDirty] = useState(false);
   // Marca-aguada del form al cargarlo, para detectar cambios sin guardar.
   // Comparamos por JSON-stringify: simple y suficiente para forms pequeños.
-  const baselineRef = useRef(JSON.stringify(emptyForm()));
+  // Se inicializa con el mismo form del estado: `emptyRule()` genera ids
+  // aleatorios y dos `emptyForm()` distintos parecían "sin guardar" (y
+  // ocultaban las plantillas) al abrir la página.
+  const baselineRef = useRef(null);
+  if (baselineRef.current === null) baselineRef.current = JSON.stringify(form);
   const isDirty = useMemo(() => JSON.stringify(form) !== baselineRef.current, [form]);
   const effectiveDirty = isDirty || (editorMode === 'raw' && rawTextDirty);
 
@@ -143,6 +179,25 @@ export default function AlertsPage() {
   }, [addNotification]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const loadBotUsage = useCallback(async () => {
+    try {
+      setBotUsage(await fetchAlertBotUsage());
+    } catch {
+      // Sin módulo de bots o error de red: «Usada por» simplemente no se muestra.
+      setBotUsage(null);
+    }
+  }, []);
+
+  useEffect(() => { loadBotUsage(); }, [loadBotUsage]);
+
+  // El botón «Logs» de dev sube para no tapar el CTA fijo del editor móvil.
+  const mobileEditor = isMobile && mobileView === 'editor';
+  useEffect(() => {
+    if (!mobileEditor) return undefined;
+    document.body.classList.add('tv-mobile-chrome');
+    return () => document.body.classList.remove('tv-mobile-chrome');
+  }, [mobileEditor]);
 
   const applyForm = useCallback((next) => {
     setForm(next);
@@ -164,6 +219,7 @@ export default function AlertsPage() {
       cooldownSeconds: Number(alert.cooldownSeconds),
       telegramEnabled: alert.telegramEnabled,
       datasource: alert.datasource,
+      direction: normalizeDirection(alert.direction),
       assetList: Array.isArray(alert.assetList) ? alert.assetList.slice() : [],
       rules: Array.isArray(alert.rules) && alert.rules.length > 0
         ? alert.rules.map(normalizeLoadedRule)
@@ -247,6 +303,7 @@ export default function AlertsPage() {
       cooldownSeconds: Number(source.cooldownSeconds ?? 900),
       telegramEnabled: source.telegramEnabled !== false,
       datasource: source.datasource || 'binance',
+      direction: normalizeDirection(source.direction),
       assetList: Array.isArray(source.assetList)
         ? source.assetList.map((asset) => String(asset || '').trim().toUpperCase()).filter(Boolean)
         : [],
@@ -309,6 +366,16 @@ export default function AlertsPage() {
   const validationError = useMemo(() => getFormValidationError(form), [form]);
   const saveValidationError = editorMode === 'raw' && rawTextDirty ? null : validationError;
 
+  const savedAlert = useMemo(() => alerts.find((a) => a.id === selectedId) || null, [alerts, selectedId]);
+  const usedByBots = (selectedId != null && botUsage?.get(Number(selectedId))) || NO_BOTS;
+  // Solo avisa al pasar a Neutral una alerta guardada con dirección y con bots.
+  const willStopBots = (nextDirection) => (
+    nextDirection === 'neutral'
+    && usedByBots.length > 0
+    && normalizeDirection(savedAlert?.direction) !== 'neutral'
+  );
+  const showNeutralWarning = willStopBots(normalizeDirection(form.direction));
+
   const save = async () => {
     const rawForm = editorMode === 'raw' && rawTextDirty ? applyRawText({ quiet: true }) : null;
     if (editorMode === 'raw' && rawTextDirty && !rawForm) return;
@@ -316,6 +383,11 @@ export default function AlertsPage() {
     if (nextValidationError) {
       addNotification?.('error', nextValidationError);
       return;
+    }
+    const nextDirection = normalizeDirection((rawForm || form).direction);
+    if (willStopBots(nextDirection)) {
+      const names = usedByBots.map((b) => `«${b.name}»`).join(', ');
+      if (!window.confirm(`Esta alerta la usa ${names}. Si la pasas a Neutral, ${usedByBots.length === 1 ? 'el bot dejará' : 'los bots dejarán'} de operarla. ¿Guardar?`)) return;
     }
     setIsSaving(true);
     try {
@@ -346,6 +418,7 @@ export default function AlertsPage() {
       addNotification?.('success', 'Alerta eliminada');
       await loadData();
       selectAlert(null);
+      setMobileView('list');
     } catch (err) {
       addNotification?.('error', `Error al eliminar: ${err.message}`);
     }
@@ -385,60 +458,137 @@ export default function AlertsPage() {
   const totals = useMemo(() => ({
     count: alerts.length,
     active: alerts.filter((a) => a.isActive).length,
-  }), [alerts]);
+    usedByBots: botUsage ? alerts.filter((a) => (botUsage.get(Number(a.id)) || []).length > 0).length : null,
+  }), [alerts, botUsage]);
+
+  const visibleAlerts = useMemo(
+    () => alerts.filter((a) => matchesDirectionFilter(a, directionFilter)),
+    [alerts, directionFilter],
+  );
+
+  const openAlert = (alert) => {
+    selectAlert(alert);
+    setMobileView('editor');
+  };
+
+  const direction = normalizeDirection(form.direction);
+  const directionNote = (() => {
+    if (showNeutralWarning) {
+      const names = usedByBots.map((b) => `«${b.name}»`).join(', ');
+      return `Esta alerta la usa ${names}. Si la pasas a Neutral, ${usedByBots.length === 1 ? 'el bot dejará' : 'los bots dejarán'} de operarla.`;
+    }
+    if (direction === 'neutral') {
+      return 'Neutral: la alerta solo avisa. Los bots de Trading automatizado no pueden vincularla.';
+    }
+    return `Los bots de Opciones › Trading automatizado operan esta alerta en dirección ${DIRECTION_META[direction].label.toLowerCase()}. Cambiarla afecta a los bots vinculados desde el próximo disparo.`;
+  })();
+
+  const previewAsset = form.assetList[0] || '—';
+  // Mismo criterio que el servidor: la temporalidad más baja de las reglas.
+  const previewTf = form.rules
+    .flatMap((r) => r.conditions || [])
+    .flatMap((c) => [c.timeframe, c.operand?.kind === 'series' ? c.operand.timeframe : null])
+    .filter((tf) => TF_ORDER.includes(tf))
+    .sort((a, b) => TF_ORDER.indexOf(a) - TF_ORDER.indexOf(b))[0] || '?';
+  const telegramPreview = [
+    telegramTitle(direction, form.name.trim()),
+    `Activo: ${previewAsset} · TF: ${previewTf}`,
+    `Puntaje: …% (umbral ${Number(form.thresholdPercent) || 0}%)`,
+  ].join('\n');
 
   const totalWeight = form.rules.reduce((acc, r) => acc + (Number(r.weight) || 0), 0);
   const requiredWeight = (totalWeight * Number(form.thresholdPercent)) / 100;
 
   return (
-    <div className={styles.page}>
-      <div className={styles.hero}>
-        <div className={styles.heroLeft}>
+    <div className={`${styles.page} ${mobileEditor ? styles.pageMobileEditor : ''}`}>
+      {mobileEditor ? (
+        <div className={styles.mobileHeader}>
           <button
-            className={`${styles.newBtn} ${styles.sidebarToggle}`}
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            aria-label="Abrir lista de alertas"
+            type="button"
+            className={styles.backBtn}
+            onClick={() => setMobileView('list')}
+            aria-label="Volver a alertas"
           >
-            ☰
+            <BackIcon />
           </button>
-          <div>
-            <span className={styles.eyebrow}>🔔 Alertas</span>
-            <h1 className={styles.title}>Alertas con reglas y peso</h1>
+          <h1 className={styles.mobileTitle}>{selectedId ? 'Editar alerta' : 'Nueva alerta'}</h1>
+        </div>
+      ) : (
+        <div className={styles.hero}>
+          <div className={styles.heroLeft}>
+            <div>
+              <span className={styles.eyebrow}>🔔 Alertas</span>
+              <h1 className={styles.title}>Alertas con reglas y peso</h1>
+            </div>
+          </div>
+          <div className={styles.stats}>
+            <div className={styles.stat}><strong>{totals.count}</strong><span>total</span></div>
+            <div className={styles.stat}><strong>{totals.active}</strong><span>activas</span></div>
+            {totals.usedByBots != null && (
+              <div className={styles.stat}><strong>{totals.usedByBots}</strong><span>usadas por bots</span></div>
+            )}
           </div>
         </div>
-        <div className={styles.stats}>
-          <div className={styles.stat}><strong>{totals.count}</strong><span>total</span></div>
-          <div className={styles.stat}><strong>{totals.active}</strong><span>activas</span></div>
-        </div>
-      </div>
+      )}
 
       <div className={styles.layout}>
-        <div className={`${styles.sidebarWrap} ${sidebarOpen ? styles.sidebarWrapOpen : ''}`}>
+        {(!isMobile || mobileView === 'list') && (
+        <div className={styles.sidebarWrap}>
           <div className={styles.sidebar}>
-            <button className={styles.newBtn} onClick={() => { selectAlert(null); setSidebarOpen(false); }}>
+            <button className={styles.newBtn} onClick={() => openAlert(null)}>
               + Nueva alerta
             </button>
+            <div role="group" aria-label="Filtrar por dirección" className={styles.dirFilters}>
+              {DIRECTION_FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  aria-pressed={directionFilter === f.key}
+                  className={`${styles.dirFilter} ${directionFilter === f.key ? styles.dirFilterActive : ''}`}
+                  onClick={() => setDirectionFilter(f.key)}
+                >
+                  {f.key !== 'all' && <DirectionIcon direction={f.key} size={10} />}
+                  {f.label}
+                </button>
+              ))}
+            </div>
             {isLoading && <div className={styles.empty}>Cargando…</div>}
             {!isLoading && alerts.length === 0 && (
               <div className={styles.empty}>Aún no tienes alertas. Crea la primera.</div>
             )}
-            {alerts.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                className={`${styles.alertItem} ${selectedId === a.id ? styles.alertItemActive : ''}`}
-                onClick={() => { selectAlert(a); setSidebarOpen(false); }}
-              >
-                <span className={styles.alertItemName}>{a.name}</span>
-                <span className={styles.alertItemMeta}>
-                  <span className={`${styles.dot} ${a.isActive ? styles.dotOn : styles.dotOff}`} />
-                  {a.assetList?.length || 0} activos · {a.rules?.length || 0} reglas · {a.thresholdPercent}%
-                </span>
-              </button>
-            ))}
+            {!isLoading && alerts.length > 0 && visibleAlerts.length === 0 && (
+              <div className={styles.empty}>No hay alertas con esta dirección.</div>
+            )}
+            {visibleAlerts.map((a) => {
+              const bots = botUsage?.get(Number(a.id)) || NO_BOTS;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  className={`${styles.alertItem} ${selectedId === a.id ? styles.alertItemActive : ''}`}
+                  onClick={() => openAlert(a)}
+                >
+                  <span className={styles.alertItemHead}>
+                    <span className={styles.alertItemName}>{a.name}</span>
+                    <DirectionChip direction={a.direction} />
+                  </span>
+                  <span className={styles.alertItemMeta}>
+                    <span className={`${styles.dot} ${a.isActive ? styles.dotOn : styles.dotOff}`} />
+                    {a.assetList?.length || 0} activos · {a.rules?.length || 0} reglas · {a.thresholdPercent}%
+                    {botUsage && (
+                      <span className={styles.alertItemBots}>
+                        {bots.length > 0 ? `Usada por ${bots.length} bot${bots.length === 1 ? '' : 's'}` : 'Sin bots'}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
+        )}
 
+        {(!isMobile || mobileView === 'editor') && (
         <div className={styles.editor}>
           {/* Banner contextual: presets si es alerta nueva sin tocar, o
               indicador "sin guardar" si el form está dirty. */}
@@ -460,6 +610,7 @@ export default function AlertsPage() {
                   >
                     <span className={styles.presetIcon}>{p.icon}</span>
                     <span className={styles.presetTitle}>{p.title}</span>
+                    <DirectionChip direction={p.direction} />
                     <span className={styles.presetDesc}>{p.description}</span>
                   </button>
                 ))}
@@ -601,6 +752,49 @@ export default function AlertsPage() {
                 </label>
               </div>
             </div>
+
+            <fieldset className={`${styles.dirFieldset} ${isMobile ? styles.dirFieldsetMobile : ''}`}>
+              <legend className={styles.dirLegend}>Dirección de la señal</legend>
+              <DirectionSelector
+                value={direction}
+                onChange={(next) => updateField('direction', next)}
+                mobile={isMobile}
+              />
+              <p
+                className={`${styles.dirNote} ${showNeutralWarning ? styles.dirNoteWarning : ''}`}
+                role={showNeutralWarning ? 'alert' : undefined}
+                data-testid="direction-note"
+              >
+                {directionNote}
+              </p>
+            </fieldset>
+          </div>
+
+          <div className={styles.signalCards}>
+            <div className={styles.signalCard}>
+              <h3 className={styles.sectionTitle}>Vista previa en Telegram</h3>
+              <div className={styles.telegramPreview} data-testid="telegram-preview">{telegramPreview}</div>
+            </div>
+            {botUsage && selectedId != null && (
+              <div className={styles.signalCard} data-testid="used-by">
+                <h3 className={styles.sectionTitle}>
+                  Usada por {usedByBots.length} bot{usedByBots.length === 1 ? '' : 's'}
+                </h3>
+                {usedByBots.map((b) => (
+                  <Link key={b.id} to="/opciones?tab=auto" className={styles.botLink}>
+                    <span className={styles.botLinkName}>{b.name}</span>
+                    <span className={styles.botLinkMeta}>
+                      {botModeLabel(b.mode)} · {botOpensLabel(b.structure, direction)}
+                    </span>
+                  </Link>
+                ))}
+                <p className={styles.dirNote}>
+                  {usedByBots.length > 0
+                    ? 'Si la pasas a Neutral, los bots dejan de operarla; te avisamos antes de guardar.'
+                    : 'Ningún bot la usa todavía. Vincúlala desde Opciones › Trading automatizado.'}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className={styles.section}>
@@ -745,17 +939,21 @@ export default function AlertsPage() {
                 </button>
               </>
             )}
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnPrimary}`}
-              onClick={save}
-              disabled={isSaving || !!saveValidationError || (!effectiveDirty && !!selectedId)}
-              title={saveValidationError || (!effectiveDirty && selectedId ? 'No hay cambios para guardar' : '')}
-            >
-              {isSaving ? 'Guardando…' : (selectedId ? 'Guardar cambios' : 'Crear alerta')}
-            </button>
+            {/* En móvil el guardado es un CTA fijo abajo, siempre a mano. */}
+            <div className={mobileEditor ? styles.mobileCtaBar : styles.saveWrap}>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnPrimary} ${mobileEditor ? styles.mobileCta : ''}`}
+                onClick={save}
+                disabled={isSaving || !!saveValidationError || (!effectiveDirty && !!selectedId)}
+                title={saveValidationError || (!effectiveDirty && selectedId ? 'No hay cambios para guardar' : '')}
+              >
+                {isSaving ? 'Guardando…' : (selectedId ? 'Guardar cambios' : 'Crear alerta')}
+              </button>
+            </div>
           </div>
         </div>
+        )}
       </div>
 
       <AssetPickerModal
