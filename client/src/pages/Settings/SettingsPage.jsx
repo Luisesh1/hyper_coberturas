@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTradingContext } from '../../context/TradingContext';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
 import { settingsApi } from '../../services/api';
@@ -10,19 +11,27 @@ import { TelegramSection } from './components/TelegramSection';
 import { EtherscanSection } from './components/EtherscanSection';
 import { AlchemySection } from './components/AlchemySection';
 import { DeltaNeutralRiskSection } from './components/DeltaNeutralRiskSection';
+import { BinanceOptionsSection } from './components/BinanceOptionsSection';
 import styles from './SettingsPage.module.css';
+
+const SECTION_KEYS = new Set(['accounts', 'binanceOptions', 'deltaNeutralRisk', 'telegram', 'etherscan', 'alchemy']);
 
 function SettingsPage() {
   const { accounts, refreshAccounts, addNotification } = useTradingContext();
   const { dialog, confirm } = useConfirmAction();
 
-  const [section, setSection] = useState('accounts');
+  // `?section=binanceOptions` abre directamente esa sección (enlace desde Opciones).
+  const [searchParams] = useSearchParams();
+  const [section, setSection] = useState(() => (
+    SECTION_KEYS.has(searchParams.get('section')) ? searchParams.get('section') : 'accounts'
+  ));
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [formAccount, setFormAccount] = useState(undefined); // undefined=closed, null=create, object=edit
   const [telegramEnabled, setTelegramEnabled] = useState(false);
   const [hasEtherscan, setHasEtherscan] = useState(false);
   const [hasAlchemy, setHasAlchemy] = useState(false);
   const [deltaNeutralRiskControls, setDeltaNeutralRiskControls] = useState(null);
+  const [binanceOptions, setBinanceOptions] = useState({ configured: false, alias: null });
 
   // Fetch status for hero badges
   useEffect(() => {
@@ -30,6 +39,7 @@ function SettingsPage() {
       .then((d) => {
         setTelegramEnabled(d?.telegram?.enabled || false);
         setDeltaNeutralRiskControls(d?.deltaNeutralRiskControls || null);
+        if (d?.binanceOptions) setBinanceOptions(d.binanceOptions);
       })
       .catch(() => {});
     settingsApi.getEtherscan()
@@ -78,6 +88,10 @@ function SettingsPage() {
         ? `${deltaNeutralRiskControls.riskPauseLiqDistancePct}% / ${deltaNeutralRiskControls.marginTopUpLiqDistancePct}%`
         : 'Sin configurar',
     },
+    binanceOptions: {
+      ok: !!binanceOptions?.configured,
+      text: binanceOptions?.configured ? (binanceOptions.alias || 'Configurada') : 'Sin configurar',
+    },
     telegram: { ok: telegramEnabled, text: telegramEnabled ? 'Activo' : 'Inactivo' },
     etherscan: { ok: hasEtherscan, text: hasEtherscan ? 'Configurada' : 'Sin configurar' },
     alchemy: { ok: hasAlchemy, text: hasAlchemy ? 'Configurada' : 'Sin configurar' },
@@ -125,6 +139,9 @@ function SettingsPage() {
               onDeleteAccount={handleDeleteAccount}
             />
           )}
+          {section === 'binanceOptions' && (
+            <BinanceOptionsSection onStatusChange={setBinanceOptions} />
+          )}
           {section === 'deltaNeutralRisk' && (
             <DeltaNeutralRiskSection onStatusChange={setDeltaNeutralRiskControls} />
           )}
@@ -147,6 +164,7 @@ function SettingsPage() {
 
       {dialog.open && (
         <ConfirmDialog
+          open
           title={dialog.title}
           message={dialog.message}
           confirmLabel={dialog.confirmLabel}

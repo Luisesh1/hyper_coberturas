@@ -26,8 +26,13 @@ async function upsert(userId, key, value) {
   );
 }
 
+async function deleteByKey(userId, key) {
+  await db.query('DELETE FROM settings WHERE user_id = $1 AND key = $2', [userId, key]);
+}
+
 module.exports = {
   getByKey,
   listByKey,
   upsert,
+  deleteByKey,
 };

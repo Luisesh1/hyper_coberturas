@@ -34,7 +34,9 @@ if (import.meta.env.DEV) {
   }).catch(() => { /* noop si el módulo no está disponible */ });
 }
 
-const request = createHttpClient({
+// Exportado para los clientes de API por módulo (p. ej. Opciones ›
+// Estrategias/Backtesting en `pages/Options/optionsAutomationApi.js`).
+export const request = createHttpClient({
   baseUrl: BASE_URL,
   getToken,
   onUnauthorized: clearSession,
@@ -166,6 +168,33 @@ export const settingsApi = {
     request('GET', `/settings/chart-drawings/${encodeURIComponent(symbol)}`),
   saveChartDrawings: (symbol, drawings) =>
     request('PUT', `/settings/chart-drawings/${encodeURIComponent(symbol)}`, { drawings }),
+  // Binance Opciones: una cuenta por usuario. El secret nunca vuelve al
+  // navegador; enviarlo vacío al editar conserva el guardado.
+  getBinanceOptions:    ()  => request('GET',    '/settings/binance-options'),
+  saveBinanceOptions:   ({ alias, apiKey, apiSecret }) =>
+    request('PUT', '/settings/binance-options', { alias, apiKey, apiSecret }),
+  deleteBinanceOptions: ()  => request('DELETE', '/settings/binance-options'),
+  testBinanceOptions:   ()  => request('POST',   '/settings/binance-options/test'),
+  getOptionsLimits:     ()  => request('GET',    '/settings/options-limits'),
+  saveOptionsLimits:    ({ maxMarginUsdt, maxDailyLossUsdt, maxLiveStrategies, notifyTelegram }) =>
+    request('PUT', '/settings/options-limits', { maxMarginUsdt, maxDailyLossUsdt, maxLiveStrategies, notifyTelegram }),
+};
+
+// ------------------------------------------------------------------
+// Opciones (Binance European Options): mercado público y trading manual
+// ------------------------------------------------------------------
+export const optionsApi = {
+  getUnderlyings: ()                       => request('GET', '/options/underlyings'),
+  getChain:       ({ underlying, expiry } = {}) =>
+    request('GET', `/options/chain${buildQueryString({ underlying, expiry })}`),
+  getAccount:     ()                       => request('GET', '/options/account'),
+  getPositions:   ()                       => request('GET', '/options/positions'),
+  getOpenOrders:  ()                       => request('GET', '/options/orders/open'),
+  placeOrder:     ({ symbol, side, quantity, price, postOnly, reduceOnly }) =>
+    request('POST', '/options/orders', { symbol, side, quantity, price, postOnly, reduceOnly }),
+  cancelOrder:    (symbol, orderId)        =>
+    request('DELETE', `/options/orders/${encodeURIComponent(symbol)}/${encodeURIComponent(orderId)}`),
+  getTrades:      ({ days = 30 } = {})     => request('GET', `/options/trades${buildQueryString({ days })}`),
 };
 
 // ------------------------------------------------------------------

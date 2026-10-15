@@ -406,6 +406,11 @@ canvas {
   min-width: 0;
 }
 
+/* ── Layout ancho: sin sidebar, con padding y scroll normales ───── */
+.mainWide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* ── Layout fullscreen: solo navbar + contenido (sin sidebar) ────── */
 .mainFullscreen {
   grid-template-columns: 1fr;
