@@ -139,7 +139,7 @@ describe('ManualTradingTab · escritorio', () => {
     await waitFor(() => expect(optionsApi.placeOrder).toHaveBeenCalledWith({
       symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.5, price: 915, postOnly: true, reduceOnly: false,
     }));
-    expect(addNotification).toHaveBeenCalledWith('success', 'Orden enviada');
+    await waitFor(() => expect(addNotification).toHaveBeenCalledWith('success', 'Orden enviada'));
   });
 
   it('muestra el error del backend si la orden falla', async () => {

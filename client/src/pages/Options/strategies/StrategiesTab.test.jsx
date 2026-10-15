@@ -94,7 +94,8 @@ describe('StrategiesTab · escritorio', () => {
   it('lista → selecciona la primera y muestra su detalle; al pulsar otra carga su detalle', async () => {
     render(<StrategiesTab />);
     expect(await screen.findByRole('heading', { name: 'Strangle semanal BTC' })).toBeTruthy();
-    expect(optionsStrategiesApi.get).toHaveBeenCalledWith(1);
+    // El encabezado sale de la lista; el detalle se pide en un efecto posterior.
+    await waitFor(() => expect(optionsStrategiesApi.get).toHaveBeenCalledWith(1));
     expect(await screen.findByText('Prima al 61 %')).toBeTruthy();
     expect(screen.getByText('Plantilla «Strangle corto» · BTC · evalúa cada 5 min · 2 patas abiertas')).toBeTruthy();
     expect(screen.getByText('1.240 / 2.000')).toBeTruthy();
@@ -102,8 +103,8 @@ describe('StrategiesTab · escritorio', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Covered call ETH/ }));
     expect(await screen.findByRole('heading', { name: 'Covered call ETH' })).toBeTruthy();
-    expect(optionsStrategiesApi.get).toHaveBeenCalledWith(2);
-    expect(screen.getByText('Todavía no hay decisiones registradas.')).toBeTruthy();
+    await waitFor(() => expect(optionsStrategiesApi.get).toHaveBeenCalledWith(2));
+    expect(await screen.findByText('Todavía no hay decisiones registradas.')).toBeTruthy();
   });
 
   it('pasar a Real abre la confirmación y sólo al aceptar envía confirm:true', async () => {
@@ -220,7 +221,7 @@ describe('StrategiesTab · móvil', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Strangle semanal BTC/ }));
     const detail = await screen.findByRole('dialog', { name: 'Strangle semanal BTC' });
-    expect(optionsStrategiesApi.get).toHaveBeenCalledWith(1);
+    await waitFor(() => expect(optionsStrategiesApi.get).toHaveBeenCalledWith(1));
     expect(within(detail).getByRole('radiogroup', { name: 'Modo de ejecución' })).toBeTruthy();
     expect(within(detail).getByRole('button', { name: /Editar parámetros/ })).toBeTruthy();
     expect(await within(detail).findByText('Últimas decisiones')).toBeTruthy();
