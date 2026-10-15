@@ -47,6 +47,8 @@ export const STRUCTURE_DEFAULTS = {
 export const COMMON_DEFAULTS = {
   expiryDays: 7,
   quantity: 0.01,
+  contractCount: 1,
+  capitalUsdt: null,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
   maxOpenPositions: 1,
@@ -139,6 +141,7 @@ export const DECISION_LABEL = {
   closed: 'Cerró',
   reversed: 'Giró',
   ignored: 'Ignorada',
+  pending: 'Pendiente',
   error: 'Error',
 };
 export const DECISION_TONE = { opened: 'open', closed: 'close', reversed: 'close', ignored: 'skip', error: 'error' };
@@ -266,6 +269,8 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       targetDelta: Math.abs(val('targetDelta')),
       expiryDays: val('expiryDays'),
       quantity: val('quantity'),
+      contractCount: val('contractCount'),
+      capitalUsdt: toNumber(p.capitalUsdt),
       onOpposite: ON_OPPOSITE.some((o) => o.value === p.onOpposite) ? p.onOpposite : defs.onOpposite,
       takeProfitPct: val('takeProfitPct'),
       stopLossPct: val('stopLossPct'),
@@ -314,6 +319,9 @@ export function validateBotForm(form) {
   range('targetDelta', 0.05, 0.95);
   range('expiryDays', 1, 90, { integer: true });
   range('quantity', 0.0001, 1000000, { minLabel: 'Debe ser mayor que 0' });
+  range('contractCount', 1, 10, { integer: true });
+  if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
+  if (Number(form.maxOpenPositions) < Number(form.contractCount)) errors.maxOpenPositions = 'Debe cubrir todos los contratos seleccionados';
   range('takeProfitPct', 1, 1000);
   range('stopLossPct', 1, 1000);
   range('exitHoursBeforeExpiry', 0, 168);
@@ -333,6 +341,8 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     targetDelta: Number(form.targetDelta),
     expiryDays: Number(form.expiryDays),
     quantity: Number(form.quantity),
+    contractCount: Number(form.contractCount),
+    capitalUsdt: Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
     onOpposite: form.onOpposite,
     takeProfitPct: Number(form.takeProfitPct),
     stopLossPct: Number(form.stopLossPct),
