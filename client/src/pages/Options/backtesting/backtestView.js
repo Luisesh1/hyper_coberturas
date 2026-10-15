@@ -235,6 +235,22 @@ export function formatLegs(legs) {
   }).join(' · ');
 }
 
+// Códigos de salida del motor (templates y backtest) → texto de la tabla.
+const EXIT_REASON_LABEL = {
+  take_profit: 'Toma de ganancia',
+  stop_loss: 'Stop por pérdida',
+  delta_stop: 'Stop por delta',
+  time_exit: 'Salida por tiempo',
+  roll: 'Roll',
+  expiry: 'Vencimiento',
+  open: 'Abierto al final',
+};
+
+export function exitReasonLabel(code) {
+  if (!code) return '';
+  return EXIT_REASON_LABEL[code] || code;
+}
+
 export function normalizeCycles(cycles) {
   return (Array.isArray(cycles) ? cycles : []).map((c, i) => ({
     id: i,
@@ -242,7 +258,7 @@ export function normalizeCycles(cycles) {
     expiry: toMs(c.expiry) ?? c.expiry ?? null,
     legsText: formatLegs(c.legs),
     premium: toNumber(pick(c, 'premiumUsdt', 'premium_usdt')),
-    exitReason: pick(c, 'exitReason', 'exit_reason') || '',
+    exitReason: exitReasonLabel(pick(c, 'exitReason', 'exit_reason')),
     pnl: toNumber(pick(c, 'pnlUsdt', 'pnl_usdt')),
   }));
 }

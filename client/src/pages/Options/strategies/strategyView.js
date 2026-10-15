@@ -82,6 +82,26 @@ function kpiFromDef(def, value, ctx) {
   }
 }
 
+// El servidor manda los KPIs por libro: `{ shadow: {...}, live: {...} }`. El
+// P&L de cada libro es el de 30 días; prima, ciclos y ganadores salen del libro
+// activo (real si la estrategia está en real, si no sombra); el margen, de `usage`.
+function flattenBookKpis(obj, detail) {
+  const isBook = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  if (!isBook(obj.shadow) && !isBook(obj.live)) return obj;
+  const shadow = obj.shadow || {};
+  const live = obj.live || {};
+  const active = detail.mode === 'live' ? live : shadow;
+  const flat = {
+    pnlShadow: shadow.pnl30dUsdt,
+    pnlLive: live.pnl30dUsdt,
+    premiumUsdt: active.premiumUsdt,
+    marginUsedUsdt: detail.usage?.marginUsedUsdt,
+    cycles: active.cycles,
+    winRatePct: active.winRatePct,
+  };
+  return Object.fromEntries(Object.entries(flat).filter(([, v]) => v !== undefined && v !== null));
+}
+
 export function buildKpis(detail = {}) {
   const raw = detail.kpis;
   const limits = detail.limits || {};
@@ -93,7 +113,7 @@ export function buildKpis(detail = {}) {
       hint: k.hint || '',
     }));
   }
-  const obj = raw && typeof raw === 'object' ? raw : {};
+  const obj = flattenBookKpis(raw && typeof raw === 'object' ? raw : {}, detail);
   const pnl = detail.pnl30d || {};
   const used = new Set();
   const out = [];

@@ -8,7 +8,8 @@ const { AppError, ValidationError, NotFoundError } = require('../../errors/app-e
 const defaultRepo = require('../../repositories/options-strategies.repository');
 const templates = require('./templates');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
-const { DAY_MS } = require('./options-utils');
+const { DAY_MS, parseSymbol } = require('./options-utils');
+const { estimateMargin, legDeltaExposure, utcDayStart, lazyMarket } = require('./options-strategy-runner.service');
 
 const MODES = ['paused', 'shadow', 'live'];
 const LIMIT_KEYS = ['maxMarginUsdt', 'maxDailyLossUsdt', 'maxNetDelta', 'maxOrdersPerDay'];
@@ -92,9 +93,47 @@ function equityCurve(positions, startAt) {
   return points;
 }
 
+const round2 = (v) => Math.round(v * 1e4) / 1e4;
+
+/**
+ * Consumo actual de los límites de la estrategia, con los mismos cálculos que
+ * el runner aplica antes de enviar una orden. Mide el libro real si la
+ * estrategia está en `live`, si no el de sombra. El margen y la delta piden
+ * datos de mercado: si fallan quedan en null en vez de romper el detalle.
+ */
+async function limitsUsage({ repo, market, strategy, positions, at }) {
+  const mode = strategy.mode === 'live' ? 'live' : 'shadow';
+  const since = utcDayStart(at);
+  const open = positions.filter((p) => p.mode === mode && p.closedAt == null);
+  const [pnlToday, ordersToday] = await Promise.all([
+    repo.realizedPnlSince({ userId: strategy.userId, strategyId: strategy.id, mode, since }),
+    repo.countOrdersSince(strategy.id, mode, since),
+  ]);
+
+  let marginUsedUsdt = null;
+  let netDelta = null;
+  try {
+    const { spot } = await market.getChain(strategy.underlying);
+    marginUsedUsdt = 0;
+    for (const p of open) {
+      const meta = parseSymbol(p.symbol);
+      if (!meta || p.side !== 'SELL') continue;
+      marginUsedUsdt += estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot });
+    }
+    marginUsedUsdt = round2(marginUsedUsdt);
+  } catch { marginUsedUsdt = null; }
+  try {
+    const quotes = await Promise.all(open.map((p) => market.getQuote(p.symbol)));
+    netDelta = round2(open.reduce((acc, p, i) => acc + legDeltaExposure({ side: p.side, delta: quotes[i]?.delta, quantity: p.quantity }), 0));
+  } catch { netDelta = null; }
+
+  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta };
+}
+
 function createOptionsStrategiesService(deps = {}) {
   const repo = deps.repo || defaultRepo;
   const credentials = deps.credentials || lazyCredentials();
+  const market = deps.market || lazyMarket();
   const now = deps.now || Date.now;
 
   async function requireStrategy(userId, id) {
@@ -155,6 +194,7 @@ function createOptionsStrategiesService(deps = {}) {
       kpis: { shadow: kpisFor(positions, events, 'shadow', at), live: kpisFor(positions, events, 'live', at) },
       equity: equityCurve(positions, strategy.createdAt),
       positions: positions.filter((p) => p.closedAt == null),
+      usage: await limitsUsage({ repo, market, strategy, positions, at }),
       events,
     };
   }

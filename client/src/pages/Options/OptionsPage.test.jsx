@@ -17,6 +17,18 @@ const { optionsApi, settingsApi } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../services/api', () => ({ optionsApi, settingsApi }));
+// Las pestañas de Estrategias y Backtesting tienen su propio cliente de API.
+vi.mock('./optionsAutomationApi', () => ({
+  optionsStrategiesApi: {
+    listTemplates: vi.fn().mockResolvedValue([]),
+    list: vi.fn().mockResolvedValue([]),
+    create: vi.fn(), get: vi.fn(), update: vi.fn(), setMode: vi.fn(), remove: vi.fn(),
+  },
+  optionsBacktestsApi: {
+    list: vi.fn().mockResolvedValue([]),
+    create: vi.fn(), get: vi.fn(),
+  },
+}));
 vi.mock('../../context/TradingContext', () => ({
   useTradingContext: () => ({ addNotification: vi.fn() }),
 }));
@@ -66,13 +78,13 @@ describe('OptionsPage', () => {
   it('sincroniza la pestaña con ?tab=', async () => {
     const user = userEvent.setup();
     renderPage('/opciones?tab=backtesting');
-    expect(screen.getByText('Backtesting: próximamente.')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Ejecutar backtest/ })).toBeTruthy();
     const nav = screen.getByRole('navigation', { name: 'Secciones de opciones' });
     expect(within(nav).getByRole('link', { name: /Backtesting/ }).getAttribute('aria-current')).toBe('page');
 
     await user.click(within(nav).getByRole('link', { name: /Estrategias/ }));
     expect(screen.getByTestId('search').textContent).toBe('?tab=strategies');
-    expect(screen.getByText('Estrategias: próximamente.')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Nueva estrategia' })).toBeTruthy();
 
     await user.click(within(nav).getByRole('link', { name: /Trading manual/ }));
     expect(screen.getByTestId('search').textContent).toBe('');

@@ -71,3 +71,11 @@ describe('backtestView', () => {
     expect(row).toBe('2026-09-26T08:15:00.000Z,2026-10-03T08:00:00.000Z,V 70000-C · V 62000-P,238.1,"Toma de ganancia, 50 %",119.05');
   });
 });
+
+describe('exitReasonLabel', () => {
+  it('traduce los códigos del motor y deja pasar texto libre', async () => {
+    const { normalizeCycles } = await import('./backtestView');
+    const rows = normalizeCycles([{ exitReason: 'take_profit' }, { exitReason: 'expiry' }, { exitReason: 'Texto libre' }]);
+    expect(rows.map((r) => r.exitReason)).toEqual(['Toma de ganancia', 'Vencimiento', 'Texto libre']);
+  });
+});

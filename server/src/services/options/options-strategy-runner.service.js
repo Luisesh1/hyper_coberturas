@@ -518,3 +518,6 @@ const runner = new OptionsStrategyRunner();
 module.exports = runner;
 module.exports.OptionsStrategyRunner = OptionsStrategyRunner;
 module.exports.estimateMargin = estimateMargin;
+module.exports.legDeltaExposure = legDeltaExposure;
+module.exports.utcDayStart = utcDayStart;
+module.exports.lazyMarket = lazyMarket;

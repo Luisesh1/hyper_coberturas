@@ -51,11 +51,17 @@ function fakeCredentials({ configured = true, maxLiveStrategies = 1 } = {}) {
   };
 }
 
+// Sin red: el detalle consulta spot y deltas para el consumo de límites.
+const fakeMarket = {
+  async getChain() { return { spot: 68000 }; },
+  async getQuote() { return { delta: 0.2 }; },
+};
+
 /** Sustituye el servicio real por uno con repo en memoria. */
 function useFakeService(options = {}) {
   const repo = createFakeOptionsRepo();
   const original = { ...strategiesService };
-  Object.assign(strategiesService, createOptionsStrategiesService({ repo, credentials: fakeCredentials(options) }));
+  Object.assign(strategiesService, createOptionsStrategiesService({ repo, credentials: fakeCredentials(options), market: fakeMarket }));
   return { repo, restore: () => Object.assign(strategiesService, original) };
 }
 
