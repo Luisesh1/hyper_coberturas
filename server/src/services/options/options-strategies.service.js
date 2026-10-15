@@ -132,6 +132,11 @@ async function limitsUsage({ repo, market, strategy, positions, at }) {
 
 function createOptionsStrategiesService(deps = {}) {
   const repo = deps.repo || defaultRepo;
+  // En producción usa el ledger PostgreSQL. Los repositorios aislados que
+  // se inyectan en pruebas no necesitan abrir una conexión real.
+  const liveOrders = deps.liveOrders || (repo === defaultRepo
+    ? require('../../repositories/options-live-orders.repository')
+    : { listByStrategy: async () => [] });
   const credentials = deps.credentials || lazyCredentials();
   const market = deps.market || lazyMarket();
   const now = deps.now || Date.now;
@@ -264,10 +269,12 @@ function createOptionsStrategiesService(deps = {}) {
 
   async function remove(userId, id) {
     const strategy = await requireStrategy(userId, id);
-    const liveOrders = require('../../repositories/options-live-orders.repository');
-    const unresolved = (await liveOrders.listByStrategy(strategy.id)).some((o) => o.status !== 'final');
-    if (unresolved) {
-      throw new AppError('El bot tiene órdenes reales pendientes de conciliación: espera antes de borrarlo', { status: 409, code: 'PENDING_LIVE_ORDERS' });
+    const orders = await liveOrders.listByStrategy(strategy.id);
+    if (orders.some((o) => o.status !== 'final')) {
+      throw new AppError('La estrategia tiene órdenes reales pendientes de conciliación', { status: 409, code: 'PENDING_LIVE_ORDERS' });
+    }
+    if (orders.length) {
+      throw new AppError('Una estrategia con historial de órdenes reales no se puede borrar: conservar auditoría', { status: 409, code: 'LIVE_ORDER_AUDIT_REQUIRED' });
     }
     const live = await repo.listOpenPositions(strategy.id, 'live');
     if (live.length) {
