@@ -65,7 +65,10 @@ export function RunProgress({ run, mobile }) {
 export default function BacktestResults({ run, mobile = false }) {
   const result = run.result || {};
   const cfg = run.config || {};
-  const metrics = useMemo(() => buildMetrics(result.metrics), [result.metrics]);
+  const metrics = useMemo(
+    () => buildMetrics(result.metrics, { capitalUsdt: cfg.capitalUsdt, equity: result.equity }),
+    [result.metrics, result.equity, cfg.capitalUsdt],
+  );
   const cycles = useMemo(() => normalizeCycles(result.cycles), [result.cycles]);
   const hodlLabel = `Mantener ${cfg.underlying || 'subyacente'}`;
 
@@ -85,7 +88,7 @@ export default function BacktestResults({ run, mobile = false }) {
       <>
         <SourceNote source={cfg.source} note={result.sourceNote} mobile />
         <div className={ui.tileGrid}>
-          {metrics.slice(0, 4).map((m) => (
+          {metrics.slice(0, 6).map((m) => (
             <div key={m.key} className={ui.tile}>
               <span className={ui.tileLabel}>{m.shortLabel || m.label}</span>
               <span className={`${ui.tileValue} ${ui[`tone_${m.tone}`]}`}>{m.value}</span>

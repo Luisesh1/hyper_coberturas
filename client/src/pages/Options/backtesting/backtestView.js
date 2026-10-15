@@ -189,9 +189,12 @@ export function runSubtitle(run) {
 }
 
 // ── Resultado ────────────────────────────────────────────────────────
-export function buildMetrics(metrics = {}) {
+export function buildMetrics(metrics = {}, { capitalUsdt, equity } = {}) {
   const m = metrics || {};
   const ret = toNumber(m.returnPct);
+  const lastValue = toNumber(Array.isArray(equity) ? equity.at(-1)?.strategy : null);
+  const capital = toNumber(capitalUsdt);
+  const pnl = toNumber(m.pnlUsdt) ?? (lastValue !== null && capital !== null ? lastValue - capital : null);
   const dd = toNumber(m.maxDrawdownPct);
   const worst = toNumber(m.worstCycleUsdt);
   const wins = toNumber(m.wins);
@@ -199,6 +202,7 @@ export function buildMetrics(metrics = {}) {
   const ddValue = dd === null ? null : -Math.abs(dd);
   return [
     { key: 'returnPct', label: 'Retorno', value: formatPct(ret, { sign: true }), tone: ret > 0 ? 'pos' : ret < 0 ? 'neg' : 'neutral' },
+    { key: 'pnlUsdt', label: 'P&L neto', value: pnl === null ? '—' : `${formatUsdt(pnl, { sign: true })} USDT`, tone: pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : 'neutral' },
     { key: 'maxDrawdownPct', label: 'Máx. drawdown', value: formatPct(ddValue), tone: ddValue < 0 ? 'neg' : 'neutral' },
     { key: 'sharpe', label: 'Sharpe', value: toNumber(m.sharpe) === null ? '—' : formatUsdt(m.sharpe), tone: 'neutral' },
     { key: 'wins', label: 'Ciclos ganadores', shortLabel: 'Ganadores', value: wins === null ? '—' : `${wins} / ${cycles ?? '—'}`, tone: 'neutral' },

@@ -57,8 +57,10 @@ describe('backtestView', () => {
   });
 
   it('métricas con signo y drawdown negativo', () => {
-    const m = buildMetrics({ returnPct: 38.2, maxDrawdownPct: 14.6, sharpe: 1.41, wins: 41, cycles: 52, premiumUsdt: 9840, worstCycleUsdt: -612 });
-    expect(m.map((x) => x.value)).toEqual(['+38,2 %', '−14,6 %', '1,41', '41 / 52', '9.840 USDT', '−612 USDT']);
+    const m = buildMetrics({ returnPct: 38.2, pnlUsdt: 1910, maxDrawdownPct: 14.6, sharpe: 1.41, wins: 41, cycles: 52, premiumUsdt: 9840, worstCycleUsdt: -612 });
+    expect(m.map((x) => x.value)).toEqual(['+38,2 %', '+1.910,00 USDT', '−14,6 %', '1,41', '41 / 52', '9.840 USDT', '−612 USDT']);
+    const oldRun = buildMetrics({ returnPct: -2 }, { capitalUsdt: 5000, equity: [{ strategy: 4900 }] });
+    expect(oldRun.find((x) => x.key === 'pnlUsdt').value).toBe('−100,00 USDT');
   });
 
   it('patas abreviadas y CSV con cabecera y comillas', () => {

@@ -334,6 +334,7 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct }) {
   return {
     metrics: {
       returnPct: round((finalValue / capitalUsdt - 1) * 100),
+      pnlUsdt: round(finalValue - capitalUsdt),
       maxDrawdownPct: round(maxDrawdownPct(equity.map((e) => e.strategy))),
       sharpe: round(sharpe(daily.map((d) => d.value))),
       wins: cycles.filter((c) => c.pnl > 0).length,

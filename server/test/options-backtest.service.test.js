@@ -92,9 +92,10 @@ test('backtest realized: short strangle sobre velas sintéticas, determinista y 
   assert.equal(candleCalls[0].startTime, FROM - 30 * DAY_MS);
 
   const { metrics, equity, cycles, sourceNote } = result;
-  for (const key of ['returnPct', 'maxDrawdownPct', 'sharpe', 'wins', 'cycles', 'premiumUsdt', 'worstCycleUsdt']) {
+  for (const key of ['returnPct', 'pnlUsdt', 'maxDrawdownPct', 'sharpe', 'wins', 'cycles', 'premiumUsdt', 'worstCycleUsdt']) {
     assert.ok(Number.isFinite(metrics[key]), key);
   }
+  assert.ok(Math.abs(metrics.pnlUsdt - (equity.at(-1).strategy - config.capitalUsdt)) < 0.02);
   // Entra los viernes a las 09:00 UTC: ~13 viernes en 90 días.
   assert.ok(metrics.cycles >= 10 && metrics.cycles <= 14, `ciclos ${metrics.cycles}`);
   assert.equal(cycles.length, metrics.cycles);

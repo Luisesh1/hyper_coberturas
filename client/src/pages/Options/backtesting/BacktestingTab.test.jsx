@@ -54,7 +54,7 @@ describe('BacktestingTab', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     optionsBacktestsApi.get
       .mockResolvedValueOnce({ id: 99, status: 'running' })
-      .mockResolvedValueOnce({ id: 99, status: 'done', config: { underlying: 'BTC', source: 'dvol', strategyId: 1 }, result: RESULT });
+      .mockResolvedValueOnce({ id: 99, status: 'done', config: { underlying: 'BTC', source: 'dvol', strategyId: 1, capitalUsdt: 5000 }, result: RESULT });
 
     render(<BacktestingTab />);
     const select = await screen.findByLabelText('Estrategia');
@@ -73,6 +73,8 @@ describe('BacktestingTab', () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(BACKTEST_POLL_MS); });
     expect(await screen.findByText('+38,2 %')).toBeTruthy();
+    expect(screen.getByText('P&L neto')).toBeTruthy();
+    expect(screen.getByText('+1.910,00 USDT')).toBeTruthy();
     expect(optionsBacktestsApi.get).toHaveBeenCalledWith(99);
     expect(screen.getByText('−14,6 %')).toBeTruthy();
     expect(screen.getByText('41 / 52')).toBeTruthy();
