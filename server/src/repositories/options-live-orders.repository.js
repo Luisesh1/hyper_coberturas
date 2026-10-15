@@ -16,6 +16,45 @@ const map = (r) => r && ({
 });
 
 function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = {}) {
+  // Comparación conservadora del libro propio con las posiciones NETAS
+  // firmadas que Binance comunica para toda la cuenta del usuario.
+  // Si el usuario opera fuera de la app, se bloquea el bot hasta conciliar.
+  async function assertExchangeExposure(userId, exchangePositions) {
+    if (!Array.isArray(exchangePositions)) throw new Error('Binance positions response is not an array');
+    const { rows } = await db.query(
+      `SELECT symbol,side,COALESCE(SUM(quantity),0) AS quantity
+         FROM options_strategy_positions
+        WHERE user_id=$1 AND mode='live' AND closed_at IS NULL
+        GROUP BY symbol,side`, [userId]
+    );
+    const expected = new Map();
+    for (const p of rows) {
+      const signed = Number(p.quantity) * (p.side === 'SELL' ? -1 : 1);
+      if (!['BUY', 'SELL'].includes(p.side) || !Number.isFinite(signed)) {
+        throw new Error('Invalid local live position');
+      }
+      expected.set(p.symbol, (expected.get(p.symbol) || 0) + signed);
+    }
+    const actual = new Map();
+    for (const p of exchangePositions) {
+      const qty = Number(p.quantity);
+      if (!p.symbol || !Number.isFinite(qty)) throw new Error('Invalid Binance live position');
+      if (p.quoteAsset != null && p.quoteAsset !== 'USDT') {
+        throw new Error('Unsupported Binance options position quote asset');
+      }
+      if (p.side === 'SHORT' && qty > 1e-9 || p.side === 'LONG' && qty < -1e-9) {
+        throw new Error('Binance live position direction disagrees with quantity');
+      }
+      actual.set(p.symbol, (actual.get(p.symbol) || 0) + qty);
+    }
+    for (const symbol of new Set([...expected.keys(), ...actual.keys()])) {
+      if (Math.abs((expected.get(symbol) || 0) - (actual.get(symbol) || 0)) > 1e-8) {
+        throw new Error('Binance exposure mismatch: ' + symbol + '. Manual reconciliation required');
+      }
+    }
+    return true;
+  }
+
   async function beginBatch({ strategy, action, legs, key, detail, deadlineAt }) {
     if (!legs.length || !['open', 'close'].includes(action)) throw new Error('Invalid live batch');
     return db.transaction(async (tx) => {
@@ -252,7 +291,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       }
     });
   }
-  return { beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
+  return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
     applyTrade, finishOrder };
 }
