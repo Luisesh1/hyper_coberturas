@@ -206,6 +206,16 @@ test('modo real: las órdenes aceptadas sin fill consumen el cupo diario', async
   assert.match(repo.events.find((e) => e.mode === 'live').detail, /Máximo de 2 órdenes/);
 });
 
+test('modo real: delta desconocida bloquea el riesgo en vez de asumir cero', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', limits: { maxNetDelta: 1 } });
+  const result = await runner.checkLiveLimits(strategy, [{
+    symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: 0.01,
+    price: 100, strike: 60000, type: 'C', delta: null,
+  }], { now: FRIDAY_9, spot: SPOT, positions: [] });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /Delta no disponible/);
+});
+
 test('modo real: margen de la estrategia y margen global', async () => {
   const a = await setup({ mode: 'live', limits: { maxMarginUsdt: 50 } });
   await a.runner.tick();
