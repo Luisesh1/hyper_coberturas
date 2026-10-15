@@ -264,6 +264,11 @@ function createOptionsStrategiesService(deps = {}) {
 
   async function remove(userId, id) {
     const strategy = await requireStrategy(userId, id);
+    const liveOrders = require('../../repositories/options-live-orders.repository');
+    const unresolved = (await liveOrders.listByStrategy(strategy.id)).some((o) => o.status !== 'final');
+    if (unresolved) {
+      throw new AppError('El bot tiene órdenes reales pendientes de conciliación: espera antes de borrarlo', { status: 409, code: 'PENDING_LIVE_ORDERS' });
+    }
     const live = await repo.listOpenPositions(strategy.id, 'live');
     if (live.length) {
       throw new AppError('La estrategia tiene posiciones reales abiertas: ciérralas antes de borrarla', { status: 409, code: 'OPEN_LIVE_POSITIONS' });
