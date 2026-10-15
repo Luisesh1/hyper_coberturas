@@ -206,8 +206,10 @@ function createBinanceOptionsClient({
     },
 
     // ── Firmados ──────────────────────────────────────────────────
+    // Binance retiró `/eapi/v1/account` (responde 404); la cuenta de opciones
+    // se lee en `marginAccount`, con la misma forma: `asset[]` y `greek[]`.
     getAccount() {
-      return request('GET', '/eapi/v1/account', { signed: true });
+      return request('GET', '/eapi/v1/marginAccount', { signed: true });
     },
     getPositions(symbol) {
       return request('GET', '/eapi/v1/position', { params: { symbol }, signed: true });

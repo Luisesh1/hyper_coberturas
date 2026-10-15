@@ -74,6 +74,14 @@ test('los endpoints públicos no firman ni envían la key', async () => {
   assert.equal(calls[0].init.headers['X-MBX-APIKEY'], undefined);
 });
 
+test('getAccount usa /eapi/v1/marginAccount (Binance retiró /eapi/v1/account: 404)', async () => {
+  const { calls, fetchImpl } = recordingFetch(() => jsonResponse({ asset: [], greek: [] }));
+  const client = createBinanceOptionsClient({ apiKey: API_KEY, apiSecret: API_SECRET, fetchImpl });
+  await client.getAccount();
+  assert.match(calls[0].url, /^https:\/\/eapi\.binance\.com\/eapi\/v1\/marginAccount\?/);
+  assert.equal(calls[0].init.headers['X-MBX-APIKEY'], API_KEY);
+});
+
 test('un endpoint firmado sin credenciales lanza ValidationError sin llamar a la red', async () => {
   const { calls, fetchImpl } = recordingFetch(() => jsonResponse({}));
   const client = createBinanceOptionsClient({ fetchImpl });
@@ -92,7 +100,7 @@ test('los errores de Binance se normalizan sin filtrar key, secret ni firma', as
   assert.equal(err.status, 400);
   assert.equal(err.code, 'BINANCE_OPTIONS_AUTH_ERROR');
   assert.equal(err.details.binanceCode, -1022);
-  assert.equal(err.details.endpoint, '/eapi/v1/account');
+  assert.equal(err.details.endpoint, '/eapi/v1/marginAccount');
   const serialized = JSON.stringify({ message: err.message, details: err.details });
   assert.ok(!serialized.includes(API_KEY));
   assert.ok(!serialized.includes(API_SECRET));
