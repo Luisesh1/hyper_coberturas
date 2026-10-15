@@ -54,8 +54,18 @@ class OptionsLiveExecution {
     this.logger = deps.logger || loggerDefault;
     this.now = deps.now || Date.now;
     this.settlement = deps.settlement || require('./options-live-settlement.service');
-    // Habilitación explícita: despliegues y migraciones no envían órdenes solos.
-    this.enabled = deps.enabled ?? (process.env.OPTIONS_LIVE_TRADING_ENABLED === 'true');
+    this.notify = deps.notify || (async (userId, message) => {
+      const registry = require('../telegram.registry');
+      const tg = await registry.getOrCreate(userId);
+      if (typeof tg?.send !== 'function') throw new Error('Telegram unavailable');
+      await tg.send(message);
+    });
+    // Doble autorización independiente; no se activa al aplicar migraciones.
+    // La segunda solo se configura tras la validación final de producción.
+    this.enabled = deps.enabled ?? (
+      process.env.OPTIONS_LIVE_TRADING_ENABLED === 'true' &&
+      process.env.OPTIONS_LIVE_PRODUCTION_APPROVED === 'true'
+    );
   }
 
   async submit(strategy, action, ctx) {
@@ -224,6 +234,36 @@ class OptionsLiveExecution {
     return this.settlement.reconcileExpired();
   }
 
+  async alertAttention() {
+    if (typeof this.repo.listAttentionOrders !== 'function' ||
+        typeof this.repo.claimAttentionNotification !== 'function') return 0;
+    const ids = await this.repo.listAttentionOrders(100);
+    let sent = 0;
+    for (const id of ids) {
+      const order = await this.repo.claimAttentionNotification(id);
+      if (!order) continue;
+      const cleanMsg = (value) => String(value ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const message = [
+        '<b>ALERTA · Binance Opciones sin conciliar</b>',
+        'Bot: ' + cleanMsg(order.strategy_id),
+        'Orden: ' + cleanMsg(order.client_order_id),
+        'Contrato: ' + cleanMsg(order.symbol),
+        'Motivo: ' + cleanMsg(String(order.last_error || 'Atención requerida').slice(0, 300)),
+        'No enviar nuevas órdenes hasta verificar Binance y el ledger.',
+      ].join('\\n');
+      try {
+        await this.notify(Number(order.user_id), message);
+        sent++;
+      } catch (err) {
+        this.logger.warn('options_live_attention_notify_failed', {
+          liveOrderId: Number(order.id), error: err.message,
+        });
+      }
+    }
+    return sent;
+  }
+
   async reconcilePending() {
     // Aun con nuevas entradas deshabilitadas, se cancelan y concilian
     // órdenes ya enviadas antes de cambiar el feature flag.
@@ -249,7 +289,14 @@ class OptionsLiveExecution {
         await this.repo.releaseReconcile(order.id, locked.leaseUntil);
       }
     }
-    return { checked: orders.length, reconciled, errors };
+    // Notificación aún con trading apagado, sin interrumpir la conciliación.
+    let alerts = 0;
+    try {
+      alerts = await this.alertAttention();
+    } catch (err) {
+      this.logger.warn('options_live_attention_scan_failed', { error: err.message });
+    }
+    return { checked: orders.length, reconciled, errors, alerts };
   }
 }
 
