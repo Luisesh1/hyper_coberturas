@@ -240,10 +240,10 @@ function createBinanceOptionsClient({
     cancelOrder({ symbol, orderId, clientOrderId }) {
       return request('DELETE', '/eapi/v1/order', { signed: true, params: { symbol, orderId, clientOrderId } });
     },
-    getUserTrades({ symbol, startTime, endTime, limit = 1000 } = {}) {
+    getUserTrades({ symbol, fromId, startTime, endTime, limit = 1000 } = {}) {
       return request('GET', '/eapi/v1/userTrades', {
         signed: true,
-        params: { symbol, startTime, endTime, limit },
+        params: { symbol, fromId, startTime, endTime, limit },
       });
     },
     // Endpoint spot, firmado con la misma key.
