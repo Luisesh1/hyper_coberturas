@@ -15,9 +15,18 @@ const alertsRepo = require('../../repositories/alerts.repository');
 const marketData = require('../market-data.service');
 const telegramRegistry = require('../telegram.registry');
 const evaluator = require('./indicator-evaluator');
+const alertEvents = require('./alert-events');
 
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M'];
 const DATASOURCES = ['hyperliquid', 'binance', 'yahoo'];
+// Hacia dónde apunta la señal. Las alertas sin dirección son 'neutral':
+// solo avisan y ningún bot de trading automatizado las opera.
+const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
+const DEFAULT_DIRECTION = 'neutral';
+
+function normalizeDirection(value) {
+  return DIRECTIONS.includes(value) ? value : DEFAULT_DIRECTION;
+}
 
 // ------------------------------------------------------------------
 // Schemas zod
@@ -94,6 +103,7 @@ const alertSchema = z.object({
   telegramEnabled: z.boolean().default(true),
   cooldownSeconds: z.number().int().nonnegative().default(900),
   datasource: z.enum(DATASOURCES).default('binance'),
+  direction: z.enum(DIRECTIONS).default(DEFAULT_DIRECTION),
 });
 
 // Compatibilidad operador → kinds aceptados de operand.
@@ -157,6 +167,8 @@ function rowToDto(row) {
     cooldownSeconds: Number(row.cooldown_seconds),
     lastTriggeredAt: row.last_triggered_at_json || {},
     datasource: row.datasource,
+    // Antes de la migración 032 la fila no trae la columna → 'neutral'.
+    direction: normalizeDirection(row.direction),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -178,6 +190,7 @@ function dtoToRowPayload(data) {
     telegramEnabled: data.telegramEnabled,
     cooldownSeconds: data.cooldownSeconds,
     datasource: data.datasource,
+    direction: normalizeDirection(data.direction),
     now: Date.now(),
   };
 }
@@ -300,7 +313,10 @@ function calculateWeightedScore(rules, ruleResults) {
   };
 }
 
-async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, sendTelegram = true } = {}) {
+// `emitSignal` (por defecto true) publica el disparo en `alert-events` para
+// los consumidores (bots de Opciones). Las pruebas manuales pasan false: un
+// «Probar» nunca debe abrir ni cerrar posiciones.
+async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, sendTelegram = true, emitSignal = true } = {}) {
   const rules = alertDto.rules || [];
   if (rules.length === 0) {
     return { asset, score: 0, threshold: alertDto.thresholdPercent, matched: [], unmatched: [], wouldTrigger: false, reason: 'sin reglas' };
@@ -370,6 +386,7 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
 
   // Disparar: registrar evento y enviar telegram
   const alertSentAt = Date.now();
+  const direction = normalizeDirection(alertDto.direction);
   const messageText = buildAlertMessage({
     alert: alertDto,
     asset,
@@ -423,6 +440,7 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
     messageText,
     telegramSent,
     telegramError,
+    direction,
     now: alertSentAt,
   });
 
@@ -431,6 +449,27 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
       alertId: alertDto.id, asset, error: err.message,
     });
   });
+
+  if (emitSignal) {
+    try {
+      alertEvents.emitAlertTriggered({
+        userId: alertDto.userId,
+        alertId: alertDto.id,
+        alertName: alertDto.name,
+        direction,
+        asset,
+        score,
+        thresholdPercent: Number(alertDto.thresholdPercent),
+        eventId: event.id,
+        candleCloseTime,
+        triggeredAt: alertSentAt,
+      });
+    } catch (err) {
+      logger.warn('alerts_signal_emit_failed', {
+        alertId: alertDto.id, asset, error: err.message,
+      });
+    }
+  }
 
   return {
     ...result,
@@ -449,6 +488,8 @@ async function testAlertNow(userId, alertId, { dryRun = true } = {}) {
     const r = await evaluateAlertOnAsset(alert, asset, {
       ignoreCooldown: true,
       sendTelegram: !dryRun,
+      // Prueba manual (dry-run o «Probar y enviar»): nunca emite señal.
+      emitSignal: false,
     });
     results.push(r);
   }
@@ -469,7 +510,7 @@ function buildAlertMessage({ alert, asset, score, matched, total, candleCloseTim
   const when = new Date(candleCloseTime).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
   const sentAtUtc = formatUtcDateTime(sentAt);
   return [
-    `🔔 <b>${escapeHtml(alert.name)}</b>`,
+    `${directionTitlePrefix(alert.direction)}<b>${escapeHtml(alert.name)}</b>`,
     `Activo: <b>${escapeHtml(asset)}</b> · TF: ${escapeHtml(lowestTf || '?')}`,
     `Puntaje: <b>${score.toFixed(1)}%</b> (umbral ${Number(alert.thresholdPercent).toFixed(0)}%)`,
     `Labels de reglas aprobadas (${matchedLabels.length}/${matched.length}, ${total} total):`,
@@ -478,6 +519,16 @@ function buildAlertMessage({ alert, asset, score, matched, total, candleCloseTim
     `Enviada UTC: <b>${escapeHtml(sentAtUtc)}</b>`,
     `<a href="${url}">📈 Abrir gráfico</a>`,
   ].join('\n');
+}
+
+// Encabezado del mensaje según la dirección. Neutral queda como siempre.
+const DIRECTION_TITLE_PREFIX = {
+  bullish: '🟢 ALCISTA · ',
+  bearish: '🔴 BAJISTA · ',
+};
+
+function directionTitlePrefix(direction) {
+  return DIRECTION_TITLE_PREFIX[direction] || '🔔 ';
 }
 
 function ruleMessageLabel(result) {
@@ -514,6 +565,7 @@ function invalidateSchedulerCache() {
 module.exports = {
   TIMEFRAMES,
   DATASOURCES,
+  DIRECTIONS,
   buildAlertMessage,
   calculateWeightedScore,
   createAlert,
@@ -524,6 +576,7 @@ module.exports = {
   listAlertEvents,
   listAlerts,
   lowestTimeframe,
+  normalizeDirection,
   rowToDto,
   setSchedulerCacheInvalidator,
   testAlertNow,
