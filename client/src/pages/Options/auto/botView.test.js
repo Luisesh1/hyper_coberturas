@@ -49,7 +49,7 @@ describe('formulario de bot', () => {
       params: {
         structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, quantity: 0.01, onOpposite: 'reverse',
         takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
-        maxPremiumUsdt: 150,
+        maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null,
       },
       limits: {},
     });
