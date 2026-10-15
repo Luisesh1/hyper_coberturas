@@ -130,7 +130,7 @@ function createOptionsAutoTradingService(deps = {}) {
       direction,
       asset: payload.asset ?? null,
       score: payload.score ?? null,
-      decision: 'ignored',
+      decision: direction === 'neutral' ? 'ignored' : 'pending',
       detail: direction === 'neutral' ? 'Alerta neutral' : 'Procesando…',
       createdAt: now(),
     });
