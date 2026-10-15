@@ -2,12 +2,12 @@ import { MODES, MODE_LABEL } from './strategyView';
 import ui from './common/ui.module.css';
 import styles from './ModeSwitch.module.css';
 
-export function ModeBadge({ mode }) {
-  return <span className={`${ui.badge} ${ui[`badge_${mode}`] || ''}`}>{MODE_LABEL[mode] || mode}</span>;
+export function ModeBadge({ mode, labels = MODE_LABEL }) {
+  return <span className={`${ui.badge} ${ui[`badge_${mode}`] || ''}`}>{labels[mode] || mode}</span>;
 }
 
 // Control segmentado Pausada / Sombra / Real (radiogroup con flechas).
-export default function ModeSwitch({ value, onSelect, disabled = false, block = false, pending = null }) {
+export default function ModeSwitch({ value, onSelect, disabled = false, block = false, pending = null, labels = MODE_LABEL }) {
   const onKeyDown = (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     e.preventDefault();
@@ -36,7 +36,7 @@ export default function ModeSwitch({ value, onSelect, disabled = false, block = 
             onClick={() => { if (!checked) onSelect(m); }}
             disabled={disabled}
           >
-            {MODE_LABEL[m]}
+            {labels[m]}
           </button>
         );
       })}

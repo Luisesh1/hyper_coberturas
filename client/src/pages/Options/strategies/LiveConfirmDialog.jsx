@@ -6,9 +6,20 @@ import { isCredentialsError } from './strategyView';
 import ui from './common/ui.module.css';
 import styles from './StrategiesTab.module.css';
 
-// Confirmación explícita antes de pasar una estrategia a modo Real. Sólo al
-// aceptar se envía PUT /:id/mode { mode: 'live', confirm: true }.
-export default function LiveConfirmDialog({ open, strategy, submitting, error, onConfirm, onCancel }) {
+const STRATEGY_POINTS = [
+  'Abre y cierra posiciones según sus reglas, evaluando cada 5 minutos.',
+  'Respeta los límites de riesgo globales y los de la estrategia; si se supera alguno, no envía la orden.',
+  'El modo sombra sigue corriendo en paralelo para comparar la ejecución.',
+  'Puedes volver a Sombra o Pausada en cualquier momento; las posiciones abiertas no se cierran solas.',
+];
+
+// Confirmación explícita antes de pasar una estrategia (o un bot de trading
+// automatizado) a modo Real. Sólo al aceptar se envía
+// PUT /:id/mode { mode: 'live', confirm: true }.
+export default function LiveConfirmDialog({
+  open, strategy, submitting, error, onConfirm, onCancel,
+  subject = 'La estrategia', points = STRATEGY_POINTS,
+}) {
   const [ack, setAck] = useState(false);
   useEffect(() => { if (open) setAck(false); }, [open]);
 
@@ -39,13 +50,10 @@ export default function LiveConfirmDialog({ open, strategy, submitting, error, o
     >
       <p className={`${ui.alert} ${ui.alertWarn}`}>
         <WarningIcon size={18} />
-        <span>La estrategia enviará <strong>órdenes reales</strong> a tu cuenta de Binance Opciones con tu dinero.</span>
+        <span>{subject} enviará <strong>órdenes reales</strong> a tu cuenta de Binance Opciones con tu dinero.</span>
       </p>
       <ul className={styles.confirmList}>
-        <li>Abre y cierra posiciones según sus reglas, evaluando cada 5 minutos.</li>
-        <li>Respeta los límites de riesgo globales y los de la estrategia; si se supera alguno, no envía la orden.</li>
-        <li>El modo sombra sigue corriendo en paralelo para comparar la ejecución.</li>
-        <li>Puedes volver a Sombra o Pausada en cualquier momento; las posiciones abiertas no se cierran solas.</li>
+        {points.map((p) => <li key={p}>{p}</li>)}
       </ul>
       <div className={styles.confirmAck}>
         <SwitchField

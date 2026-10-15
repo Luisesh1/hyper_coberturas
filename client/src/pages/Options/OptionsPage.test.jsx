@@ -29,6 +29,15 @@ vi.mock('./optionsAutomationApi', () => ({
     create: vi.fn(), get: vi.fn(),
   },
 }));
+// Pestaña Trading automatizado (rutas /options/auto-bots*).
+vi.mock('./autoTradingApi', () => ({
+  SIGNAL_FILTERS: ['all', 'traded', 'ignored'],
+  autoBotsApi: {
+    list: vi.fn().mockResolvedValue([]),
+    eligibleAlerts: vi.fn().mockResolvedValue([]),
+    create: vi.fn(), update: vi.fn(), signals: vi.fn().mockResolvedValue([]),
+  },
+}));
 vi.mock('../../context/TradingContext', () => ({
   useTradingContext: () => ({ addNotification: vi.fn() }),
 }));
@@ -89,6 +98,28 @@ describe('OptionsPage', () => {
     await user.click(within(nav).getByRole('link', { name: /Trading manual/ }));
     expect(screen.getByTestId('search').textContent).toBe('');
     expect(screen.getByRole('region', { name: 'Cadena de opciones' })).toBeTruthy();
+  });
+
+  it('la pestaña Trading automatizado va entre Estrategias y Backtesting y sincroniza ?tab=auto', async () => {
+    const user = userEvent.setup();
+    renderPage('/opciones?tab=strategies');
+    const nav = screen.getByRole('navigation', { name: 'Secciones de opciones' });
+    const labels = within(nav).getAllByRole('link').map((a) => a.textContent);
+    expect(labels).toEqual(['Trading manual', 'Estrategias', 'Trading automatizado', 'Backtesting']);
+
+    await user.click(within(nav).getByRole('link', { name: /Trading automatizado/ }));
+    expect(screen.getByTestId('search').textContent).toBe('?tab=auto');
+    expect(within(nav).getByRole('link', { name: /Trading automatizado/ }).getAttribute('aria-current')).toBe('page');
+    expect(await screen.findByRole('button', { name: 'Nuevo bot' })).toBeTruthy();
+    expect(await screen.findByText('Aún no tienes bots')).toBeTruthy();
+  });
+
+  it('?tab=auto en móvil marca «Auto» en el control segmentado', async () => {
+    setMobile(true);
+    renderPage('/opciones?tab=auto');
+    const nav = screen.getByRole('navigation', { name: 'Secciones de opciones' });
+    expect(within(nav).getByRole('link', { name: 'Auto' }).getAttribute('aria-current')).toBe('page');
+    expect(await screen.findByRole('button', { name: 'Nuevo bot' })).toBeTruthy();
   });
 
   it('una pestaña desconocida cae en Trading manual', () => {
