@@ -144,6 +144,23 @@ test('crash o timeout del POST nunca reenvía; busca por clientOrderId', async (
   assert.equal(f.orders[0].status, 'active');
 });
 
+test('no finaliza una pata queued durante la ventana ni crea una orden huérfana', async () => {
+  const f = fixture();
+  await f.engine.submit(strategy, {
+    type: 'open', legs: [leg, { ...leg, symbol: 'BTC-261030-62000-C' }],
+  }, context(f.clock.time));
+  // La API aceptó las dos patas. Probar el caso de una orden no enviada
+  // mediante un lote interrumpido con un nuevo fixture.
+  const g = fixture({ onSubmit: async () => { throw new Error('timeout'); } });
+  await g.engine.submit(strategy, {
+    type: 'open', legs: [leg, { ...leg, symbol: 'BTC-261030-62000-C' }],
+  }, context(g.clock.time));
+  assert.equal(g.orders[1].status, 'queued');
+  await g.engine.reconcilePending();
+  assert.equal(g.orders[1].status, 'queued');
+  assert.equal(g.calls.post.length, 1);
+});
+
 test('estado desconocido bloquea la estrategia y nunca inventa fills', async () => {
   const f = fixture();
   await f.submit();
@@ -160,7 +177,11 @@ test('un lote interrumpido no envía patas todavía en queued', async () => {
   const action = { type: 'open', legs: [leg, { ...leg, symbol: 'BTC-261030-62000-C' }] };
   await f.engine.submit(strategy, action, context(f.clock.time));
   assert.equal(f.orders[1].status, 'queued');
-  // Cuadra la segunda orden a cero: nunca llegó a Binance.
+  // La cola no se termina durante la ventana: otro proceso podría
+  // estar a punto de reclamarla para el POST.
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[1].status, 'queued');
+  f.clock.time += WINDOW_MS + 1;
   await f.engine.reconcilePending();
   assert.equal(f.orders[1].status, 'final');
   assert.equal(f.calls.post.length, 1);
