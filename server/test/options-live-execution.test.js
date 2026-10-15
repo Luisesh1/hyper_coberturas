@@ -65,6 +65,7 @@ function fixture({ now = 100_000, onSubmit } = {}) {
   };
   const state = { status: 'NEW', executedQty: '0', quantity: String(leg.quantity), type: 'LIMIT', timeInForce: 'GTC' };
   let allTrades = [];
+  let openOrders = [];
   const client = {
     async placeOrder(payload) {
       calls.post.push(payload);
@@ -83,6 +84,7 @@ function fixture({ now = 100_000, onSubmit } = {}) {
       return pages.slice(0, payload.limit);
     },
     async getPositions() { return []; },
+    async getOpenOrders() { return openOrders; },
     async cancelOrder(payload) {
       calls.cancel.push(payload);
       state.status = 'CANCELED';
@@ -95,7 +97,8 @@ function fixture({ now = 100_000, onSubmit } = {}) {
     engine.submit(strategy, { type: 'open', legs: [leg], detail: 'señal' }, context(clock.time, eventId));
   const setState = (status, executedQty) => Object.assign(state, { status, executedQty: String(executedQty) });
   const setTrades = (list) => { allTrades = list; };
-  return { engine, repo, orders, fills, clock, calls, client, submit, setState, setTrades };
+  const setOpenOrders = (list) => { openOrders = list; };
+  return { engine, repo, orders, fills, clock, calls, client, submit, setState, setTrades, setOpenOrders };
 }
 function trade(quantity, tradeId = '300') {
   return { orderId: '4611875134427365377', tradeId, symbol: leg.symbol,
@@ -199,6 +202,14 @@ test('clave de señal es estable, ventana exacta diez minutos', () => {
   assert.equal(WINDOW_MS, 600000);
   assert.equal(actionKey(strategy, { type: 'open' }, context()), 'alert:77:open');
   assert.throws(() => actionKey(strategy, { type: 'open' }, { now: 1, signal: {} }), /eventId/);
+});
+
+test('bloquea nuevas órdenes cuando hay órdenes manuales abiertas en Binance', async () => {
+  const f = fixture();
+  f.setOpenOrders([{ symbol: leg.symbol, orderId: '555', status: 'NEW' }]);
+  await assert.rejects(f.submit(), /pending orders/);
+  assert.equal(f.calls.post.length, 0);
+  assert.equal(f.orders.length, 0);
 });
 
 test('bloquea el envío cuando Binance y el ledger tienen exposiciones distintas', async () => {
