@@ -428,30 +428,13 @@ class OptionsStrategyRunner {
   }
 
   async executeLive(strategy, action, ctx) {
-    if (action.type === 'open') {
-      const check = await this.checkLiveLimits(strategy, action.legs, ctx);
-      if (!check.ok) {
-        await this.recordOutcome(strategy, 'live', { type: 'skip', reason: 'limit', detail: `Bloqueada por límite: ${check.reason}` }, ctx);
-        await this.maybeNotify(strategy, `Entrada bloqueada por límite: ${check.reason}`);
-        return null;
-      }
-    }
-
-    const client = await this.credentials.getClientForUser(strategy.userId);
-    const { quotes, missing } = await this.quoteLegs(action.legs);
-    if (missing) {
-      await this.recordOutcome(strategy, 'live', { type: 'error', reason: 'no_liquidity', detail: `Sin precio en el libro para ${missing}` }, ctx);
-      return null;
-    }
-
-    // Seguridad: una orden aceptada no equivale a un fill. No contabilizar
-    // posiciones reales sin conciliación verificable con Binance.
-    // Hasta implementar polling, cancelación e idempotencia persistente,
-    // bloquear el envío para evitar órdenes huérfanas y fills ficticios.
+    // Fail closed: ninguna llamada al exchange ni anotación de posiciones
+    // hasta que haya ledger persistente de órdenes y conciliación de fills.
+    // También bloquea cierres, para evitar órdenes huérfanas.
     await this.recordOutcome(strategy, 'live', {
       type: 'skip',
       reason: 'live_execution_pending_reconciliation',
-      detail: 'Ejecución real deshabilitada: requiere confirmación de fills, cancelación y conciliación',
+      detail: 'Trading real suspendido: faltan ledger de órdenes, fills confirmados e idempotencia',
     }, ctx);
     return null;
   }
@@ -504,6 +487,12 @@ class OptionsStrategyRunner {
 
       let premium = 0;
       const legs = [];
+      // Nunca liquidar posiciones reales usando un índice estimado:
+      // Binance debe confirmar la liquidación y sus comisiones.
+      if (mode === 'live') {
+        this.logger.warn('options_live_settlement_requires_reconciliation', { strategyId, count: positions.length });
+        continue;
+      }
       for (const p of positions) {
         const value = intrinsic({ S: indexPrice, K: p.meta.strike, type: p.meta.type });
         const fee = exerciseFee({ spot: indexPrice, quantity: p.quantity, intrinsicValue: value });
