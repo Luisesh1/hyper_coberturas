@@ -74,6 +74,7 @@ export default function PositionActionModal({
     cancelWalletWait,
     handleExecute,
     handlePrepare,
+    canResume,
   } = usePositionActionFlow({
     action,
     initialFormState,
@@ -169,7 +170,9 @@ export default function PositionActionModal({
       return (
         <>
           <button type="button" className={ui.btnSecondary} onClick={onClose}>Cerrar</button>
-          <button type="button" className={ui.btnPrimary} onClick={handlePrepare}>Reintentar</button>
+          <button type="button" className={ui.btnPrimary} onClick={handlePrepare}>
+            {canResume ? 'Continuar' : 'Reintentar'}
+          </button>
         </>
       );
     }
@@ -543,6 +546,12 @@ export default function PositionActionModal({
           <>
             <div className={ui.section}>
               <p className={ui.errorBox}>{error || 'Error desconocido'}</p>
+              {canResume && (
+                <p className={ui.notice}>
+                  El retiro de la posición ya se confirmó y los fondos están en la wallet.
+                  Reintentar continúa desde el paso siguiente con una cotización nueva.
+                </p>
+              )}
             </div>
           </>
         )}

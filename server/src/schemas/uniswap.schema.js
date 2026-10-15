@@ -147,10 +147,18 @@ const reinvestFeesPrepareSchema = positionActionBaseSchema.extend({
   positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
 });
 
+// Lo que libero el retiro de un intento anterior que se corto a la mitad: el
+// prepare retoma desde el swap/mint en vez de volver a retirar.
+const resumeFundingSchema = z.object({
+  amount0Raw: z.string().regex(/^\d+$/),
+  amount1Raw: z.string().regex(/^\d+$/),
+}).optional();
+
 const modifyRangePrepareSchema = positionActionBaseSchema.extend({
   positionIdentifier: z.union([z.string().min(1), z.number().int().positive()]),
   rangeLowerPrice: z.number().positive(),
   rangeUpperPrice: z.number().positive(),
+  resumeFunding: resumeFundingSchema,
 });
 
 const rebalancePrepareSchema = positionActionBaseSchema.extend({
@@ -158,6 +166,7 @@ const rebalancePrepareSchema = positionActionBaseSchema.extend({
   targetWeightToken0Pct: z.number().gt(0).lt(100),
   rangeLowerPrice: z.number().positive().optional(),
   rangeUpperPrice: z.number().positive().optional(),
+  resumeFunding: resumeFundingSchema,
 });
 
 const createPositionPrepareSchema = positionActionBaseSchema.extend({

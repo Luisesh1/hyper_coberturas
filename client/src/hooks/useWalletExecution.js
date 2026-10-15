@@ -109,6 +109,9 @@ export function useWalletExecution() {
     resumeFromIndex = null,
     initialHashes = null,
     expectedWallet = null,
+    // Txs ya minadas por un intento anterior del mismo cambio (p. ej. el
+    // retiro de un ajuste de rango retomado): el finalize las necesita todas.
+    priorTxHashes = [],
   }) => {
     reset();
 
@@ -310,7 +313,7 @@ export function useWalletExecution() {
       } else {
         submitResponse = await uniswapApi.finalizePositionAction(action, {
           ...finalizePayload,
-          txHashes: hashes,
+          txHashes: [...(priorTxHashes || []), ...hashes],
         });
       }
     } catch (err) {

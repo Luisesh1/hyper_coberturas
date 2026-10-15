@@ -851,22 +851,126 @@ async function prepareReinvestFeesV4(payload) {
   };
 }
 
+/**
+ * Reanudacion de un redespliegue (modify-range / rebalance) que se corto a la
+ * mitad: el DECREASE de un intento anterior ya se mino, la posicion quedo
+ * vacia y su capital esta en la wallet. Volver a preparar el plan entero
+ * revertiria (no hay liquidez que retirar), asi que el cliente manda lo que
+ * libero ese retiro y el plan arranca en el swap/mint con una cotizacion
+ * fresca. Solo se redespliega ese capital, acotado al saldo real: el resto de
+ * la wallet no se toca.
+ */
+function parseResumeFunding(resumeFunding) {
+  const isRaw = (value) => /^\d+$/.test(String(value ?? ''));
+  if (!isRaw(resumeFunding?.amount0Raw) || !isRaw(resumeFunding?.amount1Raw)) {
+    throw new ValidationError('resumeFunding debe traer amount0Raw y amount1Raw como enteros');
+  }
+  return { amount0: BigInt(resumeFunding.amount0Raw), amount1: BigInt(resumeFunding.amount1Raw) };
+}
+
+async function capToWalletBalance(ctx, requested) {
+  const sides = [[ctx.token0, 'amount0'], [ctx.token1, 'amount1']];
+  const erc20 = sides.filter(([token]) => !isZeroAddress(token.address));
+  const balances = erc20.length
+    ? await getBalancesAndAllowancesBatch({
+      provider: ctx.provider,
+      networkConfig: ctx.networkConfig,
+      tokens: erc20.map(([token]) => token),
+      walletAddress: ctx.normalizedWallet,
+    })
+    : [];
+  const available = {};
+  erc20.forEach(([, key], i) => { available[key] = BigInt(balances[i]?.balance ?? 0n); });
+  for (const [token, key] of sides) {
+    if (!isZeroAddress(token.address)) continue;
+    // El lado nativo tambien paga el gas del propio plan.
+    const native = BigInt(await ctx.provider.getBalance(ctx.normalizedWallet));
+    const reserve = getGasReserveRaw(ctx.networkConfig.id);
+    available[key] = native > reserve ? native - reserve : 0n;
+  }
+  const min = (a, b) => (a < b ? a : b);
+  return {
+    amount0: min(requested.amount0, available.amount0),
+    amount1: min(requested.amount1, available.amount1),
+  };
+}
+
+/**
+ * Capital del redespliegue: lo que libera el DECREASE que abre el plan o, si
+ * ese DECREASE ya se mino en un intento anterior, lo que dejo en la wallet.
+ */
+async function resolveRedeployFunding(ctx, payload, emptyMessage) {
+  const positionEmptied = BigInt(ctx.positionLiquidity || 0n) === 0n;
+
+  if (!positionEmptied || !payload.resumeFunding) {
+    const amount0Current = toBigIntAmount(ctx.currentAmounts.amount0 || 0, ctx.token0.decimals, 'amount0Current');
+    const amount1Current = toBigIntAmount(ctx.currentAmounts.amount1 || 0, ctx.token1.decimals, 'amount1Current');
+    const amount0Available = amount0Current + BigInt(ctx.unclaimedFeesRaw.fees0 || 0n);
+    const amount1Available = amount1Current + BigInt(ctx.unclaimedFeesRaw.fees1 || 0n);
+    // El capital del rango nuevo sale integramente del DECREASE que va primero
+    // en el plan. Si la posicion no tiene nada que liberar el problema no es
+    // el saldo de la wallet, y decirlo asi evita el diagnostico equivocado.
+    if (amount0Available === 0n && amount1Available === 0n) {
+      throw new ValidationError(emptyMessage);
+    }
+    return { amount0Available, amount1Available, resumed: false };
+  }
+
+  const capped = await capToWalletBalance(ctx, parseResumeFunding(payload.resumeFunding));
+  if (capped.amount0 === 0n && capped.amount1 === 0n) {
+    throw new ValidationError('La wallet ya no tiene los fondos que libero el retiro anterior: no hay nada que redesplegar.');
+  }
+  return { amount0Available: capped.amount0, amount1Available: capped.amount1, resumed: true };
+}
+
+// Al retomar, el capital ya esta en la wallet: el unico credito pendiente es
+// lo que el swap del propio plan trae de ese token.
+function resumedSwapCredit(token, swap) {
+  if (!swap?.amountIn || swap.amountIn <= 0n) return 0n;
+  return String(swap.tokenOut.address).toLowerCase() === String(token.address).toLowerCase()
+    ? swap.amountOutMinimum
+    : 0n;
+}
+
+function buildDecreaseAllTxV4(ctx) {
+  return buildV4ModifyTx(ctx, {
+    actionCodes: [
+      V4_ACTIONS.DECREASE_LIQUIDITY,
+      V4_ACTIONS.CLOSE_CURRENCY,
+      V4_ACTIONS.CLOSE_CURRENCY,
+    ],
+    params: [
+      encodeV4ModifyLiquidityParams({
+        tokenId: ctx.tokenId,
+        liquidity: ctx.positionLiquidity,
+        amount0Limit: 0n,
+        amount1Limit: 0n,
+      }),
+      encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
+      encodeV4CloseCurrencyParams(ctx.poolKey.currency1),
+    ],
+    label: 'Withdraw current v4 position',
+    kind: 'decrease_liquidity_v4',
+    meta: {
+      v4Actions: ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
+      poolId: ctx.poolId,
+      tickSpacing: ctx.tickSpacing,
+      hooks: ctx.poolKey.hooks,
+    },
+  });
+}
+
 async function prepareModifyRangeV4(payload) {
   const ctx = await loadV4PositionContext(payload);
   // Tolerancia aplicada al tope de gasto del mint (ver applyMintSlippageCeiling).
   const mintSlippageBps = payload.maxSlippageBps ?? payload.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const { lowerPrice, upperPrice } = validatePriceRange(payload.rangeLowerPrice, payload.rangeUpperPrice);
 
-  const amount0Current = toBigIntAmount(ctx.currentAmounts.amount0 || 0, ctx.token0.decimals, 'amount0Current');
-  const amount1Current = toBigIntAmount(ctx.currentAmounts.amount1 || 0, ctx.token1.decimals, 'amount1Current');
-  const amount0Available = amount0Current + BigInt(ctx.unclaimedFeesRaw.fees0 || 0n);
-  const amount1Available = amount1Current + BigInt(ctx.unclaimedFeesRaw.fees1 || 0n);
-  // El capital del rango nuevo sale integramente del DECREASE_LIQUIDITY que va
-  // primero en el plan. Si la posicion no tiene nada que liberar el problema no
-  // es el saldo de la wallet, y decirlo asi evita el diagnostico equivocado.
-  if (amount0Available === 0n && amount1Available === 0n) {
-    throw new ValidationError('La posicion no tiene liquidez ni fees que redesplegar en un rango nuevo.');
-  }
+  const { amount0Available, amount1Available, resumed } = await resolveRedeployFunding(
+    ctx,
+    payload,
+    'La posicion no tiene liquidez ni fees que redesplegar en un rango nuevo.'
+  );
   const tickLower = priceToNearestTick(lowerPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'down');
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
   validateTickRange(tickLower, tickUpper);
@@ -884,33 +988,8 @@ async function prepareModifyRangeV4(payload) {
   // corregir: recalcularlos aqui evita mintear contra un saldo que no llega.
   const redeployAmount0 = swap?.postAmount0 ?? redeployPlan.amount0Desired;
   const redeployAmount1 = swap?.postAmount1 ?? redeployPlan.amount1Desired;
-  const txPlan = [
-    buildV4ModifyTx(ctx, {
-      actionCodes: [
-        V4_ACTIONS.DECREASE_LIQUIDITY,
-        V4_ACTIONS.CLOSE_CURRENCY,
-        V4_ACTIONS.CLOSE_CURRENCY,
-      ],
-      params: [
-        encodeV4ModifyLiquidityParams({
-          tokenId: ctx.tokenId,
-          liquidity: ctx.positionLiquidity,
-          amount0Limit: 0n,
-          amount1Limit: 0n,
-        }),
-        encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
-        encodeV4CloseCurrencyParams(ctx.poolKey.currency1),
-      ],
-      label: 'Withdraw current v4 position',
-      kind: 'decrease_liquidity_v4',
-      meta: {
-        v4Actions: ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
-        poolId: ctx.poolId,
-        tickSpacing: ctx.tickSpacing,
-        hooks: ctx.poolKey.hooks,
-      },
-    }),
-  ];
+  // Un intento anterior que ya mino el retiro arranca directamente en el swap.
+  const txPlan = resumed ? [] : [buildDecreaseAllTxV4(ctx)];
   const requiresApproval = [];
 
   let amount0Desired = redeployAmount0;
@@ -926,9 +1005,10 @@ async function prepareModifyRangeV4(payload) {
       requiresApproval,
       txPlan,
       // El swap gasta lo que acaba de devolver el decrease, no saldo previo.
-      pendingCreditRaw: swap.direction === 'token0_to_token1'
+      // Al retomar, ese capital ya esta en la wallet.
+      pendingCreditRaw: resumed ? 0n : (swap.direction === 'token0_to_token1'
         ? amount0Available
-        : amount1Available,
+        : amount1Available),
     });
     txPlan.push(buildV4RouterTx(ctx, {
       value: isZeroAddress(swap.tokenIn.address) ? swap.amountIn : 0n,
@@ -971,7 +1051,7 @@ async function prepareModifyRangeV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
-    pendingCreditRaw: amount0Desired,
+    pendingCreditRaw: resumed ? resumedSwapCredit(ctx.token0, swap) : amount0Desired,
     balanceRequirementRaw: amount0Desired,
   });
   await appendMintApprovalIfErc20({
@@ -983,7 +1063,7 @@ async function prepareModifyRangeV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
-    pendingCreditRaw: amount1Desired,
+    pendingCreditRaw: resumed ? resumedSwapCredit(ctx.token1, swap) : amount1Desired,
     balanceRequirementRaw: amount1Desired,
   });
 
@@ -1060,9 +1140,16 @@ async function prepareModifyRangeV4(payload) {
       hooks: ctx.poolKey.hooks,
       // El redespliegue agrega SWEEP cuando el pool tiene un lado nativo: el
       // resumen tiene que reflejar lo que realmente se firma.
-      v4ActionPlan: swap
-        ? ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL', ...redeploy.v4Actions]
-        : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', ...redeploy.v4Actions],
+      v4ActionPlan: [
+        ...(resumed ? [] : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY']),
+        ...(swap ? ['SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL'] : []),
+        ...redeploy.v4Actions,
+      ],
+      // Lo que libera el retiro y lo que queda tras el swap: con esto el
+      // cliente puede retomar el plan si se corta despues del retiro.
+      resumed,
+      redeployFunding: { amount0Raw: amount0Available.toString(), amount1Raw: amount1Available.toString() },
+      postSwapFunding: { amount0Raw: amount0Desired.toString(), amount1Raw: amount1Desired.toString() },
     },
     requiresApproval,
     txPlan: txPlan.filter(Boolean),
@@ -1519,13 +1606,11 @@ async function prepareRebalanceV4(payload) {
   const upperPrice = Number(payload.rangeUpperPrice || uniswapService.tickToPrice(ctx.tickUpper, ctx.token0.decimals, ctx.token1.decimals));
   const tickLower = priceToNearestTick(lowerPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'down');
   const tickUpper = priceToNearestTick(upperPrice, ctx.token0.decimals, ctx.token1.decimals, ctx.tickSpacing, 'up');
-  const amount0Available = toBigIntAmount(ctx.currentAmounts.amount0 || 0, ctx.token0.decimals, 'amount0Current') + BigInt(ctx.unclaimedFeesRaw.fees0 || 0n);
-  const amount1Available = toBigIntAmount(ctx.currentAmounts.amount1 || 0, ctx.token1.decimals, 'amount1Current') + BigInt(ctx.unclaimedFeesRaw.fees1 || 0n);
-  // Igual que en modify-range: todo el capital llega del decrease que abre el
-  // plan, asi que sin nada que liberar el fallo no es de saldo de wallet.
-  if (amount0Available === 0n && amount1Available === 0n) {
-    throw new ValidationError('La posicion no tiene liquidez ni fees que rebalancear.');
-  }
+  const { amount0Available, amount1Available, resumed } = await resolveRedeployFunding(
+    ctx,
+    payload,
+    'La posicion no tiene liquidez ni fees que rebalancear.'
+  );
   const swap = await withQuotedRebalanceSwapV4(ctx, buildRebalanceSwap(ctx, {
     amount0Available,
     amount1Available,
@@ -1533,33 +1618,8 @@ async function prepareRebalanceV4(payload) {
     slippageBps: payload.slippageBps,
   }), payload.slippageBps);
 
-  const txPlan = [
-    buildV4ModifyTx(ctx, {
-      actionCodes: [
-        V4_ACTIONS.DECREASE_LIQUIDITY,
-        V4_ACTIONS.CLOSE_CURRENCY,
-        V4_ACTIONS.CLOSE_CURRENCY,
-      ],
-      params: [
-        encodeV4ModifyLiquidityParams({
-          tokenId: ctx.tokenId,
-          liquidity: ctx.positionLiquidity,
-          amount0Limit: 0n,
-          amount1Limit: 0n,
-        }),
-        encodeV4CloseCurrencyParams(ctx.poolKey.currency0),
-        encodeV4CloseCurrencyParams(ctx.poolKey.currency1),
-      ],
-      label: 'Withdraw current v4 position',
-      kind: 'decrease_liquidity_v4',
-      meta: {
-        v4Actions: ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY'],
-        poolId: ctx.poolId,
-        tickSpacing: ctx.tickSpacing,
-        hooks: ctx.poolKey.hooks,
-      },
-    }),
-  ];
+  // Un intento anterior que ya mino el retiro arranca directamente en el swap.
+  const txPlan = resumed ? [] : [buildDecreaseAllTxV4(ctx)];
   const requiresApproval = [];
 
   let finalAmount0 = amount0Available;
@@ -1575,9 +1635,10 @@ async function prepareRebalanceV4(payload) {
       requiresApproval,
       txPlan,
       // El swap gasta lo que acaba de devolver el decrease, no saldo previo.
-      pendingCreditRaw: swap.direction === 'token0_to_token1'
+      // Al retomar, ese capital ya esta en la wallet.
+      pendingCreditRaw: resumed ? 0n : (swap.direction === 'token0_to_token1'
         ? amount0Available
-        : amount1Available,
+        : amount1Available),
     });
     txPlan.push(buildV4RouterTx(ctx, {
       value: isZeroAddress(swap.tokenIn.address) ? swap.amountIn : 0n,
@@ -1619,7 +1680,7 @@ async function prepareRebalanceV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
-    pendingCreditRaw: finalAmount0,
+    pendingCreditRaw: resumed ? resumedSwapCredit(ctx.token0, swap) : finalAmount0,
   });
   await appendMintApprovalIfErc20({
     provider: ctx.provider,
@@ -1630,7 +1691,7 @@ async function prepareRebalanceV4(payload) {
     chainId: ctx.networkConfig.chainId,
     requiresApproval,
     txPlan,
-    pendingCreditRaw: finalAmount1,
+    pendingCreditRaw: resumed ? resumedSwapCredit(ctx.token1, swap) : finalAmount1,
   });
 
   const liquidityDelta = estimateLiquidityForAmounts({
@@ -1693,9 +1754,14 @@ async function prepareRebalanceV4(payload) {
       hooks: ctx.poolKey.hooks,
       // El redespliegue agrega SWEEP cuando el pool tiene un lado nativo: el
       // resumen tiene que reflejar lo que realmente se firma.
-      v4ActionPlan: swap
-        ? ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', 'SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL', ...redeploy.v4Actions]
-        : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY', ...redeploy.v4Actions],
+      v4ActionPlan: [
+        ...(resumed ? [] : ['DECREASE_LIQUIDITY', 'CLOSE_CURRENCY', 'CLOSE_CURRENCY']),
+        ...(swap ? ['SWAP_EXACT_IN_SINGLE', 'SETTLE_ALL', 'TAKE_ALL'] : []),
+        ...redeploy.v4Actions,
+      ],
+      resumed,
+      redeployFunding: { amount0Raw: amount0Available.toString(), amount1Raw: amount1Available.toString() },
+      postSwapFunding: { amount0Raw: finalAmount0.toString(), amount1Raw: finalAmount1.toString() },
     },
     requiresApproval,
     txPlan: txPlan.filter(Boolean),

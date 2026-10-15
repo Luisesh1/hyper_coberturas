@@ -232,4 +232,36 @@ describe('useWalletExecution', () => {
     });
     expect(walletMock.submitTransactionDetailed).toHaveBeenCalledTimes(1);
   });
+  it('antepone al finalize los hashes de un intento anterior que se retoma', async () => {
+    const { result } = renderHook(() => useWalletExecution());
+    const priorHash = '0x1111111111111111111111111111111111111111111111111111111111111111';
+
+    await act(async () => {
+      await result.current.runPlan({
+        action: 'modify-range',
+        chainId: 42161,
+        txPlan: [{
+          clientTxId: 'tx-1',
+          label: 'Mint rebalanced v4 position',
+          to: '0x00000000000000000000000000000000000000aa',
+          data: '0x1234',
+          value: '0x0',
+        }],
+        finalizePayload: {
+          network: 'arbitrum',
+          version: 'v4',
+          walletAddress: walletMock.address,
+          positionIdentifier: '123',
+        },
+        priorTxHashes: [priorHash],
+      });
+    });
+
+    await waitFor(() => {
+      expect(uniswapApi.finalizePositionAction).toHaveBeenCalled();
+    });
+    expect(uniswapApi.finalizePositionAction).toHaveBeenCalledWith('modify-range', expect.objectContaining({
+      txHashes: [priorHash, '0xaaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999'],
+    }));
+  });
 });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { uniswapApi } from '../../../services/api';
 import { useWalletExecution, WALLET_EXECUTION_STATE } from '../../../hooks/useWalletExecution';
+import { buildRedeployResume } from './redeployResume';
 
 export const POSITION_ACTION_STEP = {
   FORM: 'form',
@@ -29,6 +30,9 @@ export function usePositionActionFlow({
   const [finalResult, setFinalResult] = useState(null);
   const execution = useWalletExecution();
   const [error, setError] = useState(null);
+  // Si el plan se cortó después de minar el retiro, "Reintentar" retoma desde
+  // el swap/mint con el capital que quedó en la wallet (ver redeployResume).
+  const [resume, setResume] = useState(null);
 
   // Mantenemos `execution.reset` y `execution.runPlan` en refs estables
   // para poder invocarlos desde effects/callbacks SIN agregar `execution`
@@ -51,6 +55,7 @@ export function usePositionActionFlow({
     setFinalResult(null);
     executionResetRef.current?.();
     setError(null);
+    setResume(null);
     // Solo se re-inicializa cuando cambian las inputs externas del modal
     // (acción / pool / autoPrepare / prefill). NO incluir `execution` aquí.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -78,12 +83,24 @@ export function usePositionActionFlow({
         setStep(POSITION_ACTION_STEP.DONE);
         break;
       case WALLET_EXECUTION_STATE.NEEDS_RECONCILE:
+        setStep(POSITION_ACTION_STEP.ERROR);
+        break;
       case WALLET_EXECUTION_STATE.FAILED:
+        setResume((previous) => buildRedeployResume({
+          action,
+          prepareData,
+          completed: execution.progress.completed,
+          txHashes: execution.txHashes,
+          previous,
+        }));
         setStep(POSITION_ACTION_STEP.ERROR);
         break;
       default:
         break;
     }
+    // Solo reacciona al cambio de estado: progress y hashes se leen tal como
+    // quedaron al fallar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [execution.state]);
 
   const handlePrepare = useCallback(async () => {
@@ -91,6 +108,7 @@ export function usePositionActionFlow({
     setError(null);
     try {
       const payload = buildPayload(action, formState);
+      if (resume?.resumeFunding) payload.resumeFunding = resume.resumeFunding;
       const data = await uniswapApi.preparePositionAction(action, payload);
       setPrepareData(data);
       // Reset del execution via ref para no agregar `execution` a las
@@ -103,7 +121,7 @@ export function usePositionActionFlow({
       setStep(POSITION_ACTION_STEP.ERROR);
       throw err;
     }
-  }, [action, buildPayload, formState]);
+  }, [action, buildPayload, formState, resume]);
 
   useEffect(() => {
     if (!autoPrepare) return undefined;
@@ -135,6 +153,7 @@ export function usePositionActionFlow({
       // El backend arma el plan contra la wallet dueña de la posición: si la
       // conectada es otra, la tx revierte sin razón legible.
       expectedWallet: prepareData.walletAddress || null,
+      priorTxHashes: prepareData.quoteSummary?.resumed ? (resume?.priorTxHashes || []) : [],
     });
     if (result) {
       setFinalResult(result);
@@ -144,7 +163,7 @@ export function usePositionActionFlow({
       return result;
     }
     return null;
-  }, [action, onFinalized, prepareData]);
+  }, [action, onFinalized, prepareData, resume]);
 
   return {
     error,
@@ -157,6 +176,7 @@ export function usePositionActionFlow({
     setStep,
     step,
     txHashes: execution.txHashes,
+    canResume: !!resume,
     awaitingWallet: execution.state === WALLET_EXECUTION_STATE.AWAITING_WALLET,
     cancelWalletWait: execution.cancelWalletWait,
     handleExecute,
