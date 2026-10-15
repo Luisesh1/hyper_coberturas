@@ -62,8 +62,17 @@ class OptionsLiveExecution {
     if (!['open', 'close'].includes(action.type)) throw new Error('Unsupported live action');
     const client = await this.credentials.getClientForUser(strategy.userId);
     if (typeof client.getPositions !== 'function' ||
+        typeof client.getOpenOrders !== 'function' ||
         typeof this.repo.assertExchangeExposure !== 'function') {
-      throw new Error('Binance position reconciliation is unavailable');
+      throw new Error('Binance exposure and open-order checks are unavailable');
+    }
+    // Una orden manual que todavía no ha llenado no aparece en posiciones:
+    // puede ejecutarse después de nuestro preflight. Bloquear hasta que
+    // la cuenta no tenga órdenes abiertas no gestionadas por este lote.
+    const openOrders = await client.getOpenOrders();
+    if (!Array.isArray(openOrders)) throw new Error('Invalid Binance open-order list');
+    if (openOrders.length) {
+      throw new Error('Binance account has pending orders: manual reconciliation required');
     }
     // No enviar órdenes si existen posiciones ajenas o fills que todavía
     // no figuran en el ledger local.
