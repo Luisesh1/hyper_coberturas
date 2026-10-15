@@ -159,6 +159,29 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.map(map);
   }
 
+  /** Alertas operativas: reclamar envío a Telegram a lo sumo 1/15 minutos.
+   * Es atómico entre réplicas, persiste tras reinicios, no contiene secretos.
+   */
+  async function claimAttentionNotification(id, intervalMs = 15 * 60_000) {
+    const time = now();
+    const { rows } = await db.query(
+      "UPDATE options_live_orders SET attention_notified_at=$2 WHERE id=$1 " +
+      "AND status='attention' AND attention_notified_at <= $3 " +
+      "RETURNING id,user_id,strategy_id,symbol,client_order_id,last_error,deadline_at",
+      [id, time, time - intervalMs]
+    );
+    return rows[0] || null;
+  }
+
+  async function listAttentionOrders(limit = 100) {
+    const { rows } = await db.query(
+      "SELECT id FROM options_live_orders WHERE status='attention' " +
+      "ORDER BY updated_at,id LIMIT $1",
+      [limit]
+    );
+    return rows.map((row) => Number(row.id));
+  }
+
   async function countSubmittedSince(strategyId, since) {
     const { rows } = await db.query(
       "SELECT COUNT(*)::int AS n FROM options_live_orders WHERE strategy_id=$1 AND created_at >= $2 AND status <> 'queued'",
@@ -352,6 +375,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
+    claimAttentionNotification, listAttentionOrders,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
     applyTrade, finishOrder };
 }
