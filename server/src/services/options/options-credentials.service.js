@@ -110,6 +110,20 @@ function check(id, label, status, detail) {
   return { id, label, status, detail };
 }
 
+// -2018 (BALANCE_NOT_SUFFICIENT): en `marginAccount` significa que la cuenta
+// de Opciones no está abierta o su cartera está vacía, no un fallo de la key.
+const BALANCE_NOT_SUFFICIENT = -2018;
+
+function describeAccountRejection(err) {
+  const insufficient = err.details?.binanceCode === BALANCE_NOT_SUFFICIENT
+    || /balance is insufficient/i.test(err.message || '');
+  if (insufficient) {
+    return 'La cuenta de Opciones no está activada o no tiene saldo. Actívala en Binance (Derivados → Opciones) '
+      + 'y transfiere USDT a la cartera de Opciones de esta cuenta.';
+  }
+  return err.message;
+}
+
 /**
  * Verifica las credenciales contra Binance. Nunca lanza por un fallo de
  * Binance: cada comprobación devuelve ok | warn | fail con su detalle.
@@ -141,6 +155,11 @@ async function test(userId) {
   } else if (accountError.code === 'BINANCE_OPTIONS_AUTH_ERROR') {
     checks.push(check('signature', 'Firma de la API', 'fail', accountError.message));
     checks.push(check('options_account', 'Cuenta de opciones', 'fail', 'No se pudo consultar la cuenta: credenciales rechazadas.'));
+  } else if (accountError.code === 'BINANCE_OPTIONS_REJECTED') {
+    // Binance valida la firma antes que la lógica de negocio: si rechaza la
+    // petición por otro motivo, la firma ya es correcta.
+    checks.push(check('signature', 'Firma de la API', 'ok', 'Binance aceptó la firma HMAC.'));
+    checks.push(check('options_account', 'Cuenta de opciones', 'fail', describeAccountRejection(accountError)));
   } else {
     checks.push(check('signature', 'Firma de la API', 'warn', 'No se pudo confirmar la firma: Binance respondió con otro error.'));
     checks.push(check('options_account', 'Cuenta de opciones', 'fail', accountError.message));

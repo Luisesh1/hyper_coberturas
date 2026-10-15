@@ -128,3 +128,46 @@ test('test() marca fail con credenciales rechazadas y warn sin apiRestrictions',
     credentials.__setClientFactoryForTests(null);
   }
 }));
+
+test('test() da la firma por buena si Binance rechaza la petición por negocio', () => withMemoryRepo(async () => {
+  await credentials.set(1, { apiKey: API_KEY, apiSecret: API_SECRET });
+  const rejected = Object.assign(new Error('Binance Opciones rechazó la petición: Some other reason'), {
+    code: 'BINANCE_OPTIONS_REJECTED',
+    details: { endpoint: '/eapi/v1/marginAccount', httpStatus: 400, binanceCode: -1100 },
+  });
+  credentials.__setClientFactoryForTests(() => ({
+    getAccount: async () => { throw rejected; },
+    getApiRestrictions: async () => ({ ipRestrict: true, enableVanillaOptions: true, enableWithdrawals: false }),
+  }));
+  try {
+    const { checks } = await credentials.test(1);
+    const byId = Object.fromEntries(checks.map((c) => [c.id, c]));
+    assert.equal(byId.signature.status, 'ok');
+    assert.equal(byId.options_account.status, 'fail');
+    assert.equal(byId.options_account.detail, rejected.message);
+  } finally {
+    credentials.__setClientFactoryForTests(null);
+  }
+}));
+
+test('test() explica que la cuenta de opciones no está activada o sin saldo (-2018)', () => withMemoryRepo(async () => {
+  await credentials.set(1, { apiKey: API_KEY, apiSecret: API_SECRET });
+  const noBalance = Object.assign(new Error('Binance Opciones rechazó la petición: Balance is insufficient.'), {
+    code: 'BINANCE_OPTIONS_REJECTED',
+    details: { endpoint: '/eapi/v1/marginAccount', httpStatus: 400, binanceCode: -2018 },
+  });
+  credentials.__setClientFactoryForTests(() => ({
+    getAccount: async () => { throw noBalance; },
+    getApiRestrictions: async () => ({ ipRestrict: true, enableVanillaOptions: true, enableWithdrawals: false }),
+  }));
+  try {
+    const { checks } = await credentials.test(1);
+    const byId = Object.fromEntries(checks.map((c) => [c.id, c]));
+    assert.equal(byId.signature.status, 'ok');
+    assert.equal(byId.options_account.status, 'fail');
+    assert.match(byId.options_account.detail, /no está activada o no tiene saldo/);
+    assert.match(byId.options_account.detail, /cartera de Opciones/);
+  } finally {
+    credentials.__setClientFactoryForTests(null);
+  }
+}));
