@@ -7,6 +7,7 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
   const strategies = [];
   const positions = [];
   const events = [];
+  const signals = [];
   let seq = 1;
   const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -14,6 +15,7 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     strategies,
     positions,
     events,
+    signals,
 
     async createStrategy({ userId, name, template, underlying, params, limits, mode = 'paused' }) {
       const s = { id: seq++, userId, name, template, underlying, params: params || {}, limits: limits || {}, mode, state: {}, createdAt: now(), updatedAt: now() };
@@ -33,6 +35,11 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     },
     async listActiveStrategies() {
       return strategies.filter((s) => s.mode === 'shadow' || s.mode === 'live').map(clone);
+    },
+    async listActiveAlertBots(userId) {
+      return strategies
+        .filter((s) => s.userId === userId && s.template === 'alert_signal' && (s.mode === 'shadow' || s.mode === 'live'))
+        .map(clone);
     },
     async countLiveStrategies(userId, excludeId = null) {
       return strategies.filter((s) => s.userId === userId && s.mode === 'live' && s.id !== excludeId).length;
@@ -131,6 +138,36 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       for (const e of events) if (e.userId === userId) map.set(e.strategyId, e);
       return [...map.values()].map(clone);
     },
+    async countEventsSince(strategyId, mode, action, since) {
+      return events.filter((e) => e.strategyId === strategyId && e.mode === mode && e.action === action && e.createdAt >= since).length;
+    },
+
+    async claimAutoSignal(row) {
+      if (row.alertEventId != null && signals.some((x) => x.strategyId === row.strategyId && x.alertEventId === row.alertEventId)) return null;
+      const s = { id: seq++, alertId: null, alertEventId: null, alertName: null, direction: null, asset: null, score: null, detail: null, createdAt: now(), ...row };
+      signals.push(s);
+      return clone(s);
+    },
+    async finishAutoSignal(id, { decision, detail }) {
+      const s = signals.find((x) => x.id === id);
+      if (!s) return null;
+      Object.assign(s, { decision, detail: detail ?? null });
+      return clone(s);
+    },
+    async listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {
+      const ok = (d) => (filter === 'traded' ? ['opened', 'closed', 'reversed'].includes(d) : filter === 'ignored' ? d === 'ignored' : true);
+      return signals
+        .filter((x) => x.strategyId === strategyId && ok(x.decision))
+        .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+        .slice(0, limit)
+        .map(clone);
+    },
+    async lastAutoSignalsByUser(userId) {
+      const map = new Map();
+      for (const x of [...signals].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)) if (x.userId === userId) map.set(x.strategyId, x);
+      return [...map.values()].map(clone);
+    },
+
     async countOrdersSince(strategyId, mode, since) {
       return events
         .filter((e) => e.strategyId === strategyId && e.mode === mode && ['open', 'close'].includes(e.action) && e.createdAt >= since && Array.isArray(e.legs))

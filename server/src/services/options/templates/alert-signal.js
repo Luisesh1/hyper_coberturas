@@ -1,0 +1,226 @@
+/**
+ * Bot por alertas: abre una pata cuando llega una señal alcista o bajista y
+ * la gestiona con toma de ganancia, stop y salida por tiempo.
+ *
+ * - `buy_with` (comprar a favor): alcista → compra call, bajista → compra put.
+ * - `sell_against` (vender en contra): alcista → vende put, bajista → vende call.
+ *
+ * `evaluate(ctx)` es pura. Sin `ctx.signal` solo evalúa salidas (tick del
+ * runner). Con señal: (1) posición contraria según `onOpposite`, (2) límites
+ * de posiciones abiertas y operaciones del día, (3) apertura por delta en el
+ * vencimiento más cercano a `expiryDays` (la cadena la elige el runner).
+ */
+
+const { ValidationError } = require('../../../errors/app-error');
+const {
+  FIELDS, hold, skip, pickLegByDelta, legFromChain, closeLegs, closeValue, hoursToExpiry,
+  validateParams: validateNumericParams,
+} = require('./helpers');
+
+const id = 'alert_signal';
+
+const STRUCTURES = ['buy_with', 'sell_against'];
+const ON_OPPOSITE = ['reverse', 'close', 'ignore'];
+const DIRECTIONS = ['bullish', 'bearish'];
+const DIRECTION_LABEL = { bullish: 'alcista', bearish: 'bajista', neutral: 'neutral' };
+
+const STRUCTURE_DEFAULTS = {
+  buy_with: { targetDelta: 0.35, takeProfitPct: 80, stopLossPct: 50 },
+  sell_against: { targetDelta: 0.25, takeProfitPct: 50, stopLossPct: 200 },
+};
+
+const defaultParams = {
+  alertIds: [],
+  structure: 'buy_with',
+  ...STRUCTURE_DEFAULTS.buy_with,
+  expiryDays: 7,
+  quantity: 0.01,
+  onOpposite: 'reverse',
+  exitHoursBeforeExpiry: 12,
+  maxOpenPositions: 1,
+  maxTradesPerDay: 4,
+  maxPremiumUsdt: null,
+};
+
+const NUMERIC_FIELDS = [
+  { ...FIELDS.targetDelta, max: 0.95 },
+  FIELDS.expiryDays,
+  { ...FIELDS.quantity, label: 'Cantidad' },
+  { ...FIELDS.takeProfitPct, max: 1000 },
+  { key: 'stopLossPct', label: 'Stop por pérdida', type: 'number', min: 1, max: 1000, step: 5, unit: '% de la prima' },
+  FIELDS.exitHoursBeforeExpiry,
+  { key: 'maxOpenPositions', label: 'Máximo de posiciones abiertas', type: 'number', integer: true, min: 1, max: 20, step: 1 },
+  { key: 'maxTradesPerDay', label: 'Máximo de operaciones por día', type: 'number', integer: true, min: 1, max: 100, step: 1 },
+  { key: 'maxPremiumUsdt', label: 'Prima máxima por operación', type: 'number', min: 0, max: 1e7, step: 1, unit: 'USDT', nullable: true },
+];
+
+const paramSchema = [
+  { key: 'alertIds', label: 'Alertas', type: 'alerts' },
+  { key: 'structure', label: 'Estructura', type: 'enum', options: STRUCTURES },
+  { key: 'onOpposite', label: 'Señal contraria', type: 'enum', options: ON_OPPOSITE },
+  ...NUMERIC_FIELDS,
+];
+
+function normalizeAlertIds(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new ValidationError('Alertas: debe ser una lista de ids');
+  const ids = value.map(Number);
+  if (ids.some((n) => !Number.isInteger(n) || n <= 0)) throw new ValidationError('Alertas: ids inválidos');
+  return [...new Set(ids)];
+}
+
+function pickEnum(value, options, fallback, label) {
+  const v = value === undefined || value === null || value === '' ? fallback : value;
+  if (!options.includes(v)) throw new ValidationError(`${label}: debe ser ${options.join(' | ')}`);
+  return v;
+}
+
+/**
+ * Valida y completa los parámetros. Los valores por defecto de delta y
+ * salidas dependen de la estructura (comprar o vender).
+ */
+function validateParams(raw = {}) {
+  const input = raw && typeof raw === 'object' ? raw : {};
+  const structure = pickEnum(input.structure, STRUCTURES, defaultParams.structure, 'Estructura');
+  const onOpposite = pickEnum(input.onOpposite, ON_OPPOSITE, defaultParams.onOpposite, 'Señal contraria');
+  const numeric = validateNumericParams(
+    { paramSchema: NUMERIC_FIELDS, defaultParams: { ...defaultParams, ...STRUCTURE_DEFAULTS[structure] } },
+    input
+  );
+  // La prima máxima solo aplica al comprar.
+  if (structure !== 'buy_with') numeric.maxPremiumUsdt = null;
+  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, ...numeric };
+}
+
+/** Pata que abre una señal según la estructura. */
+function legFor(structure, direction) {
+  if (structure === 'buy_with') return { side: 'BUY', type: direction === 'bullish' ? 'C' : 'P' };
+  return { side: 'SELL', type: direction === 'bullish' ? 'P' : 'C' };
+}
+
+/** Dirección de una posición: compra de call o venta de put apuestan al alza. */
+function positionDirection(position) {
+  const bullish = (position.side === 'BUY' && position.type === 'C') || (position.side === 'SELL' && position.type === 'P');
+  return bullish ? 'bullish' : 'bearish';
+}
+
+function describeLeg({ side, type }, strike) {
+  return `${side === 'BUY' ? 'compra' : 'vende'} ${strike ?? ''}${type}`.trim();
+}
+
+/** P&L de una pata en % de la prima de entrada (positivo = ganancia). */
+function pnlPct(position) {
+  const value = closeValue(position);
+  if (value == null) return null;
+  const premium = position.entryPrice * position.quantity;
+  if (!(premium > 0)) return 0;
+  const diff = position.side === 'BUY' ? value - premium : premium - value;
+  return (diff / premium) * 100;
+}
+
+/** Salidas por tiempo, toma de ganancia y stop, una por posición. */
+function exits(ctx) {
+  const { now, positions = [], params } = ctx;
+  const actions = [];
+  let missingQuote = false;
+  for (const p of positions) {
+    const legs = closeLegs([p]);
+    const hours = hoursToExpiry(p, now);
+    if (params.exitHoursBeforeExpiry > 0 && hours <= params.exitHoursBeforeExpiry) {
+      actions.push({ type: 'close', reason: 'time_exit', detail: `Salida por tiempo: quedan ${hours.toFixed(1)} h al vencimiento de ${p.symbol}`, legs });
+      continue;
+    }
+    const pct = pnlPct(p);
+    if (pct == null) {
+      missingQuote = true;
+      continue;
+    }
+    if (pct >= params.takeProfitPct) {
+      actions.push({ type: 'close', reason: 'take_profit', detail: `Take profit en ${p.symbol}: ${pct.toFixed(1)} % de la prima`, legs });
+    } else if (-pct >= params.stopLossPct) {
+      actions.push({ type: 'close', reason: 'stop_loss', detail: `Stop en ${p.symbol}: pérdida del ${(-pct).toFixed(1)} % de la prima`, legs });
+    }
+  }
+  if (actions.length) return actions;
+  if (!positions.length) return [hold('waiting_signal', 'Esperando señal')];
+  if (missingQuote) return [hold('no_quote', 'Sin cotización para valorar la posición')];
+  return [hold('in_position', `En posición: ${positions.length} pata(s) abierta(s)`)];
+}
+
+function openFor(ctx, direction, openCount) {
+  const { spot, params, tradesToday = 0 } = ctx;
+  if (openCount >= params.maxOpenPositions) {
+    return skip('max_open_positions', `Máximo de ${params.maxOpenPositions} posición(es) abierta(s) alcanzado`);
+  }
+  if (tradesToday >= params.maxTradesPerDay) {
+    return skip('max_trades_per_day', `Máximo de ${params.maxTradesPerDay} operación(es) por día alcanzado`);
+  }
+  const { chain } = ctx;
+  if (!chain || !chain.rows?.length) return skip('no_chain', 'Sin cadena para el vencimiento objetivo');
+  const leg = legFor(params.structure, direction);
+  const pick = pickLegByDelta(chain, leg.type, params.targetDelta, spot, leg.side === 'BUY' ? 'ask' : 'bid');
+  if (!pick) {
+    return skip('no_legs', `No hay ${leg.type === 'C' ? 'call' : 'put'} OTM con ${leg.side === 'BUY' ? 'ask' : 'bid'} para la delta objetivo`);
+  }
+  const built = legFromChain(pick, { side: leg.side, quantity: params.quantity, type: leg.type, expiry: chain.expiry });
+  if (leg.side === 'BUY' && params.maxPremiumUsdt != null) {
+    const premium = built.price * params.quantity;
+    if (premium > params.maxPremiumUsdt) {
+      return skip('max_premium', `Prima ${premium.toFixed(2)} USDT supera el máximo de ${params.maxPremiumUsdt} USDT`);
+    }
+  }
+  return {
+    type: 'open',
+    reason: 'signal',
+    detail: `Señal ${DIRECTION_LABEL[direction]}: ${describeLeg(leg, pick.strike)} (Δ ${Math.abs(built.delta ?? 0).toFixed(2)}, vence ${chain.expiry})`,
+    legs: [built],
+  };
+}
+
+function evaluate(ctx) {
+  const { positions = [], params, signal } = ctx;
+  if (!signal) return exits(ctx);
+
+  const direction = signal.direction;
+  if (!DIRECTIONS.includes(direction)) return [skip('neutral', 'Alerta neutral')];
+
+  // 1. Posición contraria.
+  const opposite = positions.filter((p) => positionDirection(p) !== direction);
+  const actions = [];
+  let openCount = positions.length;
+  if (opposite.length) {
+    if (params.onOpposite === 'ignore') {
+      return [skip('opposite_ignored', `Señal ${DIRECTION_LABEL[direction]} ignorada: hay posición en sentido contrario`)];
+    }
+    actions.push({
+      type: 'close',
+      reason: 'opposite_signal',
+      detail: `Señal ${DIRECTION_LABEL[direction]}: cierra la posición contraria`,
+      legs: closeLegs(opposite),
+    });
+    openCount -= opposite.length;
+    if (params.onOpposite === 'close') return actions;
+  }
+
+  // 2 y 3. Límites y apertura.
+  actions.push(openFor(ctx, direction, openCount));
+  return actions;
+}
+
+module.exports = {
+  id,
+  label: 'Bot por alertas',
+  description: 'Abre opciones cuando se disparan alertas alcistas o bajistas.',
+  holdsSpot: false,
+  // Se maneja desde /options/auto-bots: no se lista en las plantillas de Estrategias ni se backtestea.
+  signalDriven: true,
+  defaultParams,
+  paramSchema,
+  validateParams,
+  evaluate,
+  STRUCTURES,
+  ON_OPPOSITE,
+  STRUCTURE_DEFAULTS,
+  legFor,
+  positionDirection,
+};
