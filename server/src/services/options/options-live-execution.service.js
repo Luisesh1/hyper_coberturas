@@ -124,7 +124,11 @@ class OptionsLiveExecution {
 
   async reconcileOrder(order, client) {
     if (order.status === 'queued') {
-      // No hubo transición a sending, por tanto NO pudo llamarse a Binance.
+      // Mientras la ventana siga abierta, el sender todavía puede reclamar
+      // esta pata. Nunca marcarla final antes de su deadline.
+      if (this.now() < order.deadlineAt) return;
+      // Solo finishOrder puede finalizarla, y únicamente si la fila
+      // continúa en 'queued' bajo FOR UPDATE.
       await this.repo.finishOrder(order.id, null, 0);
       return;
     }
