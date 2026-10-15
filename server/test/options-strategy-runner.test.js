@@ -60,6 +60,10 @@ async function setup({ mode = 'shadow', limits = {}, globalLimits = {}, template
   const clock = { now };
   const liveExecutor = {
     enabled: true,
+    repo: {
+      // Mock de órdenes enviadas (sin fills) en el ledger duradero.
+      async countSubmittedSince() { return credentials.orders.length; },
+    },
     async reconcilePending() { return { checked: 0 }; },
     async submit(strategy, action) {
       const client = await credentials.getClientForUser(strategy.userId);
@@ -174,6 +178,17 @@ test('modo real: límite de órdenes por día bloquea la entrada real pero no la
   assert.equal(blocked.action, 'skip');
   assert.match(blocked.detail, /Bloqueada por límite: Máximo de 1 órdenes/);
   assert.match(notes[0].text, /bloqueada/);
+});
+
+test('modo real: las órdenes aceptadas sin fill consumen el cupo diario', async () => {
+  const { repo, runner, credentials } = await setup({
+    mode: 'live', limits: { maxOrdersPerDay: 2 },
+  });
+  credentials.orders.push({ symbol: 'BTC-261016-60000-C', status: 'ACCEPTED' });
+  await runner.tick();
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(repo.positions.filter((p) => p.mode === 'live').length, 0);
+  assert.match(repo.events.find((e) => e.mode === 'live').detail, /Máximo de 2 órdenes/);
 });
 
 test('modo real: margen de la estrategia y margen global', async () => {
