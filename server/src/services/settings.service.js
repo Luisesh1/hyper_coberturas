@@ -10,7 +10,9 @@ const {
   DEFAULT_MIN_AUTO_TOPUP_FLOOR_USD,
 } = require('./protected-pool-delta-neutral.helpers');
 
-const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan', 'alchemy']);
+const SENSITIVE_KEYS = new Set(['wallet', 'telegram', 'etherscan', 'alchemy', 'binance_options']);
+const BINANCE_OPTIONS_KEY = 'binance_options';
+const OPTIONS_LIMITS_KEY = 'options_limits';
 const DELTA_NEUTRAL_RISK_KEY = 'delta_neutral_risk_controls';
 const deltaNeutralRiskCache = new Map();
 
@@ -383,6 +385,28 @@ async function setAlchemy(userId, alchemy) {
   await setSetting(userId, 'alchemy', alchemy);
 }
 
+// Credenciales de Binance Opciones (cifradas: la clave está en SENSITIVE_KEYS).
+async function getBinanceOptions(userId) {
+  return getSetting(userId, BINANCE_OPTIONS_KEY);
+}
+
+async function setBinanceOptions(userId, value) {
+  await setSetting(userId, BINANCE_OPTIONS_KEY, value);
+}
+
+async function removeBinanceOptions(userId) {
+  await settingsRepository.deleteByKey(userId, BINANCE_OPTIONS_KEY);
+}
+
+// Límites globales del módulo de opciones (sin cifrar).
+async function getOptionsLimits(userId) {
+  return getSetting(userId, OPTIONS_LIMITS_KEY);
+}
+
+async function setOptionsLimits(userId, limits) {
+  await setSetting(userId, OPTIONS_LIMITS_KEY, limits);
+}
+
 async function getDeltaNeutralRiskControls(userId) {
   if (deltaNeutralRiskCache.has(userId)) {
     return deltaNeutralRiskCache.get(userId);
@@ -471,6 +495,12 @@ module.exports = {
   setAlchemy,
   getDeltaNeutralRiskControls,
   setDeltaNeutralRiskControls,
+  getBinanceOptions,
+  setBinanceOptions,
+  removeBinanceOptions,
+  getOptionsLimits,
+  setOptionsLimits,
+  SENSITIVE_KEYS,
   getChartIndicators,
   setChartIndicators,
   getDefaultChartIndicators,
