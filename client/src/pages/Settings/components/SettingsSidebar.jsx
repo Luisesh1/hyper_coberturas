@@ -2,6 +2,7 @@ import styles from './SettingsSidebar.module.css';
 
 const SECTIONS = [
   { key: 'accounts', icon: '◈', label: 'Cuentas Hyperliquid', hint: 'Wallets y API keys' },
+  { key: 'binanceOptions', icon: '◇', label: 'Binance Opciones', hint: 'API key de opciones', isNew: true },
   { key: 'deltaNeutralRisk', icon: '△', label: 'Delta-neutral riesgo', hint: 'Umbrales del hedge' },
   { key: 'telegram', icon: '✉', label: 'Telegram', hint: 'Notificaciones' },
   { key: 'etherscan', icon: '🧭', label: 'Etherscan', hint: 'Escaneo de pools' },
@@ -23,7 +24,10 @@ export function SettingsSidebar({ active, onSelect, status }) {
           >
             <span className={styles.itemIcon}>{s.icon}</span>
             <div className={styles.itemBody}>
-              <span className={styles.itemLabel}>{s.label}</span>
+              <span className={styles.itemLabel}>
+                {s.label}
+                {s.isNew && <span className={styles.newBadge}>Nuevo</span>}
+              </span>
               <span className={styles.itemHint}>{s.hint}</span>
             </div>
             {st && (
