@@ -28,6 +28,7 @@ const {
 const { intrinsic } = require('./options-pricing');
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+const RECONCILE_INTERVAL_MS = 60_000;
 
 function lazyMarket() {
   // eslint-disable-next-line global-require
@@ -93,6 +94,8 @@ class OptionsStrategyRunner {
     this.now = deps.now || Date.now;
     this.intervalMs = deps.intervalMs || DEFAULT_INTERVAL_MS;
     this.interval = null;
+    this.reconcileInterval = null;
+    this.liveExecutor = deps.liveExecutor || require('./options-live-execution.service');
     this.running = false;
     // Cola por estrategia: el tick y una señal no evalúan la misma a la vez.
     this.locks = new Map();
@@ -116,12 +119,20 @@ class OptionsStrategyRunner {
       this.tick().catch((err) => this.logger.error('options_runner_tick_failed', { error: err.message }));
     }, this.intervalMs);
     this.interval.unref?.();
+    // La conciliación continúa incluso si se deshabilitan nuevas órdenes.
+    const reconcile = () => this.liveExecutor.reconcilePending()
+      .catch((err) => this.logger.error('options_reconcile_failed', { error: err.message }));
+    this.reconcileInterval = setInterval(reconcile, RECONCILE_INTERVAL_MS);
+    this.reconcileInterval.unref?.();
+    reconcile();
     this.logger.info('options_runner_started', { intervalMs: this.intervalMs });
   }
 
   stop() {
     if (this.interval) clearInterval(this.interval);
+    if (this.reconcileInterval) clearInterval(this.reconcileInterval);
     this.interval = null;
+    this.reconcileInterval = null;
   }
 
   /** Una pasada completa. Sin solapes: si la anterior sigue, se omite. */
@@ -428,15 +439,41 @@ class OptionsStrategyRunner {
   }
 
   async executeLive(strategy, action, ctx) {
-    // Fail closed: ninguna llamada al exchange ni anotación de posiciones
-    // hasta que haya ledger persistente de órdenes y conciliación de fills.
-    // También bloquea cierres, para evitar órdenes huérfanas.
-    await this.recordOutcome(strategy, 'live', {
-      type: 'skip',
-      reason: 'live_execution_pending_reconciliation',
-      detail: 'Trading real suspendido: faltan ledger de órdenes, fills confirmados e idempotencia',
-    }, ctx);
-    return null;
+    if (!this.liveExecutor.enabled) {
+      await this.recordOutcome(strategy, 'live', {
+        type: 'skip', reason: 'live_disabled',
+        detail: 'Envio real deshabilitado: OPTIONS_LIVE_TRADING_ENABLED no está activo',
+      }, ctx);
+      return null;
+    }
+    if (action.type === 'open') {
+      const limits = await this.checkLiveLimits(strategy, action.legs, ctx);
+      if (!limits.ok) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'live_risk_limit', detail: `Bloqueada por límite: ${limits.reason}`,
+        }, ctx);
+        await this.maybeNotify(strategy, `Orden real bloqueada: ${limits.reason}`);
+        return null;
+      }
+    }
+    const { quotes, missing } = await this.quoteLegs(action.legs);
+    if (missing) {
+      await this.recordOutcome(strategy, 'live', {
+        type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
+      }, ctx);
+      return null;
+    }
+    // La cotización real se usa como precio LIMIT. El precio de llenado
+    // real será EXCLUSIVAMENTE el de getUserTrades, nunca esta cotización.
+    const quoted = action.legs.map((leg, i) => ({ ...leg, price: quotes[i].price }));
+    const result = await this.liveExecutor.submit(strategy, { ...action, legs: quoted }, ctx);
+    if (result.status === 'submitted' || result.status === 'attention') {
+      await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`);
+    }
+    ctx.produced?.push({ mode: 'live', type: action.type,
+      pending: result.status === 'submitted', reason: result.status,
+      detail: result.status === 'submitted' ? 'Orden límite enviada; ejecución pendiente' : result.status });
+    return result;
   }
 
   async maybeNotify(strategy, message) {
