@@ -402,7 +402,12 @@ class OptionsStrategyRunner {
     }
 
     if (has(limits.maxOrdersPerDay)) {
-      const orders = await this.repo.countOrdersSince(strategy.id, 'live', dayStart);
+      // El conteo real sale del ledger de órdenes ENVIADAS, no de eventos
+      // de fills: una orden aceptada sin ejecución también consume cupo.
+      if (typeof this.liveExecutor.repo?.countSubmittedSince !== 'function') {
+        return { ok: false, reason: 'Sin ledger de órdenes reales para comprobar el límite diario' };
+      }
+      const orders = await this.liveExecutor.repo.countSubmittedSince(strategy.id, dayStart);
       if (orders + legs.length > Number(limits.maxOrdersPerDay)) {
         return { ok: false, reason: `Máximo de ${limits.maxOrdersPerDay} órdenes por día alcanzado (${orders} enviadas)` };
       }
