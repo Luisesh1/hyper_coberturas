@@ -451,8 +451,43 @@ class OptionsStrategyRunner {
       }, ctx);
       return null;
     }
+    const { quotes, missing } = await this.quoteLegs(action.legs);
+    if (missing) {
+      await this.recordOutcome(strategy, 'live', {
+        type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
+      }, ctx);
+      return null;
+    }
+    // El precio LIMIT es la cotización recién consultada, pero el fill
+    // SOLO se registra cuando Binance lo confirma en getUserTrades.
+    const quoted = action.legs.map((leg, i) => ({ ...leg, price: quotes[i].price }));
     if (action.type === 'open') {
-      const limits = await this.checkLiveLimits(strategy, action.legs, ctx);
+      // La prima/margen de la cadena inicial pudo cambiar. Revalidar
+      // capital y riesgos utilizando los precios LIMIT realmente enviados.
+      const capital = quoted.reduce((sum, leg) => sum + estimateMargin({
+        ...leg,
+        type: leg.optionType || parseSymbol(leg.symbol)?.type,
+        spot: ctx.spot,
+      }), 0);
+      if (!Number.isFinite(capital) || capital <= 0 ||
+          (ctx.params.capitalUsdt != null && capital > Number(ctx.params.capitalUsdt) + 1e-8)) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'capital_limit',
+          detail: 'Entrada real bloqueada: capital requerido excede el presupuesto o no pudo verificarse',
+        }, ctx);
+        return null;
+      }
+      const buyPremium = quoted.reduce((sum, leg) =>
+        sum + (leg.side === 'BUY' ? leg.quantity * leg.price : 0), 0);
+      if (ctx.params.maxPremiumUsdt != null &&
+          buyPremium > Number(ctx.params.maxPremiumUsdt) + 1e-8) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'premium_limit',
+          detail: 'Entrada real bloqueada: prima actual supera el máximo configurado',
+        }, ctx);
+        return null;
+      }
+      const limits = await this.checkLiveLimits(strategy, quoted, ctx);
       if (!limits.ok) {
         await this.recordOutcome(strategy, 'live', {
           type: 'skip', reason: 'live_risk_limit', detail: `Bloqueada por límite: ${limits.reason}`,
@@ -461,16 +496,6 @@ class OptionsStrategyRunner {
         return null;
       }
     }
-    const { quotes, missing } = await this.quoteLegs(action.legs);
-    if (missing) {
-      await this.recordOutcome(strategy, 'live', {
-        type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
-      }, ctx);
-      return null;
-    }
-    // La cotización real se usa como precio LIMIT. El precio de llenado
-    // real será EXCLUSIVAMENTE el de getUserTrades, nunca esta cotización.
-    const quoted = action.legs.map((leg, i) => ({ ...leg, price: quotes[i].price }));
     const result = await this.liveExecutor.submit(strategy, { ...action, legs: quoted }, ctx);
     if (result.status === 'submitted' || result.status === 'attention') {
       await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`);
