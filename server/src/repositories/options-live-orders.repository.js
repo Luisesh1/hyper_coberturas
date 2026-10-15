@@ -186,6 +186,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         'SELECT * FROM options_live_orders WHERE id=$1 FOR UPDATE', [order.id]
       );
       if (!locked) throw new Error('Missing order');
+      // La conciliación modifica la exposición y debe compartir el lock de
+      // usuario con beginBatch para que no pasen snapshots inconsistentes.
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [locked.user_id]);
       const { rows: [fill] } = await tx.query(
         `INSERT INTO options_live_fills
           (live_order_id,trade_id,quantity,price,fee_usdt,traded_at)
