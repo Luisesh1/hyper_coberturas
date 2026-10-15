@@ -121,13 +121,13 @@ test('getChain valida underlying y vencimiento', async () => {
   await assert.rejects(() => service.getChain('BTC/../x'), (err) => err.status === 400);
 });
 
-test('la caché evita repetir llamadas durante 5 s', async () => {
+test('la caché agrupa snapshots durante 30 s', async () => {
   const { service, calls, advance } = buildService();
   await service.getChain('BTC', '261031');
   const first = calls.length;
   await service.getChain('BTC', '261031');
   assert.equal(calls.length, first);
-  advance(6000);
+  advance(31_000);
   await service.getChain('BTC', '261031');
   assert.ok(calls.length > first);
 });
@@ -141,11 +141,11 @@ test('listUnderlyings ordena por relevancia con spot y cambio 24h', async () => 
   ]);
 });
 
-test('getQuote usa el libro para bid/ask y añade los datos del contrato', async () => {
+test('getQuote usa snapshot para UI y conserva datos del contrato', async () => {
   const { service } = buildService();
   const quote = await service.getQuote('BTC-261031-68000-C');
-  assert.equal(quote.bid, 1490);
-  assert.equal(quote.ask, 1510);
+  assert.equal(quote.bid, 1480);
+  assert.equal(quote.ask, 1520);
   assert.equal(quote.mark, 1500);
   assert.equal(quote.iv, 0.52);
   assert.equal(quote.underlying, 'BTC');
@@ -154,4 +154,16 @@ test('getQuote usa el libro para bid/ask y añade los datos del contrato', async
   assert.equal(quote.expiry, '261031');
   assert.equal(quote.spot, 67800.5);
   await assert.rejects(() => service.getQuote('nope'), (err) => err.status === 400);
+});
+
+test('getQuote fresh exige libro real sin usar la caché de 30 s', async () => {
+  const { service, calls } = buildService();
+  await service.getQuote('BTC-261031-68000-C');
+  assert.equal(calls.some((url) => new URL(url).pathname === '/eapi/v1/depth'), false);
+  const fresh = await service.getQuote('BTC-261031-68000-C', { fresh: true });
+  assert.equal(fresh.bid, 1490);
+  assert.equal(fresh.ask, 1510);
+  assert.ok(calls.some((url) => new URL(url).pathname === '/eapi/v1/depth'));
+  assert.ok(calls.some((url) => new URL(url).pathname === '/eapi/v1/mark'
+    && new URL(url).searchParams.get('symbol') === 'BTC-261031-68000-C'));
 });
