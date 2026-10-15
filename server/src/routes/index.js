@@ -20,6 +20,7 @@ const crossChainRoutes = require('./cross-chain.routes');
 const optionsRoutes = require('./options.routes');
 const optionsStrategiesRoutes = require('./options-strategies.routes');
 const optionsBacktestsRoutes = require('./options-backtests.routes');
+const optionsAutoBotsRoutes = require('./options-auto-bots.routes');
 
 const router = Router();
 
@@ -44,6 +45,7 @@ router.use('/cross-chain', crossChainRoutes);
 // antes del montaje general de /options para que no las capture ese router.
 router.use('/options/strategies', optionsStrategiesRoutes);
 router.use('/options/backtests', optionsBacktestsRoutes);
+router.use('/options/auto-bots', optionsAutoBotsRoutes);
 router.use('/options', optionsRoutes);
 
 // Endpoints solo dev: snapshot/stream de logs y batch upload de errores
