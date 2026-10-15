@@ -58,7 +58,15 @@ test('alerta disparada restringe vencimientos del bot en modo sombra, sin órden
       const expiry = expiries.find((x) => x.code === code) || expiries[0];
       return { ...buildSyntheticChain({ underlying, spot: SPOT, now: NOW, expiry, atmIv: 0.6, spreadPct: 4 }), expiries };
     },
-    async getQuote() { throw new Error('No hay posiciones abiertas'); },
+    async getQuote(symbol) {
+      const meta = parseSymbol(symbol);
+      const expiry = expiries.find((e) => e.code === meta.expiry);
+      if (!expiry) throw new Error('Vencimiento desconocido');
+      const chain = buildSyntheticChain({ underlying: meta.underlying, spot: SPOT, now: NOW, expiry, atmIv: 0.6, spreadPct: 4 });
+      const row = chain.rows.find((r) => Number(r.strike) === Number(meta.strike));
+      if (!row) throw new Error('Strike desconocido');
+      return { ...(meta.type === 'C' ? row.call : row.put), spot: SPOT };
+    },
   };
   const runner = new OptionsStrategyRunner({ repo, market, logger: log, now: () => NOW });
   const service = createOptionsAutoTradingService({ repo, runner, logger: log, now: () => NOW, alerts: { listAlerts: async () => [] } });
