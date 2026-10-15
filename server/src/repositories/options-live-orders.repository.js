@@ -15,18 +15,8 @@ const map = (r) => r && ({
   error: r.last_error,
 });
 
-function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = {}) {
-  // Comparación conservadora del libro propio con las posiciones NETAS
-  // firmadas que Binance comunica para toda la cuenta del usuario.
-  // Si el usuario opera fuera de la app, se bloquea el bot hasta conciliar.
-  async function assertExchangeExposure(userId, exchangePositions) {
-    if (!Array.isArray(exchangePositions)) throw new Error('Binance positions response is not an array');
-    const { rows } = await db.query(
-      `SELECT symbol,side,COALESCE(SUM(quantity),0) AS quantity
-         FROM options_strategy_positions
-        WHERE user_id=$1 AND mode='live' AND closed_at IS NULL
-        GROUP BY symbol,side`, [userId]
-    );
+function compareExposure(rows, exchangePositions) {
+  if (!Array.isArray(exchangePositions)) throw new Error('Binance positions response is not an array');
     const expected = new Map();
     for (const p of rows) {
       const signed = Number(p.quantity) * (p.side === 'SELL' ? -1 : 1);
@@ -53,9 +43,21 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       }
     }
     return true;
+}
+
+function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = {}) {
+  // Reconciliación de posiciones contra el total de la cuenta Binance.
+  const EXPOSURE_SQL = `SELECT symbol,side,COALESCE(SUM(quantity),0) AS quantity
+         FROM options_strategy_positions
+        WHERE user_id=$1 AND mode='live' AND closed_at IS NULL
+        GROUP BY symbol,side`;
+
+  async function assertExchangeExposure(userId, exchangePositions) {
+    const { rows } = await db.query(EXPOSURE_SQL, [userId]);
+    return compareExposure(rows, exchangePositions);
   }
 
-  async function beginBatch({ strategy, action, legs, key, detail, deadlineAt }) {
+  async function beginBatch({ strategy, action, legs, key, detail, deadlineAt, exchangePositions }) {
     if (!legs.length || !['open', 'close'].includes(action)) throw new Error('Invalid live batch');
     return db.transaction(async (tx) => {
       // Locks entre réplicas: un solo lote sin conciliar por usuario,
@@ -73,6 +75,11 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         [strategy.userId]
       );
       if (pending.length) return null;
+      // Verificar la misma instantánea de Binance bajo lock de usuario,
+      // contra el libro confirmado en la transacción. Si cambió desde
+      // el preflight, abortar: jamás confiar en límites calculados antes.
+      const { rows: currentExposure } = await tx.query(EXPOSURE_SQL, [strategy.userId]);
+      compareExposure(currentExposure, exchangePositions);
       const { rows: existing } = await tx.query(
         'SELECT id FROM options_live_batches WHERE strategy_id=$1 AND action_key=$2',
         [strategy.id, key]
