@@ -17,6 +17,7 @@ function fixture({ now = 100_000, onSubmit } = {}) {
   let nextId = 1;
   const repo = {
     orders, fills,
+    async assertExchangeExposure() { return true; },
     async beginBatch({ action, legs, key, deadlineAt }) {
       if (orders.some((o) => o.key === key || o.status !== 'final')) return null;
       return legs.map((l) => {
@@ -62,7 +63,7 @@ function fixture({ now = 100_000, onSubmit } = {}) {
       o.orderId = orderId == null ? null : String(orderId);
     },
   };
-  const state = { status: 'NEW', executedQty: '0' };
+  const state = { status: 'NEW', executedQty: '0', quantity: String(leg.quantity), type: 'LIMIT', timeInForce: 'GTC' };
   let allTrades = [];
   const client = {
     async placeOrder(payload) {
@@ -75,7 +76,13 @@ function fixture({ now = 100_000, onSubmit } = {}) {
       return { orderId: '4611875134427365377', clientOrderId: orders[0].clientOrderId,
         symbol: leg.symbol, side: leg.side, ...state };
     },
-    async getUserTrades(payload) { calls.trades.push(payload); return allTrades; },
+    async getUserTrades(payload) {
+      calls.trades.push(payload);
+      const pages = payload.fromId == null ? allTrades
+        : allTrades.filter((t) => BigInt(String(t.id)) >= BigInt(payload.fromId));
+      return pages.slice(0, payload.limit);
+    },
+    async getPositions() { return []; },
     async cancelOrder(payload) {
       calls.cancel.push(payload);
       state.status = 'CANCELED';
@@ -171,4 +178,47 @@ test('clave de señal es estable, ventana exacta diez minutos', () => {
   assert.equal(WINDOW_MS, 600000);
   assert.equal(actionKey(strategy, { type: 'open' }, context()), 'alert:77:open');
   assert.throws(() => actionKey(strategy, { type: 'open' }, { now: 1, signal: {} }), /eventId/);
+});
+
+test('bloquea el envío cuando Binance y el ledger tienen exposiciones distintas', async () => {
+  const f = fixture();
+  f.repo.assertExchangeExposure = async () => { throw new Error('Binance exposure mismatch'); };
+  await assert.rejects(f.submit(), /exposure mismatch/);
+  assert.equal(f.calls.post.length, 0);
+  assert.equal(f.orders.length, 0);
+});
+
+test('si la primera pata consume la ventana, jamás envía la segunda', async () => {
+  let f;
+  f = fixture({ onSubmit: async () => {
+    f.clock.time += WINDOW_MS + 1;
+    return { orderId: '4611875134427365377', status: 'NEW' };
+  } });
+  const result = await f.engine.submit(strategy, {
+    type: 'open', legs: [leg, { ...leg, symbol: 'BTC-261030-61000-C' }],
+  }, context(f.clock.time));
+  assert.equal(result.status, 'deadline');
+  assert.equal(f.calls.post.length, 1);
+  assert.equal(f.orders[1].status, 'queued');
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[1].status, 'final');
+  assert.equal(f.calls.cancel.length, 1);
+});
+
+test('paginación con identificadores de 64 bits conserva los fills sin duplicarlos', async () => {
+  const f = fixture();
+  await f.submit();
+  const unrelated = Array.from({ length: 1000 }, (_, i) => ({
+    ...trade(0.01, String(i + 1)), orderId: 'other',
+    id: String(4611875134427366000n + BigInt(i)),
+  }));
+  const mine = { ...trade(0.2, '5001'), id: '4611875134427367000' };
+  f.setTrades([...unrelated, mine]);
+  f.setState('FILLED', 0.2);
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.calls.trades.length, 2);
+  assert.equal(f.calls.trades[1].fromId, '4611875134427367000');
+  assert.equal(f.fills.length, 1);
+  assert.equal(f.orders[0].status, 'final');
 });
