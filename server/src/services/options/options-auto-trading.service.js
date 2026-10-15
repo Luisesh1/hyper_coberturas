@@ -81,6 +81,8 @@ function decide(strategy, produced = []) {
   if (opened.length && closed.length) return { decision: 'reversed', detail: `${prefix}: ${detail}` };
   if (opened.length) return { decision: 'opened', detail: `${prefix}: ${detail}` };
   if (closed.length) return { decision: 'closed', detail: `${prefix}: ${detail}` };
+  const pending = mine.find((p) => p.pending);
+  if (pending) return { decision: 'pending', detail: `${prefix}: ${detail || 'Orden LIMIT enviada, esperando ejecución'}` };
   const error = mine.find((p) => p.type === 'error');
   if (error) return { decision: 'error', detail: `${prefix}: ${error.detail}` };
   return { decision: 'ignored', detail: detail ? `${prefix}: ${detail}` : 'Sin acción' };
