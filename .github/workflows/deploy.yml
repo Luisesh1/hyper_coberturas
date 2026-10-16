@@ -47,6 +47,25 @@ jobs:
             exit 1
           fi
 
+      - name: Preflight VPS - bloquear deploy si trading real esta habilitado
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_HOST:-}" ] || [ -z "${DEPLOY_PATH:-}" ]; then
+            echo "::error::Falta configuración de despliegue"
+            exit 1
+          fi
+          # Solo lectura: validar el contenedor actual ANTES de modificarlo.
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node -e 'if (process.env.OPTIONS_LIVE_TRADING_ENABLED === \"true\" || process.env.OPTIONS_LIVE_PRODUCTION_APPROVED === \"true\") process.exit(3)'"; then
+            echo "::error::Trading real activo o preflight remoto inaccesible; no desplegar"
+            exit 1
+          fi
+          echo "options_predeploy_gate=pass"
+
       - name: Deploy por SSH
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
@@ -60,6 +79,18 @@ jobs:
             docker compose -f docker-compose.prod.yml up -d --build
             docker compose -f docker-compose.prod.yml exec -T server npm run migrate
           "
+
+      - name: Verificar release desplegado y ambos flags apagados
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && test \"\$(git rev-parse HEAD)\" = '$TARGET_SHA' && docker compose -f docker-compose.prod.yml exec -T server node -e 'const fs = require(\"node:fs\"); if (process.env.OPTIONS_LIVE_TRADING_ENABLED !== \"false\" || process.env.OPTIONS_LIVE_PRODUCTION_APPROVED !== \"false\" || !fs.existsSync(\"src/scripts/options-live-contract-check.js\") || !fs.existsSync(\"src/scripts/options-live-audit.js\")) process.exit(2)'"
+          echo "options_deployed_read_only=pass"
 
       - name: Verificar health endpoint
         env:
