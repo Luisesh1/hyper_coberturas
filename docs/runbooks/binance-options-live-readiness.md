@@ -32,6 +32,12 @@ Estado: **DRAFT / trading real deshabilitado**. Alcance: PR #4 fase 2. Documenta
 2. Cuenta de Binance Options aislada, capital limitado, permisos mínimos,
    restricciones por IP, clave sin permisos de retiro. No probar en la
    cuenta principal. Confirmar política de comisiones y escalas por contrato.
+   El chequeo de solo lectura consulta `GET /sapi/v1/account/apiRestrictions`
+   y **debe confirmar** `ipRestrict=true`, `enableWithdrawals=false`,
+   `enableReading=true` y `enableVanillaOptions=true`. Si la clave
+   no permite consultar el endpoint, el piloto queda bloqueado; verificar
+   permisos fuera del chat y repetir la comprobación. El reporte solo
+   expone `apiPermissions: ok/failed` sin imprimir IP, key ni permisos.
 3. Probar sin operaciones y en modo solo lectura:
    `node server/src/scripts/options-live-contract-check.js <user-id>`
    desde la raíz del repo o `node src/scripts/options-live-contract-check.js
