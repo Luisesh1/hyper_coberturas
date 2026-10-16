@@ -41,6 +41,14 @@ test('TP de put comprada requiere descenso y call vendida requiere descenso', ()
   assert.ok(shortCall.price < 1500);
 });
 
+test('la proyección respeta el offset minPrice de Binance, no solo tickSize', () => {
+  const { matchesStep } = require('../src/services/options/options-order-filters');
+  const tp = projectTakeProfit({ ...base, tickSize: 0.05, minPrice: 0.02 });
+  assert.ok(tp);
+  assert.equal(matchesStep(tp.price, '0.02', '0.05'), true);
+  assert.equal(projectTakeProfit({ ...base, minPrice: null }), null);
+});
+
 test('no inventa TP ante falta de IV, ATR o vencimiento insuficiente', () => {
   assert.equal(projectTakeProfit({ ...base, iv: null }), null);
   assert.equal(projectTakeProfit({ ...base, atrHourly: 0 }), null);
