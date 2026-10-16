@@ -69,7 +69,7 @@ function normalizeTrade(raw, order, exchangeOrderId) {
 
 function actionKey(strategy, action, ctx) {
   if (ctx.durableActionKey != null) {
-    if (!/^deferred:\\d+:\\d+$/.test(ctx.durableActionKey) || action.type !== 'close') {
+    if (!/^deferred:\d+:\d+$/.test(ctx.durableActionKey) || action.type !== 'close') {
       throw new Error('Invalid deferred action key');
     }
     return ctx.durableActionKey;
