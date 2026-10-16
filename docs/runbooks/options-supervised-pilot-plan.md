@@ -2,6 +2,31 @@
 
 Estado: **PREPARACIÓN / NO AUTORIZADO PARA TRADING REAL**.
 
+## 0. Límite acordado y minimización de pérdidas (2026-10-16)
+
+- El usuario indicó **pérdida máxima aceptable de 100 USD**, NO objetivo
+  de inversión: intentar minimizar la pérdida posible.
+- La primera opción es **no operar** si no hay un contrato apto.
+- La criba preliminar y estrictamente pública de mercado emplea un techo
+  autoimpuesto de **20 USDT de prima estimada + 10 % de reserva para la
+  comisión de entrada** (el límite en el script ya incluye ese 10 %).
+  Esto es más conservador que 100 USD, pero USDT no equivale exactamente a USD.
+- Una opción barata y muy OTM puede perder toda su prima con alta
+  probabilidad; no confundir importe de pérdida limitado con baja
+  probabilidad de pérdida ni elegir por precio únicamente.
+- Exigir spread <=10 %, ambas caras del libro con cantidad >= minQty,
+  vencimiento >48 horas y precio/lote exactos; si falla, NO OPERAR.
+- El scanner de solo lectura options-pilot-min-loss-quote.js consulta GET,
+  revisa a lo sumo 12 libros candidatos y publica solo el menor coste
+  agregado; nunca símbolos, cantidades, saldos o claves.
+- Binance limita la comisión trading al 10% de prima (FAQ), una reserva
+  precautoria, NO validación de tarifa efectiva ni costes de ejercicio/cierre.
+- Antes de cualquier prueba con fondos, verificar USD/USDT real, precio
+  límite, tarifas concretas, exposición total, estrategia, liquidez actual
+  y **autorización separada de la única orden**. No se elimina riesgo operativo.
+
+Fuente: https://www.binance.com/en/support/faq/detail/5326e5de61c34fed98abe28d2f175a23
+
 Este documento NO autoriza envíos ni cancelaciones de órdenes, cambios de los
 dos flags de trading ni depósitos. La conexión firmada 2026-10-16 comprobó
 10/12 contratos. Sin una orden histórica, getOrder y userTrades permanecen
