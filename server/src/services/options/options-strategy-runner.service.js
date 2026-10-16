@@ -26,6 +26,7 @@ const {
   num,
 } = require('./options-utils');
 const { intrinsic } = require('./options-pricing');
+const { projectTakeProfit } = require('./options-take-profit');
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const RECONCILE_INTERVAL_MS = 60_000;
@@ -234,6 +235,33 @@ class OptionsStrategyRunner {
     return out;
   }
 
+  // La proyección usa la prima REAL de entrada persistida en la posición.
+  // Si Binance no ofrece velas, IV o tick, nunca inventar un nivel de TP.
+  async attachVolatilityTargets(positions, params, spot, now) {
+    if (params.takeProfitMode !== 'volatility' || !positions.length) return positions;
+    return Promise.all(positions.map(async (p) => {
+      if (!p.quote || !Number.isFinite(Number(p.quote.iv)) ||
+          typeof this.market.getVolatilityInputs !== 'function') {
+        return { ...p, takeProfitTarget: null };
+      }
+      try {
+        const inputs = await this.market.getVolatilityInputs(p.symbol);
+        const target = projectTakeProfit({
+          entryPrice: Number(p.entryPrice), spot, strike: p.strike,
+          iv: Number(p.quote.iv), type: p.type, side: p.side,
+          expiryMs: p.expiryMs, nowMs: now,
+          atrHourly: inputs.atrHourly, tickSize: inputs.tickSize,
+          atrMultiplier: params.tpAtrMultiplier,
+          horizonHours: params.tpHorizonHours,
+        });
+        return { ...p, takeProfitTarget: target };
+      } catch (err) {
+        this.logger.warn('options_volatility_tp_unavailable', { symbol: p.symbol, error: err.message });
+        return { ...p, takeProfitTarget: null };
+      }
+    }));
+  }
+
   // ---------- evaluación ----------
 
   async runStrategy(strategy, tickCtx) {
@@ -246,7 +274,10 @@ class OptionsStrategyRunner {
 
     for (const mode of modes) {
       const open = await this.repo.listOpenPositions(strategy.id, mode);
-      const positions = await this.enrichPositions(open, chain);
+      const enriched = await this.enrichPositions(open, chain);
+      const positions = template.id === 'alert_signal'
+        ? await this.attachVolatilityTargets(enriched, params, spot, tickCtx.now)
+        : enriched;
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
       // Solo los bots por alertas limitan operaciones por día.
       const tradesToday = template.signalDriven
@@ -477,6 +508,23 @@ class OptionsStrategyRunner {
         type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
       }, ctx);
       return null;
+    }
+    // Un TP basado en volatilidad no puede ejecutar a peor precio por
+    // movimientos entre el tick y el preflight de cotización fresca.
+    if (action.reason === 'take_profit_volatility') {
+      const stale = action.legs.some((leg, i) => {
+        const price = quotes[i].price;
+        const target = Number(leg.targetPrice);
+        return !Number.isFinite(target) || target <= 0 ||
+          (leg.side === 'SELL' ? price < target : price > target);
+      });
+      if (stale) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'tp_price_moved',
+          detail: 'TP por volatilidad: el precio ejecutable cambió; no se envió la orden',
+        }, ctx);
+        return null;
+      }
     }
     // El precio LIMIT es la cotización recién consultada, pero el fill
     // SOLO se registra cuando Binance lo confirma en getUserTrades.
