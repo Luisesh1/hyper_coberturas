@@ -88,7 +88,7 @@ function emptyLeg(symbol = null) {
   };
 }
 
-function buildLeg(symbol, { mark, ticker, openInterest }) {
+function buildLeg(symbol, { mark, ticker, openInterest, contract }) {
   return {
     symbol,
     bid: positiveOrNull(ticker?.bidPrice),
@@ -100,6 +100,9 @@ function buildLeg(symbol, { mark, ticker, openInterest }) {
     theta: num(mark?.theta),
     vega: num(mark?.vega),
     openInterest: openInterest ?? null,
+    minQty: contract?.minQty ?? null,
+    maxQty: contract?.maxQty ?? null,
+    stepSize: contract?.stepSize ?? null,
   };
 }
 
@@ -165,9 +168,14 @@ function createOptionsMarketService({
       const parsed = parseSymbol(item.symbol);
       if (!parsed) continue;
       if (item.underlying ? item.underlying !== pair : parsed.underlying !== underlying) continue;
+      const priceFilter = (item.filters || []).find((f) => f.filterType === 'PRICE_FILTER') || {};
+      const lotFilter = (item.filters || []).find((f) => f.filterType === 'LOT_SIZE') || priceFilter;
       out.push({
         ...parsed,
         expiryMs: num(item.expiryDate) ?? expiryCodeToMs(parsed.expiry),
+        minQty: positiveOrNull(lotFilter.minQty ?? item.minQty),
+        maxQty: positiveOrNull(lotFilter.maxQty ?? item.maxQty),
+        stepSize: positiveOrNull(lotFilter.stepSize),
       });
     }
     return out;
@@ -255,6 +263,7 @@ function createOptionsMarketService({
         mark: markMap.get(s.symbol),
         ticker: tickerMap.get(s.symbol),
         openInterest: oi.get(s.symbol),
+        contract: s,
       });
       strikes.get(s.strike)[s.type === 'C' ? 'call' : 'put'] = leg;
     }
