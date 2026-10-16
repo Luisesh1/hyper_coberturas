@@ -94,6 +94,7 @@ class OptionsLiveExecution {
     this.credentials = deps.credentials || credentialsDefault;
     this.logger = deps.logger || loggerDefault;
     this.market = deps.market || require('./options-market.service');
+    this.runner = deps.runner || null;
     this.now = deps.now || Date.now;
     this.lastExternalScanAt = null;
     this.settlement = deps.settlement || require('./options-live-settlement.service');
@@ -109,6 +110,11 @@ class OptionsLiveExecution {
       process.env.OPTIONS_LIVE_TRADING_ENABLED === 'true' &&
       process.env.OPTIONS_LIVE_PRODUCTION_APPROVED === 'true'
     );
+  }
+
+  async queueReversal(strategy, signal, closeAction) {
+    if (!this.enabled || typeof this.repo.queueReversal !== 'function') return false;
+    return this.repo.queueReversal(strategy, signal, closeAction);
   }
 
   async requestProtectedExit(strategy, action) {
@@ -598,6 +604,46 @@ class OptionsLiveExecution {
     return { sent };
   }
 
+  async processDeferredReentries() {
+    if (!this.enabled || typeof this.repo.listPendingReentries !== 'function') return { sent: 0, expired: 0 };
+    const reentries = await this.repo.listPendingReentries(50);
+    let sent = 0;
+    let expired = 0;
+    for (const request of reentries) {
+      try {
+        // Una señal antigua no puede reabrir exposición horas después de
+        // su cancelación: expira bajo fail-closed y avisa al operador.
+        if (this.now() - request.createdAt > 30 * 60_000) {
+          await this.repo.markReentry(request.id, 'expired');
+          expired++;
+          if (typeof this.repo.claimIncidentNotification === 'function' &&
+              await this.repo.claimIncidentNotification(request.userId,
+                'REVERSAL_EXPIRED', String(request.id))) {
+            await this.notify(request.userId,
+              '<b>ALERTA · Giro caducado</b>\\n' +
+              'La salida tardó demasiado. No se abrió una posición nueva.');
+          }
+          continue;
+        }
+        if (!request.ready) continue;
+        const runner = this.runner || require('./options-strategy-runner.service');
+        const result = await runner.executeDeferredReentry(request.strategyId, request.signal);
+        const submitted = ['submitted', 'attention'].includes(result?.status) ||
+          (typeof this.repo.hasReentryOrder === 'function' &&
+            await this.repo.hasReentryOrder(request.strategyId, request.eventId));
+        if (submitted) {
+          await this.repo.markReentry(request.id, 'submitted');
+          sent++;
+        }
+      } catch (err) {
+        this.logger.warn('options_reentry_pending', {
+          strategyId: request.strategyId, reentryId: request.id, error: err.message,
+        });
+      }
+    }
+    return { sent, expired };
+  }
+
   async reconcilePending() {
     // Aun con nuevas entradas deshabilitadas, se cancelan y concilian
     // órdenes ya enviadas antes de cambiar el feature flag.
@@ -629,10 +675,12 @@ class OptionsLiveExecution {
     let protection = null;
     let protectionSent = null;
     let deferred = null;
+    let reentries = null;
     try {
       protection = await this.createMissingTakeProfits();
       protectionSent = await this.submitQueuedTakeProfits();
       deferred = await this.processDeferredExits();
+      reentries = await this.processDeferredReentries();
     } catch (err) {
       errors++;
       this.logger.warn('options_tp_maintenance_failed', { error: err.message });
@@ -655,7 +703,7 @@ class OptionsLiveExecution {
         this.logger.warn('options_live_account_audit_scan_failed', { error: err.message });
       }
     }
-    return { checked: orders.length, reconciled, errors, alerts, accountAudit, protection, protectionSent, deferred };
+    return { checked: orders.length, reconciled, errors, alerts, accountAudit, protection, protectionSent, deferred, reentries };
   }
 }
 
