@@ -26,8 +26,8 @@ Estado: **DRAFT / trading real deshabilitado**. Alcance: PR #4 fase 2. Documenta
 
 ## Comprobaciones antes de cualquier piloto real
 
-1. PR completa revisada por al menos un segundo desarrollador; GitHub CI
-   y migraciones 035, 036, 037 verdes, incluyendo pruebas de cierre parcial,
+1. PR completa revisada por al menos un segundo desarrollador; GitHub CI (incluyendo `test-migrations` con PostgreSQL 16)
+   y migraciones 035–040 verdes, incluyendo pruebas de cierre parcial,
    expiración, reinicios y reconciliación.
 2. Cuenta de Binance Options aislada, capital limitado, permisos mínimos,
    restricciones por IP, clave sin permisos de retiro. No probar en la
@@ -173,3 +173,37 @@ en el ledger, `getOrder` y `userTrades` quedan explícitamente
 `skipped`, nunca `ok` inventado. Incluso con arrays vacíos de ejercicio
 o bills, su estructura no demuestra un ejercicio realmente conciliado:
 esa evidencia debe obtenerse en la fase supervisada del piloto.
+
+## Validación de TP residente y reversión (migraciones 039–040)
+
+El bot ahora crea una orden LIMIT `reduceOnly` con `purpose='take_profit'`
+**después** de registrar el fill real, dentro de la misma pasada del
+conciliador (~60 s). Cada fill de apertura produce una posición separada y
+un TP con `clientOrderId` duradero; `queued→sending` se reclama antes de
+POST, nunca se reenvían acuses ambiguos. El precio de TP permanece fijo
+hasta que llena o se cancela. No hay OCO nativa equivalente a Spot.
+
+El cierre por stop, señal contraria o vencimiento se registra en
+`options_live_exit_requests`; se cancela el TP específico y se verifica
+su estado final y cualquier fill concurrente **antes de enviar otra
+orden de cierre**. Se reconcilia también el remanente de la entrada.
+Un giro `onOpposite=reverse` persiste el evento en
+`options_live_reentries`; solo abre otra vez si todos los cierres se
+confirman, el modo/permiso siguen activos y los límites y cotizaciones
+frescos lo permiten. El giro caduca a los 30 min en vez de ejecutar
+señales obsoletas.
+
+**Pruebas mínimas en PostgreSQL real:** la CI debe mostrar `test-migrations`
+verde (aplica todas las migraciones dos veces, comprueba 035–040).
+Después hacer en cuenta aislada verificación de orden TP aceptada en
+Binance, fill parcial, cancelación inmediata, cancelación simultánea con
+fill, reinicio del VPS con estado `sending/attention`, stop y giro
+pendientes y vencimiento real. Exigir concordancia exacta entre
+`options_live_fills`, `options_strategy_positions` y Binance; no usar
+precios teóricos como evidencia de ejecución.
+
+Con el kill switch apagado ninguna nueva orden real se envía.
+Las salidas pendientes son notificadas a Telegram como cierre manual
+requerido. No confundir ocho/nueve trabajos CI exitosos con la aprobación
+para activar operaciones: el contrato real con Binance sigue sin
+certificarse desde este chat.
