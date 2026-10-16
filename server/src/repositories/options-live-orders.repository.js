@@ -636,7 +636,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   async function markSending(id) {
     const { rows } = await db.query(
       "UPDATE options_live_orders SET status='sending',updated_at=$2 WHERE id=$1 " +
-      "AND status='queued' AND NOT cancel_requested AND reconcile_lease_until < $2 RETURNING *",
+      "AND status='queued' AND NOT cancel_requested AND deadline_at > $2 AND reconcile_lease_until < $2 RETURNING *",
       [id, now()]
     );
     return rows[0] ? map(rows[0]) : null;
