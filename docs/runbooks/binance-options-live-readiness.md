@@ -68,7 +68,7 @@ options-exact-buy-readonly-preview.js comprobará esta propuesta contra
 exchangeInfo, ticker, book, marginAccount, API permissions, posiciones y
 órdenes abiertas para el usuario interno que ya superó el diagnóstico
 (user ID 1). Todos los campos de cuenta permanecen en el VPS; en CI solo
-se publica si el campo USDT availableBalance está presente y cubre la
+se publica si el campo USDT available está presente y cubre la
 reserva máxima estimada de 0.26 USDT. **Equity/marginBalance no se acepta
 como disponibilidad real.**
 

@@ -19,7 +19,7 @@ function fixture(overrides={}){
   }]}),
   getTicker:async()=>({symbol,bidPrice:'23.40',askPrice:'23.60'}),
   getDepth:async()=>({bids:[['23.40','0.10']],asks:[['23.60','0.10']]}),
-  getAccount:async()=>({asset:[{asset:'USDT',availableBalance:'5.00',
+  getAccount:async()=>({asset:[{asset:'USDT',available:'5.00',
     equity:'1000',marginBalance:'1000'}]}),
   getApiRestrictions:async()=>({ipRestrict:true,enableWithdrawals:false,
    enableReading:true,enableVanillaOptions:true}),
@@ -64,7 +64,8 @@ test('exact ETH GET-only preview preserves user-quoted max and never arms live',
 test('equity or marginBalance is never substituted for available funds',async()=>{
  assert.equal(availableUsdt({asset:[{asset:'USDT',equity:'9999',
    marginBalance:'9999'}]}),null);
- assert.equal(availableUsdt({asset:[{asset:'USDT',availableBalance:'0.2'}]}),.2);
+ assert.equal(availableUsdt({asset:[{asset:'USDT',available:'0.2'}]}),.2);
+ assert.equal(availableUsdt({asset:[{asset:'USDT',availableBalance:'1000'}]}),null);
  const result=await calculate(fixture({getAccount:async()=>
   ({asset:[{asset:'USDT',marginBalance:'1000',equity:'1000'}]})}));
  assert.equal(result.technicalStatus,'unverified');
@@ -75,7 +76,7 @@ test('equity or marginBalance is never substituted for available funds',async()=
 
 test('too little available balance always blocks, without publishing its value',async()=>{
  const result=await calculate(fixture({getAccount:async()=>
-  ({asset:[{asset:'USDT',availableBalance:'0.20'}]})}));
+  ({asset:[{asset:'USDT',available:'0.20'}]})}));
  assert.equal(result.technicalStatus,'blocked');
  assert.equal(result.eligible,false);
  assert.match(outputLines(result).join('\n'),/preview_balanceEnough=fail/);
