@@ -128,3 +128,48 @@ de polling a ciegas ni volcar datos firmados en logs.
   de contrato con Binance **solo lectura**; hace solicitudes firmadas,
   no POST de órdenes ni cancelaciones. No ejecutar automáticamente en
   CI con credenciales reales ni imprimir resultados privados.
+
+## GitHub Actions: diagnóstico del VPS cada cinco horas
+
+El workflow `.github/workflows/options-diagnostics.yml` es **solo lectura**.
+Una vez fusionado a `main` ejecuta `cron: '17 */5 * * *'` (UTC), además de permitir
+`workflow_dispatch`. GitHub puede retrasar ejecuciones programadas: no debe
+considerarse un monitor en tiempo real ni un sustituto de Telegram en el VPS.
+
+Utiliza los secretos existentes de `production` (`SERVER_HOST`,
+`SERVER_USER`, `SERVER_SSH_KEY`, `DEPLOY_PATH`) y necesita el secreto
+**`SERVER_SSH_KNOWN_HOSTS`**. Debe incluir la **clave pública SSH del host**
+con prefijo que coincida exactamente con `SERVER_HOST`:
+
+```text
+<valor-de-SERVER_HOST> ssh-ed25519 <clave-publica-del-servidor>
+```
+
+Obtenerla desde el panel/consola confiable del VPS (por ejemplo,
+`/etc/ssh/ssh_host_ed25519_key.pub`). Confirmar allí la huella con
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`, **no** confiar sin
+comparación en un `ssh-keyscan` ejecutado durante CI. Guardarla en
+GitHub → Settings → Secrets and variables → Actions → Environment
+`production` (o en secretos del repositorio si así está configurado
+el deploy). No pegar ninguna clave privada ni credenciales en el chat.
+
+La conexión utiliza StrictHostKeyChecking; si falta esa huella o cambia,
+**la ejecución falla cerrada**. El job solo publica estados `healthy` y
+cantidades agregadas (`options_unresolved_orders`,
+`options_attention_orders`, `options_overdue_orders`,
+`options_expired_positions`). Los datos completos se procesan dentro
+del VPS, no se imprimen símbolos, usuarios ni balances. Un exit code 2
+significa **incidente**, no fallo de CI del código.
+
+Limitación: el workflow no puede ejecutarse mediante `workflow_dispatch`
+desde la interfaz hasta que el archivo exista en la rama predeterminada.
+El PR **no debe fusionarse solo para activar este diagnóstico** si aún
+están pendientes las barreras de trading real. No colocar ambos flags
+de trading en `true` por el simple hecho de completar el deploy.
+
+El comprobador `node src/scripts/options-live-contract-check.js <user-id>`
+verifica contratos firmados sin POST: si aún no existen órdenes históricas
+en el ledger, `getOrder` y `userTrades` quedan explícitamente
+`skipped`, nunca `ok` inventado. Incluso con arrays vacíos de ejercicio
+o bills, su estructura no demuestra un ejercicio realmente conciliado:
+esa evidencia debe obtenerse en la fase supervisada del piloto.
