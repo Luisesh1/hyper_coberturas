@@ -19,3 +19,18 @@ test('workflow de diagnóstico cinco horas: solo lectura con host SSH fijado', (
   assert.match(workflow, /options_expired_positions=/);
   assert.match(workflow, /audit=invalid_response/);
 });
+
+test('manual Binance contract check is read-only, fail-closed and never exposes raw JSON', () => {
+  assert.match(workflow, /binance_user_id:/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /StrictHostKeyChecking=yes/);
+  assert.match(workflow, /OPTIONS_LIVE_TRADING_ENABLED/);
+  assert.match(workflow, /OPTIONS_LIVE_PRODUCTION_APPROVED/);
+  assert.match(workflow, /options-live-contract-check\.js/);
+  assert.match(workflow, /binance_contract_check=not_deployed/);
+  assert.match(workflow, /binance_contract_ready=/);
+  assert.match(workflow, /result\.readOnly !== true/);
+  assert.match(workflow, /row\.endpoint/);
+  assert.doesNotMatch(workflow, /echo "\$raw"/);
+  assert.doesNotMatch(workflow, /git checkout|docker compose .*up -d|npm run migrate/);
+});
