@@ -309,11 +309,12 @@ function createOptionsMarketService({
     const item = (info?.optionSymbols || []).find((s) => s.symbol === parsed.symbol);
     const filter = (item?.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
     const tickSize = positiveOrNull(filter?.tickSize);
+    const minPrice = filter && num(filter.minPrice);
     const atrHourly = await cached(`atr1h:${parsed.underlying}`, async () => {
       const candles = await getClient().getSpotKlines(`${parsed.underlying}USDT`, '1h', 17);
       return hourlyAtr(candles, 14, now());
     }, 60_000);
-    return { atrHourly, tickSize };
+    return { atrHourly, tickSize, minPrice };
   }
 
   function clearCache() {
