@@ -13,7 +13,7 @@ const map = (r) => r && ({
   clientOrderId: r.client_order_id, orderId: r.exchange_order_id, status: r.status,
   leaseUntil: Number(r.reconcile_lease_until || 0),
   createdAt: Number(r.created_at), deadlineAt: Number(r.deadline_at),
-  error: r.last_error,
+  error: r.last_error, purpose: r.purpose || 'standard', cancelRequested: Boolean(r.cancel_requested),
 });
 
 function compareExposure(rows, exchangePositions) {
@@ -74,7 +74,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       }
       await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
       const { rows: pending } = await tx.query(
-        "SELECT id FROM options_live_batches WHERE user_id=$1 AND status <> 'completed' LIMIT 1",
+        "SELECT b.id FROM options_live_batches b WHERE b.user_id=$1 AND b.status <> 'completed' " +
+        "AND EXISTS (SELECT 1 FROM options_live_orders o WHERE o.batch_id=b.id AND o.purpose='standard') LIMIT 1",
         [strategy.userId]
       );
       if (pending.length) return null;
@@ -111,6 +112,15 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           }
         }
       }
+      if (action === 'open') {
+        const { rows: exits } = await tx.query(
+          "SELECT r.id FROM options_live_exit_requests r " +
+          "JOIN options_strategy_positions p ON p.id=r.position_id " +
+          "WHERE r.user_id=$1 AND p.closed_at IS NULL LIMIT 1",
+          [strategy.userId]
+        );
+        if (exits.length) return null;
+      }
       const { rows: existing } = await tx.query(
         'SELECT id FROM options_live_batches WHERE strategy_id=$1 AND action_key=$2',
         [strategy.id, key]
@@ -144,9 +154,191 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
 
+
+  /**
+   * Cada fill de apertura produce una posición individual: un TP por
+   * position_id protege exactamente esa cantidad, incluso con fills parciales.
+   * Nunca cubrir posiciones cuyo cierre ya fue solicitado.
+   */
+  async function listMissingTpPositions(limit = 100) {
+    const { rows } = await db.query(
+      "SELECT p.id,p.strategy_id,p.user_id,p.symbol,p.side,p.quantity,p.entry_price," +
+      "s.params,s.underlying FROM options_strategy_positions p " +
+      "JOIN options_strategies s ON s.id=p.strategy_id " +
+      "WHERE p.mode='live' AND p.closed_at IS NULL AND p.quantity > 0 " +
+      "AND s.mode='live' AND s.template='alert_signal' " +
+      "AND NOT EXISTS (SELECT 1 FROM options_live_orders o " +
+      "WHERE o.position_id=p.id AND o.purpose='take_profit' AND o.status<>'final') " +
+      "AND NOT EXISTS (SELECT 1 FROM options_live_exit_requests r WHERE r.position_id=p.id) " +
+      "AND NOT EXISTS (SELECT 1 FROM options_live_orders o " +
+      "WHERE o.position_id=p.id AND o.action='close' AND o.status<>'final') " +
+      "ORDER BY p.id LIMIT $1", [limit]
+    );
+    return rows.map((p) => ({
+      id: Number(p.id), strategyId: Number(p.strategy_id), userId: Number(p.user_id),
+      symbol: p.symbol, side: p.side, quantity: Number(p.quantity),
+      entryPrice: Number(p.entry_price),
+      params: typeof p.params === 'string' ? JSON.parse(p.params) : p.params,
+      underlying: p.underlying,
+    }));
+  }
+
+  /** Un único TP activo por fill, registrado DURABLEMENTE antes del POST. */
+  async function beginStandingTp({ position, price, deadlineAt }) {
+    return db.transaction(async (tx) => {
+      const { rows: [strategy] } = await tx.query(
+        "SELECT id,user_id,mode,template,underlying FROM options_strategies WHERE id=$1 FOR UPDATE",
+        [position.strategyId]
+      );
+      if (!strategy || Number(strategy.user_id) !== position.userId ||
+          strategy.mode !== 'live' || strategy.template !== 'alert_signal') return null;
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [position.userId]);
+      const { rows: [held] } = await tx.query(
+        "SELECT * FROM options_strategy_positions WHERE id=$1 AND closed_at IS NULL FOR UPDATE",
+        [position.id]
+      );
+      if (!held || held.mode !== 'live' ||
+          Number(held.user_id) !== position.userId ||
+          Number(held.strategy_id) !== position.strategyId ||
+          held.symbol !== position.symbol || held.side !== position.side ||
+          Math.abs(Number(held.quantity) - position.quantity) > 1e-8 ||
+          !String(position.symbol).startsWith(String(strategy.underlying) + '-')) return null;
+      if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(deadlineAt) || deadlineAt <= now()) {
+        throw new Error('Invalid standing TP limit price or expiration');
+      }
+      const { rows: blocked } = await tx.query(
+        "SELECT id FROM options_live_orders WHERE position_id=$1 AND status<>'final' " +
+        "AND (purpose='take_profit' OR action='close') " +
+        "UNION ALL SELECT id FROM options_live_exit_requests WHERE position_id=$1 LIMIT 1",
+        [position.id]
+      );
+      if (blocked.length) return null;
+      const { rows: [{ n }] } = await tx.query(
+        "SELECT COUNT(*)::int AS n FROM options_live_orders " +
+        "WHERE position_id=$1 AND purpose='take_profit'", [position.id]
+      );
+      const actionKey = 'tp:' + position.id + ':' + n;
+      const time = now();
+      const { rows: [batch] } = await tx.query(
+        `INSERT INTO options_live_batches
+           (strategy_id,user_id,action_key,action,detail,created_at,deadline_at)
+         VALUES ($1,$2,$3,'close',$4,$5,$6) RETURNING id`,
+        [position.strategyId, position.userId, actionKey,
+          'TP LIMIT al fill confirmado (reduceOnly)', time, deadlineAt]
+      );
+      const id = 'HC' + BigInt(batch.id).toString(36) + 'T0';
+      const side = held.side === 'BUY' ? 'SELL' : 'BUY';
+      const { rows: [order] } = await tx.query(
+        `INSERT INTO options_live_orders
+         (batch_id,strategy_id,user_id,action,position_id,symbol,side,
+          requested_qty,limit_price,client_order_id,created_at,deadline_at,updated_at,purpose)
+         VALUES ($1,$2,$3,'close',$4,$5,$6,$7,$8,$9,$10,$11,$10,'take_profit') RETURNING *`,
+        [batch.id, position.strategyId, position.userId, position.id,
+          position.symbol, side, position.quantity, price, id, time, deadlineAt]
+      );
+      return map(order);
+    });
+  }
+
+  async function listQueuedTpOrders(limit = 100) {
+    const { rows } = await db.query(
+      "SELECT * FROM options_live_orders WHERE status='queued' AND purpose='take_profit' " +
+      "AND NOT cancel_requested ORDER BY created_at,id LIMIT $1", [limit]
+    );
+    return rows.map(map);
+  }
+
+  /** Una solicitud de salida no se pierde durante la cancelación del TP. */
+  async function deferExitIfProtected(strategy, action) {
+    if (action.type !== 'close' || !Array.isArray(action.legs) || !action.legs.length) return false;
+    return db.transaction(async (tx) => {
+      const { rows: [owner] } = await tx.query(
+        'SELECT id,user_id,mode FROM options_strategies WHERE id=$1 FOR UPDATE', [strategy.id]
+      );
+      if (!owner || Number(owner.user_id) !== Number(strategy.userId) || owner.mode !== 'live') {
+        throw new Error('Strategy no longer live');
+      }
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
+      const ids = action.legs.map((l) => Number(l.positionId));
+      if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+          new Set(ids).size !== ids.length) throw new Error('Invalid exit position ids');
+      const { rows: held } = await tx.query(
+        'SELECT id,user_id,strategy_id,symbol,side,quantity FROM options_strategy_positions ' +
+        'WHERE id=ANY($1::bigint[]) AND mode=\'live\' AND closed_at IS NULL FOR UPDATE', [ids]
+      );
+      if (held.length !== ids.length) throw new Error('Exit position no longer open');
+      const byId = new Map(held.map((p) => [Number(p.id), p]));
+      for (const leg of action.legs) {
+        const p = byId.get(Number(leg.positionId));
+        if (!p || Number(p.user_id) !== Number(strategy.userId) ||
+            Number(p.strategy_id) !== Number(strategy.id) ||
+            p.symbol !== leg.symbol || p.side === leg.side ||
+            Number(leg.quantity) > Number(p.quantity) + 1e-8) {
+          throw new Error('Exit leg does not match verified position');
+        }
+      }
+      const { rows: protectedOrders } = await tx.query(
+        "SELECT id FROM options_live_orders WHERE user_id=$1 AND status<>'final' " +
+        "AND ((purpose='take_profit' AND position_id=ANY($2::bigint[])) " +
+        "OR (action='open' AND symbol=ANY($3::text[]))) LIMIT 1",
+        [strategy.userId, ids, held.map((p) => p.symbol)]
+      );
+      if (!protectedOrders.length) return false;
+      const time = now();
+      for (const p of held) {
+        await tx.query(
+          `INSERT INTO options_live_exit_requests
+           (position_id,strategy_id,user_id,reason,created_at,updated_at)
+           VALUES ($1,$2,$3,$4,$5,$5)
+           ON CONFLICT (position_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
+          [p.id, strategy.id, strategy.userId, String(action.reason || 'exit').slice(0, 80), time]
+        );
+      }
+      await tx.query(
+        "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$2 " +
+        "WHERE user_id=$1 AND status<>'final' AND " +
+        "((purpose='take_profit' AND position_id=ANY($3::bigint[])) " +
+        "OR (action='open' AND symbol=ANY($4::text[])))",
+        [strategy.userId, time, ids, held.map((p) => p.symbol)]
+      );
+      return true;
+    });
+  }
+
+  async function listReadyExitRequests(limit = 100) {
+    const { rows } = await db.query(
+      "SELECT r.id,p.id AS position_id,p.strategy_id,p.user_id,p.symbol,p.side,p.quantity " +
+      "FROM options_live_exit_requests r " +
+      "JOIN options_strategy_positions p ON p.id=r.position_id " +
+      "JOIN options_strategies s ON s.id=p.strategy_id " +
+      "WHERE p.closed_at IS NULL AND p.mode='live' AND s.mode='live' " +
+      "AND NOT EXISTS (SELECT 1 FROM options_live_orders o WHERE o.position_id=p.id " +
+      "AND o.purpose='take_profit' AND o.status<>'final') " +
+      "AND NOT EXISTS (SELECT 1 FROM options_live_orders o WHERE o.user_id=p.user_id " +
+      "AND o.action='open' AND o.symbol=p.symbol AND o.status<>'final') " +
+      "AND NOT EXISTS (SELECT 1 FROM options_live_orders o WHERE o.position_id=p.id " +
+      "AND o.action='close' AND o.purpose='standard' AND o.status<>'final') " +
+      "ORDER BY r.created_at,r.id LIMIT $1", [limit]
+    );
+    return rows.map((p) => ({
+      id: Number(p.id), positionId: Number(p.position_id),
+      strategyId: Number(p.strategy_id), userId: Number(p.user_id),
+      symbol: p.symbol, side: p.side, quantity: Number(p.quantity),
+    }));
+  }
+
+  async function listRestingTpOrderIds(userId) {
+    const { rows } = await db.query(
+      "SELECT client_order_id,exchange_order_id FROM options_live_orders " +
+      "WHERE user_id=$1 AND purpose='take_profit' AND status<>'final'", [userId]
+    );
+    return rows.map((r) => ({ clientOrderId: r.client_order_id, orderId: r.exchange_order_id }));
+  }
+
   async function listUnresolved() {
     const { rows } = await db.query(
-      "SELECT * FROM options_live_orders WHERE status <> 'final' AND (status <> 'queued' OR deadline_at <= $1) ORDER BY created_at,id",
+      "SELECT * FROM options_live_orders WHERE status <> 'final' " +
+      "AND (status <> 'queued' OR deadline_at <= $1 OR cancel_requested) ORDER BY created_at,id",
       [now()]
     );
     return rows.map(map);
@@ -224,7 +416,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
 
   async function markSending(id) {
     const { rows } = await db.query(
-      "UPDATE options_live_orders SET status='sending',updated_at=$2 WHERE id=$1 AND status='queued' AND reconcile_lease_until < $2 RETURNING *",
+      "UPDATE options_live_orders SET status='sending',updated_at=$2 WHERE id=$1 " +
+      "AND status='queued' AND NOT cancel_requested AND reconcile_lease_until < $2 RETURNING *",
       [id, now()]
     );
     return rows[0] ? map(rows[0]) : null;
@@ -407,6 +600,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
+    listMissingTpPositions, beginStandingTp, listQueuedTpOrders,
+    deferExitIfProtected, listReadyExitRequests, listRestingTpOrderIds,
     claimAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
