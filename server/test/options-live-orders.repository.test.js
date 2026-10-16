@@ -110,3 +110,19 @@ test('liberar conciliación solo modifica el lease exacto de quien lo adquirió'
   assert.equal(calls.length, 2);
   assert.match(calls[0].sql, /reconcile_lease_until=\$2/);
 });
+
+test('markSending exige deadline vigente en la transición SQL atómica', async () => {
+  const nowMs = 100_000;
+  const repo = createOptionsLiveOrdersRepository({
+    now: () => nowMs,
+    db: { async query(sql, args) {
+      assert.match(sql, /status='queued'/);
+      assert.match(sql, /NOT cancel_requested/);
+      assert.match(sql, /deadline_at > \\$2/);
+      assert.deepEqual(args, [13, nowMs]);
+      return { rows: [] };
+    } },
+  });
+  // PostgreSQL no reclama la fila si expiró o tiene cancelRequested.
+  assert.equal(await repo.markSending(13), null);
+});
