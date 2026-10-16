@@ -2,6 +2,61 @@
 
 Estado: **DRAFT / trading real deshabilitado**. Alcance: PR #4 fase 2. Documentación operativa, no autorización de despliegue.
 
+## Iteración de endurecimiento del piloto (16 oct 2026)
+
+**Estado: NO operar ni activar automáticamente.** La petición de habilitar
+live no sustituye la aprobación del contrato exacto, lado, cantidad,
+precio LIMIT y coste total en USD al momento de ejecución.
+
+Límites declarados: máximo absoluto 100 USD de pérdida, buscando la mínima
+posible. Solo una compra ETH; límite voluntario preliminar de 20 USDT
+incluyendo reserva del 10% de la prima como fee de entrada, sin asumir que
+USDT y USD son idénticos. Un contrato barato puede perder toda su prima.
+
+### Barrera obligatoria para la única entrada piloto
+
+El motor OptionsLiveExecution.submit comprueba ANTES del batch y del POST,
+cuando ambos flags live están activados, todas estas variables:
+
+- OPTIONS_LIVE_PILOT_AUTHORIZED=true, únicamente tras revisar y aprobar
+  los términos de ESA operación.
+- OPTIONS_LIVE_PILOT_USER_ID: ID interno del usuario autorizado.
+- OPTIONS_LIVE_PILOT_STRATEGY_ID: ID exacto de la estrategia ETH.
+- OPTIONS_LIVE_PILOT_SYMBOL: símbolo ETH exacto, listado y vigente.
+- OPTIONS_LIVE_PILOT_QUANTITY: lote mínimo o cantidad exacta válida.
+- OPTIONS_LIVE_PILOT_MAX_PRICE: límite máximo exacto de la opción en USDT.
+- OPTIONS_LIVE_PILOT_EXPIRES_AT_MS: fecha Unix ms, con vencimiento de
+  autorización no posterior a 15 minutos.
+
+La política impide SELL-to-open, BTC, estrategias o símbolos distintos,
+múltiples patas, otra cantidad, o precio más alto que el autorizado.
+Los cierres y TP protectores NO quedan bloqueados por el vencimiento
+del permiso. Bajo pg_advisory_xact_lock de PostgreSQL, beginBatch bloquea
+otra apertura si ya existe cualquier entrada previa del usuario, incluso
+una cancelada sin fills. No reintentar POST ambiguos.
+
+### Qué falta para habilitar y operar, por orden
+
+1. Diagnóstico GET en Binance para el contrato: tipo, strike, vencimiento,
+   delta, IV, bid/ask, profundidad, minQty/tick. Si no hay candidato, no operar.
+2. Verificar saldo libre, tarifa real en Binance, equivalencia USD/USDT,
+   coste total y ausencia de exposición, órdenes o incidencias del ledger.
+3. Elegir el bot exacto, plan de TP/stop y recuperación; otra revisión de
+   permisos y firma, límites de pérdida y monitorización.
+4. Obtener autorización transaccional explícita para símbolo, BUY, cantidad,
+   precio límite, coste máximo y usuario; fijar permiso de 15 minutos.
+5. PR de activación de producción revisada y controlada: por ahora
+   docker-compose.prod.yml fija ambos flags a false y deploy rechaza true;
+   no eludir estos bloqueos de forma silenciosa.
+6. Un único POST LIMIT supervisado, reconciliación con getOrder,
+   userTrades y fills; cancelar remanente por ID propio y confirmar TP,
+   stop y reinicio. Cerrar permisos y flags de nuevas entradas al acabar.
+7. Verificar liquidación real cuando venza con exerciseRecord y bill;
+   sin orden/trade históricos NO afirmar ready=yes.
+
+**No se ha enviado ninguna orden ni habilitado trading real.** Este cambio
+cierra errores de límites y autorización de entrada, no certifica Binance.
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**
