@@ -64,3 +64,20 @@ test('deployment stops before checkout and build when production trading is acti
   assert.match(deployWorkflow, /options-live-contract-check\.js/);
   assert.match(deployWorkflow, /git rev-parse HEAD/);
 });
+
+test('diagnóstico remoto no consume el heredoc SSH ni reporta éxito sin resultados', () => {
+  // Los procesos docker exec no deben heredar stdin de bash -s, porque
+  // pueden consumir el resto del script y provocar un falso success.
+  assert.match(workflow, /options-live-audit\.js <\/dev\/null/);
+  assert.match(workflow, /options-live-contract-check\.js "\$user_id" <\/dev\/null/);
+  assert.match(workflow, /binance_contract_check=blocked_live_flag[\s\S]*?exec -T server node -e '[\s\S]*?binance_contract_check=not_deployed/);
+  const manual = workflow.split('- name: Comprobar Binance Options firmadas')[1];
+  assert.match(manual, /process\.exit\(3\);\s*' <\/dev\/null; then/);
+  assert.match(manual, /process\.exit\(2\);\s*' <\/dev\/null; then/);
+  // Marcadores comprobados fuera de SSH: no basta con un SSH exit 0.
+  assert.match(workflow, /options_audit_complete=pass/);
+  assert.match(workflow, /grep -Fxq 'options_audit_complete=pass'/);
+  assert.match(workflow, /options-binance-check\.log/);
+  assert.match(workflow, /grep -Fxq 'binance_contract_check_complete=pass'/);
+  assert.match(workflow, /grep -Eq '\^binance_contract_ready=\(yes\|no\)\$'/);
+});
