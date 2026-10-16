@@ -50,3 +50,19 @@ test('minimal-loss quote scan stays read-only and never authorizes trading', () 
   assert.doesNotMatch(scan, /\.placeOrder\(|\.cancelOrder\(|\.query\(/);
   assert.doesNotMatch(flow, /docker compose .*up -d|git checkout|POST.*\/eapi\/v1\/order/);
 });
+
+test('public contract comparison uses only GET and never enables trading', () => {
+  assert.match(flow, /options-eth-contract-public-review\.js/);
+  assert.match(flow, /review_read_only=pass/);
+  assert.match(flow, /review_status=no_candidate/);
+  assert.match(flow, /pilot_ready=no/);
+  assert.match(flow, /Revisar contratos ETH con griegas/);
+  const script = fs.readFileSync(path.resolve(
+    __dirname, '../src/scripts/options-eth-contract-public-review.js'), 'utf8');
+  assert.match(script, /HARD_SCREEN_USDT = 20/);
+  assert.match(script, /MIN_DELTA = 0\.25/);
+  assert.match(script, /MAX_DELTA = 0\.75/);
+  assert.match(script, /MAX_BOOKS = 12/);
+  assert.match(script, /pilotReady: false/);
+  assert.doesNotMatch(script, /\.placeOrder\(|\.cancelOrder\(|\.query\(|\.getAccount\(/);
+});
