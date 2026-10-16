@@ -503,6 +503,15 @@ class OptionsStrategyRunner {
       }, ctx);
       return null;
     }
+    // Un TP LIMIT residente ya está encargado al exchange. No cancelarlo
+    // ni competir con él cuando el tick vuelve a detectar la misma ganancia.
+    if (action.type === 'close' && ['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+        typeof this.liveExecutor.repo?.hasStandingTp === 'function' &&
+        await this.liveExecutor.repo.hasStandingTp(action.legs.map((l) => l.positionId))) {
+      ctx.produced?.push({ mode: 'live', type: 'hold', pending: true,
+        reason: 'tp_resting', detail: 'TP LIMIT residente, ejecución pendiente en Binance' });
+      return null;
+    }
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
       await this.recordOutcome(strategy, 'live', {
@@ -573,7 +582,7 @@ class OptionsStrategyRunner {
       await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`);
     }
     ctx.produced?.push({ mode: 'live', type: action.type,
-      pending: result.status === 'submitted', reason: result.status,
+      pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
       detail: result.status === 'submitted' ? 'Orden límite enviada; ejecución pendiente' : result.status });
     return result;
   }
