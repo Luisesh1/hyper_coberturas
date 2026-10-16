@@ -19,6 +19,7 @@
 
 const { createBinanceOptionsClient } = require('./binance-options.client');
 const { NotFoundError, ValidationError } = require('../../errors/app-error');
+const { hourlyAtr } = require('./options-take-profit');
 
 const DEFAULT_TTL_MS = 30_000;
 const METADATA_TTL_MS = 10 * 60_000;
@@ -298,11 +299,27 @@ function createOptionsMarketService({
     };
   }
 
+  // Requiere metadatos reales del tick y 14 velas cerradas (sin suponer
+  // precisión de cotización ni ATR cuando Binance no los proporciona).
+  async function getVolatilityInputs(rawSymbol) {
+    const parsed = parseSymbol(rawSymbol);
+    if (!parsed) throw new ValidationError('Símbolo de opción inválido para TP');
+    const info = await getExchangeInfo();
+    const item = (info?.optionSymbols || []).find((s) => s.symbol === parsed.symbol);
+    const filter = (item?.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
+    const tickSize = positiveOrNull(filter?.tickSize);
+    const atrHourly = await cached(`atr1h:${parsed.underlying}`, async () => {
+      const candles = await getClient().getSpotKlines(`${parsed.underlying}USDT`, '1h', 17);
+      return hourlyAtr(candles, 14, now());
+    }, 60_000);
+    return { atrHourly, tickSize };
+  }
+
   function clearCache() {
     cache.clear();
   }
 
-  return { listUnderlyings, getChain, getQuote, getMarks, clearCache };
+  return { listUnderlyings, getChain, getQuote, getMarks, getVolatilityInputs, clearCache };
 }
 
 // Instancia por defecto (cliente público sin credenciales).
@@ -317,5 +334,6 @@ module.exports = {
   getChain: (...args) => defaultService.getChain(...args),
   getQuote: (...args) => defaultService.getQuote(...args),
   getMarks: (...args) => defaultService.getMarks(...args),
+  getVolatilityInputs: (...args) => defaultService.getVolatilityInputs(...args),
   clearCache: () => defaultService.clearCache(),
 };
