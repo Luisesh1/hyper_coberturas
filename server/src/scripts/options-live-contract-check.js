@@ -72,13 +72,24 @@ async function checkContracts({ userId, client, database, at = Date.now() }) {
     row.status === 'TRADING' && typeof row.symbol === 'string' &&
     /^[A-Z0-9]+-\d{6}-[0-9.]+-[CP]$/.test(row.symbol));
   if (active) {
-    // Verificar tick/lot/fechas antes de permitir TP o sizing en real.
-    const filter = (active.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
-    const tick = Number(filter?.tickSize);
-    const step = Number(filter?.stepSize);
+    // Binance Options documenta tanto LOT_SIZE separado como stepSize
+    // embebido en PRICE_FILTER. Debe coincidir con el validador de órdenes.
+    const filters = Array.isArray(active.filters) ? active.filters : [];
+    const priceFilter = filters.find((f) => f?.filterType === 'PRICE_FILTER');
+    const lotFilter = filters.find((f) => f?.filterType === 'LOT_SIZE') || priceFilter;
+    const tick = Number(priceFilter?.tickSize);
+    const step = Number(lotFilter?.stepSize);
+    const minQty = Number(lotFilter?.minQty);
+    const maxQty = Number(lotFilter?.maxQty ?? active.maxQty);
     const expiry = Number(active.expiryDate);
-    const valid = tick > 0 && step > 0 && expiry > at && Number.isFinite(expiry);
-    results.push({ endpoint: 'optionFilters', ok: valid, fields: ['tickSize', 'stepSize', 'expiryDate'] });
+    const valid = active.quoteAsset === 'USDT' &&
+      Number.isFinite(tick) && tick > 0 &&
+      Number.isFinite(step) && step > 0 &&
+      Number.isFinite(minQty) && minQty > 0 &&
+      Number.isFinite(maxQty) && maxQty >= minQty &&
+      Number.isFinite(expiry) && expiry > at;
+    results.push({ endpoint: 'optionFilters', ok: valid,
+      fields: ['tickSize', 'stepSize', 'minQty', 'maxQty', 'expiryDate', 'quoteAsset'] });
     const underlying = String(active.underlying || '').toUpperCase();
     if (/^[A-Z0-9]{3,20}$/.test(underlying) && typeof client.getSpotKlines === 'function') {
       await checked('spotKlines1h', async () => {
