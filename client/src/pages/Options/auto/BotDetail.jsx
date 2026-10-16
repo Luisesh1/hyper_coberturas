@@ -6,6 +6,7 @@ import { isCredentialsError } from '../strategies/strategyView';
 import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import SignalsFeed, { SignalFilter } from './SignalsFeed';
+import LiveTpStatus from './LiveTpStatus';
 import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, buildBotKpis, describeParams } from './botView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
@@ -132,6 +133,7 @@ export default function BotDetail({
           <ModeError error={modeError} />
           {liveWarning}
           {loadAlert}
+          <LiveTpStatus bot={bot} />
           <div className={ui.tileGrid}>
             <div className={ui.tile}>
               <span className={ui.tileLabel}>Señales 30d</span>
@@ -189,6 +191,7 @@ export default function BotDetail({
       <ModeError error={modeError} />
       {liveWarning}
       {loadAlert}
+      <LiveTpStatus bot={bot} />
 
       <div className={ui.kpiGrid}>
         {kpis.map((k) => (
