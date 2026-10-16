@@ -145,6 +145,25 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         }
       }
       if (action === 'open') {
+        // Una sola entrada histórica por usuario durante el piloto.
+        // Se consulta BAJO el advisory lock existente del usuario: dos
+        // estrategias concurrentes no pueden consumir el permiso a la vez.
+        // Las entradas anteriores, incluso canceladas o con 0 fills,
+        // también consumen el piloto: revisión humana antes de repetir.
+        if (process.env.OPTIONS_LIVE_TRADING_ENABLED === 'true' &&
+            process.env.OPTIONS_LIVE_PRODUCTION_APPROVED === 'true') {
+          const { rows: alreadyAttempted } = await tx.query(
+            "SELECT id FROM options_live_orders WHERE user_id=$1 AND action='open' LIMIT 1",
+            [strategy.userId]
+          );
+          if (alreadyAttempted.length) {
+            throw new Error('One-shot pilot already used; no additional live entries');
+          }
+          if (legs.length !== 1 || legs[0].side !== 'BUY' ||
+              !/^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(legs[0].symbol || '')) {
+            throw new Error('One-shot pilot allows only one ETH BUY leg');
+          }
+        }
         const { rows: exits } = await tx.query(
           "SELECT r.id FROM options_live_exit_requests r " +
           "JOIN options_strategy_positions p ON p.id=r.position_id " +
