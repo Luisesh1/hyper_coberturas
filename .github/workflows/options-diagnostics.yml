@@ -122,7 +122,7 @@ jobs:
             exit 1
           fi
           for metric in options_unresolved_orders options_attention_orders options_overdue_orders options_expired_positions; do
-            if ! grep -Eq "^\${metric}=[0-9]+$" "$RUNNER_TEMP/options-vps-audit.log"; then
+            if ! grep -Eq "^${metric}=[0-9]+$" "$RUNNER_TEMP/options-vps-audit.log"; then
               echo "::error::Auditoría incompleta (faltó una métrica agregada)"
               exit 1
             fi
@@ -206,7 +206,7 @@ jobs:
           REMOTE
           # Sin marcador y resultado explícito, nunca publicar "success".
           if ! grep -Fxq 'binance_contract_check_complete=pass' "$RUNNER_TEMP/options-binance-check.log" ||
-             ! grep -Eq '^binance_contract_ready=(yes|no) "$RUNNER_TEMP/options-binance-check.log"; then
+              ! grep -Eq '^binance_contract_ready=(yes|no)$' "$RUNNER_TEMP/options-binance-check.log"; then
             echo "::error::Diagnóstico Binance incompleto (faltó resultado firmado)"
             exit 1
           fi
