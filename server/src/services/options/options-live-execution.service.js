@@ -6,6 +6,7 @@
 const liveRepo = require('../../repositories/options-live-orders.repository');
 const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
+const { validateBinanceOrderBatch } = require('./options-order-filters');
 
 const WINDOW_MS = 10 * 60_000;
 const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'REJECTED']);
@@ -99,9 +100,15 @@ class OptionsLiveExecution {
     if (new Set(legs.map((l) => l.symbol + ':' + (l.positionId ?? ''))).size !== legs.length) {
       throw new Error('Duplicate leg');
     }
+    // Binance Options usa filtros con mínimo como origen del paso:
+    // (precio-minPrice) % tickSize y (qty-minQty) % stepSize.
+    // Bloquear ANTES del batch: nunca confiar en redondeos UI/market.
+    const deadlineAt = this.now() + WINDOW_MS;
+    const exchangeInfo = await client.getExchangeInfo();
+    validateBinanceOrderBatch(exchangeInfo, legs, this.now(), deadlineAt);
     const orders = await this.repo.beginBatch({
       strategy, action: action.type, legs, key: actionKey(strategy, action, ctx),
-      detail: action.detail, deadlineAt: this.now() + WINDOW_MS,
+      detail: action.detail, deadlineAt,
       exchangePositions,
     });
     if (!orders) return { status: 'duplicate_or_unresolved' };
