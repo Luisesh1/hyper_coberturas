@@ -24,6 +24,27 @@ Estado: **DRAFT / trading real deshabilitado**. Alcance: PR #4 fase 2. Documenta
 - El flags OFF **no cierra posiciones existentes**: las posiciones abiertas
   necesitan seguimiento/gestión manual en Binance mientras se investiga.
 
+### Gate de despliegue sin trading real
+
+El despliegue de esta fase en `docker-compose.prod.yml` **fuerza a
+`false`** las dos variables `OPTIONS_LIVE_TRADING_ENABLED` y
+`OPTIONS_LIVE_PRODUCTION_APPROVED` mediante `environment:`, que tiene
+prioridad sobre `server/.env`. La habilitación futura requiere otro
+cambio de código revisado y autorización independiente del piloto.
+
+`deploy.yml` comprueba el contenedor actual de manera remota y **aborta
+antes de `git checkout` / reconstruir** si cualquiera de los dos flags
+está encendido o la comprobación no responde. Después de reconstruir,
+comprueba SHA desplegado, ambos flags apagados y existencia de scripts
+de diagnóstico; no prueba órdenes, cancela posiciones ni introduce
+credenciales en Actions. Requiere el secreto SSH `SERVER_SSH_KNOWN_HOSTS`
+verificado previamente o falla antes de tocar el VPS.
+
+**Una CI exitosa o un deploy verde no certifican formatos firmados
+de Binance.** El diagnóstico con ID interno debe ejecutarse
+separadamente mediante el workflow manual `Options - diagnóstico VPS`
+cuando el release esté desplegado.
+
 ## Comprobaciones antes de cualquier piloto real
 
 1. PR completa revisada por al menos un segundo desarrollador; GitHub CI (incluyendo `test-migrations` con PostgreSQL 16)
