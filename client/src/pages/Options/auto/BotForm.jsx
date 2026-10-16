@@ -7,7 +7,7 @@ import { autoBotsApi } from '../autoTradingApi';
 import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import {
-  NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, alertMeta, buildBotPayload,
+  NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, TAKE_PROFIT_MODES, alertMeta, buildBotPayload,
   initialBotForm, normalizeAlert, structureLabels, validateBotForm, withStructure,
 } from './botView';
 import ui from '../strategies/common/ui.module.css';
@@ -323,17 +323,50 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
         </FieldGroup>
 
         <FieldGroup title="3 · Salidas">
-          <NumberField
-            label={labels.takeProfit}
-            help={labels.takeProfitHelp}
-            unit="%"
-            value={form.takeProfitPct}
-            min={1}
-            max={1000}
-            step={5}
-            error={errors.takeProfitPct}
-            onChange={(v) => update({ takeProfitPct: v })}
+          <ChoiceField
+            label="Tipo de Take Profit"
+            options={TAKE_PROFIT_MODES.map((m) => ({ value: m.value, label: m.label }))}
+            value={form.takeProfitMode}
+            onChange={(v) => update({ takeProfitMode: v })}
+            error={errors.takeProfitMode}
+            columns={2}
           />
+          {form.takeProfitMode === 'volatility' ? (
+            <>
+              <p className={styles.note}>Objetivo calculado con ATR de velas spot 1 h, IV actual y prima de entrada confirmada. Se comprueba el precio ejecutable antes del cierre. Sin datos de Binance no se ejecuta este TP; el stop y la salida por tiempo siguen activos. No garantiza ganancia.</p>
+              <NumberField
+                label="Multiplicador ATR"
+                value={form.tpAtrMultiplier}
+                min={0.25}
+                max={4}
+                step={0.25}
+                error={errors.tpAtrMultiplier}
+                onChange={(v) => update({ tpAtrMultiplier: v })}
+              />
+              <NumberField
+                label="Horizonte del movimiento"
+                unit="h"
+                value={form.tpHorizonHours}
+                min={1}
+                max={24}
+                integer
+                error={errors.tpHorizonHours}
+                onChange={(v) => update({ tpHorizonHours: v })}
+              />
+            </>
+          ) : (
+            <NumberField
+              label={labels.takeProfit}
+              help={labels.takeProfitHelp}
+              unit="%"
+              value={form.takeProfitPct}
+              min={1}
+              max={1000}
+              step={5}
+              error={errors.takeProfitPct}
+              onChange={(v) => update({ takeProfitPct: v })}
+            />
+          )}
           <NumberField
             label={labels.stopLoss}
             help={labels.stopLossHelp}
