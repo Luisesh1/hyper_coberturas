@@ -5,7 +5,13 @@
 name: Options - diagnóstico VPS
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      binance_user_id:
+        description: 'ID interno de usuario para comprobar Binance (opcional, solo lectura)'
+        required: false
+        default: ''
+        type: string
   schedule:
     - cron: '17 */5 * * *'
 
@@ -107,4 +113,80 @@ jobs:
             });
           '
           if [ "$healthy" -ne 1 ]; then exit 2; fi
+          REMOTE
+
+      - name: Comprobar Binance Options firmadas (solo lectura; manual)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.binance_user_id != '' }}
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          BINANCE_USER_ID: ${{ inputs.binance_user_id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${BINANCE_USER_ID:-}" =~ ^[1-9][0-9]{0,14}$ ]]; then
+            echo "::error::binance_user_id debe ser un entero positivo"
+            exit 1
+          fi
+          if [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_HOST:-}" ] || [ -z "${DEPLOY_PATH:-}" ]; then
+            echo "::error::Falta configuración SSH/deploy en el entorno production"
+            exit 1
+          fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s -- '$BINANCE_USER_ID'" <<'REMOTE'
+          set -euo pipefail
+          user_id="$1"
+          compose=(docker compose -f docker-compose.prod.yml)
+          # No activar flags. Si alguno está activo, abortar incluso el preflight.
+          if ! "${compose[@]}" exec -T server node -e '
+            if (process.env.OPTIONS_LIVE_TRADING_ENABLED === "true" ||
+                process.env.OPTIONS_LIVE_PRODUCTION_APPROVED === "true") process.exit(3);
+          '; then
+            echo "binance_contract_check=blocked_live_flag"
+            exit 3
+          fi
+          # No hacer checkout del PR ni reconstruir contenedores en producción.
+          # El diagnóstico solo corre si el release desplegado ya lo contiene.
+          if ! "${compose[@]}" exec -T server node -e '
+            const fs = require("node:fs");
+            if (!fs.existsSync("src/scripts/options-live-contract-check.js")) process.exit(2);
+          '; then
+            echo "binance_contract_check=not_deployed"
+            exit 2
+          fi
+          status=0
+          raw="$("${compose[@]}" exec -T server node src/scripts/options-live-contract-check.js "$user_id" 2>/dev/null)" || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            echo "binance_contract_check=unavailable"
+            exit 1
+          fi
+          # Solo publicar el nombre/status/código de cada control; NUNCA el JSON.
+          printf '%s' "$raw" | "${compose[@]}" exec -T server node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", part => { input += part; });
+            process.stdin.on("end", () => {
+              try {
+                const result = JSON.parse(input);
+                const allowed = new Set([
+                  "exchangeInfo", "optionFilters", "spotKlines1h", "apiPermissions",
+                  "marginAccount", "positions", "openOrders", "isolatedAccount",
+                  "exerciseRecord", "bill", "getOrder", "userTrades"
+                ]);
+                if (result.readOnly !== true || !Array.isArray(result.results) ||
+                    result.results.some(r => !allowed.has(r.endpoint) ||
+                      (r.ok !== true && r.ok !== false && r.ok !== null))) {
+                  throw new Error("Invalid contract response");
+                }
+                for (const row of result.results) {
+                  console.log("binance_" + row.endpoint + "=" +
+                    (row.ok === true ? "pass" : row.ok === null ? "unverified" : "fail"));
+                }
+                console.log("binance_contract_ready=" + (result.ready === true ? "yes" : "no"));
+                if (result.ready !== true) process.exitCode = 2;
+              } catch (_) {
+                console.log("binance_contract_check=invalid_response");
+                process.exitCode = 1;
+              }
+            });
+          '
           REMOTE
