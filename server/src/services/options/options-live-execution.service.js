@@ -7,11 +7,45 @@ const liveRepo = require('../../repositories/options-live-orders.repository');
 const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
 const { validateBinanceOrderBatch } = require('./options-order-filters');
+const { parseSymbol } = require('./options-utils');
+const { projectTakeProfit } = require('./options-take-profit');
+const alertSignal = require('./templates/alert-signal');
 
 const WINDOW_MS = 10 * 60_000;
 const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'REJECTED']);
 const ACTIVE = new Set(['NEW', 'PARTIALLY_FILLED', 'ACCEPTED']);
 const clean = (value) => String(value ?? '');
+
+function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly, now }) {
+  const side = position.side;
+  const origin = Number(minPrice);
+  const tick = Number(tickSize);
+  if (!Number.isFinite(origin) || origin < 0 || !(tick > 0)) return null;
+  if (params.takeProfitMode === 'volatility') {
+    const meta = parseSymbol(position.symbol);
+    if (!meta || !quote) return null;
+    return projectTakeProfit({
+      entryPrice: position.entryPrice, spot: Number(quote.spot),
+      strike: meta.strike, type: meta.type, side,
+      iv: Number(quote.iv), expiryMs: meta.expiryMs, nowMs: now,
+      atrHourly, tickSize: tick, minPrice: origin,
+      atrMultiplier: params.tpAtrMultiplier, horizonHours: params.tpHorizonHours,
+    })?.price ?? null;
+  }
+  // Fijo: precios resting que permiten salir con la prima objetivo, nunca
+  // confiar en un mark o una cotización ejecutable que ya se movió.
+  const pct = Number(params.takeProfitPct) / 100;
+  const raw = side === 'BUY'
+    ? position.entryPrice * (1 + pct)
+    : position.entryPrice * (1 - pct);
+  const scaled = (raw - origin) / tick;
+  const steps = side === 'BUY' ? Math.ceil(scaled - 1e-9) : Math.floor(scaled + 1e-9);
+  const price = Number((origin + steps * tick).toFixed(10));
+  if (!(price > 0) ||
+      (side === 'BUY' && price <= position.entryPrice) ||
+      (side === 'SELL' && price >= position.entryPrice)) return null;
+  return price;
+}
 
 function normalizeTrade(raw, order, exchangeOrderId) {
   if (clean(raw.orderId) !== clean(exchangeOrderId)) return null;
@@ -53,6 +87,7 @@ class OptionsLiveExecution {
     this.repo = deps.repo || liveRepo;
     this.credentials = deps.credentials || credentialsDefault;
     this.logger = deps.logger || loggerDefault;
+    this.market = deps.market || require('./options-market.service');
     this.now = deps.now || Date.now;
     this.lastExternalScanAt = null;
     this.settlement = deps.settlement || require('./options-live-settlement.service');
@@ -79,13 +114,30 @@ class OptionsLiveExecution {
         typeof this.repo.assertExchangeExposure !== 'function') {
       throw new Error('Binance exposure and open-order checks are unavailable');
     }
+    if (action.type === 'close' &&
+        typeof this.repo.deferExitIfProtected === 'function' &&
+        await this.repo.deferExitIfProtected(strategy, action)) {
+      return { status: 'tp_cancel_requested', sent: 0 };
+    }
     // Una orden manual que todavía no ha llenado no aparece en posiciones:
     // puede ejecutarse después de nuestro preflight. Bloquear hasta que
     // la cuenta no tenga órdenes abiertas no gestionadas por este lote.
     const openOrders = await client.getOpenOrders();
     if (!Array.isArray(openOrders)) throw new Error('Invalid Binance open-order list');
     if (openOrders.length) {
-      throw new Error('Binance account has pending orders: manual reconciliation required');
+      if (action.type !== 'close' ||
+          typeof this.repo.listRestingTpOrderIds !== 'function') {
+        throw new Error('Binance account has pending orders: manual reconciliation required');
+      }
+      const mine = await this.repo.listRestingTpOrderIds(strategy.userId);
+      const ids = new Set(mine.map((o) => clean(o.clientOrderId)));
+      const orderIds = new Set(mine.map((o) => clean(o.orderId)).filter(Boolean));
+      // Cerrar otra posición es admisible si las únicas órdenes resting
+      // ajenas al objetivo son TPs propios e identificados.
+      if (openOrders.some((o) =>
+        !ids.has(clean(o.clientOrderId)) && !orderIds.has(clean(o.orderId)))) {
+        throw new Error('Binance account has pending orders: manual reconciliation required');
+      }
     }
     // No enviar órdenes si existen posiciones ajenas o fills que todavía
     // no figuran en el ledger local.
@@ -154,7 +206,7 @@ class OptionsLiveExecution {
     if (order.status === 'queued') {
       // Mientras la ventana siga abierta, el sender todavía puede reclamar
       // esta pata. Nunca marcarla final antes de su deadline.
-      if (this.now() < order.deadlineAt) return;
+      if (this.now() < order.deadlineAt && !order.cancelRequested) return;
       // Solo finishOrder puede finalizarla, y únicamente si la fila
       // continúa en 'queued' bajo FOR UPDATE.
       await this.repo.finishOrder(order.id, null, 0);
@@ -183,9 +235,14 @@ class OptionsLiveExecution {
     if (!TERMINAL.has(status) && !ACTIVE.has(status)) {
       throw new Error(`Unrecognized Binance order status: ${status}`);
     }
-    if (this.now() >= order.deadlineAt && !TERMINAL.has(status)) {
-      // Solo cancelar la orden identificada, nunca órdenes ajenas.
-      await client.cancelOrder({ symbol: order.symbol, orderId });
+    if ((this.now() >= order.deadlineAt || order.cancelRequested) && !TERMINAL.has(status)) {
+      // Nunca enviar otro cierre antes de confirmar la cancelación del TP.
+      try {
+        await client.cancelOrder({ symbol: order.symbol, orderId });
+      } catch (err) {
+        const rechecked = await client.getOrder({ symbol: order.symbol, orderId });
+        if (!TERMINAL.has(clean(rechecked?.status).toUpperCase())) throw err;
+      }
       state = await client.getOrder({ symbol: order.symbol, orderId });
       status = clean(state?.status).toUpperCase();
       if (!TERMINAL.has(status) && !ACTIVE.has(status)) {
