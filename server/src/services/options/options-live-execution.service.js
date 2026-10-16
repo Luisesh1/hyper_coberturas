@@ -569,8 +569,27 @@ class OptionsLiveExecution {
    * reintenta cuando el TP está definitivamente cancelado/reconciliado.
    */
   async processDeferredExits() {
-    if (!this.enabled || typeof this.repo.listReadyExitRequests !== 'function') return { sent: 0 };
+    if (typeof this.repo.listReadyExitRequests !== 'function') return { sent: 0 };
     const pending = await this.repo.listReadyExitRequests(100);
+    // Kill switch OFF bloquea toda orden nueva, también de salida. Alertar
+    // explícitamente para intervención manual en Binance.
+    if (!this.enabled) {
+      for (const request of pending) {
+        try {
+          if (typeof this.repo.claimIncidentNotification === 'function' &&
+              await this.repo.claimIncidentNotification(request.userId,
+                'MANUAL_EXIT_REQUIRED', String(request.positionId))) {
+            await this.notify(request.userId,
+              '<b>ALERTA · Cierre manual requerido</b>\\n' +
+              'Trading real apagado y posición #' + request.positionId +
+              ' tiene salida pendiente. Revisar Binance.');
+          }
+        } catch (err) {
+          this.logger.warn('options_exit_disabled_alert_failed', { error: err.message });
+        }
+      }
+      return { sent: 0, manual: pending.length };
+    }
     let sent = 0;
     for (const request of pending) {
       try {
