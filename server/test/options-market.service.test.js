@@ -15,7 +15,9 @@ const EXCHANGE_INFO = {
     { baseAsset: 'BTC', underlying: 'BTCUSDT' },
   ],
   optionSymbols: [
-    { symbol: 'BTC-261031-68000-C', underlying: 'BTCUSDT', side: 'CALL', strikePrice: '68000', expiryDate: Date.UTC(2026, 9, 31, 8) },
+    { symbol: 'BTC-261031-68000-C', underlying: 'BTCUSDT', side: 'CALL', strikePrice: '68000', expiryDate: Date.UTC(2026, 9, 31, 8),
+      filters: [{ filterType: 'PRICE_FILTER', minPrice: '0.02', tickSize: '0.01',
+        minQty: '0.01', maxQty: '10', stepSize: '0.01' }] },
     { symbol: 'BTC-261031-68000-P', underlying: 'BTCUSDT', side: 'PUT', strikePrice: '68000', expiryDate: Date.UTC(2026, 9, 31, 8) },
     { symbol: 'BTC-261031-66000-P', underlying: 'BTCUSDT', side: 'PUT', strikePrice: '66000', expiryDate: Date.UTC(2026, 9, 31, 8) },
     { symbol: 'BTC-261016-70000-C', underlying: 'BTCUSDT', side: 'CALL', strikePrice: '70000', expiryDate: Date.UTC(2026, 9, 16, 8) },
@@ -84,6 +86,7 @@ test('getChain arma la cadena del vencimiento más cercano por defecto', async (
   assert.deepEqual(chain.expiries.map((e) => e.code), ['261016', '261031']);
   assert.equal(chain.expiries[0].dte, 2);
   assert.equal(chain.expiries[1].label, '31 oct 26');
+  assert.equal(chain.expiries[1].expiryMs, Date.UTC(2026, 9, 31, 8));
   assert.equal(chain.expiry, '261016');
   assert.equal(chain.rows.length, 1);
   assert.equal(chain.rows[0].put.symbol, null);
@@ -106,6 +109,9 @@ test('getChain con vencimiento devuelve filas por strike con griegas y bid/ask',
     theta: -45.2,
     vega: 60.1,
     openInterest: 12.5,
+    minQty: 0.01,
+    maxQty: 10,
+    stepSize: 0.01,
   });
   // bid a cero → null (sin liquidez)
   assert.equal(atm.put.bid, null);
@@ -121,13 +127,13 @@ test('getChain valida underlying y vencimiento', async () => {
   await assert.rejects(() => service.getChain('BTC/../x'), (err) => err.status === 400);
 });
 
-test('la caché evita repetir llamadas durante 5 s', async () => {
+test('la caché agrupa snapshots durante 30 s', async () => {
   const { service, calls, advance } = buildService();
   await service.getChain('BTC', '261031');
   const first = calls.length;
   await service.getChain('BTC', '261031');
   assert.equal(calls.length, first);
-  advance(6000);
+  advance(31_000);
   await service.getChain('BTC', '261031');
   assert.ok(calls.length > first);
 });
@@ -141,11 +147,11 @@ test('listUnderlyings ordena por relevancia con spot y cambio 24h', async () => 
   ]);
 });
 
-test('getQuote usa el libro para bid/ask y añade los datos del contrato', async () => {
+test('getQuote usa snapshot para UI y conserva datos del contrato', async () => {
   const { service } = buildService();
   const quote = await service.getQuote('BTC-261031-68000-C');
-  assert.equal(quote.bid, 1490);
-  assert.equal(quote.ask, 1510);
+  assert.equal(quote.bid, 1480);
+  assert.equal(quote.ask, 1520);
   assert.equal(quote.mark, 1500);
   assert.equal(quote.iv, 0.52);
   assert.equal(quote.underlying, 'BTC');
@@ -154,4 +160,16 @@ test('getQuote usa el libro para bid/ask y añade los datos del contrato', async
   assert.equal(quote.expiry, '261031');
   assert.equal(quote.spot, 67800.5);
   await assert.rejects(() => service.getQuote('nope'), (err) => err.status === 400);
+});
+
+test('getQuote fresh exige libro real sin usar la caché de 30 s', async () => {
+  const { service, calls } = buildService();
+  await service.getQuote('BTC-261031-68000-C');
+  assert.equal(calls.some((url) => new URL(url).pathname === '/eapi/v1/depth'), false);
+  const fresh = await service.getQuote('BTC-261031-68000-C', { fresh: true });
+  assert.equal(fresh.bid, 1490);
+  assert.equal(fresh.ask, 1510);
+  assert.ok(calls.some((url) => new URL(url).pathname === '/eapi/v1/depth'));
+  assert.ok(calls.some((url) => new URL(url).pathname === '/eapi/v1/mark'
+    && new URL(url).searchParams.get('symbol') === 'BTC-261031-68000-C'));
 });

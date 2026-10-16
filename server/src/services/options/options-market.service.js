@@ -6,11 +6,11 @@
  *
  * - exchangeInfo → subyacentes, símbolos, strikes y vencimientos.
  * - mark         → precio mark, IV y griegas.
- * - ticker       → mejor bid/ask de cada símbolo (depth para una cotización).
+ * - ticker       → mejor bid/ask por snapshot; depth se usa en preflight de ejecución.
  * - index        → spot del subyacente.
  * - openInterest → interés abierto por vencimiento.
  *
- * Caché en memoria de unos 5 s por petición, compartiendo las promesas en
+ * Caché en memoria de 30 s para datos públicos y 10 min para metadatos, compartiendo promesas en
  * curso para no repetir llamadas concurrentes.
  *
  * Convenciones: `iv` es una fracción (0.52 = 52 %), como la publica Binance;
@@ -19,8 +19,10 @@
 
 const { createBinanceOptionsClient } = require('./binance-options.client');
 const { NotFoundError, ValidationError } = require('../../errors/app-error');
+const { hourlyAtr } = require('./options-take-profit');
 
-const DEFAULT_TTL_MS = 5_000;
+const DEFAULT_TTL_MS = 30_000;
+const METADATA_TTL_MS = 10 * 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UNDERLYING_ORDER = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE'];
 const MONTHS_ES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -86,7 +88,7 @@ function emptyLeg(symbol = null) {
   };
 }
 
-function buildLeg(symbol, { mark, ticker, openInterest }) {
+function buildLeg(symbol, { mark, ticker, openInterest, contract }) {
   return {
     symbol,
     bid: positiveOrNull(ticker?.bidPrice),
@@ -98,6 +100,9 @@ function buildLeg(symbol, { mark, ticker, openInterest }) {
     theta: num(mark?.theta),
     vega: num(mark?.vega),
     openInterest: openInterest ?? null,
+    minQty: contract?.minQty ?? null,
+    maxQty: contract?.maxQty ?? null,
+    stepSize: contract?.stepSize ?? null,
   };
 }
 
@@ -123,9 +128,9 @@ function createOptionsMarketService({
     return publicClient;
   }
 
-  function cached(key, loader) {
+  function cached(key, loader, lifetimeMs = ttlMs) {
     const hit = cache.get(key);
-    if (hit && now() - hit.at < ttlMs) return hit.promise;
+    if (hit && now() - hit.at < lifetimeMs) return hit.promise;
     const promise = Promise.resolve().then(loader);
     cache.set(key, { at: now(), promise });
     promise.catch(() => {
@@ -134,7 +139,7 @@ function createOptionsMarketService({
     return promise;
   }
 
-  const getExchangeInfo = () => cached('exchangeInfo', () => getClient().getExchangeInfo());
+  const getExchangeInfo = () => cached('exchangeInfo', () => getClient().getExchangeInfo(), METADATA_TTL_MS);
   const getMarks = () => cached('mark', () => getClient().getMark());
   const getTickers = () => cached('ticker', () => getClient().getTicker());
   const getSpot = (underlying) => cached(`index:${underlying}`, async () => {
@@ -163,9 +168,14 @@ function createOptionsMarketService({
       const parsed = parseSymbol(item.symbol);
       if (!parsed) continue;
       if (item.underlying ? item.underlying !== pair : parsed.underlying !== underlying) continue;
+      const priceFilter = (item.filters || []).find((f) => f.filterType === 'PRICE_FILTER') || {};
+      const lotFilter = (item.filters || []).find((f) => f.filterType === 'LOT_SIZE') || priceFilter;
       out.push({
         ...parsed,
         expiryMs: num(item.expiryDate) ?? expiryCodeToMs(parsed.expiry),
+        minQty: positiveOrNull(lotFilter.minQty ?? item.minQty),
+        maxQty: positiveOrNull(lotFilter.maxQty ?? item.maxQty),
+        stepSize: positiveOrNull(lotFilter.stepSize),
       });
     }
     return out;
@@ -224,7 +234,8 @@ function createOptionsMarketService({
     }
     const expiries = [...expiryMap.entries()]
       .sort((a, b) => a[1] - b[1])
-      .map(([code, ms]) => ({ code, label: expiryLabel(code), dte: Math.max(0, Math.ceil((ms - nowMs) / DAY_MS)) }));
+      .map(([code, ms]) => ({ code, label: expiryLabel(code), expiryMs: ms,
+        dte: Math.max(0, Math.ceil((ms - nowMs) / DAY_MS)) }));
 
     let expiry = rawExpiry ? String(rawExpiry).trim() : null;
     if (expiry && !/^\d{6}$/.test(expiry)) {
@@ -252,6 +263,7 @@ function createOptionsMarketService({
         mark: markMap.get(s.symbol),
         ticker: tickerMap.get(s.symbol),
         openInterest: oi.get(s.symbol),
+        contract: s,
       });
       strikes.get(s.strike)[s.type === 'C' ? 'call' : 'put'] = leg;
     }
@@ -260,44 +272,65 @@ function createOptionsMarketService({
     return { underlying, spot, expiries, expiry, rows };
   }
 
-  async function getQuote(rawSymbol) {
+  async function getQuote(rawSymbol, { fresh = false } = {}) {
     const parsed = parseSymbol(rawSymbol);
     if (!parsed) throw new ValidationError('symbol inválido (formato BTC-261031-68000-C)');
     const { symbol, underlying, expiry, strike, type } = parsed;
 
-    const [markList, depth, spot, oi] = await Promise.all([
-      cached(`mark:${symbol}`, () => getClient().getMark(symbol)),
-      cached(`depth:${symbol}`, () => getClient().getDepth(symbol, 5)).catch(() => null),
-      getSpot(underlying).catch(() => null),
-      getOpenInterestMap(underlying, expiry),
-    ]);
-    const mark = Array.isArray(markList) ? markList.find((m) => m.symbol === symbol) || markList[0] : markList;
-    if (!mark) throw new NotFoundError(`Sin datos de mercado para ${symbol}`);
-
-    let ticker = {
-      bidPrice: Array.isArray(depth?.bids?.[0]) ? depth.bids[0][0] : null,
-      askPrice: Array.isArray(depth?.asks?.[0]) ? depth.asks[0][0] : null,
-    };
-    if (!depth) {
-      const tickers = await getTickers().catch(() => []);
-      ticker = bySymbol(tickers).get(symbol) || {};
+    // Pantalla: snapshots compartidos para reducir consumo de IP.
+    // Preflight real: libro, mark e índice consultados sin caché, antes del POST.
+    // No degradar silenciosamente el libro al snapshot cuando fresh=true.
+    const [markList, tickerList, spot, oi] = fresh
+      ? await Promise.all([
+        getClient().getMark(symbol),
+        getClient().getDepth(symbol, 5),
+        getClient().getIndex(`${underlying}USDT`).then((v) => num(v?.indexPrice)),
+        getOpenInterestMap(underlying, expiry),
+      ])
+      : await Promise.all([
+        getMarks(), getTickers(), getSpot(underlying).catch(() => null),
+        getOpenInterestMap(underlying, expiry),
+      ]);
+    const mark = Array.isArray(markList) ? bySymbol(markList).get(symbol) : markList;
+    if (!mark || (mark.symbol && mark.symbol !== symbol)) {
+      throw new NotFoundError(`Sin datos de mercado para ${symbol}`);
     }
+    const ticker = fresh ? {
+      bidPrice: Array.isArray(tickerList?.bids?.[0]) ? tickerList.bids[0][0] : null,
+      askPrice: Array.isArray(tickerList?.asks?.[0]) ? tickerList.asks[0][0] : null,
+    } : (bySymbol(tickerList).get(symbol) || {});
 
+    if (fresh && (!positiveOrNull(ticker.bidPrice) || !positiveOrNull(ticker.askPrice) || !positiveOrNull(spot))) {
+      throw new ValidationError('Libro o índice incompleto para ejecución real');
+    }
     return {
       ...buildLeg(symbol, { mark, ticker, openInterest: oi.get(symbol) }),
-      underlying,
-      strike,
-      type,
-      expiry,
-      spot,
+      underlying, strike, type, expiry, spot,
     };
+  }
+
+  // Requiere metadatos reales del tick y 14 velas cerradas (sin suponer
+  // precisión de cotización ni ATR cuando Binance no los proporciona).
+  async function getVolatilityInputs(rawSymbol) {
+    const parsed = parseSymbol(rawSymbol);
+    if (!parsed) throw new ValidationError('Símbolo de opción inválido para TP');
+    const info = await getExchangeInfo();
+    const item = (info?.optionSymbols || []).find((s) => s.symbol === parsed.symbol);
+    const filter = (item?.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
+    const tickSize = positiveOrNull(filter?.tickSize);
+    const minPrice = filter && num(filter.minPrice);
+    const atrHourly = await cached(`atr1h:${parsed.underlying}`, async () => {
+      const candles = await getClient().getSpotKlines(`${parsed.underlying}USDT`, '1h', 17);
+      return hourlyAtr(candles, 14, now());
+    }, 60_000);
+    return { atrHourly, tickSize, minPrice };
   }
 
   function clearCache() {
     cache.clear();
   }
 
-  return { listUnderlyings, getChain, getQuote, getMarks, clearCache };
+  return { listUnderlyings, getChain, getQuote, getMarks, getVolatilityInputs, clearCache };
 }
 
 // Instancia por defecto (cliente público sin credenciales).
@@ -312,5 +345,6 @@ module.exports = {
   getChain: (...args) => defaultService.getChain(...args),
   getQuote: (...args) => defaultService.getQuote(...args),
   getMarks: (...args) => defaultService.getMarks(...args),
+  getVolatilityInputs: (...args) => defaultService.getVolatilityInputs(...args),
   clearCache: () => defaultService.clearCache(),
 };

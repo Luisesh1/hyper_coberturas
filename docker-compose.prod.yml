@@ -161,6 +161,10 @@ services:
       # Fondeo cross-chain del asistente LP: off | read | execute.
       CROSS_CHAIN_FUNDING: ${CROSS_CHAIN_FUNDING:-execute}
       NODE_ENV: production
+      # Seguro por defecto en piloto: anula cualquier flag en server/.env.
+      # Requiere cambio de código y aprobación aparte para permitir órdenes reales.
+      OPTIONS_LIVE_TRADING_ENABLED: "false"
+      OPTIONS_LIVE_PRODUCTION_APPROVED: "false"
       CLIENT_URL: "${CLIENT_URL:?CLIENT_URL requerido (ej: https://tudominio.com) — ver DEPLOYMENT.md}"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-testbot}:${POSTGRES_PASSWORD:?requerido}@postgres:5432/${POSTGRES_DB:-testbot}"
       DB_SSL: "false"

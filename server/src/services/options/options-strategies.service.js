@@ -132,6 +132,11 @@ async function limitsUsage({ repo, market, strategy, positions, at }) {
 
 function createOptionsStrategiesService(deps = {}) {
   const repo = deps.repo || defaultRepo;
+  // En producción usa el ledger PostgreSQL. Los repositorios aislados que
+  // se inyectan en pruebas no necesitan abrir una conexión real.
+  const liveOrders = deps.liveOrders || (repo === defaultRepo
+    ? require('../../repositories/options-live-orders.repository')
+    : { listByStrategy: async () => [] });
   const credentials = deps.credentials || lazyCredentials();
   const market = deps.market || lazyMarket();
   const now = deps.now || Date.now;
@@ -193,9 +198,12 @@ function createOptionsStrategiesService(deps = {}) {
 
   async function get(userId, id) {
     const strategy = await requireStrategy(userId, id);
-    const [positions, events] = await Promise.all([
+    const [positions, events, standingOrders] = await Promise.all([
       repo.listPositions(strategy.id),
       repo.listEvents(strategy.id, { limit: 100 }),
+      strategy.template === 'alert_signal'
+        ? liveOrders.listByStrategy(strategy.id)
+        : Promise.resolve([]),
     ]);
     const at = now();
     return {
@@ -203,6 +211,13 @@ function createOptionsStrategiesService(deps = {}) {
       kpis: { shadow: kpisFor(positions, events, 'shadow', at), live: kpisFor(positions, events, 'live', at) },
       equity: equityCurve(positions, strategy.createdAt),
       positions: positions.filter((p) => p.closedAt == null),
+      // Solo información operacional; las credenciales nunca llegan al cliente.
+      takeProfitOrders: standingOrders.filter((o) => o.purpose === 'take_profit')
+        .slice(0, 20).map((o) => ({
+          id: o.id, positionId: o.positionId, symbol: o.symbol,
+          price: o.limitPrice, quantity: o.quantity, executedQty: o.processedQty,
+          status: o.status, cancelRequested: o.cancelRequested,
+        })),
       usage: await limitsUsage({ repo, market, strategy, positions, at }),
       events,
     };
@@ -264,6 +279,13 @@ function createOptionsStrategiesService(deps = {}) {
 
   async function remove(userId, id) {
     const strategy = await requireStrategy(userId, id);
+    const orders = await liveOrders.listByStrategy(strategy.id);
+    if (orders.some((o) => o.status !== 'final')) {
+      throw new AppError('La estrategia tiene órdenes reales pendientes de conciliación', { status: 409, code: 'PENDING_LIVE_ORDERS' });
+    }
+    if (orders.length) {
+      throw new AppError('Una estrategia con historial de órdenes reales no se puede borrar: conservar auditoría', { status: 409, code: 'LIVE_ORDER_AUDIT_REQUIRED' });
+    }
     const live = await repo.listOpenPositions(strategy.id, 'live');
     if (live.length) {
       throw new AppError('La estrategia tiene posiciones reales abiertas: ciérralas antes de borrarla', { status: 409, code: 'OPEN_LIVE_POSITIONS' });

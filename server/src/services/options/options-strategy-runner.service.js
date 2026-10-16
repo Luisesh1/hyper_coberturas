@@ -26,8 +26,10 @@ const {
   num,
 } = require('./options-utils');
 const { intrinsic } = require('./options-pricing');
+const { projectTakeProfit } = require('./options-take-profit');
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+const RECONCILE_INTERVAL_MS = 60_000;
 
 function lazyMarket() {
   // eslint-disable-next-line global-require
@@ -93,6 +95,8 @@ class OptionsStrategyRunner {
     this.now = deps.now || Date.now;
     this.intervalMs = deps.intervalMs || DEFAULT_INTERVAL_MS;
     this.interval = null;
+    this.reconcileInterval = null;
+    this.liveExecutor = deps.liveExecutor || require('./options-live-execution.service');
     this.running = false;
     // Cola por estrategia: el tick y una señal no evalúan la misma a la vez.
     this.locks = new Map();
@@ -116,12 +120,32 @@ class OptionsStrategyRunner {
       this.tick().catch((err) => this.logger.error('options_runner_tick_failed', { error: err.message }));
     }, this.intervalMs);
     this.interval.unref?.();
+    // La conciliación continúa incluso si se deshabilitan nuevas órdenes.
+    const reconcile = async () => {
+      try {
+        await this.liveExecutor.reconcilePending();
+      } catch (err) {
+        this.logger.error('options_reconcile_failed', { error: err.message });
+      }
+      if (typeof this.liveExecutor.reconcileExpired === 'function') {
+        try {
+          await this.liveExecutor.reconcileExpired();
+        } catch (err) {
+          this.logger.error('options_exercise_reconcile_failed', { error: err.message });
+        }
+      }
+    };
+    this.reconcileInterval = setInterval(reconcile, RECONCILE_INTERVAL_MS);
+    this.reconcileInterval.unref?.();
+    reconcile();
     this.logger.info('options_runner_started', { intervalMs: this.intervalMs });
   }
 
   stop() {
     if (this.interval) clearInterval(this.interval);
+    if (this.reconcileInterval) clearInterval(this.reconcileInterval);
     this.interval = null;
+    this.reconcileInterval = null;
   }
 
   /** Una pasada completa. Sin solapes: si la anterior sigue, se omite. */
@@ -157,6 +181,39 @@ class OptionsStrategyRunner {
     return { actions, produced: tickCtx.produced };
   }
 
+  /**
+   * Reentrada diferida de una alerta ya recibida. Solo evalúa y opera
+   * el libro REAL, sin repetir shadow ni disparar la misma alerta.
+   * Se vuelve a cotizar y a comprobar límites justo antes del POST.
+   */
+  async executeDeferredReentry(strategyId, signal) {
+    const strategy = await this.repo.getStrategyById(strategyId);
+    if (!strategy || strategy.mode !== 'live' || strategy.template !== 'alert_signal' ||
+        !this.liveExecutor.enabled) return { status: 'disabled' };
+    return this.withLock(strategyId, async () => {
+      const tickCtx = { now: this.now(), signal, chains: new Map(), produced: [] };
+      const template = templates.getTemplate(strategy.template);
+      const params = templates.validateParams(strategy.template, strategy.params);
+      if (params.onOpposite !== 'reverse') return { status: 'mode_changed' };
+      const positions = await this.repo.listOpenPositions(strategy.id, 'live');
+      if (positions.length) return { status: 'positions_still_open' };
+      const { base, chain } = await this.targetChain(strategy, params, tickCtx);
+      const spot = num(chain?.spot) ?? num(base?.spot);
+      const actions = template.evaluate({
+        now: tickCtx.now, signal, spot, chain, positions: [],
+        params, mode: 'live',
+        lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
+        tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
+          utcDayStart(tickCtx.now)),
+      });
+      const open = actions.find((a) => a.type === 'open');
+      if (!open) return { status: 'no_valid_entry' };
+      return await this.executeLive(strategy, open, {
+        ...tickCtx, spot, params, positions: [], mode: 'live',
+      }) || { status: 'not_submitted' };
+    });
+  }
+
   // ---------- datos de mercado (caché por pasada) ----------
 
   async chainFor(underlying, expiry, tickCtx) {
@@ -187,9 +244,9 @@ class OptionsStrategyRunner {
     return { base, chain };
   }
 
-  async quoteFor(symbol) {
+  async quoteFor(symbol, { fresh = false } = {}) {
     try {
-      return await this.market.getQuote(symbol);
+      return await this.market.getQuote(symbol, { fresh });
     } catch (err) {
       this.logger.warn('options_quote_failed', { symbol, error: err.message });
       return null;
@@ -211,6 +268,34 @@ class OptionsStrategyRunner {
     return out;
   }
 
+  // La proyección usa la prima REAL de entrada persistida en la posición.
+  // Si Binance no ofrece velas, IV o tick, nunca inventar un nivel de TP.
+  async attachVolatilityTargets(positions, params, spot, now) {
+    if (params.takeProfitMode !== 'volatility' || !positions.length) return positions;
+    return Promise.all(positions.map(async (p) => {
+      if (!p.quote || !Number.isFinite(Number(p.quote.iv)) ||
+          typeof this.market.getVolatilityInputs !== 'function') {
+        return { ...p, takeProfitTarget: null };
+      }
+      try {
+        const inputs = await this.market.getVolatilityInputs(p.symbol);
+        const target = projectTakeProfit({
+          entryPrice: Number(p.entryPrice), spot, strike: p.strike,
+          iv: Number(p.quote.iv), type: p.type, side: p.side,
+          expiryMs: p.expiryMs, nowMs: now,
+          atrHourly: inputs.atrHourly, tickSize: inputs.tickSize,
+          minPrice: inputs.minPrice,
+          atrMultiplier: params.tpAtrMultiplier,
+          horizonHours: params.tpHorizonHours,
+        });
+        return { ...p, takeProfitTarget: target };
+      } catch (err) {
+        this.logger.warn('options_volatility_tp_unavailable', { symbol: p.symbol, error: err.message });
+        return { ...p, takeProfitTarget: null };
+      }
+    }));
+  }
+
   // ---------- evaluación ----------
 
   async runStrategy(strategy, tickCtx) {
@@ -223,7 +308,10 @@ class OptionsStrategyRunner {
 
     for (const mode of modes) {
       const open = await this.repo.listOpenPositions(strategy.id, mode);
-      const positions = await this.enrichPositions(open, chain);
+      const enriched = await this.enrichPositions(open, chain);
+      const positions = template.id === 'alert_signal'
+        ? await this.attachVolatilityTargets(enriched, params, spot, tickCtx.now)
+        : enriched;
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
       // Solo los bots por alertas limitan operaciones por día.
       const tradesToday = template.signalDriven
@@ -243,6 +331,22 @@ class OptionsStrategyRunner {
       });
       byMode[mode] = actions;
       const ctx = { ...tickCtx, spot, positions, params, mode };
+      // Una alerta opuesta con onOpposite=reverse registra CIERRE + REENTRADA
+      // en una sola transacción. El reconciliador abrirá la nueva dirección
+      // únicamente al confirmar todos los cierres, nunca en el mismo tick.
+      if (mode === 'live' && template.id === 'alert_signal' &&
+          tickCtx.signal && params.onOpposite === 'reverse' &&
+          actions.some((a) => a.type === 'close') &&
+          actions.some((a) => a.type === 'open') &&
+          typeof this.liveExecutor.queueReversal === 'function') {
+        const closeAction = actions.find((a) => a.type === 'close');
+        if (await this.liveExecutor.queueReversal(strategy, tickCtx.signal, closeAction)) {
+          ctx.produced?.push({ mode: 'live', type: 'close', pending: true,
+            reason: 'reverse_queued',
+            detail: 'Giro en espera: cancelar TP, cerrar y conciliar antes de abrir' });
+          continue;
+        }
+      }
       for (const action of actions) {
         try {
           if (action.type === 'open' || action.type === 'close') {
@@ -294,10 +398,10 @@ class OptionsStrategyRunner {
 
   // ---------- ejecutor sombra ----------
 
-  async quoteLegs(legs) {
+  async quoteLegs(legs, { fresh = false } = {}) {
     const quotes = [];
     for (const leg of legs) {
-      const quote = await this.quoteFor(leg.symbol);
+      const quote = await this.quoteFor(leg.symbol, { fresh });
       const price = fillPrice(quote, leg.side);
       if (price == null) return { missing: leg.symbol };
       quotes.push({ quote, price });
@@ -391,7 +495,12 @@ class OptionsStrategyRunner {
     }
 
     if (has(limits.maxOrdersPerDay)) {
-      const orders = await this.repo.countOrdersSince(strategy.id, 'live', dayStart);
+      // El conteo real sale del ledger de órdenes ENVIADAS, no de eventos
+      // de fills: una orden aceptada sin ejecución también consume cupo.
+      if (typeof this.liveExecutor.repo?.countSubmittedSince !== 'function') {
+        return { ok: false, reason: 'Sin ledger de órdenes reales para comprobar el límite diario' };
+      }
+      const orders = await this.liveExecutor.repo.countSubmittedSince(strategy.id, dayStart);
       if (orders + legs.length > Number(limits.maxOrdersPerDay)) {
         return { ok: false, reason: `Máximo de ${limits.maxOrdersPerDay} órdenes por día alcanzado (${orders} enviadas)` };
       }
@@ -418,7 +527,15 @@ class OptionsStrategyRunner {
     }
 
     if (has(limits.maxNetDelta)) {
-      const current = (ctx.positions || []).reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: p.quote?.delta, quantity: p.quantity }), 0);
+      // Una delta ausente no equivale a cero: si no podemos medir el
+      // riesgo direccional, no se permiten nuevas órdenes reales.
+      const missingDelta = (ctx.positions || []).some((p) =>
+        p.quote?.delta == null || !Number.isFinite(Number(p.quote.delta))) ||
+        legs.some((leg) => leg.delta == null || !Number.isFinite(Number(leg.delta)));
+      if (missingDelta) {
+        return { ok: false, reason: 'Delta no disponible para verificar la exposición neta' };
+      }
+      const current = (ctx.positions || []).reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: p.quote.delta, quantity: p.quantity }), 0);
       const net = legs.reduce((acc, leg) => acc + legDeltaExposure(leg), current);
       if (Math.abs(net) > Number(limits.maxNetDelta)) {
         return { ok: false, reason: `|Δ| neta ${Math.abs(net).toFixed(3)} supera el máximo de ${limits.maxNetDelta}` };
@@ -428,57 +545,106 @@ class OptionsStrategyRunner {
   }
 
   async executeLive(strategy, action, ctx) {
-    if (action.type === 'open') {
-      const check = await this.checkLiveLimits(strategy, action.legs, ctx);
-      if (!check.ok) {
-        await this.recordOutcome(strategy, 'live', { type: 'skip', reason: 'limit', detail: `Bloqueada por límite: ${check.reason}` }, ctx);
-        await this.maybeNotify(strategy, `Entrada bloqueada por límite: ${check.reason}`);
+    if (!this.liveExecutor.enabled) {
+      await this.recordOutcome(strategy, 'live', {
+        type: 'skip', reason: 'live_disabled',
+        detail: 'Envio real deshabilitado: OPTIONS_LIVE_TRADING_ENABLED no está activo',
+      }, ctx);
+      return null;
+    }
+    // Un TP LIMIT residente ya está encargado al exchange. No cancelarlo
+    // ni competir con él cuando el tick vuelve a detectar la misma ganancia.
+    if (action.type === 'close' && ['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+        typeof this.liveExecutor.repo?.hasStandingTp === 'function' &&
+        await this.liveExecutor.repo.hasStandingTp(action.legs.map((l) => l.positionId))) {
+      ctx.produced?.push({ mode: 'live', type: 'hold', pending: true,
+        reason: 'tp_resting', detail: 'TP LIMIT residente, ejecución pendiente en Binance' });
+      return null;
+    }
+    // Stops, señales contrarias y salidas por tiempo no dependen de que
+    // haya liquidez para SOLICITAR la cancelación durable de un TP resting.
+    if (action.type === 'close' &&
+        !['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+        typeof this.liveExecutor.requestProtectedExit === 'function' &&
+        await this.liveExecutor.requestProtectedExit(strategy, action)) {
+      ctx.produced?.push({ mode: 'live', type: 'close', pending: true,
+        reason: 'tp_cancel_requested',
+        detail: 'TP en cancelación; salida pendiente y persistida' });
+      return { status: 'tp_cancel_requested', sent: 0 };
+    }
+    const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
+    if (missing) {
+      await this.recordOutcome(strategy, 'live', {
+        type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
+      }, ctx);
+      return null;
+    }
+    // Un TP basado en volatilidad no puede ejecutar a peor precio por
+    // movimientos entre el tick y el preflight de cotización fresca.
+    if (action.reason === 'take_profit_volatility') {
+      const stale = action.legs.some((leg, i) => {
+        const price = quotes[i].price;
+        const target = Number(leg.targetPrice);
+        return !Number.isFinite(target) || target <= 0 ||
+          (leg.side === 'SELL' ? price < target : price > target);
+      });
+      if (stale) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'tp_price_moved',
+          detail: 'TP por volatilidad: el precio ejecutable cambió; no se envió la orden',
+        }, ctx);
         return null;
       }
     }
-
-    const client = await this.credentials.getClientForUser(strategy.userId);
-    const { quotes, missing } = await this.quoteLegs(action.legs);
-    if (missing) {
-      await this.recordOutcome(strategy, 'live', { type: 'error', reason: 'no_liquidity', detail: `Sin precio en el libro para ${missing}` }, ctx);
-      return null;
-    }
-
-    const filled = [];
-    try {
-      for (let i = 0; i < action.legs.length; i += 1) {
-        const leg = action.legs[i];
-        const { quote, price } = quotes[i];
-        const order = await client.placeOrder({
-          symbol: leg.symbol,
-          side: leg.side,
-          quantity: leg.quantity,
-          price,
-          postOnly: false,
-          reduceOnly: action.type === 'close',
-          clientOrderId: `os${strategy.id}-${ctx.now}-${i}`,
-        });
-        // Orden LIMIT al precio del libro: se registra al precio medio si ya llenó.
-        const avg = num(order?.avgPrice);
-        const fillAt = avg && avg > 0 ? avg : price;
-        const spot = num(quote.spot) ?? ctx.spot;
-        filled.push({
-          ...leg,
-          price: fillAt,
-          fee: tradeFee({ spot, quantity: leg.quantity, price: fillAt }),
-          orderId: order?.orderId ?? null,
-        });
+    // El precio LIMIT es la cotización recién consultada, pero el fill
+    // SOLO se registra cuando Binance lo confirma en getUserTrades.
+    const quoted = action.legs.map((leg, i) => ({
+      ...leg, price: quotes[i].price,
+      delta: quotes[i].quote?.delta == null ? null : Number(quotes[i].quote.delta),
+    }));
+    if (action.type === 'open') {
+      // La prima/margen de la cadena inicial pudo cambiar. Revalidar
+      // capital y riesgos utilizando los precios LIMIT realmente enviados.
+      const capital = quoted.reduce((sum, leg) => sum + estimateMargin({
+        ...leg,
+        type: leg.optionType || parseSymbol(leg.symbol)?.type,
+        spot: ctx.spot,
+      }), 0);
+      if (!Number.isFinite(capital) || capital <= 0 ||
+          (ctx.params.capitalUsdt != null && capital > Number(ctx.params.capitalUsdt) + 1e-8)) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'capital_limit',
+          detail: 'Entrada real bloqueada: capital requerido excede el presupuesto o no pudo verificarse',
+        }, ctx);
+        return null;
       }
-    } catch (err) {
-      // Lo ya enviado se registra igual: son órdenes reales en el exchange.
-      if (filled.length) await this.book(strategy, 'live', { ...action, detail: `${action.detail || action.reason} (parcial)` }, filled, ctx);
-      throw new Error(`Binance rechazó la orden: ${err.message}`);
+      const buyPremium = quoted.reduce((sum, leg) =>
+        sum + (leg.side === 'BUY' ? leg.quantity * leg.price : 0), 0);
+      if (ctx.params.maxPremiumUsdt != null &&
+          buyPremium > Number(ctx.params.maxPremiumUsdt) + 1e-8) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'premium_limit',
+          detail: 'Entrada real bloqueada: prima actual supera el máximo configurado',
+        }, ctx);
+        return null;
+      }
+      const limits = await this.checkLiveLimits(strategy, quoted, ctx);
+      if (!limits.ok) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'live_risk_limit', detail: `Bloqueada por límite: ${limits.reason}`,
+        }, ctx);
+        await this.maybeNotify(strategy, `Orden real bloqueada: ${limits.reason}`);
+        return null;
+      }
     }
-
-    const event = await this.book(strategy, 'live', action, filled, ctx);
-    const legsText = filled.map((l) => `${l.side} ${l.quantity} ${l.symbol} @ ${l.price}`).join('\n');
-    await this.maybeNotify(strategy, `${action.type === 'open' ? 'Apertura' : 'Cierre'}: ${action.detail || action.reason}\n${legsText}`);
-    return event;
+    const result = await this.liveExecutor.submit(strategy, { ...action, legs: quoted }, ctx);
+    if (result.status === 'submitted' || result.status === 'attention') {
+      await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`);
+    }
+    ctx.produced?.push({ mode: 'live', type: action.type,
+      pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
+      detail: result.status === 'submitted' ? 'Orden límite enviada; ejecución pendiente' : result.status });
+    return result;
   }
 
   async maybeNotify(strategy, message) {
@@ -529,6 +695,12 @@ class OptionsStrategyRunner {
 
       let premium = 0;
       const legs = [];
+      // Nunca liquidar posiciones reales usando un índice estimado:
+      // Binance debe confirmar la liquidación y sus comisiones.
+      if (mode === 'live') {
+        this.logger.warn('options_live_settlement_requires_reconciliation', { strategyId, count: positions.length });
+        continue;
+      }
       for (const p of positions) {
         const value = intrinsic({ S: indexPrice, K: p.meta.strike, type: p.meta.type });
         const fee = exerciseFee({ spot: indexPrice, quantity: p.quantity, intrinsicValue: value });

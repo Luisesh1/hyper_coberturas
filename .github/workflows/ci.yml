@@ -31,6 +31,67 @@ jobs:
       - run: npm ci --prefix server
       - run: npm run test --prefix server
 
+  # Migraciones SQL probadas en PostgreSQL real y repetidas para validar
+  # idempotencia. Sin acceso al VPS ni a credenciales reales de Binance.
+  test-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: testbot
+          POSTGRES_PASSWORD: testbot
+          POSTGRES_DB: testbot
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U testbot -d testbot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://testbot:testbot@localhost:5432/testbot
+      DB_SSL: 'false'
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --prefix server
+      - run: npm run migrate --prefix server
+      - run: npm run migrate --prefix server
+      - name: Comprobar migraciones TP y reversiones
+        run: |
+          cd server
+          node - <<'NODE'
+          const { Pool } = require('pg');
+          (async () => {
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+            try {
+              const { rows } = await pool.query(
+                "SELECT version FROM schema_migrations WHERE version IN (35,36,37,38,39,40) ORDER BY version"
+              );
+              const got = rows.map(r => Number(r.version)).join(',');
+              if (got !== '35,36,37,38,39,40') {
+                throw new Error('Migraciones Options faltantes: ' + got);
+              }
+              const tables = await pool.query(
+                "SELECT to_regclass('public.options_live_orders') AS orders, " +
+                "to_regclass('public.options_live_exit_requests') AS exits, " +
+                "to_regclass('public.options_live_reentries') AS reentries"
+              );
+              if (Object.values(tables.rows[0]).some(v => v == null)) {
+                throw new Error('Falta una tabla durable de TP/reversiones');
+              }
+              console.log('Migraciones 35–40 aplicadas e idempotentes.');
+            } finally {
+              await pool.end();
+            }
+          })().catch((err) => { console.error(err.message); process.exitCode = 1; });
+          NODE
+
   # Cotizaciones reales de Li.Fi y Across (fondeo cross-chain). Detecta cambios
   # de formato o de contratos de los proveedores; no bloquea el CI porque
   # depende de servicios de terceros.

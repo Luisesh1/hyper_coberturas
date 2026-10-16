@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ConfirmDialog } from '../../../components/shared/ConfirmDialog';
-import { fmtSigned, toneOf } from '../format';
+import { fmtNum, fmtSigned, toneOf } from '../format';
 import { useOptionChain } from './hooks/useOptionChain';
 import { useOptionsAccount } from './hooks/useOptionsAccount';
 import { useOrderActions } from './hooks/useOrderActions';
@@ -94,6 +94,16 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
         {notConfigured}
         {errorBanner}
         <ExpiryPills expiries={chain?.expiries} value={activeExpiry} onChange={setExpiry} scroller />
+        {configured && acct.account && (
+          <div className={styles.mobileFunds} role="status">
+            <span>Fondos de opciones</span>
+            <strong className={styles.mono}>
+              {acct.account.balanceUsdt != null && Number.isFinite(Number(acct.account.balanceUsdt))
+                ? `${fmtNum(acct.account.balanceUsdt, 2)} USDT`
+                : '—'}
+            </strong>
+          </div>
+        )}
         <MobileChain
           chain={chain}
           loading={chainLoading}

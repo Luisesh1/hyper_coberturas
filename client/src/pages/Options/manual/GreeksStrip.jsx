@@ -10,7 +10,10 @@ export default function GreeksStrip({ account, limits }) {
     ? `${fmtNum(used, 0)}${Number.isFinite(maxMargin) && maxMargin > 0 ? ` / ${fmtNum(maxMargin, 0)}` : ''}`
     : '—';
 
+  const balance = account?.balanceUsdt;
   const items = [
+    { label: 'Fondos de opciones', value: balance != null && Number.isFinite(Number(balance))
+      ? `${fmtNum(Number(balance), 2)} USDT` : '—' },
     { label: 'Delta neto', value: account ? fmtSigned(g.delta, 3) : '—' },
     { label: 'Gamma', value: account ? fmtSigned(g.gamma, 4) : '—' },
     { label: 'Theta / día', value: account ? `${fmtSigned(g.theta, 2)} USDT` : '—', tone: account ? toneOf(g.theta) : 'neutral' },

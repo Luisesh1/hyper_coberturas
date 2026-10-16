@@ -58,8 +58,26 @@ async function setup({ mode = 'shadow', limits = {}, globalLimits = {}, template
   const credentials = fakeCredentials({ limits: globalLimits });
   const notes = [];
   const clock = { now };
+  const liveExecutor = {
+    enabled: true,
+    repo: {
+      // Mock de órdenes enviadas (sin fills) en el ledger duradero.
+      async countSubmittedSince() { return credentials.orders.length; },
+    },
+    async reconcilePending() { return { checked: 0 }; },
+    async submit(strategy, action) {
+      const client = await credentials.getClientForUser(strategy.userId);
+      for (const leg of action.legs) {
+        await client.placeOrder({ symbol: leg.symbol, side: leg.side,
+          price: leg.price, quantity: leg.quantity, reduceOnly: action.type === 'close' });
+      }
+      // El exchange simuló ACCEPTED (sin fills confirmados).
+      return { status: 'submitted', sent: action.legs.length };
+    },
+  };
   const runner = new OptionsStrategyRunner({
     repo,
+    liveExecutor,
     market,
     credentials,
     notify: async (userId, text) => notes.push({ userId, text }),
@@ -128,13 +146,13 @@ test('hold/skip solo se registran cuando cambia el motivo', async () => {
   assert.equal(repo.events[0].action, 'skip');
 });
 
-test('modo real: abre en sombra y en real; orden LIMIT al bid y aviso por Telegram', async () => {
+test('modo real: acepta órdenes LIMIT sin inventar posiciones ni fills', async () => {
   const { repo, runner, credentials, notes, market } = await setup({ mode: 'live' });
   await runner.tick();
   const shadow = repo.positions.filter((p) => p.mode === 'shadow');
   const live = repo.positions.filter((p) => p.mode === 'live');
   assert.equal(shadow.length, 2);
-  assert.equal(live.length, 2);
+  assert.equal(live.length, 0);
   assert.equal(credentials.orders.length, 2);
   for (const order of credentials.orders) {
     const quote = await market.getQuote(order.symbol);
@@ -144,9 +162,9 @@ test('modo real: abre en sombra y en real; orden LIMIT al bid y aviso por Telegr
     assert.equal(order.quantity, 0.01);
   }
   const liveEvent = repo.events.find((e) => e.mode === 'live' && e.action === 'open');
-  assert.ok(liveEvent.legs.every((l) => l.orderId > 1000));
+  assert.equal(liveEvent, undefined);
   assert.equal(notes.length, 1);
-  assert.match(notes[0].text, /Apertura/);
+  assert.match(notes[0].text, /LIMIT/);
   assert.equal(notes[0].userId, 7);
 });
 
@@ -160,6 +178,42 @@ test('modo real: límite de órdenes por día bloquea la entrada real pero no la
   assert.equal(blocked.action, 'skip');
   assert.match(blocked.detail, /Bloqueada por límite: Máximo de 1 órdenes/);
   assert.match(notes[0].text, /bloqueada/);
+});
+
+test('modo real: revalida presupuesto al precio LIMIT y bloquea sobrecostes', async () => {
+  const { repo, runner, strategy, credentials, market } = await setup({ mode: 'live' });
+  const symbol = 'BTC-261016-60000-C';
+  const q = await market.getQuote(symbol);
+  const quantity = 0.1;
+  const budget = q.ask * quantity * 0.9;
+  await runner.executeLive(strategy, {
+    type: 'open', detail: 'entry',
+    legs: [{ symbol, side: 'BUY', quantity, optionType: 'C', strike: 60000 }],
+  }, { now: FRIDAY_9, spot: SPOT, positions: [], params: { capitalUsdt: budget } });
+  assert.equal(credentials.orders.length, 0);
+  assert.equal(repo.positions.filter((p) => p.mode === 'live').length, 0);
+  assert.match(repo.events.find((e) => e.mode === 'live').detail, /capital requerido excede/);
+});
+
+test('modo real: las órdenes aceptadas sin fill consumen el cupo diario', async () => {
+  const { repo, runner, credentials } = await setup({
+    mode: 'live', limits: { maxOrdersPerDay: 2 },
+  });
+  credentials.orders.push({ symbol: 'BTC-261016-60000-C', status: 'ACCEPTED' });
+  await runner.tick();
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(repo.positions.filter((p) => p.mode === 'live').length, 0);
+  assert.match(repo.events.find((e) => e.mode === 'live').detail, /Máximo de 2 órdenes/);
+});
+
+test('modo real: delta desconocida bloquea el riesgo en vez de asumir cero', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', limits: { maxNetDelta: 1 } });
+  const result = await runner.checkLiveLimits(strategy, [{
+    symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: 0.01,
+    price: 100, strike: 60000, type: 'C', delta: null,
+  }], { now: FRIDAY_9, spot: SPOT, positions: [] });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /Delta no disponible/);
 });
 
 test('modo real: margen de la estrategia y margen global', async () => {

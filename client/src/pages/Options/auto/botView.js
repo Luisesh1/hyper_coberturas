@@ -47,11 +47,21 @@ export const STRUCTURE_DEFAULTS = {
 export const COMMON_DEFAULTS = {
   expiryDays: 7,
   quantity: 0.01,
+  contractCount: 1,
+  capitalUsdt: null,
+  takeProfitMode: 'fixed',
+  tpAtrMultiplier: 1,
+  tpHorizonHours: 4,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
   maxOpenPositions: 1,
   maxTradesPerDay: 4,
 };
+
+export const TAKE_PROFIT_MODES = [
+  { value: 'fixed', label: 'Porcentaje fijo' },
+  { value: 'volatility', label: 'Volatilidad ATR + IV' },
+];
 
 export const ON_OPPOSITE = [
   { value: 'reverse', label: 'Girar', help: 'Cierra y abre en la nueva dirección' },
@@ -139,9 +149,10 @@ export const DECISION_LABEL = {
   closed: 'Cerró',
   reversed: 'Giró',
   ignored: 'Ignorada',
+  pending: 'Por confirmar',
   error: 'Error',
 };
-export const DECISION_TONE = { opened: 'open', closed: 'close', reversed: 'close', ignored: 'skip', error: 'error' };
+export const DECISION_TONE = { opened: 'open', closed: 'close', reversed: 'close', ignored: 'skip', pending: 'pending', error: 'error' };
 const TRADED = new Set(['opened', 'closed', 'reversed']);
 export const isTraded = (s) => TRADED.has(s.decision);
 
@@ -178,7 +189,7 @@ export function normalizeSignals(list) {
 // Defensa en el cliente por si el servidor ignora `filter`.
 export function filterSignals(signals, filter) {
   if (filter === 'traded') return signals.filter(isTraded);
-  if (filter === 'ignored') return signals.filter((s) => !isTraded(s));
+  if (filter === 'ignored') return signals.filter((s) => s.decision === 'ignored');
   return signals;
 }
 
@@ -266,8 +277,13 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       targetDelta: Math.abs(val('targetDelta')),
       expiryDays: val('expiryDays'),
       quantity: val('quantity'),
+      contractCount: val('contractCount'),
+      capitalUsdt: toNumber(p.capitalUsdt),
       onOpposite: ON_OPPOSITE.some((o) => o.value === p.onOpposite) ? p.onOpposite : defs.onOpposite,
       takeProfitPct: val('takeProfitPct'),
+      takeProfitMode: TAKE_PROFIT_MODES.some((m) => m.value === p.takeProfitMode) ? p.takeProfitMode : 'fixed',
+      tpAtrMultiplier: val('tpAtrMultiplier'),
+      tpHorizonHours: val('tpHorizonHours'),
       stopLossPct: val('stopLossPct'),
       exitHoursBeforeExpiry: val('exitHoursBeforeExpiry'),
       maxOpenPositions: val('maxOpenPositions'),
@@ -314,7 +330,13 @@ export function validateBotForm(form) {
   range('targetDelta', 0.05, 0.95);
   range('expiryDays', 1, 90, { integer: true });
   range('quantity', 0.0001, 1000000, { minLabel: 'Debe ser mayor que 0' });
+  range('contractCount', 1, 10, { integer: true });
+  if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
+  if (Number(form.maxOpenPositions) < Number(form.contractCount)) errors.maxOpenPositions = 'Debe cubrir todos los contratos seleccionados';
   range('takeProfitPct', 1, 1000);
+  if (!TAKE_PROFIT_MODES.some((m) => m.value === form.takeProfitMode)) errors.takeProfitMode = 'Modo de Take Profit inválido';
+  range('tpAtrMultiplier', 0.25, 4);
+  range('tpHorizonHours', 1, 24, { integer: true });
   range('stopLossPct', 1, 1000);
   range('exitHoursBeforeExpiry', 0, 168);
   range('maxOpenPositions', 1, 20, { integer: true });
@@ -333,8 +355,13 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     targetDelta: Number(form.targetDelta),
     expiryDays: Number(form.expiryDays),
     quantity: Number(form.quantity),
+    contractCount: Number(form.contractCount),
+    capitalUsdt: Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
     onOpposite: form.onOpposite,
     takeProfitPct: Number(form.takeProfitPct),
+    takeProfitMode: form.takeProfitMode,
+    tpAtrMultiplier: Number(form.tpAtrMultiplier),
+    tpHorizonHours: Number(form.tpHorizonHours),
     stopLossPct: Number(form.stopLossPct),
     exitHoursBeforeExpiry: Number(form.exitHoursBeforeExpiry),
     maxOpenPositions: Number(form.maxOpenPositions),
@@ -375,7 +402,10 @@ export function describeParams(bot) {
       { key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true },
     ],
     exits: [
-      { key: 'takeProfitPct', label: labels.takeProfit, value: `${buy ? '+' : ''}${formatNumber(v('takeProfitPct'), { decimals: 0 })} % de la prima` },
+      { key: 'takeProfitPct', label: labels.takeProfit,
+        value: p.takeProfitMode === 'volatility'
+          ? `ATR × ${formatNumber(v('tpAtrMultiplier'), { decimals: 2 })} + IV · ${formatNumber(v('tpHorizonHours'), { decimals: 0 })} h`
+          : `${buy ? '+' : ''}${formatNumber(v('takeProfitPct'), { decimals: 0 })} % de la prima` },
       { key: 'stopLossPct', label: labels.stopLoss, value: `${buy ? '−' : ''}${formatNumber(v('stopLossPct'), { decimals: 0 })} % de la prima` },
       { key: 'exitHoursBeforeExpiry', label: 'Cerrar antes del venc.', value: `${formatNumber(v('exitHoursBeforeExpiry'), { decimals: 0 })} h` },
     ],

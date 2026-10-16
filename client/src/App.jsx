@@ -39,11 +39,11 @@ const DevLogPanel = import.meta.env.DEV
 const IS_DEV = import.meta.env.DEV;
 
 const BASE_NAV = [
-  { id: 'manual',   path: '/trade',      label: 'Trading Manual', activeClass: 'modeBtnActive',  title: 'Trading' },
-  { id: 'hedge',    path: '/coberturas', label: 'Coberturas',     activeClass: 'modeHedgeActive', title: 'Coberturas' },
-  { id: 'strategies', path: '/estrategias', label: 'Estrategias', activeClass: 'modeBtnActive', title: 'Estrategias' },
-  { id: 'backtesting', path: '/backtesting', label: 'Backtesting', activeClass: 'modeBtnActive', title: 'Backtesting' },
-  { id: 'bots', path: '/bots', label: 'Bots', activeClass: 'modeBtnActive', title: 'Bots' },
+  { id: 'manual',   path: '/trade',      label: '💹 Trading Manual', activeClass: 'modeBtnActive',  title: 'Trading' },
+  { id: 'hedge',    path: '/coberturas', label: '🛡️ Coberturas',     activeClass: 'modeHedgeActive', title: 'Coberturas' },
+  { id: 'strategies', path: '/estrategias', label: '🧭 Estrategias', activeClass: 'modeBtnActive', title: 'Estrategias' },
+  { id: 'backtesting', path: '/backtesting', label: '🧪 Backtesting', activeClass: 'modeBtnActive', title: 'Backtesting' },
+  { id: 'bots', path: '/bots', label: '🤖 Bots', activeClass: 'modeBtnActive', title: 'Bots' },
   { id: 'alerts', path: '/alertas', label: '🔔 Alertas', activeClass: 'modeBtnActive', title: 'Alertas' },
   { id: 'uniswap',  path: '/uniswap-pools', label: '🦄 Uniswap Pools', activeClass: 'modeBtnActive', title: 'Uniswap Pools' },
   { id: 'lp-orchestrator', path: '/lp-orchestrator', label: '🎛 Orquestador LP', activeClass: 'modeBtnActive', title: 'Orquestador LP' },

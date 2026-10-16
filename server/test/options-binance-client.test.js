@@ -127,6 +127,46 @@ test('errores de red, rate limit, rechazo y 5xx tienen su clase', async () => {
   assert.equal(server.status, 502);
 });
 
+test('un 429 aplica cooldown por host entre clientes sin nuevas peticiones hasta Retry-After', async () => {
+  // Host aislado: no contamina las pruebas que usan el endpoint real.
+  let at = 1_700_000_000_000;
+  const requests = [];
+  const baseUrl = 'https://options-rate-limit-test.invalid';
+  const fetchImpl = async (url) => {
+    requests.push(url);
+    if (requests.length === 1) {
+      return {
+        ...jsonResponse({ code: -1003, msg: 'Too many requests' }, 429),
+        headers: { get(name) { return name.toLowerCase() === 'retry-after' ? '120' : null; } },
+      };
+    }
+    return jsonResponse({ optionSymbols: [] });
+  };
+  const makeClient = () => createBinanceOptionsClient({
+    baseUrl, fetchImpl, now: () => at,
+  });
+  const first = makeClient();
+  const second = makeClient();
+  await assert.rejects(() => first.getExchangeInfo(), (error) =>
+    error.status === 429 && error.code === 'BINANCE_OPTIONS_RATE_LIMIT');
+  assert.equal(requests.length, 1);
+
+  // Una nueva instancia del cliente comparte el bloqueo por IP/host.
+  await assert.rejects(() => second.getExchangeInfo(), (error) =>
+    error.status === 429 && error.code === 'BINANCE_OPTIONS_RATE_LIMIT' &&
+      error.details.retryAfterMs === 120_000);
+  assert.equal(requests.length, 1);
+
+  at += 119_999;
+  await assert.rejects(() => second.getExchangeInfo(), (error) =>
+    error.status === 429 && error.details.retryAfterMs === 1);
+  assert.equal(requests.length, 1);
+
+  at += 1;
+  assert.deepEqual(await second.getExchangeInfo(), { optionSymbols: [] });
+  assert.equal(requests.length, 2);
+});
+
 test('los orderId grandes se conservan como string exacto', async () => {
   const fetchImpl = async () => ({
     ok: true,
@@ -145,4 +185,36 @@ test('getApiRestrictions usa el host spot con firma', async () => {
   await client.getApiRestrictions();
   assert.ok(calls[0].url.startsWith('https://api.binance.com/sapi/v1/account/apiRestrictions?'));
   assert.ok(calls[0].url.includes('&signature='));
+});
+
+test('endpoints de ejercicios y bills son GET firmados y preservan IDs 64-bit', async () => {
+  const { calls, fetchImpl } = recordingFetch((url) => ({
+    ok: true, status: 200,
+    text: async () => url.includes('/exerciseRecord')
+      ? '[{"id":1125899906842624042,"quantity":"0.1","amount":"0","fee":"0"}]'
+      : '[{"id":1125899906842624043,"type":"EXERCISE_FEE","amount":"0"}]',
+  }));
+  const client = createBinanceOptionsClient({
+    apiKey: API_KEY, apiSecret: API_SECRET, fetchImpl, now: () => 1700000000000,
+  });
+  const [record] = await client.getExerciseRecords({
+    symbol: 'BTC-261016-60000-C', startTime: 123, endTime: 456,
+  });
+  const [bill] = await client.getBills({
+    currency: 'USDT', startTime: 123, endTime: 456,
+  });
+  assert.equal(record.id, '1125899906842624042');
+  assert.equal(bill.id, '1125899906842624043');
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.init.method, 'GET');
+    assert.equal(call.init.headers['X-MBX-APIKEY'], API_KEY);
+    const url = new URL(call.url);
+    assert.equal(url.searchParams.get('startTime'), '123');
+    assert.equal(url.searchParams.get('endTime'), '456');
+    assert.ok(url.searchParams.get('signature'));
+  }
+  assert.match(calls[0].url, /\/eapi\/v1\/exerciseRecord\?/);
+  assert.match(calls[1].url, /\/eapi\/v1\/bill\?/);
+  assert.equal(new URL(calls[1].url).searchParams.get('currency'), 'USDT');
 });

@@ -326,6 +326,13 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
    * (las liquidaciones al vencimiento no llevan `orderId`).
    */
   async function countOrdersSince(strategyId, mode, since) {
+    if (mode === 'live') {
+      const { rows } = await db.query(
+        "SELECT COUNT(*)::int AS n FROM options_live_orders WHERE strategy_id=$1 AND created_at >= $2 AND status<>'queued'",
+        [strategyId, since]
+      );
+      return Number(rows[0]?.n || 0);
+    }
     const { rows } = await db.query(
       `SELECT COUNT(*)::int AS n
          FROM options_strategy_events ev
@@ -358,7 +365,10 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
 
   async function finishAutoSignal(id, { decision, detail }) {
     const { rows } = await db.query(
-      'UPDATE options_auto_signals SET decision = $2, detail = $3 WHERE id = $1 RETURNING *',
+      `UPDATE options_auto_signals SET decision = $2, detail = $3
+       WHERE id = $1
+         AND (decision = 'pending' OR $2 IN ('opened', 'closed', 'reversed'))
+       RETURNING *`,
       [id, decision, detail ?? null]
     );
     return rows[0] ? mapAutoSignal(rows[0]) : null;
