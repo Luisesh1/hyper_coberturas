@@ -27,19 +27,32 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.sha }}
 
-      - name: Configurar SSH
+      - name: Configurar SSH con huella de host previamente verificada
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+          set -euo pipefail
+          if [ -z "${SERVER_HOST:-}" ] || [ -z "${SERVER_SSH_KEY:-}" ] || [ -z "${SERVER_SSH_KNOWN_HOSTS:-}" ]; then
+            echo "::error::Falta configuración SSH o SERVER_SSH_KNOWN_HOSTS verificado"
+            exit 1
+          fi
+          mkdir -p -m 700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_rsa
+          printf '%s\n' "$SERVER_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_rsa ~/.ssh/known_hosts
+          if ! ssh-keygen -F "$SERVER_HOST" -f ~/.ssh/known_hosts >/dev/null; then
+            echo "::error::La huella SSH fijada no corresponde a SERVER_HOST"
+            exit 1
+          fi
 
       - name: Deploy por SSH
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
-          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" "
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" "
             set -e
             cd '$DEPLOY_PATH'
             git fetch origin main
