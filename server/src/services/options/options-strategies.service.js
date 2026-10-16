@@ -198,9 +198,12 @@ function createOptionsStrategiesService(deps = {}) {
 
   async function get(userId, id) {
     const strategy = await requireStrategy(userId, id);
-    const [positions, events] = await Promise.all([
+    const [positions, events, standingOrders] = await Promise.all([
       repo.listPositions(strategy.id),
       repo.listEvents(strategy.id, { limit: 100 }),
+      strategy.template === 'alert_signal'
+        ? liveOrders.listByStrategy(strategy.id)
+        : Promise.resolve([]),
     ]);
     const at = now();
     return {
@@ -208,6 +211,13 @@ function createOptionsStrategiesService(deps = {}) {
       kpis: { shadow: kpisFor(positions, events, 'shadow', at), live: kpisFor(positions, events, 'live', at) },
       equity: equityCurve(positions, strategy.createdAt),
       positions: positions.filter((p) => p.closedAt == null),
+      // Solo información operacional; las credenciales nunca llegan al cliente.
+      takeProfitOrders: standingOrders.filter((o) => o.purpose === 'take_profit')
+        .slice(0, 20).map((o) => ({
+          id: o.id, positionId: o.positionId, symbol: o.symbol,
+          price: o.limitPrice, quantity: o.quantity, executedQty: o.processedQty,
+          status: o.status, cancelRequested: o.cancelRequested,
+        })),
       usage: await limitsUsage({ repo, market, strategy, positions, at }),
       events,
     };
