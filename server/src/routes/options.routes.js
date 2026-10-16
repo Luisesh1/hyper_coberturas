@@ -146,13 +146,17 @@ router.get('/account', asyncHandler(async (req, res) => {
   const client = await optionsCredentials.getClientForUser(req.user.userId);
   const account = await client.getAccount();
   const assets = Array.isArray(account?.asset) ? account.asset : [];
-  const usdt = assets.find((a) => a.asset === 'USDT') || assets[0] || {};
-  const equity = num(usdt.equity) ?? num(usdt.marginBalance) ?? 0;
-  const available = num(usdt.available);
-  const initialMargin = num(usdt.initialMargin);
+  // Nunca etiquetar el saldo de otro activo como USDT, ni inventar 0
+  // cuando Binance omite datos de margen de la cuenta de opciones.
+  const usdt = assets.find((a) => a.asset === 'USDT') || null;
+  const equity = usdt ? (num(usdt.equity) ?? num(usdt.marginBalance)) : null;
+  const available = num(usdt?.available);
+  const initialMargin = num(usdt?.initialMargin);
   const marginUsedUsdt = initialMargin != null
     ? initialMargin
-    : (available != null ? Math.max(0, equity - available) : num(usdt.locked) ?? 0);
+    : (available != null && equity != null
+      ? Math.max(0, equity - available)
+      : num(usdt?.locked));
 
   const greeks = { delta: 0, gamma: 0, theta: 0, vega: 0 };
   for (const g of Array.isArray(account?.greek) ? account.greek : []) {
