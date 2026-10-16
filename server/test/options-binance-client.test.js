@@ -127,6 +127,46 @@ test('errores de red, rate limit, rechazo y 5xx tienen su clase', async () => {
   assert.equal(server.status, 502);
 });
 
+test('un 429 aplica cooldown por host entre clientes sin nuevas peticiones hasta Retry-After', async () => {
+  // Host aislado: no contamina las pruebas que usan el endpoint real.
+  let at = 1_700_000_000_000;
+  const requests = [];
+  const baseUrl = 'https://options-rate-limit-test.invalid';
+  const fetchImpl = async (url) => {
+    requests.push(url);
+    if (requests.length === 1) {
+      return {
+        ...jsonResponse({ code: -1003, msg: 'Too many requests' }, 429),
+        headers: { get(name) { return name.toLowerCase() === 'retry-after' ? '120' : null; } },
+      };
+    }
+    return jsonResponse({ optionSymbols: [] });
+  };
+  const makeClient = () => createBinanceOptionsClient({
+    baseUrl, fetchImpl, now: () => at,
+  });
+  const first = makeClient();
+  const second = makeClient();
+  await assert.rejects(() => first.getExchangeInfo(), (error) =>
+    error.status === 429 && error.code === 'BINANCE_OPTIONS_RATE_LIMIT');
+  assert.equal(requests.length, 1);
+
+  // Una nueva instancia del cliente comparte el bloqueo por IP/host.
+  await assert.rejects(() => second.getExchangeInfo(), (error) =>
+    error.status === 429 && error.code === 'BINANCE_OPTIONS_RATE_LIMIT' &&
+      error.details.retryAfterMs === 120_000);
+  assert.equal(requests.length, 1);
+
+  at += 119_999;
+  await assert.rejects(() => second.getExchangeInfo(), (error) =>
+    error.status === 429 && error.details.retryAfterMs === 1);
+  assert.equal(requests.length, 1);
+
+  at += 1;
+  assert.deepEqual(await second.getExchangeInfo(), { optionSymbols: [] });
+  assert.equal(requests.length, 2);
+});
+
 test('los orderId grandes se conservan como string exacto', async () => {
   const fetchImpl = async () => ({
     ok: true,
