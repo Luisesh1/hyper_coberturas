@@ -177,11 +177,12 @@ jobs:
           printf '%s' "$raw" | "${compose[@]}" exec -T server node src/scripts/options-contract-readiness-summary.js
           echo "binance_contract_check_complete=pass"
           REMOTE
-          # Distinción estricta: pass=certificado; unverified=solo falta
-          # evidencia de getOrder/userTrades; fail=error real (exit 2).
+          # Sin marcador y salidas explícitas el job falla cerrado.
           if ! grep -Fxq 'binance_contract_check_complete=pass' "$RUNNER_TEMP/options-binance-check.log" ||
-             ! grep -Eq '^binance_contract_ready=(yes|no) "$RUNNER_TEMP/options-binance-check.log" ||
-             ! grep -Eq '^binance_contract_status=(pass|unverified) "$RUNNER_TEMP/options-binance-check.log"; then
+             ! { grep -Fxq 'binance_contract_ready=yes' "$RUNNER_TEMP/options-binance-check.log" ||
+                 grep -Fxq 'binance_contract_ready=no' "$RUNNER_TEMP/options-binance-check.log"; } ||
+             ! { grep -Fxq 'binance_contract_status=pass' "$RUNNER_TEMP/options-binance-check.log" ||
+                 grep -Fxq 'binance_contract_status=unverified' "$RUNNER_TEMP/options-binance-check.log"; }; then
             echo "::error::Diagnóstico Binance incompleto o no superado"
             exit 1
           fi
