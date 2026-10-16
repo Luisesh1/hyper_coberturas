@@ -177,6 +177,38 @@ El PR **no debe fusionarse solo para activar este diagnóstico** si aún
 están pendientes las barreras de trading real. No colocar ambos flags
 de trading en `true` por el simple hecho de completar el deploy.
 
+### Ejecución manual del contrato de Binance por CI/CD
+
+El workflow `.github/workflows/options-diagnostics.yml` acepta ahora la entrada
+opcional `binance_user_id` en **Actions → Options - diagnóstico VPS →
+Run workflow**, únicamente cuando el workflow ya está disponible en
+`main`. Los cron jobs dejan esa entrada vacía y no consultan credenciales
+de opciones adicionales. No habilita flags de trading.
+
+Al introducir el **ID interno** del usuario, el job primero confirma
+servicios Docker/ledger, después establece SSH con la huella previamente
+verificada, exige que **ambos** flags reales estén apagados y comprueba que
+el contenedor desplegado ya tiene el script. Ejecuta allí:
+
+```bash
+node src/scripts/options-live-contract-check.js <user-id>
+```
+
+Es equivalente a `npm run check:options-binance --prefix server -- <user-id>`
+desde la raíz de la aplicación. Únicamente imprime estado
+`binance_<comprobación>=pass|fail|unverified` y `binance_contract_ready=yes|no`.
+Si el servidor sigue con una versión anterior, muestra
+`binance_contract_check=not_deployed` y no actualiza código.
+**No sube ni copia el script a producción ni revela el JSON completo.**
+
+**No ejecutarlo automáticamente desde PR:** por seguridad, GitHub Actions
+con secretos `production` solo corre en la rama aprobada; introducir
+las claves SSH de producción en un job de `pull_request` permitiría que
+código no revisado accediera al VPS. El workflow de deploy existente se
+dispara en cada push a `main` después de CI, así que no integrar este
+archivo aisladamente para provocar un disparo: el despliegue requiere
+planificación y validación separadas.
+
 El comprobador `node src/scripts/options-live-contract-check.js <user-id>`
 verifica contratos firmados sin POST: si aún no existen órdenes históricas
 en el ledger, `getOrder` y `userTrades` quedan explícitamente
