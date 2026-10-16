@@ -212,7 +212,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
    */
   async function queueReversal(strategy, signal, closeAction) {
     const eventId = String(signal?.eventId ?? '');
-    if (!/^\\d{1,20}$/.test(eventId) ||
+    if (!/^\d{1,20}$/.test(eventId) ||
         !['bullish','bearish'].includes(signal.direction) ||
         closeAction.type !== 'close' || !closeAction.legs?.length) {
       throw new Error('Invalid durable reversal event');
