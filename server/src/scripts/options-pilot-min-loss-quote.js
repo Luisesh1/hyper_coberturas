@@ -58,11 +58,18 @@ function candidateList(info, tickers, at = Date.now()) {
     a.upperEntryCost - b.upperEntryCost || a.expiry - b.expiry);
 }
 
-function bookHasTwoWayLiquidity(book, quantity) {
-  const levels = side => Array.isArray(side) &&
-    side.some(x => Array.isArray(x) && pos(x[0]) &&
-      Number(x[1]) >= quantity && Number.isFinite(Number(x[1])));
-  return book && levels(book.asks) && levels(book.bids);
+function bookHasTwoWayLiquidity(book, quantity, quotedAsk = null) {
+  if (!book || !Array.isArray(book.asks) || !Array.isArray(book.bids)) return false;
+  const levels = rows => rows.filter(x => Array.isArray(x) && pos(x[0]) && pos(x[1]))
+    .map(x => ({ price: Number(x[0]), qty: Number(x[1]) }));
+  const asks = levels(book.asks).sort((a, b) => a.price - b.price);
+  const bids = levels(book.bids).sort((a, b) => b.price - a.price);
+  if (!asks.length || !bids.length || asks[0].price <= bids[0].price ||
+      asks[0].qty < quantity || bids[0].qty < quantity ||
+      (asks[0].price - bids[0].price) / asks[0].price > MAX_SPREAD_RATIO) return false;
+  // Nunca estimar prima inferior al precio ejecutable más reciente.
+  if (quotedAsk !== null && asks[0].price > quotedAsk + 1e-10) return false;
+  return true;
 }
 
 async function minLossScan(client, at = Date.now()) {
@@ -76,7 +83,7 @@ async function minLossScan(client, at = Date.now()) {
     let depth;
     try { depth = await client.getDepth(candidate.symbol, 10); }
     catch (_) { continue; }
-    if (!bookHasTwoWayLiquidity(depth, candidate.quantity)) continue;
+    if (!bookHasTwoWayLiquidity(depth, candidate.quantity, candidate.ask)) continue;
     liquidCandidates++;
     if (!best || candidate.upperEntryCost < best.upperEntryCost) {
       best = candidate;
