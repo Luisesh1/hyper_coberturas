@@ -333,7 +333,10 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
           />
           {form.takeProfitMode === 'volatility' ? (
             <>
-              <p className={styles.note}>Objetivo calculado con ATR de velas spot 1 h, IV actual y prima de entrada confirmada. Se comprueba el precio ejecutable antes del cierre. Sin datos de Binance no se ejecuta este TP; el stop y la salida por tiempo siguen activos. No garantiza ganancia.</p>
+              <details className={styles.note}>
+                <summary aria-label="Información sobre TP por volatilidad">ⓘ Cómo se calcula</summary>
+                <p>ATR (velas 1 h) + volatilidad implícita, sobre prima confirmada. El TP se revisa cada 5 minutos; no queda una orden residente en Binance. Si faltan datos no se dispara ese TP. El stop y la salida por tiempo siguen activos. No garantiza ganancias.</p>
+              </details>
               <NumberField
                 label="Multiplicador ATR"
                 value={form.tpAtrMultiplier}
