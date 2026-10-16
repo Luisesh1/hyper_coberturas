@@ -67,6 +67,15 @@ function fixture({ now = 100_000, onSubmit } = {}) {
   let allTrades = [];
   let openOrders = [];
   const client = {
+    async getExchangeInfo() {
+      return { optionSymbols: [60000, 61000, 62000].map((strike) => ({
+        symbol: `BTC-261030-${strike}-C`, status: 'TRADING',
+        quoteAsset: 'USDT', expiryDate: 9999999999999,
+        filters: [{ filterType: 'PRICE_FILTER', minPrice: '0',
+          maxPrice: '1000000', tickSize: '0.01', minQty: '0.01',
+          maxQty: '100', stepSize: '0.01' }],
+      })) };
+    },
     async placeOrder(payload) {
       calls.post.push(payload);
       if (onSubmit) return onSubmit(payload);
