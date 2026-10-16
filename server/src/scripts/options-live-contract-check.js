@@ -8,6 +8,35 @@
 const credentials = require('../services/options/options-credentials.service');
 const db = require('../db');
 
+function positiveNumber(value) {
+  return value != null && value !== '' && Number.isFinite(Number(value)) && Number(value) > 0;
+}
+
+/** Igual que el ledger: un HTTP 200 no certifica fills sin datos contabilizables. */
+function usableUserTrade(row) {
+  return row != null && typeof row === 'object' &&
+    /^\\d+$/.test(String(row.tradeId ?? row.id ?? '')) &&
+    /^\\d+$/.test(String(row.orderId ?? '')) &&
+    typeof row.symbol === 'string' && row.symbol.length > 0 &&
+    ['BUY', 'SELL'].includes(row.side) &&
+    positiveNumber(row.quantity) && positiveNumber(row.price) &&
+    row.fee != null && row.fee !== '' && Number.isFinite(Number(row.fee)) &&
+    row.quoteAsset === 'USDT' &&
+    Number.isFinite(Number(row.time)) && Number(row.time) > 0;
+}
+
+/** La reconciliación exige estos campos para verificar estado y cantidad. */
+function usableOrder(row, symbol, id) {
+  return row != null && typeof row === 'object' &&
+    String(row.orderId ?? '') === String(id) &&
+    row.symbol === symbol && ['BUY', 'SELL'].includes(row.side) &&
+    typeof row.status === 'string' &&
+    positiveNumber(row.quantity) &&
+    row.executedQty != null && Number.isFinite(Number(row.executedQty)) &&
+    Number(row.executedQty) >= 0 &&
+    Number(row.executedQty) <= Number(row.quantity);
+}
+
 function shapeOf(data) {
   if (Array.isArray(data)) return data[0] && typeof data[0] === 'object'
     ? Object.keys(data[0]).sort() : [];
@@ -87,17 +116,28 @@ async function checkContracts({ userId, client, database, at = Date.now() }) {
     );
     const existing = rows[0];
     if (existing?.symbol && existing.exchange_order_id != null) {
-      await checked('getOrder', () => client.getOrder({
+      const order = await checked('getOrder', () => client.getOrder({
         symbol: existing.symbol, orderId: String(existing.exchange_order_id),
       }), { array: false });
+      if (order && !usableOrder(order, existing.symbol, existing.exchange_order_id)) {
+        const row = results.find((r) => r.endpoint === 'getOrder');
+        row.ok = false;
+        row.code = 'INCOMPATIBLE_ORDER_SHAPE';
+      }
       const trades = await checked('userTrades', () => client.getUserTrades({
         symbol: existing.symbol, startTime, endTime: at, limit: 100,
       }));
-      if (Array.isArray(trades) && !trades.length) {
-        // HTTP 200 con [] no demuestra el esquema de fills reales.
+      if (Array.isArray(trades)) {
         const row = results.find((r) => r.endpoint === 'userTrades');
-        row.ok = null;
-        row.skipped = 'NO_RECENT_TRADES';
+        if (!trades.length) {
+          // HTTP 200 con [] no demuestra el esquema de fills reales.
+          row.ok = null;
+          row.skipped = 'NO_RECENT_TRADES';
+        } else if (!trades.every(usableUserTrade)) {
+          // No filtrar valores privados: solo indicar incompatibilidad.
+          row.ok = false;
+          row.code = 'INCOMPATIBLE_TRADE_SHAPE';
+        }
       }
     } else {
       results.push({ endpoint: 'getOrder', ok: null, skipped: 'NO_HISTORICAL_ORDER' });
@@ -133,4 +173,4 @@ if (require.main === module) {
   }).finally(() => db.pool.end());
 }
 
-module.exports = { checkContracts, shapeOf };
+module.exports = { checkContracts, shapeOf, usableUserTrade, usableOrder };
