@@ -7,6 +7,7 @@ const liveRepo = require('../../repositories/options-live-orders.repository');
 const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
 const { validateBinanceOrderBatch } = require('./options-order-filters');
+const { enforcePilotEntry } = require('./options-live-pilot-policy');
 const { parseSymbol } = require('./options-utils');
 const { projectTakeProfit } = require('./options-take-profit');
 const alertSignal = require('./templates/alert-signal');
@@ -174,6 +175,9 @@ class OptionsLiveExecution {
     const deadlineAt = this.now() + WINDOW_MS;
     const exchangeInfo = await client.getExchangeInfo();
     validateBinanceOrderBatch(exchangeInfo, legs, this.now(), deadlineAt);
+    // Freno final antes del ledger y de cualquier POST si hay trading real.
+    // Nunca activa una orden: exige contrato, precio y permiso exactos.
+    enforcePilotEntry({ strategy, action: { ...action, legs }, now: this.now() });
     const orders = await this.repo.beginBatch({
       strategy, action: action.type, legs, key: actionKey(strategy, action, ctx),
       detail: action.detail, deadlineAt,
