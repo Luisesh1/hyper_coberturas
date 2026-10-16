@@ -116,3 +116,38 @@ jobs:
             echo '- Cotización actual, tarifa efectiva, USD/USDT y autorización: PENDIENTES.'
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::warning::La opción de menor precio puede vencer sin valor; esto no constituye una recomendación ni habilita el piloto real."
+
+      - name: Revisar contratos ETH con griegas y profundidad (solo mercado público)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SERVER_USER" ] || [ -z "$SERVER_HOST" ] || [ -z "$DEPLOY_PATH" ]; then
+            echo "::error::Falta configuración VPS"
+            exit 1
+          fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-eth-contract-public-review.js" \
+            | tee "$RUNNER_TEMP/options-eth-public-review.log"
+          if ! grep -Fxq 'review_read_only=pass' "$RUNNER_TEMP/options-eth-public-review.log" ||
+             ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-eth-public-review.log" ||
+             ! { grep -Fxq 'review_status=candidates' "$RUNNER_TEMP/options-eth-public-review.log" ||
+                 grep -Fxq 'review_status=no_candidate' "$RUNNER_TEMP/options-eth-public-review.log"; } ||
+             ! grep -Fxq 'review_effective_fees=unverified' "$RUNNER_TEMP/options-eth-public-review.log"; then
+            echo "::error::Revisión de contratos no completada de forma segura"
+            exit 1
+          fi
+          if grep -Fxq 'review_status=no_candidate' "$RUNNER_TEMP/options-eth-public-review.log"; then
+            echo "::warning::No se identificó ningún contrato ETH con delta y liquidez aceptables dentro de 20 USDT. NO OPERAR."
+          fi
+          {
+            echo '### Revisión ETH: delta, precio y vencimiento'
+            echo '- Todos los datos mostrados en logs son mercado PÚBLICO, no cuenta.'
+            echo '- Filtrado: delta absoluta 0.25–0.75; vencimiento 3–30 días; spread <=10%.'
+            echo '- Lote mínimo y coste teórico <=20 USDT incluyendo techo estimado de comisión de entrada.'
+            echo '- Hasta tres contratos, entre un máximo de 12 libros inspeccionados.'
+            echo '- Delta NO es probabilidad de éxito. Una prima barata puede perderse íntegramente.'
+            echo '- Operación autorizada: NO; trading automático: NO.'
+          } >> "$GITHUB_STEP_SUMMARY"
