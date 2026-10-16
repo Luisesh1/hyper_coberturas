@@ -44,6 +44,10 @@ Estado: **DRAFT / trading real deshabilitado**. Alcance: PR #4 fase 2. Documenta
    <user-id>` dentro de `server/`. El resultado **solo incluye estructura
    de los campos**, no saldos o credenciales. Confirmar formatos de
    `getOrder`, `getUserTrades`, `exerciseRecord`, `bill`.
+   El chequeo incluye `isolatedAccount`: debe comprobar ausencia de
+   órdenes abiertas y cantidad neta distinta de cero. Si cualquiera de
+   estos datos no está disponible o la cuenta ya tiene exposición,
+   el piloto se detiene sin publicar símbolos ni cantidades en CI.
 4. En cuenta aislada, después de una autorización humana **separada**:
    prueba con capital mínimo permitido por exchange, revisar físicamente
    en Binance las órdenes aceptadas sin ejecución, fills parciales,
