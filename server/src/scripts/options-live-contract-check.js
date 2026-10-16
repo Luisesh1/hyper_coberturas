@@ -90,9 +90,15 @@ async function checkContracts({ userId, client, database, at = Date.now() }) {
       await checked('getOrder', () => client.getOrder({
         symbol: existing.symbol, orderId: String(existing.exchange_order_id),
       }), { array: false });
-      await checked('userTrades', () => client.getUserTrades({
+      const trades = await checked('userTrades', () => client.getUserTrades({
         symbol: existing.symbol, startTime, endTime: at, limit: 100,
       }));
+      if (Array.isArray(trades) && !trades.length) {
+        // HTTP 200 con [] no demuestra el esquema de fills reales.
+        const row = results.find((r) => r.endpoint === 'userTrades');
+        row.ok = null;
+        row.skipped = 'NO_RECENT_TRADES';
+      }
     } else {
       results.push({ endpoint: 'getOrder', ok: null, skipped: 'NO_HISTORICAL_ORDER' });
       results.push({ endpoint: 'userTrades', ok: null, skipped: 'NO_HISTORICAL_ORDER' });
