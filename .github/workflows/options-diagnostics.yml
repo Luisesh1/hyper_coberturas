@@ -172,41 +172,33 @@ jobs:
             echo "binance_contract_check=unavailable"
             exit 1
           fi
-          # Solo publicar el nombre/status/código de cada control; NUNCA el JSON.
-          printf '%s' "$raw" | "${compose[@]}" exec -T server node -e '
-            let input = "";
-            process.stdin.setEncoding("utf8");
-            process.stdin.on("data", part => { input += part; });
-            process.stdin.on("end", () => {
-              try {
-                const result = JSON.parse(input);
-                const allowed = new Set([
-                  "exchangeInfo", "optionFilters", "spotKlines1h", "apiPermissions",
-                  "marginAccount", "positions", "openOrders", "isolatedAccount",
-                  "exerciseRecord", "bill", "getOrder", "userTrades"
-                ]);
-                if (result.readOnly !== true || !Array.isArray(result.results) ||
-                    result.results.some(r => !allowed.has(r.endpoint) ||
-                      (r.ok !== true && r.ok !== false && r.ok !== null))) {
-                  throw new Error("Invalid contract response");
-                }
-                for (const row of result.results) {
-                  console.log("binance_" + row.endpoint + "=" +
-                    (row.ok === true ? "pass" : row.ok === null ? "unverified" : "fail"));
-                }
-                console.log("binance_contract_ready=" + (result.ready === true ? "yes" : "no"));
-                if (result.ready !== true) process.exitCode = 2;
-              } catch (_) {
-                console.log("binance_contract_check=invalid_response");
-                process.exitCode = 1;
-              }
-            });
-          '
+          # JSON firmado se procesa dentro del VPS. GitHub solo recibe
+          # pass/fail/unverified por endpoint y readiness separada.
+          printf '%s' "$raw" | "${compose[@]}" exec -T server node src/scripts/options-contract-readiness-summary.js
           echo "binance_contract_check_complete=pass"
           REMOTE
-          # Sin marcador y resultado explícito, nunca publicar "success".
+          # Sin marcador y salidas explícitas el job falla cerrado.
           if ! grep -Fxq 'binance_contract_check_complete=pass' "$RUNNER_TEMP/options-binance-check.log" ||
-              ! grep -Eq '^binance_contract_ready=(yes|no)$' "$RUNNER_TEMP/options-binance-check.log"; then
-            echo "::error::Diagnóstico Binance incompleto (faltó resultado firmado)"
+             ! { grep -Fxq 'binance_contract_ready=yes' "$RUNNER_TEMP/options-binance-check.log" ||
+                 grep -Fxq 'binance_contract_ready=no' "$RUNNER_TEMP/options-binance-check.log"; } ||
+             ! { grep -Fxq 'binance_contract_status=pass' "$RUNNER_TEMP/options-binance-check.log" ||
+                 grep -Fxq 'binance_contract_status=unverified' "$RUNNER_TEMP/options-binance-check.log"; }; then
+            echo "::error::Diagnóstico Binance incompleto o no superado"
             exit 1
+          fi
+          contract_status="$(sed -n 's/^binance_contract_status=//p' "$RUNNER_TEMP/options-binance-check.log" | tail -n 1)"
+          contract_ready="$(sed -n 's/^binance_contract_ready=//p' "$RUNNER_TEMP/options-binance-check.log" | tail -n 1)"
+          if { [ "$contract_status" = "pass" ] && [ "$contract_ready" != "yes" ]; } ||
+             { [ "$contract_status" = "unverified" ] && [ "$contract_ready" != "no" ]; }; then
+            echo "::error::Resultado y certificación inconsistentes"
+            exit 1
+          fi
+          {
+            echo "### Binance Options — diagnóstico firmado, solo lectura"
+            echo "- Diagnóstico: \`$contract_status\`"
+            echo "- Certificación para trading real: \`$contract_ready\`"
+            echo "- Los controles no verificados no autorizan el trading."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$contract_status" = "unverified" ]; then
+            echo "::warning::Sin orden/fills históricos para getOrder y userTrades: diagnóstico completo pero trading NO certificado"
           fi
