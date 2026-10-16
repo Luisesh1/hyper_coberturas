@@ -441,3 +441,28 @@
   .mapArrow { display: none; }
   .mapAction { text-align: right; }
 }
+
+/* TP residente: estado compacto; información detallada solo bajo demanda. */
+.tpStatus {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  padding: 10px 12px;
+  margin-block: 8px 12px;
+}
+.tpStatusHeader {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.tpStatusHeader strong { font-weight: 650; }
+.tpStatusHeader > span:last-child { margin-left: auto; font-size: 12px; }
+.tpDot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--indigo); }
+.tpDetails { margin-top: 6px; font-size: 12px; }
+.tpDetails summary { cursor: pointer; color: var(--text-secondary); }
+.tpList { list-style: none; padding: 8px 0 0; margin: 0; display: grid; gap: 6px; }
+.tpList li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tpList li > span:first-child { font-family: var(--font-mono); }
+.tpList li > span:last-child { margin-left: auto; }
