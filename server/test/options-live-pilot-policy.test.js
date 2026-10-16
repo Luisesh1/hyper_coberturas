@@ -84,3 +84,16 @@ test('execution enforces pilot check after exchange tick/lot and before DB batch
   const post=body.indexOf('client.placeOrder(');
   assert.ok(filters>=0 && permit>filters && batch>permit && post>batch);
 });
+
+test('deploy reads ETH public quote automatically but never arms trading',()=>{
+  const flow=fs.readFileSync(path.resolve(__dirname,
+    '../../.github/workflows/deploy.yml'),'utf8');
+  const step=flow.split('- name: Revisar opciones ETH públicas tras el deploy')[1];
+  assert.ok(step,'expected public market-only step');
+  assert.match(step,/options-eth-contract-public-review\.js/);
+  assert.match(step,/review_read_only=pass/);
+  assert.match(step,/pilot_ready=no/);
+  assert.match(step,/NO OPERAR/);
+  assert.doesNotMatch(step,/placeOrder|cancelOrder|OPTIONS_LIVE_PILOT_AUTHORIZED=true|docker compose .*up -d/);
+  assert.match(flow,/options_deployed_read_only=pass/);
+});
