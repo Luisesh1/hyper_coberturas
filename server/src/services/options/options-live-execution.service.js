@@ -219,6 +219,12 @@ class OptionsLiveExecution {
   }
 
   async reconcileOrder(order, client) {
+    if (order.purpose === 'take_profit' && this.now() >= order.deadlineAt &&
+        typeof this.repo.requestDeadlineExit === 'function') {
+      await this.repo.requestDeadlineExit(order);
+      // La solicitud se hace durable antes de cancelar el límite. Ninguna
+      // nueva orden de cierre compite con él hasta su estado final.
+    }
     if (order.status === 'queued') {
       // Mientras la ventana siga abierta, el sender todavía puede reclamar
       // esta pata. Nunca marcarla final antes de su deadline.
