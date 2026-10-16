@@ -204,7 +204,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       "AND NOT EXISTS (SELECT 1 FROM options_live_exit_requests r WHERE r.position_id=p.id) " +
       "AND NOT EXISTS (SELECT 1 FROM options_live_orders o " +
       "WHERE o.position_id=p.id AND o.action='close' AND o.status<>'final') " +
-      "ORDER BY p.id LIMIT $1", [limit]
+      "ORDER BY p.id DESC LIMIT $1", [limit]
     );
     return rows.map((p) => ({
       id: Number(p.id), strategyId: Number(p.strategy_id), userId: Number(p.user_id),
@@ -357,6 +357,19 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       strategyId: Number(p.strategy_id), userId: Number(p.user_id),
       symbol: p.symbol, side: p.side, quantity: Number(p.quantity),
     }));
+  }
+
+  async function hasStandingTp(positionIds) {
+    if (!Array.isArray(positionIds) || !positionIds.length) return false;
+    const ids = positionIds.map(Number);
+    if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+      throw new Error('Invalid TP position id');
+    }
+    const { rows } = await db.query(
+      "SELECT id FROM options_live_orders WHERE position_id=ANY($1::bigint[]) " +
+      "AND purpose='take_profit' AND status<>'final' LIMIT 1", [ids]
+    );
+    return rows.length > 0;
   }
 
   async function listRestingTpOrderIds(userId) {
@@ -633,7 +646,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders,
-    deferExitIfProtected, listReadyExitRequests, listRestingTpOrderIds,
+    deferExitIfProtected, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp,
     claimAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
