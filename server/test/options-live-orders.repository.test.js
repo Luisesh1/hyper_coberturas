@@ -118,7 +118,7 @@ test('markSending exige deadline vigente en la transición SQL atómica', async 
     db: { async query(sql, args) {
       assert.match(sql, /status='queued'/);
       assert.match(sql, /NOT cancel_requested/);
-      assert.match(sql, /deadline_at > \\$2/);
+      assert.match(sql, /deadline_at > \$2/);
       assert.deepEqual(args, [13, nowMs]);
       return { rows: [] };
     } },
