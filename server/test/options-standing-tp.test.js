@@ -197,3 +197,41 @@ test('un tick de ganancia no cancela orden TP resting', async () => {
   assert.equal(quoted, 0);
   assert.equal(ctx.produced[0].reason, 'tp_resting');
 });
+
+test('stop solicita cancelación durable incluso si falla el libro de órdenes', async () => {
+  let quoteCalls = 0;
+  let deferred = 0;
+  const runner = new OptionsStrategyRunner({
+    repo: {},
+    market: { async getQuote() { quoteCalls++; throw new Error('Binance unavailable'); } },
+    liveExecutor: {
+      enabled: true,
+      requestProtectedExit: async () => { deferred++; return true; },
+      repo: {},
+    },
+    logger: silent,
+  });
+  const ctx = { now: NOW, produced: [] };
+  const result = await runner.executeLive(strategy, {
+    type: 'close', reason: 'stop_loss',
+    legs: [{ positionId: 100, symbol: SYMBOL, side: 'SELL', quantity: 0.2 }],
+  }, ctx);
+  assert.equal(result.status, 'tp_cancel_requested');
+  assert.equal(deferred, 1);
+  assert.equal(quoteCalls, 0);
+  assert.equal(ctx.produced[0].pending, true);
+});
+
+test('si Binance no confirma cancelación terminal no se contabiliza el cierre', async () => {
+  const f = fixture({ positions: [filledPosition()] });
+  await f.engine.reconcilePending();
+  // Orden pasa a CANCELED solo cuando la API confirma el cambio.
+  const calls = [];
+  f.client.cancelOrder = async () => { calls.push('cancel'); };
+  const req = { ...f.orders[0], cancelRequested: true };
+  await f.engine.reconcileOrder(req, f.client);
+  assert.equal(calls.length, 1);
+  assert.equal(f.orders[0].status, 'active');
+  assert.equal(f.orders[0].processedQty, 0);
+  assert.equal(f.log.sent.length, 1);
+});
