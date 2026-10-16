@@ -22,8 +22,17 @@ const makeClient = (trace) => ({
   async getOpenOrders() { trace.push('openOrders'); return []; },
   async getExerciseRecords() { trace.push('exercise'); return []; },
   async getBills() { trace.push('bill'); return []; },
-  async getOrder() { trace.push('order'); return { orderId: '1234567890123456789', symbol }; },
-  async getUserTrades() { trace.push('trades'); return [{ tradeId: '9999999999999999999', symbol }]; },
+  async getOrder() {
+    trace.push('order');
+    return { orderId: '1234567890123456789', symbol, side: 'BUY',
+      status: 'FILLED', quantity: '0.10', executedQty: '0.10' };
+  },
+  async getUserTrades() {
+    trace.push('trades');
+    return [{ tradeId: '9999999999999999999', orderId: '1234567890123456789',
+      symbol, side: 'BUY', quantity: '0.10', price: '120',
+      fee: '0.01', quoteAsset: 'USDT', time: NOW - 10000 }];
+  },
 });
 
 test('READ-ONLY: checks shapes/filters/orders without sending or cancelling', async () => {
@@ -86,4 +95,38 @@ test('si faltan filtros o falla endpoint, la validación falla cerrada sin filtr
   assert.equal(out.results.find((r) => r.endpoint === 'optionFilters').ok, false);
   assert.equal(out.results.find((r) => r.endpoint === 'spotKlines1h').ok, false);
   assert.ok(!JSON.stringify(out).includes('API_KEY_IS_SENSITIVE'));
+});
+
+test('HTTP 200 con fills incompletos no certifica ledger real de Binance', async () => {
+  const trace = [];
+  const client = makeClient(trace);
+  client.getUserTrades = async () => [{
+    tradeId: '9999999999999999999', orderId: '1234567890123456789',
+    symbol, side: 'BUY', price: '120',
+    fee: '0.01', time: NOW - 10000,
+    // Faltan quantity y quoteAsset: el ledger no puede aplicar este fill.
+  }];
+  const out = await checkContracts({ userId: 11, client,
+    database: { async query() {
+      return { rows: [{ symbol, exchange_order_id: '1234567890123456789' }] };
+    } }, at: NOW });
+  assert.equal(out.ready, false);
+  const trades = out.results.find((r) => r.endpoint === 'userTrades');
+  assert.equal(trades.ok, false);
+  assert.equal(trades.code, 'INCOMPATIBLE_TRADE_SHAPE');
+  assert.ok(!JSON.stringify(out).includes('9999999999999999999'));
+});
+
+test('HTTP 200 con orden sin estado o cantidad no certifica el contrato de cancelación', async () => {
+  const trace = [];
+  const client = makeClient(trace);
+  client.getOrder = async () => ({ orderId: '1234567890123456789', symbol });
+  const out = await checkContracts({ userId: 11, client,
+    database: { async query() {
+      return { rows: [{ symbol, exchange_order_id: '1234567890123456789' }] };
+    } }, at: NOW });
+  assert.equal(out.ready, false);
+  const order = out.results.find((r) => r.endpoint === 'getOrder');
+  assert.equal(order.ok, false);
+  assert.equal(order.code, 'INCOMPATIBLE_ORDER_SHAPE');
 });
