@@ -99,6 +99,38 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           [ids]
         );
         const byId = new Map(held.map((p) => [Number(p.id), p]));
+        // Se protege la carrera: TP creado después del preflight y antes
+        // de esta transacción. Bajo el mismo advisory lock, guardar la
+        // intención de salida y cancelar TP en lugar de enviar doble cierre.
+        const { rows: protectedTp } = await tx.query(
+          "SELECT id FROM options_live_orders WHERE position_id=ANY($1::bigint[]) " +
+          "AND purpose='take_profit' AND status<>'final' LIMIT 1", [ids]
+        );
+        if (protectedTp.length) {
+          const time = now();
+          for (const leg of legs) {
+            const p = byId.get(Number(leg.positionId));
+            if (!p || Number(p.user_id) !== Number(strategy.userId) ||
+                Number(p.strategy_id) !== Number(strategy.id) || p.mode !== 'live' ||
+                p.symbol !== leg.symbol || p.side === leg.side ||
+                Number(leg.quantity) > Number(p.quantity) + 1e-9) {
+              throw new Error('Closing order exceeds verified live position');
+            }
+            await tx.query(
+              `INSERT INTO options_live_exit_requests
+               (position_id,strategy_id,user_id,reason,created_at,updated_at)
+               VALUES ($1,$2,$3,'tp_race_cancel',$4,$4)
+               ON CONFLICT (position_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
+              [p.id, strategy.id, strategy.userId, time]
+            );
+          }
+          await tx.query(
+            "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$2 " +
+            "WHERE position_id=ANY($1::bigint[]) AND purpose='take_profit' AND status<>'final'",
+            [ids, time]
+          );
+          return null;
+        }
         for (const leg of legs) {
           const p = byId.get(Number(leg.positionId));
           if (!p || Number(p.strategy_id) !== Number(strategy.id) ||
