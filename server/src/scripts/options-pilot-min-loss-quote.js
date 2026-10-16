@@ -7,7 +7,7 @@
 const { createBinanceOptionsClient } = require('../services/options/binance-options.client');
 const { requireOrderFilters } = require('../services/options/options-order-filters');
 
-const MAX_SEARCH_BUDGET_USDT = 100;
+const MAX_SEARCH_BUDGET_USDT = 20;
 const MAX_SPREAD_RATIO = 0.10;
 const MIN_DTE_MS = 2 * 24 * 60 * 60_000;
 const MAX_BOOK_CALLS = 12;
