@@ -1,30 +1,36 @@
-# Take Profit ATR + IV — bots de alertas Binance Options
+# Take Profit LIMIT residente · Binance Opciones (PR #4)
 
-## Configuración y compatibilidad
+## Configuración
 
-En el editor del bot de alertas, **Tipo de Take Profit** permite elegir:
-- `fixed` (predeterminado, compatible con bots existentes): toma de ganancia como porcentaje de la prima de entrada.
-- `volatility` (opt-in): objetivo proyectado a partir de ATR(14) de velas spot de 1 hora, volatilidad implícita `markIV` de la opción y Black–Scholes. `tpAtrMultiplier` (0.25–4, predeterminado 1) y `tpHorizonHours` (1–24, predeterminado 4) controlan la proyección.
+En la ficha del bot se elige **Porcentaje fijo** (predeterminado para bots existentes) o **ATR + volatilidad implícita**. La interfaz muestra un estado compacto para las órdenes reales: `Preparando`, `Por confirmar`, `Activa`, `Cancelando` o `Revisar`.
 
-Ninguna de las dos opciones modifica el hecho de que las nuevas operaciones reales requieren los dos flags de aprobación; nunca habilitar por defecto. Las operaciones de sombra siguen disponibles.
+El porcentaje usa la **prima del fill confirmado**, no el mark ni un mero acuse `NEW`. El modo por volatilidad proyecta el cambio de prima con ATR(14) de velas spot de una hora cerradas, IV de la opción y Black–Scholes. Parámetros: `tpAtrMultiplier` 0.25–4 y `tpHorizonHours` 1–24.
 
-## Condiciones para cerrar
+## Ciclo real de la orden
 
-1. La **prima de entrada** es la del fill realmente confirmado en el ledger de Binance, no el acuse de la orden ni el precio mark.
-2. Para una posición **comprada**, el TP se activa cuando el **bid** de mercado es mayor o igual al precio objetivo; se emite una orden `SELL LIMIT`. Para una posición **vendida**, requiere **ask** menor o igual al objetivo; se emite `BUY LIMIT` con `reduceOnly`.
-3. Antes del POST de la orden de salida, el ejecutor consulta un libro **fresco** y vuelve a verificar el objetivo. Si el precio cambió en contra, **no envía**.
-4. Una orden LIMIT enviada no equivale a un cierre: la posición y el P&L reales sólo cambian con `getUserTrades`, incluidas ejecuciones parciales. El remanente se cancela tras diez minutos; estados ambiguos requieren conciliación.
-5. Cuando faltan ATR (al menos 15 velas cerradas), IV, precio spot, vencimiento suficiente o el `tickSize` oficial de `PRICE_FILTER`, **no se inventa un TP**. El stop y la salida por tiempo continúan evaluándose.
+1. El reconciliador consulta `getOrder` y `getUserTrades` periódicamente (cada ~60 s). Cada fill de apertura **confirmado** genera una fila distinta de posición, con cantidad y comisiones reales.
+2. En **esa misma pasada de conciliación**, cuando la exposición de Binance coincide con el libro, se crea transaccionalmente una intención de TP vinculada a `position_id` (`options_live_orders.purpose='take_profit'`, única mientras no es final).
+3. El remitente reclama `queued → sending` **antes** de llamar `POST /eapi/v1/order`, con `LIMIT GTC`, `reduceOnly=true` y `clientOrderId` durable. Si el POST da timeout, consulta por identidad y nunca lo repite a ciegas. El objetivo se redondea sobre `minPrice + N*tickSize`; se exige `TRADING`, cotización USDT y `minQty/stepSize/maxQty` válidos.
+4. El TP queda resting en Binance hasta que llena, se solicita cancelarlo o llega su ventana de salida temporal. El fill del TP cierra total o parcialmente **solo tras conciliación**. Los remanentes se pueden volver a proteger si no hay otro cierre solicitado. La ventana de diez minutos **solo aplica a órdenes estándar**, no al TP resting.
+5. Cuando un Stop Loss, señal contraria o salida por vencimiento requiere cerrar, primero se escribe `options_live_exit_requests` duraderamente y se marca `cancel_requested` en el TP (y remanentes de entrada). El reconciliador cancela esa orden específica, verifica su estado final y sus fills, y **solo entonces** puede remitir otro cierre con la cantidad que efectivamente sigue abierta. Un cierre parcial se reintenta sin volver a proteger el remanente.
+6. En la opción **Girar** (`onOpposite='reverse'`), la intención de nueva entrada y los cierres se guardan conjuntamente en `options_live_reentries`; solo se reevalúa y envía la nueva apertura cuando **todas** las posiciones contrarias están cerradas, el bot continúa en modo real, hay datos frescos y se vuelven a comprobar los límites de riesgo. Una señal de giro pendiente durante más de **30 minutos caduca** (no opera una señal anticuada).
+7. Si llega el límite temporal del TP sin haber un tick disponible, se persiste una solicitud `time_exit` **antes** de cancelar la orden resting; no se inventa una liquidación por mark.
 
-## Alcances y límites del MVP
+El TP se presenta como **orden aceptada, no garantía de cierre**. Un rechazo, error de datos, cuenta con órdenes ajenas, exposure mismatch, vencimiento, un movimiento del libro o un timeout dejan el caso **sin ejecutar o en atención**, con aviso Telegram deduplicado. El bot no inventa un fill ni aumenta exposición.
 
-- El cálculo del objetivo se **actualiza en cada evaluación** con IV/spot/ATR nuevos y se ancla a la prima confirmada; no es un objetivo fijo persistente ni una orden take-profit estacionada en el exchange.
-- El runner normal evalúa estrategias cada **5 minutos**. Puede perder movimientos transitorios entre ticks; la salida se hace mediante LIMIT GTC con conciliación, nunca con MARKET.
-- La proyección Black–Scholes y el movimiento implícito **no garantizan rentabilidad, liquidez ni ejecución**. No descuenta comisiones del umbral teórico (el P&L se registra con fees reales).
-- No habilitar envíos reales sin pruebas con cuenta Binance Options controlada, verificación de filtros reales, forma de respuesta de `klines` y `exchangeInfo`, cancelaciones, ejercicio/vencimiento, alerta operativa y parada de emergencia. Consultar `docs/runbooks/binance-options-live-readiness.md`.
+## Limitaciones explícitas
 
-## Pruebas
+- La observación del fill depende del polling de conciliación (~60 s): «inmediato tras confirmación» no significa ejecución subsegundo.
+- El precio objetivo de un TP resting se fija **al detectar el fill** y no se recalcula cada cinco minutos. El runner evalúa stop/señal/salida temporal aproximadamente cada cinco minutos; por lo tanto un stop no es un stop exchange-native ni garantiza precio.
+- Binance Opciones ofrece órdenes LIMIT; no se presupone una OCO nativa idéntica a Spot. Las cancelaciones, salidas diferidas y restricciones de exposición corren en nuestro ledger.
+- Con los dos flags de trading real apagados, las tareas no envían TP, cierres ni aperturas nuevas; las órdenes antiguas solo se concilian/cancelan según políticas previas. Una posición real abierta puede necesitar gestión manual.
+- Un bot no abre entradas nuevas si hay órdenes TP resting en la cuenta: decisión de seguridad conservadora hasta validar convivencia de múltiples estrategias. El cierre de otra posición puede coexistir con TP ajenos **solo** si todos están identificados en el ledger.
+- No se conoce todavía en esta conversación el resultado de ejercicios y cancelaciones **con una cuenta real del usuario**; todas las verificaciones nuevas son con mocks. No habilitar ambos flags ni hacer deploy basándose solo en CI.
 
-`node --test server/test/options-take-profit.test.js server/test/options-alert-volatility-tp.test.js`
+## Pruebas y operación
 
-Verificar adicionalmente en CI `test-server`, `test-client`, `lint`, `lint-client`, `build-client` y revisiones de contratos del proveedor. Un resultado verde con mocks **no sustituye** el piloto manual con Binance.
+`node --test server/test/options-standing-tp.test.js server/test/options-standing-tp-repository.test.js server/test/options-reverse-after-tp.test.js server/test/options-reverse-repository.test.js`
+
+El runbook `docs/runbooks/binance-options-live-readiness.md` define las comprobaciones del VPS, esquema real Binance, permisos mínimos, manejo de incidentes y piloto con capital mínimo. Las tablas `options_live_orders`, `options_live_exit_requests` y `options_live_reentries` deben migrarse **antes** de ejecutar el reconciliador actualizado.
+
+Código en PR **DRAFT**, sin despliegue ni autorización de trading.
