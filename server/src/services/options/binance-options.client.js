@@ -222,6 +222,17 @@ function createBinanceOptionsClient({
         base: spotBaseUrl,
       });
     },
+    // Velas spot públicas: ATR de 1 h, no implica ejecución de órdenes.
+    getSpotKlines(symbol, interval = '1h', limit = 17) {
+      if (!/^[A-Z0-9]{3,20}$/.test(String(symbol)) ||
+          interval !== '1h' || !Number.isInteger(limit) || limit < 15 || limit > 100) {
+        throw new ValidationError('Parámetros de klines inválidos');
+      }
+      return request('GET', '/api/v3/klines', {
+        params: { symbol, interval, limit },
+        base: spotBaseUrl,
+      });
+    },
 
     // ── Firmados ──────────────────────────────────────────────────
     // Binance retiró `/eapi/v1/account` (responde 404); la cuenta de opciones
