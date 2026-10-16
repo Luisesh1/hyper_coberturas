@@ -141,3 +141,43 @@ jobs:
             echo '- getOrder/userTrades siguen pendientes de prueba real autorizada.'
             echo '- Permiso de una sola orden y activación live: NO CONCEDIDOS.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verificar BUY ETH exacto y fondos disponibles (solo GET, sin órdenes)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          # Petición de preparación, NO consentimiento para ejecutar.
+          # Se evalúa el contrato del último análisis, en la cuenta interna
+          # ya diagnosticada. Nunca se envía una orden.
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-exact-buy-readonly-preview.js 1 ETH-261023-2500-C 0.01 23.60" \
+            >"$RUNNER_TEMP/options-exact-buy-preview.log" 2>/dev/null; then
+            echo "::warning::Vista previa firmada no disponible; NO OPERAR"
+            exit 0
+          fi
+          if ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-exact-buy-preview.log" ||
+             ! { grep -Fxq 'preview_status=pass' "$RUNNER_TEMP/options-exact-buy-preview.log" ||
+                 grep -Fxq 'preview_status=blocked' "$RUNNER_TEMP/options-exact-buy-preview.log" ||
+                 grep -Fxq 'preview_status=unverified' "$RUNNER_TEMP/options-exact-buy-preview.log"; }; then
+            echo "::warning::Vista previa incompleta o malformada; NO OPERAR"
+            exit 0
+          fi
+          # No exponer datos de cuenta, ni siquiera saldos. El script solo
+          # emite precios PUBLICOS y booleans de las comprobaciones privadas.
+          grep -E '^preview_(status|symbol|side|quantity|limit_usdt|bid_usdt|ask_usdt|entry_total_cap_usdt|flagsOff|listed|quoteValid|exactFilters|liquidity|balanceKnown|balanceEnough|permissions|isolated)=' \
+            "$RUNNER_TEMP/options-exact-buy-preview.log" || true
+          if grep -Fxq 'preview_status=pass' "$RUNNER_TEMP/options-exact-buy-preview.log"; then
+            echo "::warning::Preflight preliminar favorable: SIN autorización de trading ni estrategia; NO OPERAR."
+          else
+            echo "::warning::Preflight bloqueado o sin datos suficientes: NO OPERAR."
+          fi
+          {
+            echo '### Vista previa de una compra ETH (datos privados minimizados)'
+            echo '- Solo se comprueba una propuesta: 0.01 ETH-261023-2500-C, precio LIMIT <=23.60 USDT.'
+            echo '- No se muestra patrimonio ni saldo, únicamente estado suficiente/insuficiente/desconocido.'
+            echo '- Las tarifas efectivas, autorización personal y estrategia siguen pendientes.'
+            echo '- Trading real: OFF. No se enviaron órdenes.'
+          } >> "$GITHUB_STEP_SUMMARY"

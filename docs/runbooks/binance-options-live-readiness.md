@@ -57,6 +57,33 @@ una cancelada sin fills. No reintentar POST ambiguos.
 **No se ha enviado ninguna orden ni habilitado trading real.** Este cambio
 cierra errores de límites y autorización de entrada, no certifica Binance.
 
+## Vista previa exacta antes de la autorización del operador (16 oct 2026)
+
+Existe una propuesta informativa basada en datos públicos del despliegue
+#97: comprar 0.01 ETH-261023-2500-C con LIMIT máximo 23.60 USDT.
+**No es una orden autorizada ni garantía de precio actual.**
+
+Tras cada nuevo deploy, el paso GET de solo lectura
+options-exact-buy-readonly-preview.js comprobará esta propuesta contra
+exchangeInfo, ticker, book, marginAccount, API permissions, posiciones y
+órdenes abiertas para el usuario interno que ya superó el diagnóstico
+(user ID 1). Todos los campos de cuenta permanecen en el VPS; en CI solo
+se publica si el campo USDT availableBalance está presente y cubre la
+reserva máxima estimada de 0.26 USDT. **Equity/marginBalance no se acepta
+como disponibilidad real.**
+
+Si el campo de disponibilidad falta, el resultado es unverified; si no
+hay suficiente, el contrato venció, la cotización ask supera el precio
+límite o hay órdenes/posiciones previas, queda blocked. Incluso cuando
+el resultado es pass, siempre se emite pilot_ready=no, pues siguen sin
+confirmarse tarifas efectivas, USD/USDT, estrategia seleccionada,
+autorización transaccional, rendimiento de cierre y protección real.
+
+Las consultas automáticas posteriores a despliegue son puntuales, no
+continuas. **Antes de autorizar una ejecución real se requiere una
+revalidación fresca y aprobación expresa de precio, cantidad y riesgo**.
+En todo caso, el trading está OFF y no se hizo ningún POST.
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**
