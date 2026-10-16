@@ -163,7 +163,8 @@ function exits(ctx) {
       (p.side === 'BUY' ? executable >= target : executable <= target);
     if (targetReached) {
       actions.push({ type: 'close', reason: 'take_profit_volatility',
-        detail: `TP ATR/IV en ${p.symbol}: objetivo ${target} USDT, cotización ${executable} USDT`, legs });
+        detail: `TP ATR/IV en ${p.symbol}: objetivo ${target} USDT, cotización ${executable} USDT`,
+        legs: legs.map((l) => ({ ...l, targetPrice: target })) });
     } else if (!dynamic && pct >= params.takeProfitPct) {
       actions.push({ type: 'close', reason: 'take_profit', detail: `Take profit en ${p.symbol}: ${pct.toFixed(1)} % de la prima`, legs });
     } else if (-pct >= params.stopLossPct) {
