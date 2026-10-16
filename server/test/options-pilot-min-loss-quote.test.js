@@ -40,6 +40,8 @@ test('lowest lot: only BUY minimum quantity with liquidity and 10% fee bound', a
 test('illiquid books and excessive spread are rejected', async () => {
   assert.equal(bookHasTwoWayLiquidity({ asks: [['1', '0.001']],
     bids: [['0.95', '1']] }, 0.01), false);
+  assert.equal(bookHasTwoWayLiquidity({ asks: [['1.10', '1']], bids: [['0.95', '1']] }, 0.01), false);
+  assert.equal(bookHasTwoWayLiquidity({ asks: [['1.01', '1']], bids: [['0.95', '1']] }, 0.01, 1), false);
   assert.equal(candidateList(info([option()]), market('2.00', '1.00'), at).length, 0);
   assert.equal(candidateList(info([option()]), market('2.005', '2.000'), at).length, 0);
 });
