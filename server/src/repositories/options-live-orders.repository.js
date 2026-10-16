@@ -389,6 +389,29 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
 
+  /**
+   * Watchdog SOLO LECTURA: detecta fills registrados que llevan demasiado
+   * tiempo abiertos sin TP activo y confirmado. queued/sending/attention
+   * y cancelaciones solicitadas no equivalen a protección en Binance.
+   */
+  async function listUnprotectedLivePositions(olderThan, limit = 100) {
+    const { rows } = await db.query(
+      "SELECT p.id,p.user_id,p.strategy_id,p.opened_at FROM options_strategy_positions p " +
+      "JOIN options_strategies s ON s.id=p.strategy_id " +
+      "WHERE p.mode='live' AND p.closed_at IS NULL AND p.quantity > 0 " +
+      "AND s.mode='live' AND s.template='alert_signal' AND p.opened_at <= $1 " +
+      "AND NOT EXISTS (SELECT 1 FROM options_live_orders o " +
+      "WHERE o.position_id=p.id AND o.purpose='take_profit' " +
+      "AND o.status='active' AND o.cancel_requested=FALSE) " +
+      "ORDER BY p.opened_at,p.id LIMIT $2",
+      [olderThan, limit]
+    );
+    return rows.map((r) => ({
+      positionId: Number(r.id), userId: Number(r.user_id),
+      strategyId: Number(r.strategy_id), openedAt: Number(r.opened_at),
+    }));
+  }
+
   async function listQueuedTpOrders(limit = 100) {
     const { rows } = await db.query(
       "SELECT * FROM options_live_orders WHERE status='queued' AND purpose='take_profit' " +
@@ -796,7 +819,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
-    listMissingTpPositions, beginStandingTp, listQueuedTpOrders,
+    listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
     deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
