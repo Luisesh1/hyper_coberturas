@@ -251,6 +251,7 @@ class OptionsStrategyRunner {
           iv: Number(p.quote.iv), type: p.type, side: p.side,
           expiryMs: p.expiryMs, nowMs: now,
           atrHourly: inputs.atrHourly, tickSize: inputs.tickSize,
+          minPrice: inputs.minPrice,
           atrMultiplier: params.tpAtrMultiplier,
           horizonHours: params.tpHorizonHours,
         });
