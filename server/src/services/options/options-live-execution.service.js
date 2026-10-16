@@ -384,6 +384,40 @@ class OptionsLiveExecution {
     return { checked: users.length, incidents };
   }
 
+  /**
+   * Watchdog local: el TP puede tardar un ciclo en colocarse tras el fill.
+   * Un fill con más de dos minutos sin TP ACTIVE no se considera protegido,
+   * aunque exista una orden queued/sending/attention en el ledger.
+   * Solo SELECT + alerta con deduplicación, nunca envía ni cancela órdenes.
+   */
+  async scanUnprotectedPositions() {
+    if (typeof this.repo.listUnprotectedLivePositions !== 'function' ||
+        typeof this.repo.claimIncidentNotification !== 'function') {
+      return { checked: 0, incidents: 0, alerts: 0 };
+    }
+    const positions = await this.repo.listUnprotectedLivePositions(this.now() - 2 * 60_000, 100);
+    let alerts = 0;
+    for (const position of positions) {
+      try {
+        if (await this.repo.claimIncidentNotification(
+          position.userId, 'UNPROTECTED_TP', String(position.positionId)
+        )) {
+          await this.notify(position.userId,
+            '<b>ALERTA · Posición sin TP confirmado</b>\\n' +
+            'Posición #' + position.positionId +
+            ': lleva más de dos minutos sin una orden TP activa confirmada. ' +
+            'Puede existir una salida/cancelación en curso: revisar Binance y el ledger.');
+          alerts++;
+        }
+      } catch (err) {
+        this.logger.warn('options_unprotected_tp_notification_failed', {
+          positionId: position.positionId, error: err.message,
+        });
+      }
+    }
+    return { checked: positions.length, incidents: positions.length, alerts };
+  }
+
   async alertAttention() {
     if (typeof this.repo.listAttentionOrders !== 'function' ||
         typeof this.repo.claimAttentionNotification !== 'function') return 0;
@@ -717,6 +751,15 @@ class OptionsLiveExecution {
     } catch (err) {
       this.logger.warn('options_live_attention_scan_failed', { error: err.message });
     }
+    // Los fills sin TP activo requieren alerta aun cuando no hay acceso
+    // a Binance o el flag de envío está deshabilitado.
+    let unprotected = null;
+    try {
+      unprotected = await this.scanUnprotectedPositions();
+    } catch (err) {
+      errors++;
+      this.logger.warn('options_unprotected_tp_scan_failed', { error: err.message });
+    }
     // Auditoría de cuenta cada cinco minutos. No depende del flag de envío.
     let accountAudit = null;
     if (this.lastExternalScanAt == null ||
@@ -728,7 +771,7 @@ class OptionsLiveExecution {
         this.logger.warn('options_live_account_audit_scan_failed', { error: err.message });
       }
     }
-    return { checked: orders.length, reconciled, errors, alerts, accountAudit, protection, protectionSent, deferred, reentries };
+    return { checked: orders.length, reconciled, errors, alerts, unprotected, accountAudit, protection, protectionSent, deferred, reentries };
   }
 }
 
