@@ -106,3 +106,38 @@ jobs:
           done
           echo "Health check fallo tras el deploy"
           exit 1
+
+      - name: Revisar opciones ETH públicas tras el deploy (informativo, sin órdenes)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          # Falla como aviso, no bloquea la salud del deploy por latencia
+          # de un proveedor externo de market data.
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-eth-contract-public-review.js" \
+            >"$RUNNER_TEMP/options-eth-public-review.log" 2>/dev/null; then
+            echo "::warning::Mercado público ETH no disponible: NO OPERAR"
+            exit 0
+          fi
+          if ! grep -Fxq 'review_read_only=pass' "$RUNNER_TEMP/options-eth-public-review.log" ||
+             ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-eth-public-review.log"; then
+            echo "::warning::Revisión pública ETH incompleta: NO OPERAR"
+            exit 0
+          fi
+          # Datos exclusivamente públicos de contrato, precio y griegas.
+          grep -E '^review_(status|eth_index_usdt|snapshot_at|books_sampled|candidate_[123]_)' \
+            "$RUNNER_TEMP/options-eth-public-review.log" || true
+          {
+            echo '### Revisión pública ETH tras deploy (no autoriza ninguna orden)'
+            if grep -Fxq 'review_status=candidates' "$RUNNER_TEMP/options-eth-public-review.log"; then
+              echo '- Hay candidatos preliminares. Confirmar liquidez y precio nuevamente antes de operar.'
+            else
+              echo '- Sin candidatos bajo restricciones actuales: NO OPERAR.'
+            fi
+            echo '- Máxima pérdida declarada: 100 USD; criba inicial <=20 USDT.'
+            echo '- getOrder/userTrades siguen pendientes de prueba real autorizada.'
+            echo '- Permiso de una sola orden y activación live: NO CONCEDIDOS.'
+          } >> "$GITHUB_STEP_SUMMARY"
