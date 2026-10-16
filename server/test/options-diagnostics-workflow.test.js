@@ -44,3 +44,23 @@ test('despliegue protegido: SSH no confía en una huella obtenida durante el job
   assert.match(deployWorkflow, /StrictHostKeyChecking=yes/);
   assert.doesNotMatch(deployWorkflow, /ssh-keyscan/);
 });
+
+const productionCompose = fs.readFileSync(path.resolve(
+  __dirname, '../../docker-compose.prod.yml'), 'utf8');
+
+test('pilot deployment forces both Binance Options live flags off regardless of server/.env', () => {
+  assert.match(productionCompose, /OPTIONS_LIVE_TRADING_ENABLED:\s*["']false["']/);
+  assert.match(productionCompose, /OPTIONS_LIVE_PRODUCTION_APPROVED:\s*["']false["']/);
+});
+
+test('deployment stops before checkout and build when production trading is active', () => {
+  const gate = deployWorkflow.indexOf('Preflight VPS - bloquear deploy');
+  const actualDeploy = deployWorkflow.indexOf('Deploy por SSH');
+  assert.ok(gate >= 0 && actualDeploy > gate, 'preflight precedes deployment');
+  assert.match(deployWorkflow, /OPTIONS_LIVE_TRADING_ENABLED ===/);
+  assert.match(deployWorkflow, /OPTIONS_LIVE_PRODUCTION_APPROVED ===/);
+  assert.match(deployWorkflow, /options_predeploy_gate=pass/);
+  assert.match(deployWorkflow, /options_deployed_read_only=pass/);
+  assert.match(deployWorkflow, /options-live-contract-check\\.js/);
+  assert.match(deployWorkflow, /git rev-parse HEAD/);
+});
