@@ -165,6 +165,20 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
         [strategy.id, strategy.userId, key, action, detail || null, time, deadlineAt]
       );
+      // Todo cierre real queda con intención durable, aun si el LIMIT
+      // termina parcialmente ejecutado. Evita que el protector vuelva a
+      // colocar un TP sobre una posición que tiene un stop pendiente.
+      if (action === 'close') {
+        for (const leg of legs) {
+          await tx.query(
+            `INSERT INTO options_live_exit_requests
+             (position_id,strategy_id,user_id,reason,created_at,updated_at)
+             VALUES ($1,$2,$3,$4,$5,$5)
+             ON CONFLICT (position_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
+            [leg.positionId, strategy.id, strategy.userId, 'close_limit', time]
+          );
+        }
+      }
       const orders = [];
       for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
