@@ -111,6 +111,12 @@ class OptionsLiveExecution {
     );
   }
 
+  async requestProtectedExit(strategy, action) {
+    if (!this.enabled || action.type !== 'close' ||
+        typeof this.repo.deferExitIfProtected !== 'function') return false;
+    return this.repo.deferExitIfProtected(strategy, action);
+  }
+
   async submit(strategy, action, ctx) {
     if (!this.enabled) return { status: 'disabled' };
     if (!['open', 'close'].includes(action.type)) throw new Error('Unsupported live action');
@@ -120,9 +126,7 @@ class OptionsLiveExecution {
         typeof this.repo.assertExchangeExposure !== 'function') {
       throw new Error('Binance exposure and open-order checks are unavailable');
     }
-    if (action.type === 'close' &&
-        typeof this.repo.deferExitIfProtected === 'function' &&
-        await this.repo.deferExitIfProtected(strategy, action)) {
+    if (action.type === 'close' && await this.requestProtectedExit(strategy, action)) {
       return { status: 'tp_cancel_requested', sent: 0 };
     }
     // Una orden manual que todavía no ha llenado no aparece en posiciones:
