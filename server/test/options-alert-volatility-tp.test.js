@@ -75,7 +75,7 @@ test('ATR utiliza 14 velas cerradas y metadatos reales de PRICE_FILTER', async (
   ]);
   const service = createOptionsMarketService({ now: () => now, client: {
     async getExchangeInfo() { return { optionSymbols: [
-      { symbol, filters: [{ filterType: 'PRICE_FILTER', tickSize: '0.1' }] },
+      { symbol, filters: [{ filterType: 'PRICE_FILTER', tickSize: '0.1', minPrice: '0.02' }] },
     ] }; },
     async getSpotKlines(pair, interval, limit) {
       assert.equal(pair, 'BTCUSDT'); assert.equal(interval, '1h'); assert.equal(limit, 17);
@@ -83,7 +83,7 @@ test('ATR utiliza 14 velas cerradas y metadatos reales de PRICE_FILTER', async (
       return rows;
     },
   } });
-  assert.deepEqual(await service.getVolatilityInputs(symbol), { atrHourly: 10, tickSize: 0.1 });
-  assert.deepEqual(await service.getVolatilityInputs(symbol), { atrHourly: 10, tickSize: 0.1 });
+  assert.deepEqual(await service.getVolatilityInputs(symbol), { atrHourly: 10, tickSize: 0.1, minPrice: 0.02 });
+  assert.deepEqual(await service.getVolatilityInputs(symbol), { atrHourly: 10, tickSize: 0.1, minPrice: 0.02 });
   assert.equal(calls, 1);
 });
