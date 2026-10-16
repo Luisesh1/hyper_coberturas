@@ -6,7 +6,7 @@
  * openOrders, apiRestrictions (GET). No POST/DELETE ni escrituras en DB.
  * Nunca muestra saldos, claves, direcciones, historial o ID interno.
  *
- * Disponible != patrimonio: no inferir availableBalance de equity.
+ * Disponible != patrimonio: OPTIONS expone available, no equity.
  */
 const credentials = require('../services/options/options-credentials.service');
 const { requireOrderFilters } = require('../services/options/options-order-filters');
@@ -53,11 +53,13 @@ function bestBook(book, qty, maxLimit) {
 function availableUsdt(account) {
   if (!account || !Array.isArray(account.asset)) return null;
   const row=account.asset.find(x => x && x.asset === 'USDT');
-  // No usar equity, marginBalance, walletBalance ni fondos de Spot.
-  if (!row || row.availableBalance === undefined || row.availableBalance === null ||
-      row.availableBalance === '' ||
-      !Number.isFinite(Number(row.availableBalance)) || Number(row.availableBalance) < 0) return null;
-  return Number(row.availableBalance);
+  // Binance OPTIONS marginAccount devuelve available, no
+  // availableBalance (campo de Futures). Nunca derivar capital libre
+  // de equity, marginBalance ni walletBalance.
+  if (!row || row.available === undefined || row.available === null ||
+      row.available === '' ||
+      !Number.isFinite(Number(row.available)) || Number(row.available) < 0) return null;
+  return Number(row.available);
 }
 
 function roundupCents(number) {
