@@ -58,6 +58,7 @@ test('READ-ONLY: checks shapes/filters/orders without sending or cancelling', as
   assert.equal(out.results.find((r) => r.endpoint === 'optionFilters').ok, true);
   assert.equal(out.results.find((r) => r.endpoint === 'marginAccount').ok, true);
   assert.equal(out.results.find((r) => r.endpoint === 'apiPermissions').ok, true);
+  assert.equal(out.results.find((r) => r.endpoint === 'isolatedAccount').ok, true);
   assert.ok(trace.includes('apiRestrictions'));
   const json = JSON.stringify(out);
   assert.ok(!json.includes('300'));
@@ -168,4 +169,23 @@ test('preflight no certifica permisos cuando Binance o la clave no permiten cons
   const item = out.results.find((r) => r.endpoint === 'apiPermissions');
   assert.equal(item.code, 'PERMISSION_CHECK_UNAVAILABLE');
   assert.ok(!JSON.stringify(out).includes('DO_NOT_EXPOSE_KEY'));
+});
+
+test('la cuenta piloto debe estar sin posiciones ni órdenes abiertas', async () => {
+  for (const overload of [
+    { getPositions: async () => [{ symbol, side: 'LONG', quantity: '0.05' }] },
+    { getOpenOrders: async () => [{ symbol, status: 'NEW', orderId: '123456' }] },
+    { getPositions: async () => [{ symbol, side: 'LONG', quantity: null }] },
+  ]) {
+    const client = Object.assign(makeClient([]), overload);
+    const out = await checkContracts({ userId: 11, client,
+      database: { async query() { return { rows: [] }; } }, at: NOW });
+    assert.equal(out.ready, false);
+    assert.deepEqual(out.results.find((r) => r.endpoint === 'isolatedAccount'), {
+      endpoint: 'isolatedAccount', ok: false, code: 'NONZERO_EXPOSURE_OR_OPEN_ORDERS',
+    });
+    const safe = JSON.stringify(out);
+    assert.ok(!safe.includes(symbol));
+    assert.ok(!safe.includes('123456'));
+  }
 });
