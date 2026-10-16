@@ -454,6 +454,40 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
 
+  /** El plazo del TP obliga a dejar constancia de una salida por tiempo,
+   * incluso si falla la lectura de la cadena de opciones del runner.
+   */
+  async function requestDeadlineExit(order) {
+    if (order.purpose !== 'take_profit') return false;
+    return db.transaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [order.userId]);
+      const { rows: [held] } = await tx.query(
+        "SELECT id,user_id,strategy_id,symbol FROM options_strategy_positions " +
+        "WHERE id=$1 AND mode='live' AND closed_at IS NULL FOR UPDATE", [order.positionId]
+      );
+      if (!held) return false;
+      if (Number(held.user_id) !== order.userId ||
+          Number(held.strategy_id) !== order.strategyId ||
+          held.symbol !== order.symbol) {
+        throw new Error('Standing TP expired for an unrelated position');
+      }
+      const at = now();
+      await tx.query(
+        `INSERT INTO options_live_exit_requests
+         (position_id,strategy_id,user_id,reason,created_at,updated_at)
+         VALUES ($1,$2,$3,'time_exit',$4,$4)
+         ON CONFLICT(position_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
+        [held.id, order.strategyId, order.userId, at]
+      );
+      await tx.query(
+        "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$2 " +
+        "WHERE id=$1 AND purpose='take_profit' AND status<>'final'",
+        [order.id, at]
+      );
+      return true;
+    });
+  }
+
   async function listReadyExitRequests(limit = 100) {
     const { rows } = await db.query(
       "SELECT r.id,p.id AS position_id,p.strategy_id,p.user_id,p.symbol,p.side,p.quantity " +
@@ -763,7 +797,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders,
-    deferExitIfProtected, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
+    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
