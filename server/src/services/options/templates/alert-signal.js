@@ -207,9 +207,16 @@ function openFor(ctx, direction, openCount) {
     const price = Number(quote[leg.side === 'BUY' ? 'ask' : 'bid']);
     const otm = leg.type === 'C' ? Math.max(row.strike - spot, 0) : Math.max(spot - row.strike, 0);
     const unitCapital = leg.side === 'BUY' ? price : price + Math.max(0.15 * spot - otm, 0.1 * spot);
-    const allowedQty = budget == null ? params.quantity : Math.min(params.quantity, budget / count / unitCapital);
-    const quantity = Math.floor((allowedQty + 1e-12) * 10000) / 10000;
-    return quantity >= 0.0001 ? legFromChain({ leg: quote, strike: row.strike }, {
+    const step = Number(quote.stepSize) > 0 ? Number(quote.stepSize) : 0.0001;
+    const minimum = Number(quote.minQty) > 0 ? Number(quote.minQty) : step;
+    const maximum = Number(quote.maxQty) > 0 ? Number(quote.maxQty) : params.quantity;
+    const allowedQty = Math.min(params.quantity, maximum,
+      budget == null ? params.quantity : budget / count / unitCapital);
+    // Binance valida (qty-minQty) % stepSize == 0. Siempre redondear
+    // hacia ABAJO para mantener cantidad/capital dentro del límite.
+    const steps = Math.floor((allowedQty - minimum + 1e-12) / step);
+    const quantity = steps >= 0 ? Number((minimum + steps * step).toFixed(12)) : null;
+    return quantity != null && quantity >= minimum ? legFromChain({ leg: quote, strike: row.strike }, {
       side: leg.side, quantity, type: leg.type, expiry: chain.expiry,
     }) : null;
   });
