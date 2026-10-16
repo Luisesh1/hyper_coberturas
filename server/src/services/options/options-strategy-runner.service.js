@@ -181,6 +181,39 @@ class OptionsStrategyRunner {
     return { actions, produced: tickCtx.produced };
   }
 
+  /**
+   * Reentrada diferida de una alerta ya recibida. Solo evalúa y opera
+   * el libro REAL, sin repetir shadow ni disparar la misma alerta.
+   * Se vuelve a cotizar y a comprobar límites justo antes del POST.
+   */
+  async executeDeferredReentry(strategyId, signal) {
+    const strategy = await this.repo.getStrategyById(strategyId);
+    if (!strategy || strategy.mode !== 'live' || strategy.template !== 'alert_signal' ||
+        !this.liveExecutor.enabled) return { status: 'disabled' };
+    return this.withLock(strategyId, async () => {
+      const tickCtx = { now: this.now(), signal, chains: new Map(), produced: [] };
+      const template = templates.getTemplate(strategy.template);
+      const params = templates.validateParams(strategy.template, strategy.params);
+      if (params.onOpposite !== 'reverse') return { status: 'mode_changed' };
+      const positions = await this.repo.listOpenPositions(strategy.id, 'live');
+      if (positions.length) return { status: 'positions_still_open' };
+      const { base, chain } = await this.targetChain(strategy, params, tickCtx);
+      const spot = num(chain?.spot) ?? num(base?.spot);
+      const actions = template.evaluate({
+        now: tickCtx.now, signal, spot, chain, positions: [],
+        params, mode: 'live',
+        lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
+        tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
+          utcDayStart(tickCtx.now)),
+      });
+      const open = actions.find((a) => a.type === 'open');
+      if (!open) return { status: 'no_valid_entry' };
+      return await this.executeLive(strategy, open, {
+        ...tickCtx, spot, params, positions: [], mode: 'live',
+      }) || { status: 'not_submitted' };
+    });
+  }
+
   // ---------- datos de mercado (caché por pasada) ----------
 
   async chainFor(underlying, expiry, tickCtx) {
@@ -298,6 +331,22 @@ class OptionsStrategyRunner {
       });
       byMode[mode] = actions;
       const ctx = { ...tickCtx, spot, positions, params, mode };
+      // Una alerta opuesta con onOpposite=reverse registra CIERRE + REENTRADA
+      // en una sola transacción. El reconciliador abrirá la nueva dirección
+      // únicamente al confirmar todos los cierres, nunca en el mismo tick.
+      if (mode === 'live' && template.id === 'alert_signal' &&
+          tickCtx.signal && params.onOpposite === 'reverse' &&
+          actions.some((a) => a.type === 'close') &&
+          actions.some((a) => a.type === 'open') &&
+          typeof this.liveExecutor.queueReversal === 'function') {
+        const closeAction = actions.find((a) => a.type === 'close');
+        if (await this.liveExecutor.queueReversal(strategy, tickCtx.signal, closeAction)) {
+          ctx.produced?.push({ mode: 'live', type: 'close', pending: true,
+            reason: 'reverse_queued',
+            detail: 'Giro en espera: cancelar TP, cerrar y conciliar antes de abrir' });
+          continue;
+        }
+      }
       for (const action of actions) {
         try {
           if (action.type === 'open' || action.type === 'close') {
