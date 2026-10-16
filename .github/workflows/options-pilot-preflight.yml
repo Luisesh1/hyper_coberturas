@@ -1,0 +1,82 @@
+# Preflight preliminar ETH Options: consultas GET y estado agregado.
+# No compra/vende, no genera órdenes, no cancela, no habilita trading real.
+name: Options - preflight ETH (solo lectura)
+
+on:
+  workflow_dispatch:
+    inputs:
+      binance_user_id:
+        description: 'ID interno de Hyper Coberturas (no Binance UID)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: options-pilot-preflight-readonly
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Preparar SSH con host verificado
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVER_HOST:-}" ] || [ -z "${SERVER_SSH_KEY:-}" ] ||
+             [ -z "${SERVER_SSH_KNOWN_HOSTS:-}" ]; then
+            echo "::error::Configuración SSH verificada incompleta"
+            exit 1
+          fi
+          mkdir -p -m 700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_rsa
+          printf '%s\n' "$SERVER_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_rsa ~/.ssh/known_hosts
+          if ! ssh-keygen -F "$SERVER_HOST" -f ~/.ssh/known_hosts >/dev/null; then
+            echo "::error::Host SSH no coincide con la huella fijada"
+            exit 1
+          fi
+
+      - name: Comprobar piloto ETH en modo solo lectura
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          BINANCE_USER_ID: ${{ inputs.binance_user_id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${BINANCE_USER_ID:-}" =~ ^[1-9][0-9]{0,14}$ ]]; then
+            echo "::error::Se necesita ID interno entero positivo"
+            exit 1
+          fi
+          if [ -z "${SERVER_USER:-}" ] || [ -z "${SERVER_HOST:-}" ] ||
+             [ -z "${DEPLOY_PATH:-}" ]; then
+            echo "::error::Configuración VPS incompleta"
+            exit 1
+          fi
+          # Una sola línea remota: no deja que Docker consuma el heredoc de bash -s.
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-preflight.js '$BINANCE_USER_ID'" \
+            | tee "$RUNNER_TEMP/options-pilot-preflight.log"
+
+          if ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-pilot-preflight.log" ||
+             ! grep -Fxq 'pilot_technical_status=pass' "$RUNNER_TEMP/options-pilot-preflight.log" ||
+             ! grep -Fxq 'pilot_liveFlagsOff=pass' "$RUNNER_TEMP/options-pilot-preflight.log" ||
+             ! grep -Fxq 'pilot_isolatedAccount=pass' "$RUNNER_TEMP/options-pilot-preflight.log"; then
+            echo "::error::Preflight incompleto, flags no seguros o evidencia técnica insuficiente"
+            exit 1
+          fi
+          {
+            echo '### Preflight ETH — solo lectura'
+            echo '- Verificaciones técnicas sin órdenes: pass'
+            echo '- Operativa real autorizada: NO'
+            echo '- Contrato concreto, presupuesto, tarifas y consentimiento: pendientes'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Este preflight jamás autoriza trading real ni certifica fills."
