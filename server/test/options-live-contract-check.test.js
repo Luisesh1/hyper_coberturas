@@ -17,6 +17,11 @@ const makeClient = (trace) => ({
     trace.push('klines');
     return Array.from({ length: 17 }, () => [1, 2, 3, 4, 5, 6, 7]);
   },
+  async getApiRestrictions() {
+    trace.push('apiRestrictions');
+    return { ipRestrict: true, enableWithdrawals: false,
+      enableReading: true, enableVanillaOptions: true };
+  },
   async getAccount() { trace.push('account'); return { asset: [{ asset: 'USDT', equity: '300' }], greek: [] }; },
   async getPositions() { trace.push('positions'); return []; },
   async getOpenOrders() { trace.push('openOrders'); return []; },
@@ -52,6 +57,8 @@ test('READ-ONLY: checks shapes/filters/orders without sending or cancelling', as
   assert.ok(trace.includes('trades'));
   assert.equal(out.results.find((r) => r.endpoint === 'optionFilters').ok, true);
   assert.equal(out.results.find((r) => r.endpoint === 'marginAccount').ok, true);
+  assert.equal(out.results.find((r) => r.endpoint === 'apiPermissions').ok, true);
+  assert.ok(trace.includes('apiRestrictions'));
   const json = JSON.stringify(out);
   assert.ok(!json.includes('300'));
   assert.ok(!json.includes(symbol));
@@ -129,4 +136,36 @@ test('HTTP 200 con orden sin estado o cantidad no certifica el contrato de cance
   const order = out.results.find((r) => r.endpoint === 'getOrder');
   assert.equal(order.ok, false);
   assert.equal(order.code, 'INCOMPATIBLE_ORDER_SHAPE');
+});
+
+test('preflight rechaza permisos de retiro, IP no restringida y ausencia de privilegios necesarios', async () => {
+  for (const unsafe of [
+    { enableWithdrawals: true },
+    { ipRestrict: false },
+    { enableReading: false },
+    { enableVanillaOptions: false },
+  ]) {
+    const trace = [];
+    const client = makeClient(trace);
+    const original = client.getApiRestrictions.bind(client);
+    client.getApiRestrictions = async () => ({ ...(await original()), ...unsafe });
+    const out = await checkContracts({ userId: 11, client,
+      database: { async query() { return { rows: [] }; } }, at: NOW });
+    assert.equal(out.ready, false);
+    assert.deepEqual(out.results.find((r) => r.endpoint === 'apiPermissions'), {
+      endpoint: 'apiPermissions', ok: false, code: 'UNSAFE_OR_INCOMPLETE_API_PERMISSIONS',
+    });
+    assert.ok(!JSON.stringify(out).includes('enableWithdrawals'));
+  }
+});
+
+test('preflight no certifica permisos cuando Binance o la clave no permiten consultarlos', async () => {
+  const client = makeClient([]);
+  client.getApiRestrictions = async () => { throw new Error('DO_NOT_EXPOSE_KEY'); };
+  const out = await checkContracts({ userId: 11, client,
+    database: { async query() { return { rows: [] }; } }, at: NOW });
+  assert.equal(out.ready, false);
+  const item = out.results.find((r) => r.endpoint === 'apiPermissions');
+  assert.equal(item.code, 'PERMISSION_CHECK_UNAVAILABLE');
+  assert.ok(!JSON.stringify(out).includes('DO_NOT_EXPOSE_KEY'));
 });
