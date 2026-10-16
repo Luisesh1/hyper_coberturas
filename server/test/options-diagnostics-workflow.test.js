@@ -34,3 +34,13 @@ test('manual Binance contract check is read-only, fail-closed and never exposes 
   assert.doesNotMatch(workflow, /echo "\$raw"/);
   assert.doesNotMatch(workflow, /git checkout|docker compose .*up -d|npm run migrate/);
 });
+
+const deployWorkflow = fs.readFileSync(path.resolve(
+  __dirname, '../../.github/workflows/deploy.yml'), 'utf8');
+
+test('despliegue protegido: SSH no confía en una huella obtenida durante el job', () => {
+  assert.match(deployWorkflow, /SERVER_SSH_KNOWN_HOSTS/);
+  assert.match(deployWorkflow, /ssh-keygen -F/);
+  assert.match(deployWorkflow, /StrictHostKeyChecking=yes/);
+  assert.doesNotMatch(deployWorkflow, /ssh-keyscan/);
+});
