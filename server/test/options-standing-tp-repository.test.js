@@ -79,3 +79,26 @@ test('el identificador de TP activo bloquea nueva orden de take-profit por posic
   assert.equal(await repo.hasStandingTp([]), false);
   await assert.rejects(() => repo.hasStandingTp([-1]), /Invalid TP/);
 });
+
+test('watchdog selecciona solo posiciones live maduras sin TP activo y no cuenta colas o cancelaciones', async () => {
+  const calls = [];
+  const repo = createOptionsLiveOrdersRepository({
+    db: { async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: [
+        { id: '100', user_id: '7', strategy_id: '4', opened_at: '120000' },
+      ] };
+    } },
+  });
+  const result = await repo.listUnprotectedLivePositions(400000, 100);
+  assert.deepEqual(result, [{ positionId: 100, userId: 7, strategyId: 4, openedAt: 120000 }]);
+  assert.deepEqual(calls[0].params, [400000, 100]);
+  const sql = calls[0].sql;
+  assert.match(sql, /p\.closed_at IS NULL/);
+  assert.match(sql, /s\.template='alert_signal'/);
+  assert.match(sql, /p\.opened_at <= \$1/);
+  assert.match(sql, /NOT EXISTS/);
+  assert.match(sql, /o\.status='active'/);
+  assert.match(sql, /o\.cancel_requested=FALSE/);
+  assert.match(sql, /ORDER BY p\.opened_at/);
+});
