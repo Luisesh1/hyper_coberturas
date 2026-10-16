@@ -121,9 +121,25 @@ async function checkContracts({ userId, client, database, at = Date.now() }) {
     ['exerciseRecord', () => client.getExerciseRecords({ startTime, endTime: at, limit: 100 }), true],
     ['bill', () => client.getBills({ currency: 'USDT', startTime, endTime: at, limit: 100 }), true],
   ];
+  const accountRows = {};
   for (const [name, call, array] of endpoints) {
-    await checked(name, call, { array });
+    const data = await checked(name, call, { array });
+    if (name === 'positions' || name === 'openOrders') accountRows[name] = data;
   }
+
+  // Un piloto nuevo necesita una cuenta aislada sin órdenes manuales
+  // pendientes ni contratos ya expuestos. El resumen jamás revela montos.
+  const positions = accountRows.positions;
+  const openOrders = accountRows.openOrders;
+  const isolated = Array.isArray(positions) && Array.isArray(openOrders) &&
+    openOrders.length === 0 && positions.every((p) =>
+      p && typeof p.symbol === 'string' && p.symbol.length > 0 &&
+      p.quantity != null && p.quantity !== '' &&
+      Number.isFinite(Number(p.quantity)) && Math.abs(Number(p.quantity)) <= 1e-12);
+  results.push({
+    endpoint: 'isolatedAccount', ok: Boolean(isolated),
+    ...(!isolated ? { code: 'NONZERO_EXPOSURE_OR_OPEN_ORDERS' } : {}),
+  });
 
   // getOrder necesita identidad real de una orden que ya exista. No crear
   // órdenes solo para probar el contrato; usar ledger histórico si lo hay.
