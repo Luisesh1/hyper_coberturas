@@ -80,3 +80,39 @@ jobs:
             echo '- Contrato concreto, presupuesto, tarifas y consentimiento: pendientes'
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::warning::Este preflight jamás autoriza trading real ni certifica fills."
+
+      - name: Estimar mínimo desembolso ETH con liquidez (solo GET)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SERVER_USER" ] || [ -z "$SERVER_HOST" ] || [ -z "$DEPLOY_PATH" ]; then
+            echo "::error::Falta configuración del servidor"
+            exit 1
+          fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-min-loss-quote.js" \
+            | tee "$RUNNER_TEMP/options-pilot-min-loss.log"
+
+          if ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-pilot-min-loss.log" ||
+             ! { grep -Fxq 'pilot_min_loss_scan=pass' "$RUNNER_TEMP/options-pilot-min-loss.log" ||
+                 grep -Fxq 'pilot_min_loss_scan=unverified' "$RUNNER_TEMP/options-pilot-min-loss.log"; } ||
+             ! grep -Fxq 'pilot_effective_fees=unverified' "$RUNNER_TEMP/options-pilot-min-loss.log" ||
+             ! grep -Fxq 'pilot_usd_conversion=unverified' "$RUNNER_TEMP/options-pilot-min-loss.log"; then
+            echo "::error::Cotización incompleta o sin control de riesgos"
+            exit 1
+          fi
+          if grep -Fxq 'pilot_min_loss_scan=unverified' "$RUNNER_TEMP/options-pilot-min-loss.log"; then
+            echo "::warning::No hay un contrato mínimo de ETH con cotización, spread y libro aceptables: NO OPERAR"
+          fi
+          {
+            echo '### Estimación conservadora de desembolso ETH'
+            echo '- Pérdida máxima comunicada por el usuario: 100 USD; NO equivale automáticamente a USDT.'
+            echo '- Filtro previo de lectura: máximo 20 USDT de prima estimada + margen de comisión de entrada.'
+            echo '- Si no hay un contrato líquido a ese importe: NO OPERAR.'
+            echo '- Tipo permitido para futura propuesta: solamente compra de opción; nunca naked short.'
+            echo '- Cotización actual, tarifa efectiva, USD/USDT y autorización: PENDIENTES.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::La opción de menor precio puede vencer sin valor; esto no constituye una recomendación ni habilita el piloto real."

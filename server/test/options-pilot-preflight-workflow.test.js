@@ -33,3 +33,20 @@ test('el script es siempre solo lectura y nunca puede ser autorización', () => 
   assert.match(script, /OPTIONS_LIVE_PRODUCTION_APPROVED === 'false'/);
   assert.doesNotMatch(script, /\.placeOrder\(|\.cancelOrder\(|\.query\(/);
 });
+
+test('minimal-loss quote scan stays read-only and never authorizes trading', () => {
+  assert.match(flow, /options-pilot-min-loss-quote\.js/);
+  assert.match(flow, /pilot_min_loss_scan=pass/);
+  assert.match(flow, /pilot_min_loss_scan=unverified/);
+  assert.match(flow, /pilot_effective_fees=unverified/);
+  assert.match(flow, /pilot_usd_conversion=unverified/);
+  assert.match(flow, /pilot_ready=no/);
+  assert.match(flow, /NO OPERAR/);
+  const scan = fs.readFileSync(path.resolve(
+    __dirname, '../src/scripts/options-pilot-min-loss-quote.js'), 'utf8');
+  assert.match(scan, /MAX_SEARCH_BUDGET_USDT = 20/);
+  assert.match(scan, /MAX_SPREAD_RATIO = 0\.10/);
+  assert.match(scan, /pilotReady: false/);
+  assert.doesNotMatch(scan, /\.placeOrder\(|\.cancelOrder\(|\.query\(/);
+  assert.doesNotMatch(flow, /docker compose .*up -d|git checkout|POST.*\/eapi\/v1\/order/);
+});
