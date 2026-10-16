@@ -71,6 +71,7 @@ test('preflight de cierre rechaza sobreventa, posición ajena y cierres duplicad
       };
       if (sql.includes('FROM options_live_batches')) return { rows: [] };
       if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (sql.includes("FROM options_live_orders") && sql.includes("purpose='take_profit'")) return { rows: [] };
       if (sql.includes('FROM options_strategy_positions') && sql.includes('GROUP BY')) {
         return { rows: [{ symbol: held.symbol, side: held.side, quantity: held.quantity }] };
       }
