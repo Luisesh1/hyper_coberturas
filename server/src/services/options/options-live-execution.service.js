@@ -68,6 +68,12 @@ function normalizeTrade(raw, order, exchangeOrderId) {
 }
 
 function actionKey(strategy, action, ctx) {
+  if (ctx.durableActionKey != null) {
+    if (!/^deferred:\\d+:\\d+$/.test(ctx.durableActionKey) || action.type !== 'close') {
+      throw new Error('Invalid deferred action key');
+    }
+    return ctx.durableActionKey;
+  }
   const eventId = ctx.signal?.eventId;
   if (strategy.template === 'alert_signal' && ctx.signal && eventId == null) {
     throw new Error('Live signal requires a durable alert eventId');
@@ -392,6 +398,184 @@ class OptionsLiveExecution {
     return sent;
   }
 
+
+  /** Al observar un fill de apertura se genera el TP en esta misma pasada
+   * del reconciliador, nunca antes del fill ni por el acuse NEW.
+   * Cada fila de posición representa UN fill confirmado y tiene TP propio.
+   */
+  async createMissingTakeProfits() {
+    if (!this.enabled || typeof this.repo.listMissingTpPositions !== 'function') return { attempted: 0, queued: 0 };
+    const positions = await this.repo.listMissingTpPositions(100);
+    let queued = 0;
+    const clientByUser = new Map();
+    const exchangeByUser = new Map();
+    for (const position of positions) {
+      try {
+        if (!clientByUser.has(position.userId)) {
+          clientByUser.set(position.userId, await this.credentials.getClientForUser(position.userId));
+        }
+        const client = clientByUser.get(position.userId);
+        const meta = parseSymbol(position.symbol);
+        if (!meta?.expiryMs || meta.expiryMs <= this.now()) throw new Error('Invalid or expired TP contract');
+        const params = alertSignal.validateParams(position.params || {});
+        const deadlineAt = meta.expiryMs - Math.max(1, Number(params.exitHoursBeforeExpiry)) * 3600000;
+        if (deadlineAt <= this.now() + 60000) {
+          throw new Error('Option too close to exit time for standing TP');
+        }
+        if (!exchangeByUser.has(position.userId)) {
+          const [info, current, open] = await Promise.all([
+            client.getExchangeInfo(), client.getPositions(), client.getOpenOrders(),
+          ]);
+          await this.repo.assertExchangeExposure(position.userId, current);
+          // Al emitir TP puede coexistir la entrada parcial pendiente, pero
+          // únicamente si TODAS las órdenes abiertas son propiedad del ledger.
+          if (!Array.isArray(open)) throw new Error('Binance open orders unknown');
+          if (open.length) {
+            const known = await this.repo.listUserOrderIds(position.userId);
+            const keys = new Set(known.map((o) => clean(o.clientOrderId)));
+            if (open.some((o) => !keys.has(clean(o.clientOrderId)))) {
+              throw new Error('Untracked Binance order: cannot arm TP');
+            }
+          }
+          exchangeByUser.set(position.userId, info);
+        }
+        const info = exchangeByUser.get(position.userId);
+        const contract = (info.optionSymbols || []).find((o) => o.symbol === position.symbol);
+        const filter = (contract?.filters || []).find((o) => o.filterType === 'PRICE_FILTER');
+        const tickSize = Number(filter?.tickSize);
+        const minPrice = filter?.minPrice == null ? null : Number(filter.minPrice);
+        let quote = null;
+        let atrHourly = null;
+        if (params.takeProfitMode === 'volatility') {
+          quote = await this.market.getQuote(position.symbol);
+          const inputs = await this.market.getVolatilityInputs(position.symbol);
+          atrHourly = inputs.atrHourly;
+        }
+        const price = standingPrice({
+          position, params, tickSize, minPrice, quote, atrHourly, now: this.now(),
+        });
+        if (!Number.isFinite(price) || price <= 0) {
+          throw new Error('Unable to compute verified take-profit price');
+        }
+        const leg = {
+          symbol: position.symbol, side: position.side === 'BUY' ? 'SELL' : 'BUY',
+          quantity: position.quantity, price,
+        };
+        validateBinanceOrderBatch(info, [leg], this.now(), deadlineAt);
+        const intent = await this.repo.beginStandingTp({ position, price, deadlineAt });
+        if (intent) queued++;
+      } catch (err) {
+        this.logger.warn('options_tp_coverage_pending', {
+          positionId: position.id, strategyId: position.strategyId, error: err.message,
+        });
+        try {
+          if (typeof this.repo.claimIncidentNotification === 'function' &&
+              await this.repo.claimIncidentNotification(position.userId, 'TP_NOT_PROTECTED', String(position.id))) {
+            await this.notify(position.userId,
+              '<b>ALERTA · TP aún no protegido</b>\\n' +
+              'Posición #' + position.id + ': verificar Binance y ledger antes de operar.');
+          }
+        } catch (notifyErr) {
+          this.logger.warn('options_tp_coverage_notify_failed', { error: notifyErr.message });
+        }
+      }
+    }
+    return { attempted: positions.length, queued };
+  }
+
+  /** El POST de TP es idempotente: CAS queued→sending ANTES de la red.
+   * Un crash después de sending recupera por clientOrderId, jamás POST nuevo.
+   */
+  async submitQueuedTakeProfits() {
+    if (!this.enabled || typeof this.repo.listQueuedTpOrders !== 'function') return { sent: 0 };
+    const orders = await this.repo.listQueuedTpOrders(100);
+    let sent = 0;
+    for (const order of orders) {
+      try {
+        const client = await this.credentials.getClientForUser(order.userId);
+        const [info, positions] = await Promise.all([
+          client.getExchangeInfo(), client.getPositions(),
+        ]);
+        await this.repo.assertExchangeExposure(order.userId, positions);
+        validateBinanceOrderBatch(info, [{
+          symbol: order.symbol, side: order.side,
+          quantity: order.quantity, price: order.limitPrice,
+        }], this.now(), order.deadlineAt);
+        if (this.now() >= order.deadlineAt) continue;
+        const claimed = await this.repo.markSending(order.id);
+        if (!claimed) continue;
+        try {
+          const ack = await client.placeOrder({
+            symbol: claimed.symbol, side: claimed.side,
+            quantity: claimed.quantity, price: claimed.limitPrice,
+            reduceOnly: true, clientOrderId: claimed.clientOrderId,
+          });
+          if (ack?.orderId == null ||
+              (ack.symbol && ack.symbol !== claimed.symbol) ||
+              (ack.side && ack.side !== claimed.side) ||
+              (ack.clientOrderId && ack.clientOrderId !== claimed.clientOrderId)) {
+            throw new Error('TP acknowledgement identity mismatch');
+          }
+          await this.repo.markActive(claimed.id, ack.orderId);
+          sent++;
+        } catch (err) {
+          await this.repo.markAttention(claimed.id, 'TP uncertain: ' + err.message);
+          throw err;
+        }
+      } catch (err) {
+        this.logger.warn('options_tp_submit_pending', {
+          strategyId: order.strategyId, liveOrderId: order.id, error: err.message,
+        });
+      }
+    }
+    return { sent };
+  }
+
+  /** La salida solicitada por stop/señal/tiempo es durable y solo se
+   * reintenta cuando el TP está definitivamente cancelado/reconciliado.
+   */
+  async processDeferredExits() {
+    if (!this.enabled || typeof this.repo.listReadyExitRequests !== 'function') return { sent: 0 };
+    const pending = await this.repo.listReadyExitRequests(100);
+    let sent = 0;
+    for (const request of pending) {
+      try {
+        const quote = await this.market.getQuote(request.symbol, { fresh: true });
+        const price = request.side === 'BUY' ? Number(quote?.bid) : Number(quote?.ask);
+        if (!Number.isFinite(price) || price <= 0) throw new Error('No executable deferred close price');
+        const res = await this.submit(
+          { id: request.strategyId, userId: request.userId, template: 'alert_signal' },
+          { type: 'close', reason: 'deferred_exit',
+            detail: 'Salida pendiente tras cancelar y conciliar TP',
+            legs: [{
+              positionId: request.positionId, symbol: request.symbol,
+              side: request.side === 'BUY' ? 'SELL' : 'BUY',
+              quantity: request.quantity, price,
+            }] },
+          { now: this.now(),
+            durableActionKey: 'deferred:' + request.id + ':' + Math.floor(this.now() / 60000) }
+        );
+        if (res.status === 'submitted') sent++;
+      } catch (err) {
+        this.logger.warn('options_deferred_exit_pending', {
+          strategyId: request.strategyId, positionId: request.positionId,
+          error: err.message,
+        });
+        try {
+          if (typeof this.repo.claimIncidentNotification === 'function' &&
+              await this.repo.claimIncidentNotification(request.userId, 'DEFERRED_EXIT', String(request.positionId))) {
+            await this.notify(request.userId,
+              '<b>ALERTA · Salida aún pendiente</b>\\n' +
+              'Posición #' + request.positionId + ': revisar TP y órdenes en Binance.');
+          }
+        } catch (notifyErr) {
+          this.logger.warn('options_deferred_exit_notify_failed', { error: notifyErr.message });
+        }
+      }
+    }
+    return { sent };
+  }
+
   async reconcilePending() {
     // Aun con nuevas entradas deshabilitadas, se cancelan y concilian
     // órdenes ya enviadas antes de cambiar el feature flag.
@@ -417,6 +601,20 @@ class OptionsLiveExecution {
         await this.repo.releaseReconcile(order.id, locked.leaseUntil);
       }
     }
+    // Mismo ciclo que recibió el fill confirmado: registrar TP durable, emitir
+    // su POST una sola vez y atender salidas solo tras cancelación confirmada.
+    // Ninguna de estas acciones se activa si falta la doble autorización.
+    let protection = null;
+    let protectionSent = null;
+    let deferred = null;
+    try {
+      protection = await this.createMissingTakeProfits();
+      protectionSent = await this.submitQueuedTakeProfits();
+      deferred = await this.processDeferredExits();
+    } catch (err) {
+      errors++;
+      this.logger.warn('options_tp_maintenance_failed', { error: err.message });
+    }
     // Notificación aún con trading apagado, sin interrumpir la conciliación.
     let alerts = 0;
     try {
@@ -435,7 +633,7 @@ class OptionsLiveExecution {
         this.logger.warn('options_live_account_audit_scan_failed', { error: err.message });
       }
     }
-    return { checked: orders.length, reconciled, errors, alerts, accountAudit };
+    return { checked: orders.length, reconciled, errors, alerts, accountAudit, protection, protectionSent, deferred };
   }
 }
 
