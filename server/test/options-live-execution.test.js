@@ -263,3 +263,17 @@ test('paginación con identificadores de 64 bits conserva los fills sin duplicar
   assert.equal(f.fills.length, 1);
   assert.equal(f.orders[0].status, 'final');
 });
+
+test('conciliación recupera el estado reclamado aunque el listado previo indique queued', async () => {
+  const f = fixture();
+  await f.submit();
+  // Otra réplica puede pasar queued -> sending entre SELECT y el claim.
+  // Se usa el estado obtenido bajo el lease, no el snapshot anterior.
+  const originalList = f.repo.listUnresolved.bind(f.repo);
+  f.repo.listUnresolved = async () => (await originalList()).map((o) => ({ ...o, status: 'queued' }));
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.calls.get.length, 1);
+  assert.equal(f.orders[0].status, 'active');
+  assert.equal(f.calls.post.length, 1);
+});
