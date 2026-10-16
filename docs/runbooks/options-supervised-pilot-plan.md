@@ -32,6 +32,34 @@ dos flags de trading ni depósitos. La conexión firmada 2026-10-16 comprobó
 10/12 contratos. Sin una orden histórica, getOrder y userTrades permanecen
 `unverified`. No se deben inventar órdenes o fills para lograr una CI verde.
 
+## 0.1 Comparación de contratos antes de cualquier prueba real
+
+No recomendar automáticamente el cheapest entry del preflight. Una opción
+extremadamente OTM puede costar céntimos y perder toda la prima.
+
+El paso READ-ONLY options-eth-contract-public-review.js revisa precio público
+de ETH, vencimiento (3–30 días), strike, CALL/PUT, delta absoluta (0.25–0.75),
+IV positiva, bid/ask (spread <=10%), minQty, contract unit y profundidad.
+Evalúa solo los 12 contratos más baratos que superaron estos filtros,
+no toda la cadena, y publica como máximo tres candidatos. Son cotizaciones
+puntuales; pueden cambiar antes de cualquier operación y no garantizan fills.
+La delta **no equivale a la probabilidad de obtener rentabilidad**.
+
+Presupuesto inicial: **máximo 20 USDT estimados** para lote mínimo incluyendo
+reserva de 10% de prima como tarifa máxima estimada de trading de entrada.
+No se ha demostrado aún la comisión efectiva, el saldo disponible de la
+cuenta, la paridad USD/USDT, la tarifa de cierre, ni el riesgo de ejecución;
+el máximo absoluto declarado sigue siendo 100 USD de pérdida total.
+
+Conforme a la fórmula oficial Binance, prima negociada = option traded
+price × traded size; contract unit entra en el cómputo de comisión basada
+en índice, pero no se debe multiplicar de nuevo en el valor de la prima.
+Ver: https://www.binance.com/en-ZA/support/faq/detail/5326e5de61c34fed98abe28d2f175a23
+
+Si la lista está vacía, NO OPERAR. Aunque exista un candidato, **NO OPERAR
+todavía**: revisar caso de uso, volatilidad, comisiones y autorización
+separada para símbolo, lado, lote y precio exactos.
+
 ## 1. Inspección técnica solo lectura
 
 Workflow manual: `.github/workflows/options-pilot-preflight.yml`, rama
