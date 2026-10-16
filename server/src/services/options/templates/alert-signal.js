@@ -21,6 +21,7 @@ const id = 'alert_signal';
 
 const STRUCTURES = ['buy_with', 'sell_against'];
 const ON_OPPOSITE = ['reverse', 'close', 'ignore'];
+const TAKE_PROFIT_MODES = ['fixed', 'volatility'];
 const DIRECTIONS = ['bullish', 'bearish'];
 const DIRECTION_LABEL = { bullish: 'alcista', bearish: 'bajista', neutral: 'neutral' };
 
@@ -42,6 +43,9 @@ const defaultParams = {
   maxPremiumUsdt: null,
   contractCount: 1,
   capitalUsdt: null,
+  takeProfitMode: 'fixed',
+  tpAtrMultiplier: 1,
+  tpHorizonHours: 4,
 };
 
 const NUMERIC_FIELDS = [
@@ -54,12 +58,15 @@ const NUMERIC_FIELDS = [
   { key: 'maxOpenPositions', label: 'Máximo de posiciones abiertas', type: 'number', integer: true, min: 1, max: 20, step: 1 },
   { key: 'maxTradesPerDay', label: 'Máximo de operaciones por día', type: 'number', integer: true, min: 1, max: 100, step: 1 },
   { key: 'maxPremiumUsdt', label: 'Prima máxima por operación', type: 'number', min: 0, max: 1e7, step: 1, unit: 'USDT', nullable: true },
+  { key: 'tpAtrMultiplier', label: 'Multiplicador ATR del TP', type: 'number', min: 0.25, max: 4, step: 0.25 },
+  { key: 'tpHorizonHours', label: 'Horizonte TP por volatilidad', type: 'number', min: 1, max: 24, step: 1, integer: true, unit: 'horas' },
 ];
 
 const paramSchema = [
   { key: 'contractCount', label: 'Contratos distintos', type: 'number', integer: true, min: 1, max: 10, step: 1 },
   { key: 'capitalUsdt', label: 'Capital máximo de entrada', type: 'number', min: 0.01, max: 1e7, nullable: true, unit: 'USDT' },
   { key: 'alertIds', label: 'Alertas', type: 'alerts' },
+  { key: 'takeProfitMode', label: 'Tipo de Take Profit', type: 'enum', options: TAKE_PROFIT_MODES },
   { key: 'structure', label: 'Estructura', type: 'enum', options: STRUCTURES },
   { key: 'onOpposite', label: 'Señal contraria', type: 'enum', options: ON_OPPOSITE },
   ...NUMERIC_FIELDS,
@@ -87,6 +94,7 @@ function validateParams(raw = {}) {
   const input = raw && typeof raw === 'object' ? raw : {};
   const structure = pickEnum(input.structure, STRUCTURES, defaultParams.structure, 'Estructura');
   const onOpposite = pickEnum(input.onOpposite, ON_OPPOSITE, defaultParams.onOpposite, 'Señal contraria');
+  const takeProfitMode = pickEnum(input.takeProfitMode, TAKE_PROFIT_MODES, defaultParams.takeProfitMode, 'Tipo de Take Profit');
   const numeric = validateNumericParams(
     { paramSchema: NUMERIC_FIELDS, defaultParams: { ...defaultParams, ...STRUCTURE_DEFAULTS[structure] } },
     input
@@ -97,7 +105,7 @@ function validateParams(raw = {}) {
   const capitalUsdt = input.capitalUsdt == null || input.capitalUsdt === '' ? null : Number(input.capitalUsdt);
   if (!Number.isInteger(contractCount) || contractCount < 1 || contractCount > 10) throw new ValidationError('contractCount debe estar entre 1 y 10');
   if (capitalUsdt !== null && (!Number.isFinite(capitalUsdt) || capitalUsdt <= 0 || capitalUsdt > 1e7)) throw new ValidationError('capitalUsdt inválido');
-  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, ...numeric, contractCount, capitalUsdt };
+  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, ...numeric, contractCount, capitalUsdt };
 }
 
 /** Pata que abre una señal según la estructura. */
@@ -131,6 +139,7 @@ function exits(ctx) {
   const { now, positions = [], params } = ctx;
   const actions = [];
   let missingQuote = false;
+  let missingVolatility = false;
   for (const p of positions) {
     const legs = closeLegs([p]);
     const hours = hoursToExpiry(p, now);
@@ -143,15 +152,30 @@ function exits(ctx) {
       missingQuote = true;
       continue;
     }
-    if (pct >= params.takeProfitPct) {
+    // El objetivo se calcula sobre el precio de fill confirmado, pero la
+    // condición se comprueba con el bid (para vender) o ask (para recomprar).
+    // No activar TP por mark/Black-Scholes sin liquidez ejecutable.
+    const dynamic = params.takeProfitMode === 'volatility';
+    const target = Number(p.takeProfitTarget?.price);
+    const executable = Number(p.quote?.[p.side === 'BUY' ? 'bid' : 'ask']);
+    const targetReached = dynamic && Number.isFinite(target) && target > 0 &&
+      Number.isFinite(executable) && executable > 0 &&
+      (p.side === 'BUY' ? executable >= target : executable <= target);
+    if (targetReached) {
+      actions.push({ type: 'close', reason: 'take_profit_volatility',
+        detail: `TP ATR/IV en ${p.symbol}: objetivo ${target} USDT, cotización ${executable} USDT`, legs });
+    } else if (!dynamic && pct >= params.takeProfitPct) {
       actions.push({ type: 'close', reason: 'take_profit', detail: `Take profit en ${p.symbol}: ${pct.toFixed(1)} % de la prima`, legs });
     } else if (-pct >= params.stopLossPct) {
       actions.push({ type: 'close', reason: 'stop_loss', detail: `Stop en ${p.symbol}: pérdida del ${(-pct).toFixed(1)} % de la prima`, legs });
+    } else if (dynamic && !(target > 0)) {
+      missingVolatility = true;
     }
   }
   if (actions.length) return actions;
   if (!positions.length) return [hold('waiting_signal', 'Esperando señal')];
   if (missingQuote) return [hold('no_quote', 'Sin cotización para valorar la posición')];
+  if (missingVolatility) return [hold('no_volatility_tp', 'TP por volatilidad pendiente: faltan IV, ATR o tick de Binance')];
   return [hold('in_position', `En posición: ${positions.length} pata(s) abierta(s)`)];
 }
 
@@ -242,6 +266,7 @@ module.exports = {
   STRUCTURES,
   ON_OPPOSITE,
   STRUCTURE_DEFAULTS,
+  TAKE_PROFIT_MODES,
   legFor,
   positionDirection,
 };
