@@ -206,6 +206,109 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
    * position_id protege exactamente esa cantidad, incluso con fills parciales.
    * Nunca cubrir posiciones cuyo cierre ya fue solicitado.
    */
+
+  /** Reversión de señal: guardar cierre + reentrada bajo UN advisory lock.
+   * Nunca permitir que la nueva apertura corra antes de reconciliar el TP.
+   */
+  async function queueReversal(strategy, signal, closeAction) {
+    const eventId = String(signal?.eventId ?? '');
+    if (!/^\\d{1,20}$/.test(eventId) ||
+        !['bullish','bearish'].includes(signal.direction) ||
+        closeAction.type !== 'close' || !closeAction.legs?.length) {
+      throw new Error('Invalid durable reversal event');
+    }
+    return db.transaction(async (tx) => {
+      const { rows: [owner] } = await tx.query(
+        'SELECT id,user_id,mode,template FROM options_strategies WHERE id=$1 FOR UPDATE', [strategy.id]
+      );
+      if (!owner || Number(owner.user_id) !== Number(strategy.userId) ||
+          owner.mode !== 'live' || owner.template !== 'alert_signal') return false;
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
+      const ids = closeAction.legs.map((l) => Number(l.positionId));
+      if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+          new Set(ids).size !== ids.length) throw new Error('Invalid reversal position ids');
+      const { rows: held } = await tx.query(
+        "SELECT id,user_id,strategy_id,symbol,side,quantity FROM options_strategy_positions " +
+        "WHERE id=ANY($1::bigint[]) AND mode='live' AND closed_at IS NULL FOR UPDATE", [ids]
+      );
+      if (held.length !== ids.length) throw new Error('Reversal positions changed');
+      const byId = new Map(held.map((p) => [Number(p.id), p]));
+      for (const leg of closeAction.legs) {
+        const p = byId.get(Number(leg.positionId));
+        if (!p || Number(p.user_id) !== Number(strategy.userId) ||
+            Number(p.strategy_id) !== Number(strategy.id) || p.side === leg.side ||
+            p.symbol !== leg.symbol || !(Number(leg.quantity) > 0) ||
+            Number(leg.quantity) > Number(p.quantity) + 1e-8) {
+          throw new Error('Reversal may only close owned verified positions');
+        }
+      }
+      const at = now();
+      for (const p of held) {
+        await tx.query(
+          `INSERT INTO options_live_exit_requests
+          (position_id,strategy_id,user_id,reason,created_at,updated_at)
+          VALUES ($1,$2,$3,'opposite_signal',$4,$4)
+          ON CONFLICT (position_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
+          [p.id, strategy.id, strategy.userId, at]
+        );
+      }
+      await tx.query(
+        "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$2 " +
+        "WHERE user_id=$1 AND status<>'final' AND " +
+        "((purpose='take_profit' AND position_id=ANY($3::bigint[])) " +
+        "OR (action='open' AND symbol=ANY($4::text[])))",
+        [strategy.userId, at, ids, held.map((p) => p.symbol)]
+      );
+      const savedSignal = {
+        eventId,
+        direction: signal.direction,
+        optionExpiryMinDays: signal.optionExpiryMinDays ?? null,
+        optionExpiryMaxDays: signal.optionExpiryMaxDays ?? null,
+      };
+      await tx.query(
+        `INSERT INTO options_live_reentries
+         (strategy_id,user_id,alert_event_id,signal,wait_position_ids,created_at,updated_at)
+         VALUES ($1,$2,$3,$4::jsonb,$5::bigint[],$6,$6)
+         ON CONFLICT (strategy_id,alert_event_id) DO NOTHING`,
+        [strategy.id, strategy.userId, eventId, JSON.stringify(savedSignal), ids, at]
+      );
+      return true;
+    });
+  }
+
+  async function listPendingReentries(limit = 50) {
+    const { rows } = await db.query(
+      "SELECT r.id,r.strategy_id,r.user_id,r.alert_event_id,r.signal,r.created_at, " +
+      "NOT EXISTS (SELECT 1 FROM options_strategy_positions p " +
+      "WHERE p.id=ANY(r.wait_position_ids) AND p.closed_at IS NULL) AS ready " +
+      "FROM options_live_reentries r JOIN options_strategies s ON s.id=r.strategy_id " +
+      "WHERE r.status='pending' AND s.mode='live' " +
+      "ORDER BY r.created_at,r.id LIMIT $1", [limit]
+    );
+    return rows.map((r) => ({
+      id: Number(r.id), strategyId: Number(r.strategy_id), userId: Number(r.user_id),
+      eventId: String(r.alert_event_id), signal: typeof r.signal === 'string' ? JSON.parse(r.signal) : r.signal,
+      createdAt: Number(r.created_at), ready: r.ready === true,
+    }));
+  }
+
+  async function hasReentryOrder(strategyId, eventId) {
+    const { rows } = await db.query(
+      "SELECT id FROM options_live_batches WHERE strategy_id=$1 AND action_key=$2 LIMIT 1",
+      [strategyId, 'alert:' + eventId + ':open']
+    );
+    return rows.length > 0;
+  }
+
+  async function markReentry(id, status) {
+    if (!['submitted','expired'].includes(status)) throw new Error('Invalid reentry status');
+    const { rowCount } = await db.query(
+      "UPDATE options_live_reentries SET status=$2,updated_at=$3 WHERE id=$1 AND status='pending'",
+      [id, status, now()]
+    );
+    return rowCount === 1;
+  }
+
   async function listMissingTpPositions(limit = 100) {
     const { rows } = await db.query(
       "SELECT p.id,p.strategy_id,p.user_id,p.symbol,p.side,p.quantity,p.entry_price," +
@@ -660,7 +763,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders,
-    deferExitIfProtected, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp,
+    deferExitIfProtected, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
