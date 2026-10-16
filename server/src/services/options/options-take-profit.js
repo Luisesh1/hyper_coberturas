@@ -39,12 +39,12 @@ function hourlyAtr(rows, period = 14, now = Date.now()) {
  */
 function projectTakeProfit({
   entryPrice, spot, strike, iv, type, side, expiryMs, nowMs,
-  atrHourly, tickSize, atrMultiplier = 1, horizonHours = 4,
+  atrHourly, tickSize, minPrice = 0, atrMultiplier = 1, horizonHours = 4,
 }) {
-  const input = [entryPrice, spot, strike, iv, expiryMs, nowMs, atrHourly, tickSize, atrMultiplier, horizonHours];
+  const input = [entryPrice, spot, strike, iv, expiryMs, nowMs, atrHourly, tickSize, minPrice, atrMultiplier, horizonHours];
   if (input.some((v) => !Number.isFinite(Number(v))) ||
       !(entryPrice > 0 && spot > 0 && strike > 0 && iv >= 0.01 && iv <= 5 &&
-        atrHourly > 0 && tickSize > 0 && atrMultiplier > 0 && atrMultiplier <= 4 &&
+        atrHourly > 0 && tickSize > 0 && minPrice >= 0 && atrMultiplier > 0 && atrMultiplier <= 4 &&
         horizonHours > 0 && horizonHours <= 24) ||
       !['BUY', 'SELL'].includes(side) || !['C', 'P'].includes(type)) return null;
 
@@ -71,9 +71,12 @@ function projectTakeProfit({
   // Prima proyectada anclada al fill real (no al mark).
   const raw = Number(entryPrice) + theoreticalLater - theoreticalNow;
   const tick = Number(tickSize);
-  const steps = side === 'BUY' ? Math.ceil((raw - 1e-9) / tick) : Math.floor((raw + 1e-9) / tick);
-  const price = Number((steps * tick).toFixed(10));
-  if (!Number.isFinite(price) || price <= 0 ||
+  // Binance PRICE_FILTER exige (price - minPrice) % tickSize == 0.
+  const origin = Number(minPrice);
+  const ticks = (raw - origin) / tick;
+  const steps = side === 'BUY' ? Math.ceil(ticks - 1e-9) : Math.floor(ticks + 1e-9);
+  const price = Number((origin + steps * tick).toFixed(10));
+  if (!Number.isFinite(price) || price <= 0 || price < origin ||
       (side === 'BUY' && price <= entryPrice + tick * 0.5) ||
       (side === 'SELL' && price >= entryPrice - tick * 0.5)) return null;
   return {
