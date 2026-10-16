@@ -714,8 +714,8 @@ class OptionsLiveExecution {
       const locked = await this.repo.claimReconcile(order.id);
       if (!locked) continue;
       try {
-        const client = order.status === 'queued'
-          ? null : await this.credentials.getClientForUser(order.userId);
+        const client = locked.status === 'queued'
+          ? null : await this.credentials.getClientForUser(locked.userId);
         await this.reconcileOrder(locked, client);
         reconciled += 1;
       } catch (err) {
