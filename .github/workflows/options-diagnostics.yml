@@ -59,7 +59,7 @@ jobs:
             echo "::error::Faltan SERVER_USER o DEPLOY_PATH"
             exit 1
           fi
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s" <<'REMOTE'
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s" <<'REMOTE' | tee "$RUNNER_TEMP/options-vps-audit.log"
           set -euo pipefail
           compose=(docker compose -f docker-compose.prod.yml)
 
@@ -79,7 +79,7 @@ jobs:
           # Captura el JSON dentro del VPS y solo publica contadores; jamás
           # vuelca IDs, símbolos, posiciones ni credenciales a GitHub Actions.
           audit_status=0
-          audit_output="$("${compose[@]}" exec -T server node src/scripts/options-live-audit.js 2>/dev/null)" || audit_status=$?
+          audit_output="$("${compose[@]}" exec -T server node src/scripts/options-live-audit.js </dev/null 2>/dev/null)" || audit_status=$?
           if [ "$audit_status" -ne 0 ] && [ "$audit_status" -ne 2 ]; then
             echo "options_audit=unavailable"
             exit 1
@@ -113,7 +113,20 @@ jobs:
             });
           '
           if [ "$healthy" -ne 1 ]; then exit 2; fi
+          echo "options_audit_complete=pass"
           REMOTE
+          # El job debe fallar si bash -s termina prematuramente sin ejecutar
+          # la auditoría, aunque SSH haya devuelto exit 0.
+          if ! grep -Fxq 'options_audit_complete=pass' "$RUNNER_TEMP/options-vps-audit.log"; then
+            echo "::error::Auditoría incompleta (faltó marcador final)"
+            exit 1
+          fi
+          for metric in options_unresolved_orders options_attention_orders options_overdue_orders options_expired_positions; do
+            if ! grep -Eq "^${metric}=[0-9]+$" "$RUNNER_TEMP/options-vps-audit.log"; then
+              echo "::error::Auditoría incompleta (faltó una métrica agregada)"
+              exit 1
+            fi
+          done
 
       - name: Comprobar Binance Options firmadas (solo lectura; manual)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.binance_user_id != '' }}
@@ -132,7 +145,7 @@ jobs:
             echo "::error::Falta configuración SSH/deploy en el entorno production"
             exit 1
           fi
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s -- '$BINANCE_USER_ID'" <<'REMOTE'
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s -- '$BINANCE_USER_ID'" <<'REMOTE' | tee "$RUNNER_TEMP/options-binance-check.log"
           set -euo pipefail
           user_id="$1"
           compose=(docker compose -f docker-compose.prod.yml)
@@ -140,7 +153,7 @@ jobs:
           if ! "${compose[@]}" exec -T server node -e '
             if (process.env.OPTIONS_LIVE_TRADING_ENABLED === "true" ||
                 process.env.OPTIONS_LIVE_PRODUCTION_APPROVED === "true") process.exit(3);
-          '; then
+          ' </dev/null; then
             echo "binance_contract_check=blocked_live_flag"
             exit 3
           fi
@@ -149,12 +162,12 @@ jobs:
           if ! "${compose[@]}" exec -T server node -e '
             const fs = require("node:fs");
             if (!fs.existsSync("src/scripts/options-live-contract-check.js")) process.exit(2);
-          '; then
+          ' </dev/null; then
             echo "binance_contract_check=not_deployed"
             exit 2
           fi
           status=0
-          raw="$("${compose[@]}" exec -T server node src/scripts/options-live-contract-check.js "$user_id" 2>/dev/null)" || status=$?
+          raw="$("${compose[@]}" exec -T server node src/scripts/options-live-contract-check.js "$user_id" </dev/null 2>/dev/null)" || status=$?
           if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
             echo "binance_contract_check=unavailable"
             exit 1
@@ -189,4 +202,11 @@ jobs:
               }
             });
           '
+          echo "binance_contract_check_complete=pass"
           REMOTE
+          # Sin marcador y resultado explícito, nunca publicar "success".
+          if ! grep -Fxq 'binance_contract_check_complete=pass' "$RUNNER_TEMP/options-binance-check.log" ||
+              ! grep -Eq '^binance_contract_ready=(yes|no)$' "$RUNNER_TEMP/options-binance-check.log"; then
+            echo "::error::Diagnóstico Binance incompleto (faltó resultado firmado)"
+            exit 1
+          fi
