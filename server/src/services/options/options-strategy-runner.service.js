@@ -512,6 +512,17 @@ class OptionsStrategyRunner {
         reason: 'tp_resting', detail: 'TP LIMIT residente, ejecución pendiente en Binance' });
       return null;
     }
+    // Stops, señales contrarias y salidas por tiempo no dependen de que
+    // haya liquidez para SOLICITAR la cancelación durable de un TP resting.
+    if (action.type === 'close' &&
+        !['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+        typeof this.liveExecutor.requestProtectedExit === 'function' &&
+        await this.liveExecutor.requestProtectedExit(strategy, action)) {
+      ctx.produced?.push({ mode: 'live', type: 'close', pending: true,
+        reason: 'tp_cancel_requested',
+        detail: 'TP en cancelación; salida pendiente y persistida' });
+      return { status: 'tp_cancel_requested', sent: 0 };
+    }
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
       await this.recordOutcome(strategy, 'live', {
