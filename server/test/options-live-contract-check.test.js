@@ -8,9 +8,10 @@ const makeClient = (trace) => ({
   async getExchangeInfo() {
     trace.push('exchangeInfo');
     return { optionSymbols: [{
-      symbol, status: 'TRADING', underlying: 'BTCUSDT',
+      symbol, status: 'TRADING', underlying: 'BTCUSDT', quoteAsset: 'USDT',
       expiryDate: NOW + 15 * 86400000,
-      filters: [{ filterType: 'PRICE_FILTER', tickSize: '0.1', stepSize: '0.01' }],
+      filters: [{ filterType: 'PRICE_FILTER', tickSize: '0.1',
+        stepSize: '0.01', minQty: '0.01', maxQty: '100' }],
     }] };
   },
   async getSpotKlines() {
@@ -64,6 +65,38 @@ test('READ-ONLY: checks shapes/filters/orders without sending or cancelling', as
   assert.ok(!json.includes('300'));
   assert.ok(!json.includes(symbol));
   assert.ok(!json.includes('1234567890123456789'));
+});
+
+test('reconoce LOT_SIZE separado de PRICE_FILTER en exchangeInfo real', async () => {
+  const client = makeClient([]);
+  client.getExchangeInfo = async () => ({ optionSymbols: [{
+    symbol, status: 'TRADING', underlying: 'BTCUSDT', quoteAsset: 'USDT',
+    expiryDate: NOW + 15 * 86400000,
+    filters: [
+      { filterType: 'PRICE_FILTER', minPrice: '0.01',
+        maxPrice: '3000', tickSize: '0.01' },
+      { filterType: 'LOT_SIZE', minQty: '0.01',
+        maxQty: '100', stepSize: '0.01' },
+    ],
+  }] });
+  const out = await checkContracts({ userId: 11, client,
+    database: { async query() { return { rows: [] }; } }, at: NOW });
+  assert.equal(out.results.find((r) => r.endpoint === 'optionFilters').ok, true);
+});
+
+test('falla cerrada sin rango de lotes completo o quote USDT confirmado', async () => {
+  for (const missing of ['minQty', 'maxQty', 'quoteAsset']) {
+    const client = makeClient([]);
+    const info = await client.getExchangeInfo();
+    const item = info.optionSymbols[0];
+    if (missing === 'quoteAsset') delete item.quoteAsset;
+    else delete item.filters[0][missing];
+    client.getExchangeInfo = async () => info;
+    const out = await checkContracts({ userId: 11, client,
+      database: { async query() { return { rows: [] }; } }, at: NOW });
+    assert.equal(out.results.find((r) => r.endpoint === 'optionFilters').ok, false,
+      'must reject missing ' + missing);
+  }
 });
 
 test('si no existen órdenes históricas, no inventa getOrder/trades confirmados', async () => {
