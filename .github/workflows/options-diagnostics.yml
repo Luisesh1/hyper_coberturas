@@ -1,11 +1,13 @@
-# Diagnóstico manual y estrictamente de solo lectura para el VPS de producción.
-# Reutiliza el acceso SSH de deploy. No consulta balances ni vuelca logs,
-# identificadores de usuarios, contratos o credenciales a GitHub Actions.
-# No ejecuta ni cancela órdenes y no modifica flags de trading.
+# Diagnóstico de solo lectura (nunca envía/cancela órdenes).
+# Se programa cada cinco horas UTC desde main una vez integrado.
+# Requiere host SSH fijado en secret SERVER_SSH_KNOWN_HOSTS,
+# obtenido de un canal confiable; nunca ssh-keyscan dentro de CI.
 name: Options - diagnóstico VPS
 
 on:
   workflow_dispatch: {}
+  schedule:
+    - cron: '17 */5 * * *'
 
 permissions:
   contents: read
@@ -20,27 +22,38 @@ jobs:
     environment: production
     timeout-minutes: 10
     steps:
-      - name: Preparar SSH con credenciales del despliegue
+      - name: Preparar SSH con host verificado
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
+          if [ -z "${SERVER_HOST:-}" ] || [ -z "${SERVER_SSH_KEY:-}" ] || [ -z "${SERVER_SSH_KNOWN_HOSTS:-}" ]; then
+            echo "::error::Falta SERVER_HOST, SERVER_SSH_KEY o SERVER_SSH_KNOWN_HOSTS (host SSH verificado)"
+            exit 1
+          fi
           mkdir -p -m 700 ~/.ssh
           printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          # Mismo mecanismo de host-key del deploy existente.
-          # Se recomienda sustituirlo por una huella SSH fijada fuera de banda.
-          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$SERVER_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_rsa ~/.ssh/known_hosts
+          if ! ssh-keygen -F "$SERVER_HOST" -f ~/.ssh/known_hosts >/dev/null; then
+            echo "::error::La huella SSH fijada no corresponde a SERVER_HOST"
+            exit 1
+          fi
 
-      - name: Salud Docker y conciliación (sin datos privados)
+      - name: Salud Docker y auditoría agregada
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s" <<'REMOTE'
+          if [ -z "${SERVER_USER:-}" ] || [ -z "${DEPLOY_PATH:-}" ]; then
+            echo "::error::Faltan SERVER_USER o DEPLOY_PATH"
+            exit 1
+          fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && bash -s" <<'REMOTE'
           set -euo pipefail
           compose=(docker compose -f docker-compose.prod.yml)
 
@@ -57,8 +70,8 @@ jobs:
             if [ "$status" != "healthy" ]; then healthy=0; fi
           done
 
-          # El script lee la DB y emite datos internos a stdout: capturarlos
-          # y convertirlos a métricas agregadas ANTES de mostrarlos en CI.
+          # Captura el JSON dentro del VPS y solo publica contadores; jamás
+          # vuelca IDs, símbolos, posiciones ni credenciales a GitHub Actions.
           audit_status=0
           audit_output="$("${compose[@]}" exec -T server node src/scripts/options-live-audit.js 2>/dev/null)" || audit_status=$?
           if [ "$audit_status" -ne 0 ] && [ "$audit_status" -ne 2 ]; then
@@ -72,13 +85,21 @@ jobs:
             process.stdin.on("end", () => {
               try {
                 const d = JSON.parse(raw);
-                const unresolved = Array.isArray(d.unresolved) ? d.unresolved : null;
+                const orders = Array.isArray(d.unresolved) ? d.unresolved : null;
                 const expired = Array.isArray(d.expiredLocalLivePositions) ? d.expiredLocalLivePositions : null;
-                if (!unresolved || !expired) throw new Error("invalid shape");
-                console.log("options_unresolved_orders=" + unresolved.length);
-                console.log("options_attention_orders=" + unresolved.filter(o => o.status === "attention").length);
+                const statuses = Array.isArray(d.orderStatuses) ? d.orderStatuses : null;
+                if (!orders || !expired || !statuses) throw new Error("invalid shape");
+                const unresolvedTotal = statuses.filter(s => s.status !== "final")
+                  .reduce((acc, s) => acc + Number(s.count || 0), 0);
+                const attention = orders.filter(o => o.status === "attention").length;
+                const overdue = orders.filter(o => o.minutesPastDeadline > 1).length;
+                console.log("options_unresolved_orders=" + unresolvedTotal);
+                console.log("options_attention_orders=" + attention);
+                console.log("options_overdue_orders=" + overdue);
                 console.log("options_expired_positions=" + expired.length);
-                if (unresolved.some(o => o.status === "attention" || o.minutesPastDeadline > 1) || expired.length) process.exitCode = 2;
+                if (unresolvedTotal > orders.length || attention || overdue || expired.length) {
+                  process.exitCode = 2;
+                }
               } catch (_) {
                 console.log("options_audit=invalid_response");
                 process.exitCode = 1;
