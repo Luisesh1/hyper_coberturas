@@ -538,6 +538,16 @@ class OptionsLiveExecution {
         this.logger.warn('options_tp_submit_pending', {
           strategyId: order.strategyId, liveOrderId: order.id, error: err.message,
         });
+        try {
+          if (typeof this.repo.claimIncidentNotification === 'function' &&
+              await this.repo.claimIncidentNotification(order.userId, 'TP_SUBMIT_PENDING', String(order.positionId))) {
+            await this.notify(order.userId,
+              '<b>ALERTA · TP no enviado</b>\\n' +
+              'Posición #' + order.positionId + ': validar orden y exposición en Binance.');
+          }
+        } catch (notifyErr) {
+          this.logger.warn('options_tp_submit_notify_failed', { error: notifyErr.message });
+        }
       }
     }
     return { sent };
