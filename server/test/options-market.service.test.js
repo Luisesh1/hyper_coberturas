@@ -15,7 +15,9 @@ const EXCHANGE_INFO = {
     { baseAsset: 'BTC', underlying: 'BTCUSDT' },
   ],
   optionSymbols: [
-    { symbol: 'BTC-261031-68000-C', underlying: 'BTCUSDT', side: 'CALL', strikePrice: '68000', expiryDate: Date.UTC(2026, 9, 31, 8) },
+    { symbol: 'BTC-261031-68000-C', underlying: 'BTCUSDT', side: 'CALL', strikePrice: '68000', expiryDate: Date.UTC(2026, 9, 31, 8),
+      filters: [{ filterType: 'PRICE_FILTER', minPrice: '0.02', tickSize: '0.01',
+        minQty: '0.01', maxQty: '10', stepSize: '0.01' }] },
     { symbol: 'BTC-261031-68000-P', underlying: 'BTCUSDT', side: 'PUT', strikePrice: '68000', expiryDate: Date.UTC(2026, 9, 31, 8) },
     { symbol: 'BTC-261031-66000-P', underlying: 'BTCUSDT', side: 'PUT', strikePrice: '66000', expiryDate: Date.UTC(2026, 9, 31, 8) },
     { symbol: 'BTC-261016-70000-C', underlying: 'BTCUSDT', side: 'CALL', strikePrice: '70000', expiryDate: Date.UTC(2026, 9, 16, 8) },
@@ -84,6 +86,7 @@ test('getChain arma la cadena del vencimiento más cercano por defecto', async (
   assert.deepEqual(chain.expiries.map((e) => e.code), ['261016', '261031']);
   assert.equal(chain.expiries[0].dte, 2);
   assert.equal(chain.expiries[1].label, '31 oct 26');
+  assert.equal(chain.expiries[1].expiryMs, Date.UTC(2026, 9, 31, 8));
   assert.equal(chain.expiry, '261016');
   assert.equal(chain.rows.length, 1);
   assert.equal(chain.rows[0].put.symbol, null);
@@ -106,6 +109,9 @@ test('getChain con vencimiento devuelve filas por strike con griegas y bid/ask',
     theta: -45.2,
     vega: 60.1,
     openInterest: 12.5,
+    minQty: 0.01,
+    maxQty: 10,
+    stepSize: 0.01,
   });
   // bid a cero → null (sin liquidez)
   assert.equal(atm.put.bid, null);
