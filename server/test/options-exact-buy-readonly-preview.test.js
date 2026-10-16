@@ -108,3 +108,17 @@ test('sanitizer rejects spoofed ready signal and excessive costs',async()=>{
  assert.throws(()=>outputLines({...result,pilotReady:true}));
  assert.throws(()=>outputLines({...result,entryTotalCapUsdt:30}));
 });
+
+test('deploy only previews GET-only buy without exposing account or placing orders',()=>{
+ const fs=require('node:fs');
+ const path=require('node:path');
+ const deploy=fs.readFileSync(path.resolve(__dirname,
+   '../../.github/workflows/deploy.yml'),'utf8');
+ const step=deploy.split('- name: Verificar BUY ETH exacto y fondos disponibles')[1];
+ assert.ok(step);
+ assert.match(step,/options-exact-buy-readonly-preview\.js 1 ETH-261023-2500-C 0\.01 23\.60/);
+ assert.match(step,/pilot_ready=no/);
+ assert.match(step,/preview_balanceEnough|balanceEnough/);
+ assert.match(step,/NO OPERAR/);
+ assert.doesNotMatch(step,/placeOrder|cancelOrder|OPTIONS_LIVE_TRADING_ENABLED:\s*"true"/);
+});
