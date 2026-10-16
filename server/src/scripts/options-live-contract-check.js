@@ -15,8 +15,8 @@ function positiveNumber(value) {
 /** Igual que el ledger: un HTTP 200 no certifica fills sin datos contabilizables. */
 function usableUserTrade(row) {
   return row != null && typeof row === 'object' &&
-    /^\\d+$/.test(String(row.tradeId ?? row.id ?? '')) &&
-    /^\\d+$/.test(String(row.orderId ?? '')) &&
+    /^[0-9]+$/.test(String(row.tradeId ?? row.id ?? '')) &&
+    /^[0-9]+$/.test(String(row.orderId ?? '')) &&
     typeof row.symbol === 'string' && row.symbol.length > 0 &&
     ['BUY', 'SELL'].includes(row.side) &&
     positiveNumber(row.quantity) && positiveNumber(row.price) &&
