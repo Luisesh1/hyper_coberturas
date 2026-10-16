@@ -226,7 +226,8 @@ function createOptionsMarketService({
     }
     const expiries = [...expiryMap.entries()]
       .sort((a, b) => a[1] - b[1])
-      .map(([code, ms]) => ({ code, label: expiryLabel(code), dte: Math.max(0, Math.ceil((ms - nowMs) / DAY_MS)) }));
+      .map(([code, ms]) => ({ code, label: expiryLabel(code), expiryMs: ms,
+        dte: Math.max(0, Math.ceil((ms - nowMs) / DAY_MS)) }));
 
     let expiry = rawExpiry ? String(rawExpiry).trim() : null;
     if (expiry && !/^\d{6}$/.test(expiry)) {
