@@ -95,6 +95,25 @@ async function checkContracts({ userId, client, database, at = Date.now() }) {
     results.push({ endpoint: 'spotKlines1h', ok: false, code: 'NO_TRADING_SYMBOL' });
   }
 
+  // Barrera de cuenta aislada: la clave no debe poder retirar fondos y
+  // debe estar restringida a las IP conocidas del VPS. No se reportan
+  // direcciones ni el valor de ningún permiso, solo estado agregado.
+  try {
+    if (typeof client.getApiRestrictions !== 'function') {
+      throw new Error('API restrictions endpoint unavailable');
+    }
+    const perms = await client.getApiRestrictions();
+    const valid = perms && perms.ipRestrict === true &&
+      perms.enableWithdrawals === false && perms.enableReading === true &&
+      perms.enableVanillaOptions === true;
+    results.push({
+      endpoint: 'apiPermissions', ok: Boolean(valid),
+      ...(!valid ? { code: 'UNSAFE_OR_INCOMPLETE_API_PERMISSIONS' } : {}),
+    });
+  } catch (_) {
+    results.push({ endpoint: 'apiPermissions', ok: false, code: 'PERMISSION_CHECK_UNAVAILABLE' });
+  }
+
   const endpoints = [
     ['marginAccount', () => client.getAccount(), false],
     ['positions', () => client.getPositions(), true],
