@@ -61,6 +61,6 @@ test('deployment stops before checkout and build when production trading is acti
   assert.match(deployWorkflow, /OPTIONS_LIVE_PRODUCTION_APPROVED ===/);
   assert.match(deployWorkflow, /options_predeploy_gate=pass/);
   assert.match(deployWorkflow, /options_deployed_read_only=pass/);
-  assert.match(deployWorkflow, /options-live-contract-check\\.js/);
+  assert.match(deployWorkflow, /options-live-contract-check\.js/);
   assert.match(deployWorkflow, /git rev-parse HEAD/);
 });
