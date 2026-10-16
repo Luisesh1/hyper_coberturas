@@ -130,3 +130,55 @@ test('deduplicación de incidentes usa upsert condicional atómico', async () =>
   assert.match(calls[0].sql, /last_notified_at <= \$5/);
   assert.equal(calls[0].args[4], 10_000_000 - 15 * 60_000);
 });
+
+test('watchdog detecta fill sin TP tras dos minutos y alerta con trading apagado sin usar Binance', async () => {
+  const now = 700_000;
+  const sent = [];
+  const claims = [];
+  const checks = [];
+  let allowed = true;
+  const engine = new OptionsLiveExecution({
+    enabled: false, now: () => now,
+    logger: { warn() {}, info() {}, error() {} },
+    credentials: { async getClientForUser() {
+      throw new Error('No debería consultar Binance');
+    } },
+    repo: {
+      async listUnresolved() { return []; },
+      async listUnprotectedLivePositions(olderThan, limit) {
+        checks.push({ olderThan, limit });
+        return [{ positionId: 101, userId: 7, strategyId: 4, openedAt: now - 200_000 }];
+      },
+      async claimIncidentNotification(userId, kind, resource) {
+        claims.push({ userId, kind, resource });
+        if (!allowed) return false;
+        allowed = false;
+        return true;
+      },
+    },
+    notify: async (userId, msg) => sent.push({ userId, msg }),
+  });
+  const first = await engine.reconcilePending();
+  assert.deepEqual(first.unprotected, { checked: 1, incidents: 1, alerts: 1 });
+  assert.deepEqual(checks[0], { olderThan: now - 120_000, limit: 100 });
+  assert.deepEqual(claims[0], { userId: 7, kind: 'UNPROTECTED_TP', resource: '101' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].userId, 7);
+  assert.match(sent[0].msg, /sin TP confirmado/);
+  assert.match(sent[0].msg, /dos minutos/);
+  assert.equal((await engine.reconcilePending()).unprotected.alerts, 0);
+  assert.equal(sent.length, 1);
+});
+
+test('watchdog omite alertas cuando no existen posiciones desprotegidas', async () => {
+  const engine = new OptionsLiveExecution({
+    enabled: false, logger: { warn() {}, info() {}, error() {} },
+    repo: {
+      async listUnprotectedLivePositions() { return []; },
+      async claimIncidentNotification() { throw new Error('No hay incidentes'); },
+    },
+    notify: async () => { throw new Error('Sin aviso'); },
+  });
+  assert.deepEqual(await engine.scanUnprotectedPositions(),
+    { checked: 0, incidents: 0, alerts: 0 });
+});
