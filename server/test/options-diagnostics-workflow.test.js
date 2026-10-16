@@ -29,8 +29,9 @@ test('manual Binance contract check is read-only, fail-closed and never exposes 
   assert.match(workflow, /options-live-contract-check\.js/);
   assert.match(workflow, /binance_contract_check=not_deployed/);
   assert.match(workflow, /binance_contract_ready=/);
-  assert.match(workflow, /result\.readOnly !== true/);
-  assert.match(workflow, /row\.endpoint/);
+  assert.match(workflow, /options-contract-readiness-summary\.js/);
+  assert.match(workflow, /binance_contract_status=unverified/);
+  assert.match(workflow, /GITHUB_STEP_SUMMARY/);
   assert.doesNotMatch(workflow, /echo "\$raw"/);
   assert.doesNotMatch(workflow, /git checkout|docker compose .*up -d|npm run migrate/);
 });
@@ -79,5 +80,9 @@ test('diagnóstico remoto no consume el heredoc SSH ni reporta éxito sin result
   assert.match(workflow, /grep -Fxq 'options_audit_complete=pass'/);
   assert.match(workflow, /options-binance-check\.log/);
   assert.match(workflow, /grep -Fxq 'binance_contract_check_complete=pass'/);
-  assert.match(workflow, /grep -Eq '\^binance_contract_ready=\(yes\|no\)\$'/);
+  assert.match(workflow, /grep -Fxq 'binance_contract_ready=yes'/);
+  assert.match(workflow, /grep -Fxq 'binance_contract_ready=no'/);
+  assert.match(workflow, /grep -Fxq 'binance_contract_status=pass'/);
+  assert.match(workflow, /grep -Fxq 'binance_contract_status=unverified'/);
+  assert.match(workflow, /::warning::Sin orden/);
 });
