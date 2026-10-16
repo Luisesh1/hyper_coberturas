@@ -59,6 +59,20 @@ test('si no existen órdenes históricas, no inventa getOrder/trades confirmados
   assert.equal(trace.includes('trades'), false);
 });
 
+test('array vacío de userTrades no cuenta como esquema de fill validado', async () => {
+  const trace = [];
+  const client = makeClient(trace);
+  client.getUserTrades = async () => [];
+  const out = await checkContracts({ userId: 11, client,
+    database: { async query() {
+      return { rows: [{ symbol, exchange_order_id: '1234567890123456789' }] };
+    } }, at: NOW });
+  assert.equal(out.ready, false);
+  const trades = out.results.find((r) => r.endpoint === 'userTrades');
+  assert.equal(trades.ok, null);
+  assert.equal(trades.skipped, 'NO_RECENT_TRADES');
+});
+
 test('si faltan filtros o falla endpoint, la validación falla cerrada sin filtrar errores', async () => {
   const trace = [];
   const client = makeClient(trace);
