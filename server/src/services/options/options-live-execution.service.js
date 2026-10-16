@@ -497,10 +497,18 @@ class OptionsLiveExecution {
     for (const order of orders) {
       try {
         const client = await this.credentials.getClientForUser(order.userId);
-        const [info, positions] = await Promise.all([
-          client.getExchangeInfo(), client.getPositions(),
+        const [info, positions, open, known] = await Promise.all([
+          client.getExchangeInfo(), client.getPositions(), client.getOpenOrders(),
+          this.repo.listUserOrderIds(order.userId),
         ]);
         await this.repo.assertExchangeExposure(order.userId, positions);
+        if (!Array.isArray(open) || !Array.isArray(known)) {
+          throw new Error('Unable to verify Binance open orders before TP POST');
+        }
+        const ids = new Set(known.map((o) => clean(o.clientOrderId)));
+        if (open.some((o) => !ids.has(clean(o.clientOrderId)))) {
+          throw new Error('Untracked resting order: TP POST blocked');
+        }
         validateBinanceOrderBatch(info, [{
           symbol: order.symbol, side: order.side,
           quantity: order.quantity, price: order.limitPrice,
