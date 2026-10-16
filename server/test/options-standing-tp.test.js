@@ -235,3 +235,22 @@ test('si Binance no confirma cancelación terminal no se contabiliza el cierre',
   assert.equal(f.orders[0].processedQty, 0);
   assert.equal(f.log.sent.length, 1);
 });
+
+test('al vencer el TP se persiste salida temporal ANTES de cancelar el resting', async () => {
+  const f = fixture({ positions: [filledPosition()] });
+  await f.engine.reconcilePending();
+  const sequence = [];
+  f.clock.now = f.orders[0].deadlineAt;
+  f.repository.requestDeadlineExit = async (order) => {
+    sequence.push('persist_exit');
+    assert.equal(order.purpose, 'take_profit');
+    return true;
+  };
+  f.client.cancelOrder = async () => {
+    sequence.push('cancel_exchange');
+    f.setBrokerStatus('CANCELED');
+  };
+  await f.engine.reconcileOrder({ ...f.orders[0] }, f.client);
+  assert.deepEqual(sequence, ['persist_exit', 'cancel_exchange']);
+  assert.equal(f.orders[0].status, 'final');
+});
