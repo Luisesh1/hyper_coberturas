@@ -50,6 +50,7 @@ describe('formulario de bot', () => {
         structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, quantity: 0.01, onOpposite: 'reverse',
         takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
         maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null,
+        takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
       },
       limits: {},
     });
@@ -57,6 +58,24 @@ describe('formulario de bot', () => {
     expect(sell.underlying).toBeUndefined();
     expect(sell.params.maxPremiumUsdt).toBeUndefined();
     expect(sell.limits).toEqual({ maxDailyLossUsdt: 50, maxMarginUsdt: 1000 });
+  });
+
+  it('configura TP ATR/IV y valida parámetros de volatilidad', () => {
+    const base = initialBotForm({ underlying: 'ETH' });
+    expect(base.takeProfitMode).toBe('fixed');
+    const dynamic = { ...base, name: 'TP dinámico', alertIds: [3],
+      takeProfitMode: 'volatility', tpAtrMultiplier: 1.5, tpHorizonHours: 6 };
+    expect(validateBotForm(dynamic)).toEqual({});
+    const payload = buildBotPayload(dynamic);
+    expect(payload.params).toMatchObject({
+      takeProfitMode: 'volatility', tpAtrMultiplier: 1.5, tpHorizonHours: 6,
+    });
+    expect(initialBotForm({ bot: normalizeBot({ id: 2, params: payload.params }) })).toMatchObject({
+      takeProfitMode: 'volatility', tpAtrMultiplier: 1.5, tpHorizonHours: 6,
+    });
+    expect(validateBotForm({ ...dynamic, tpAtrMultiplier: 5, tpHorizonHours: 2.5 })).toMatchObject({
+      tpAtrMultiplier: 'Máximo 4', tpHorizonHours: 'Debe ser un número entero',
+    });
   });
 
   it('al editar parte de los parámetros guardados', () => {
