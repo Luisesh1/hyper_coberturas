@@ -42,7 +42,7 @@ function projectTakeProfit({
   atrHourly, tickSize, minPrice = 0, atrMultiplier = 1, horizonHours = 4,
 }) {
   const input = [entryPrice, spot, strike, iv, expiryMs, nowMs, atrHourly, tickSize, minPrice, atrMultiplier, horizonHours];
-  if (input.some((v) => !Number.isFinite(Number(v))) ||
+  if (minPrice === null || input.some((v) => !Number.isFinite(Number(v))) ||
       !(entryPrice > 0 && spot > 0 && strike > 0 && iv >= 0.01 && iv <= 5 &&
         atrHourly > 0 && tickSize > 0 && minPrice >= 0 && atrMultiplier > 0 && atrMultiplier <= 4 &&
         horizonHours > 0 && horizonHours <= 24) ||
