@@ -63,7 +63,8 @@ function harness() {
           orderId: b.orderId, status: b.status }));
     },
     async placeOrder(data) {
-      const row = { ...data, timeInForce:data.timeInForce || 'GTC',
+      const row = { ...data, submittedWithTif:Object.hasOwn(data,'timeInForce'),
+        timeInForce:data.timeInForce || 'GTC',
         orderId: String(nextBrokerId++),
         status: 'NEW', executedQty: 0, trades: [] };
       broker.push(row);
@@ -282,6 +283,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(f.broker[1].side,'SELL');
   assert.equal(f.broker[1].reduceOnly,true);
   assert.equal(f.broker[1].timeInForce,'GTC');
+  assert.equal(f.broker[1].submittedWithTif,true,'GTC must be transmitted explicitly');
   assert.equal(f.broker[1].quantity,.01);
   assert.equal(f.broker[1].price,35.40);
   assert.equal((await f.engine.reconcilePending()).protectionSent.sent,0);
