@@ -30,6 +30,7 @@ const TradingViewPage      = lazy(() => import('./pages/TradingView/TradingViewP
 const AlertsPage           = lazy(() => import('./pages/Alerts/AlertsPage'));
 const SmartContractsPage   = lazy(() => import('./pages/SmartContracts/SmartContractsPage'));
 const OptionsPage          = lazy(() => import('./pages/Options/OptionsPage'));
+const GtcDiagnosticPage    = lazy(() => import('./pages/Options/GtcDiagnosticPage'));
 
 // DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
 // completo en build de producción gracias al guard `import.meta.env.DEV`.
@@ -188,6 +189,8 @@ function AppContent() {
                 <Route path="/trading-view" element={<TradingViewPage />} />
                 <Route path="/alertas"     element={<AlertsPage />} />
                 <Route path="/opciones"    element={<OptionsPage />} />
+                {/* Diagnostico oculto para superuser: no se publica en la navegacion. */}
+                {isSuperuser && <Route path="/opciones/diagnostico-gtc" element={<GtcDiagnosticPage />} />}
                 <Route path="/config"     element={<SettingsPage />} />
                 {/* Ruta oculta — no aparece en el navbar. Acciones de
                     recovery / mantenimiento manual. Acceso por URL directo. */}
