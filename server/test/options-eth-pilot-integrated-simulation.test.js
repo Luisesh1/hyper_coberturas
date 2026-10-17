@@ -257,8 +257,9 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
     {symbol:SYMBOL,side:'BUY',qty:.01,price:23.60,reduceOnly:false});
   // Binance acknowledgement is not a fill: no position yet.
   assert.equal(f.positions.length,0);
-  const duplicate=await f.runEntry(2);
-  assert.equal(duplicate.status,'duplicate_or_unresolved');
+  // The exchange-level open-order guard must block a second BUY before
+  // even reaching the one-shot ledger guard.
+  await assert.rejects(f.runEntry(2),/Binance account has pending orders/);
   assert.equal(f.broker.length,1);
 
   f.setFill(f.broker[0],.01,23.60,8001);
