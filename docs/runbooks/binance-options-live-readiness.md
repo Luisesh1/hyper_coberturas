@@ -222,6 +222,29 @@ rediseñar salidas de forma que no dejen residuos, antes de operar.
 La estrategia 2 permanece pausada, flags de trading real OFF,
 sin enviar órdenes reales ni crear posiciones.
 
+
+## Salidas ETH FOK e incidentes TP — 17 oct 2026
+
+- Las salidas estándar de ETH (stop, vencimiento y cierre diferido) usan
+  `LIMIT FOK reduceOnly`. Si falta liquidez para cerrar TODO al límite,
+  la orden expira sin garantía de cierre; el request duradero sigue
+  pendiente y exige una nueva cotización/reconciliación. Nunca asumir
+  que la orden FOK es un stop garantizado.
+- El TP residente se mantiene `LIMIT GTC reduceOnly`. Al observar
+  `PARTIALLY_FILLED` con cualquier ejecución, registrar los trades
+  confirmados, marcar `ATTENTION` y emitir incidente al operador.
+  Los residuos inferiores a `minQty` siguen sin solución validada.
+- Los fills parciales anómalos de una orden FOK de entrada **o salida**
+  también se registran y bloquean como atención, nunca se inventa
+  cierre. Las pruebas in-memory verifican FOK rechazado y reintento
+  condicionado, así como dust anómalo.
+- **NO-GO**: este cambio NO certifica el TP GTC, stop exchange-native,
+  capacidad de cerrar lotes inferiores al mínimo ni acceso live.
+  Se mantienen ambos flags de producción en `false` y estrategia pausada.
+
+Fuente oficial (FOK y reduceOnly):
+https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-options/api/rest-api/trade
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**
