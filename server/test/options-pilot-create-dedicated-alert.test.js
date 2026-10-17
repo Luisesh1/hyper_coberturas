@@ -109,7 +109,7 @@ test('rejects modified clone, multiple originals, nonmatching binding, live mode
     {strategies:[{...strategy,mode:'live'}],reason:'live_activity'},
     {positions:[{id:3}],reason:'live_activity'},
     {orders:[{id:3}],reason:'live_activity'},
-    {global:{...limits,maxDailyLossUsdt:500}},reason:'global_limits'},
+    {global:{...limits,maxDailyLossUsdt:500},reason:'global_limits'},
     {strategies:[{...strategy,params:{...strategy.params,quantity:0.05}}],reason:'strategy_mismatch'},
   ];
   for(const scenario of scenarios){
