@@ -226,10 +226,15 @@ sin enviar órdenes reales ni crear posiciones.
 ## Salidas ETH FOK e incidentes TP — 17 oct 2026
 
 - Las salidas estándar de ETH (stop, vencimiento y cierre diferido) usan
-  `LIMIT FOK reduceOnly`. Si falta liquidez para cerrar TODO al límite,
-  la orden expira sin garantía de cierre; el request duradero sigue
-  pendiente y exige una nueva cotización/reconciliación. Nunca asumir
-  que la orden FOK es un stop garantizado.
+  `LIMIT FOK reduceOnly`. El precio límite procede de `GET /eapi/v1/depth`
+  con máximo 20 niveles: exigir libro de ambas caras coherente, `T` presente
+  y con antigüedad <=10 s (máximo 2 s en el futuro), volumen acumulado de
+  la **cantidad completa** y degradación máxima de precio de **10%**
+  frente al mejor nivel. No usar el mejor bid sin verificar volumen.
+  Si falla cualquier check, NO enviar orden; mantener salida pendiente y
+  alertar. Si el FOK no encuentra contrapartida completa, expira sin
+  garantía de cierre. No existe stop exchange-native ni liquidación segura
+  certificada. Un snapshot de libro puede cambiar antes del POST.
 - El TP residente se mantiene `LIMIT GTC reduceOnly`. Al observar
   `PARTIALLY_FILLED` con cualquier ejecución, registrar los trades
   confirmados, marcar `ATTENTION` y emitir incidente al operador.
