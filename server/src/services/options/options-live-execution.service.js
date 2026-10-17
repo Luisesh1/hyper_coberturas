@@ -432,6 +432,36 @@ class OptionsLiveExecution {
   }
 
   /**
+   * Critical incident alert delivery with DB-backed retry after failures.
+   * No exchange-side effects; only this claim is released by CAS.
+   */
+  async sendIncidentAlert(userId, kind, resource, message) {
+    if (typeof this.repo.claimIncidentNotification !== 'function') return false;
+    const tokenized =
+      typeof this.repo.claimIncidentNotificationToken === 'function' &&
+      typeof this.repo.releaseIncidentNotification === 'function';
+    const claim = tokenized
+      ? await this.repo.claimIncidentNotificationToken(userId, kind, resource)
+      : await this.repo.claimIncidentNotification(userId, kind, resource);
+    if (claim == null || claim === false) return false;
+    try {
+      await this.notify(userId, message);
+      return true;
+    } catch (err) {
+      if (tokenized) {
+        try {
+          await this.repo.releaseIncidentNotification(userId, kind, resource, claim);
+        } catch (releaseErr) {
+          this.logger.warn('options_live_incident_claim_release_failed', {
+            kind, resource, error: releaseErr.message,
+          });
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Watchdog local: el TP puede tardar un ciclo en colocarse tras el fill.
    * Un fill con más de dos minutos sin TP ACTIVE no se considera protegido,
    * aunque exista una orden queued/sending/attention en el ledger.
@@ -446,16 +476,13 @@ class OptionsLiveExecution {
     let alerts = 0;
     for (const position of positions) {
       try {
-        if (await this.repo.claimIncidentNotification(
-          position.userId, 'UNPROTECTED_TP', String(position.positionId)
-        )) {
-          await this.notify(position.userId,
+        if (await this.sendIncidentAlert(
+          position.userId, 'UNPROTECTED_TP', String(position.positionId),
             '<b>ALERTA · Posición sin TP confirmado</b>\\n' +
             'Posición #' + position.positionId +
             ': lleva más de dos minutos sin una orden TP activa confirmada. ' +
-            'Puede existir una salida/cancelación en curso: revisar Binance y el ledger.');
-          alerts++;
-        }
+            'Puede existir una salida/cancelación en curso: revisar Binance y el ledger.'
+        )) alerts++;
       } catch (err) {
         this.logger.warn('options_unprotected_tp_notification_failed', {
           positionId: position.positionId, error: err.message,
@@ -581,12 +608,11 @@ class OptionsLiveExecution {
           positionId: position.id, strategyId: position.strategyId, error: err.message,
         });
         try {
-          if (typeof this.repo.claimIncidentNotification === 'function' &&
-              await this.repo.claimIncidentNotification(position.userId, 'TP_NOT_PROTECTED', String(position.id))) {
-            await this.notify(position.userId,
+          await this.sendIncidentAlert(
+            position.userId, 'TP_NOT_PROTECTED', String(position.id),
               '<b>ALERTA · TP aún no protegido</b>\\n' +
-              'Posición #' + position.id + ': verificar Binance y ledger antes de operar.');
-          }
+              'Posición #' + position.id + ': verificar Binance y ledger antes de operar.'
+          );
         } catch (notifyErr) {
           this.logger.warn('options_tp_coverage_notify_failed', { error: notifyErr.message });
         }
