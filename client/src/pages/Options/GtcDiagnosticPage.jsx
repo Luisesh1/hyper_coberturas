@@ -11,6 +11,12 @@ const CHECKS = [
   ['initialOrderValid', '0.01 cumple filtro de entrada'],
 ];
 const SYMBOL_PATTERN = /^ETH-\d{6}-\d+(?:\.\d+)?-C$/;
+const SAMPLE_LABELS = {
+  out_of_lot_observed: 'Se observaron ejecuciones fuera del lote',
+  lot_aligned_observed: 'Todas las observadas respetan el lote (no es garantia)',
+  no_trades: 'No hubo trades recientes en la muestra',
+  unavailable: 'No se pudo consultar la muestra',
+};
 
 function Indicator({ value }) {
   const status = value === null || value === undefined ? 'No verificable' :
@@ -73,8 +79,8 @@ export default function GtcDiagnosticPage() {
       {report && (
         <section className={styles.panel} aria-live="polite">
           <div className={styles.heading}>
-            <h2>Resultado: {report.status === 'risk_detected' ? 'Riesgo de residuo' :
-              report.status === 'filter_only' ? 'Filtro compatible, ejecución no comprobada' :
+            <h2>Resultado: {report.status === 'risk_detected' ? 'Ejecuciones fuera del lote detectadas' :
+              report.status === 'filter_only' ? 'Filtros comprobados, fills parciales sin demostrar' :
                 'Verificación bloqueada'}</h2>
             <span>{checkedAt}</span>
           </div>
@@ -83,8 +89,20 @@ export default function GtcDiagnosticPage() {
               <div key={key}><span>{label}</span><Indicator value={report[key]} /></div>
             ))}
             <div>
-              <span>Nueva orden SELL de 0.005 contratos válida</span>
-              <Indicator value={report.residualNewOrderValid} />
+              <span>Nueva orden SELL de 0.005 (solo filtro de órdenes)</span>
+              <strong>{report.residualNewOrderValid === null ? 'No verificable' :
+                report.residualNewOrderValid ? 'Permitida' : 'No permitida'}</strong>
+            </div>
+            <div>
+              <span>Muestra de ejecuciones publicas del contrato</span>
+              <strong className={report.tradeEvidenceStatus === 'out_of_lot_observed' ?
+                styles.fail : styles.pending}>
+                {SAMPLE_LABELS[report.tradeEvidenceStatus] || 'Sin verificar'}
+              </strong>
+            </div>
+            <div>
+              <span>Ejecuciones examinadas / fuera del lote</span>
+              <strong>{report.observedTrades ?? 0} / {report.observedOutOfLotTrades ?? 0}</strong>
             </div>
             <div>
               <span>Cierre parcial REAL con Binance</span>
@@ -92,9 +110,11 @@ export default function GtcDiagnosticPage() {
             </div>
           </div>
           <p className={styles.note}>
-            Un TP GTC de 0.01 con fill de 0.005 deja 0.005 pendientes. Este test determina
-            únicamente si se aceptaría una NUEVA orden con esa cantidad, no si Binance
-            ejecutará o permitirá liquidar el saldo del TP residente.
+            LOT_SIZE regula nuevas ordenes. Un fill hipotetico de 0.005 no demuestra
+            que Binance lo permita: consultamos hasta 100 ejecuciones publicas, pero
+            incluso una muestra sin fracciones NO garantiza que nunca puedan ocurrir.
+            El cierre parcial de nuestro TP GTC y la liquidacion de residuos siguen sin
+            verificarse con una operacion real.
           </p>
           <p className={styles.noGo}>NO-GO: el piloto de trading real permanece desactivado.</p>
         </section>
