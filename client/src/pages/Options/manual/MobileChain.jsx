@@ -1,5 +1,6 @@
 import { fmtIv, fmtNum, fmtPrice, fmtSpot, fmtStrike } from '../format';
 import styles from './ManualTrading.module.css';
+import { quoteMid, optionPremiumLeverage } from './mobileChainMetrics';
 
 // Índice de la primera fila por encima del spot: ahí va el separador.
 export function spotDividerIndex(rows, spot) {
@@ -41,7 +42,7 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
       </div>
 
       <div className={`${styles.mGrid} ${styles.mHead}`} aria-hidden="true">
-        <span>Strike · IV</span><span>Bid</span><span>Ask</span><span>Δ</span>
+        <span>Strike · IV</span><span className={styles.mQuoteHead}>Bid / Prom / Ask</span><span>Δ</span><span title="Nocional del subyacente / prima al ask (no es apalancamiento delta)">Apal.</span>
       </div>
 
       {error && !rows.length ? (
@@ -54,6 +55,8 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
             const leg = r[key];
             if (!leg?.symbol) return null;
             const on = leg.symbol === selectedSymbol;
+            const mid = quoteMid(leg.bid, leg.ask);
+            const leverage = optionPremiumLeverage(chain?.spot, leg.ask);
             return (
               <div key={r.strike}>
                 {i === divider && (
@@ -64,16 +67,22 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
                 <button
                   type="button"
                   className={`${styles.mRow} ${styles.mGrid} ${on ? styles.mRowOn : ''}`}
-                  aria-label={`${type === 'C' ? 'Call' : 'Put'} ${fmtStrike(r.strike)}, bid ${fmtPrice(leg.bid)}, ask ${fmtPrice(leg.ask)}`}
+                  aria-label={`${type === 'C' ? 'Call' : 'Put'} ${fmtStrike(r.strike)}, bid ${fmtPrice(leg.bid)}, promedio ${fmtPrice(mid)}, ask ${fmtPrice(leg.ask)}, apalancamiento por prima ${leverage == null ? 'no disponible' : fmtNum(leverage, 1) + ' veces'}`}
                   onClick={() => onPickRow({ leg, strike: r.strike, type })}
                 >
                   <span className={styles.mStrike}>
                     <span className={`${styles.mono} ${styles.mStrikeVal}`}>{fmtStrike(r.strike)}</span>
                     <span className={`${styles.mono} ${styles.mIv}`}>IV {fmtIv(leg.iv)}</span>
                   </span>
-                  <span className={`${styles.mono} ${styles.mNum} ${styles.down}`}>{fmtPrice(leg.bid)}</span>
-                  <span className={`${styles.mono} ${styles.mNum} ${styles.up}`}>{fmtPrice(leg.ask)}</span>
+                  <span className={`${styles.mono} ${styles.mQuoteCell}`}>
+                    <span className={`${styles.mQuoteSide} ${styles.down}`}>{fmtPrice(leg.bid)}</span>
+                    <strong className={styles.mQuoteMid}>{fmtPrice(mid)}</strong>
+                    <span className={`${styles.mQuoteSide} ${styles.up}`}>{fmtPrice(leg.ask)}</span>
+                  </span>
                   <span className={`${styles.mono} ${styles.mDelta}`}>{fmtNum(leg.delta, 2)}</span>
+                  <span className={`${styles.mono} ${styles.mLeverage}`}>
+                    {leverage == null ? '—' : `${fmtNum(leverage, 1)}x`}
+                  </span>
                 </button>
               </div>
             );
