@@ -7,6 +7,7 @@ const liveRepo = require('../../repositories/options-live-orders.repository');
 const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
 const { validateBinanceOrderBatch } = require('./options-order-filters');
+const { fullSizeFokLimit } = require('./options-fok-depth');
 const { enforcePilotEntry } = require('./options-live-pilot-policy');
 const { parseSymbol } = require('./options-utils');
 const { projectTakeProfit } = require('./options-take-profit');
@@ -656,8 +657,23 @@ class OptionsLiveExecution {
     let sent = 0;
     for (const request of pending) {
       try {
-        const quote = await this.market.getQuote(request.symbol, { fresh: true });
-        const price = request.side === 'BUY' ? Number(quote?.bid) : Number(quote?.ask);
+        const closingSide = request.side === 'BUY' ? 'SELL' : 'BUY';
+        let price;
+        if (/^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(request.symbol || '')) {
+          // FOK is all-or-nothing: the best bid alone may lack enough volume.
+          // Read the actual book and bound slippage BEFORE creating an order.
+          const client = await this.credentials.getClientForUser(request.userId);
+          if (typeof client.getDepth !== 'function') {
+            throw new Error('Binance depth unavailable for full-size FOK exit');
+          }
+          const book = await client.getDepth(request.symbol, 20);
+          price = fullSizeFokLimit({
+            book, side: closingSide, quantity: request.quantity, nowMs: this.now(),
+          });
+        } else {
+          const quote = await this.market.getQuote(request.symbol, { fresh: true });
+          price = request.side === 'BUY' ? Number(quote?.bid) : Number(quote?.ask);
+        }
         if (!Number.isFinite(price) || price <= 0) throw new Error('No executable deferred close price');
         const res = await this.submit(
           { id: request.strategyId, userId: request.userId, template: 'alert_signal' },
@@ -665,7 +681,7 @@ class OptionsLiveExecution {
             detail: 'Salida pendiente tras cancelar y conciliar TP',
             legs: [{
               positionId: request.positionId, symbol: request.symbol,
-              side: request.side === 'BUY' ? 'SELL' : 'BUY',
+              side: closingSide,
               quantity: request.quantity, price,
             }] },
           { now: this.now(),
