@@ -613,7 +613,8 @@ class OptionsLiveExecution {
           const ack = await client.placeOrder({
             symbol: claimed.symbol, side: claimed.side,
             quantity: claimed.quantity, price: claimed.limitPrice,
-            reduceOnly: true, clientOrderId: claimed.clientOrderId,
+            reduceOnly: true, timeInForce: 'GTC',
+            clientOrderId: claimed.clientOrderId,
           });
           if (ack?.orderId == null ||
               (ack.symbol && ack.symbol !== claimed.symbol) ||
