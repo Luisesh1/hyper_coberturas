@@ -90,7 +90,8 @@ async function inspectChannel({
     }
   }
   result.status = result.checks.strategyCandidate &&
-    result.checks.signalBound && result.checks.telegramConfigured
+    result.checks.signalBound && result.checks.telegramConfigured &&
+    (mode === '--read-only' || result.telegramTest === 'ack')
     ? 'channel_candidate' : 'blocked';
   return result;
 }
