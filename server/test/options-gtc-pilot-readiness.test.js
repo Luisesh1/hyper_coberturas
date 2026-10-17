@@ -14,7 +14,7 @@ const env = {
 };
 const strategy = {
   readOnly:true,pilotReady:false,status:'strategy_candidate',
-  candidateStrategyId:2,
+  candidateStrategyId:2,entrySignalConfigured:true,
 };
 const quote = {
   readOnly:true,pilotReady:false,eligible:true,technicalStatus:'pass',
@@ -71,6 +71,15 @@ test('fails on wrong account, size, or risk budget without sending anything',asy
     assert.equal(outcome.checks.riskBudget,Number(candidate.maxLimit)<=23.60 &&
       Number(candidate.quantity)===0.01);
   }
+});
+
+test('paused strategy without alertIds is NOT an entry-ready candidate',async()=>{
+ const report=await assess({...deps,
+   inspectFn:async()=>({...strategy,entrySignalConfigured:false}),
+ });
+ assert.equal(report.status,'blocked');
+ assert.equal(report.checks.entrySignalConfigured,false);
+ assert.match(summaryLines(report).join('\n'),/gtc_pilot_entrySignalConfigured=fail/);
 });
 
 test('market drift, missing quote and unprepared strategy cannot be approved',async()=>{
