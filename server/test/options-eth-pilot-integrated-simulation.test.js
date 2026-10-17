@@ -648,3 +648,58 @@ test('EXPERIMENT: stop-loss path uses full-size FOK without resting GTC',async()
   assert.equal(f.broker[1].reduceOnly,true);
   assert.equal(f.broker[1].price,11.7);
 });
+
+test('EXPERIMENT restart: recover an already-submitted FOK without duplicate POST or GTC',async()=>{
+  const f=harness({syntheticTpExperimentalEnabled:true});
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.6,9501);
+  await f.engine.reconcilePending();
+  assert.equal(f.broker.length,1,'no resting TP before process restart');
+  f.setQuote({bid:35.5,ask:36});
+  f.setDepth({T:f.clock.now,bids:[['35.5','0.01']],asks:[['36','0.01']]});
+  const p={...f.positions[0],quote:{bid:35.5,ask:36}};
+  const params=alert.validateParams(BOT_PARAMS);
+  const tp=alert.evaluate({now:f.clock.now,positions:[p],params})[0];
+  assert.equal(tp.reason,'take_profit');
+  assert.equal((await f.runner.executeLive(strategy,tp,{
+    now:f.clock.now,params,positions:[p],produced:[],
+  })).status,'submitted');
+  assert.equal(f.broker.length,2);
+  const activeOrder=f.records.find(o=>o.clientOrderId===f.broker[1].clientOrderId);
+  assert.equal(activeOrder.status,'active');
+
+  // Simulate a crash after Binance accepted the order but before recording
+  // the exchange orderId locally. Durable clientOrderId must recover it by GET.
+  activeOrder.orderId=null;
+  activeOrder.status='sending';
+  const restarted=new OptionsLiveExecution({
+    repo:f.repo,credentials:f.engine.credentials,market:f.engine.market,
+    now:()=>f.clock.now,enabled:true,syntheticTpExperimentalEnabled:true,
+    logger:f.engine.logger,notify:f.engine.notify,
+    settlement:{reconcileExpired:async()=>{}},
+  });
+  restarted.scanExternalAccounts=async()=>({checked:0});
+  restarted.scanUnprotectedPositions=async()=>({checked:0});
+  restarted.alertAttention=async()=>0;
+  restarted.processDeferredReentries=async()=>({sent:0});
+  f.runner.liveExecutor=restarted;
+  const checked=await restarted.reconcilePending();
+  assert.equal(checked.errors,0);
+  assert.equal(activeOrder.orderId,f.broker[1].orderId);
+  assert.equal(f.broker.length,2,'never re-POST accepted FOK after restart');
+  assert.equal(f.broker.filter(o=>o.side==='SELL'&&o.timeInForce==='GTC').length,0);
+  // Binance FOK may expire unfilled. Retry only after verified terminal state.
+  f.broker[1].status='EXPIRED';
+  f.broker[1].executedQty=0;
+  await restarted.reconcilePending();
+  assert.equal(activeOrder.status,'final');
+  f.clock.now+=60_000;
+  f.setDepth({T:f.clock.now,bids:[['35.5','0.01']],asks:[['36','0.01']]});
+  const attempt=await f.runner.executeLive(strategy,tp,{
+    now:f.clock.now,params,positions:[p],produced:[],
+  });
+  assert.equal(attempt.status,'submitted');
+  assert.equal(f.broker.length,3);
+  assert.equal(f.broker[2].timeInForce,'FOK');
+  assert.equal(f.positions[0].quantity,.01,'without a fill exposure remains, never fake closure');
+});
