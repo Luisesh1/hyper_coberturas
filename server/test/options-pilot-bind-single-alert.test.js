@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { apply, chooseOne, explainAlertFailure, summaryLines } =
+const { apply, chooseOne, expiryWindowAllowed, explainAlertFailure, summaryLines } =
   require('../src/scripts/options-pilot-bind-single-alert');
 const { BOT_PARAMS, BOT_LIMITS, MARKER } =
   require('../src/scripts/options-pilot-configure-paused');
@@ -43,14 +43,25 @@ test('accepts only a unique active ETH bullish alert with rules and proper expir
   assert.equal(chooseOne([{...alert,direction:'bearish'}]),null);
   assert.equal(chooseOne([{...alert,asset_list_json:'["BTCUSDT"]'}]),null);
   assert.equal(chooseOne([{...alert,rules_json:'[]'}]),null);
-  assert.equal(chooseOne([{...alert,option_expiry_min_days:8}]),null);
-  assert.equal(chooseOne([{...alert,option_expiry_max_days:6}]),null);
+  // El runner respeta la ventana y toma el vencimiento mas cercano a 7
+  // DENTRO de ella; no exige que el dia 7 este incluido.
+  assert.equal(chooseOne([{...alert,option_expiry_min_days:8}]),40);
+  assert.equal(chooseOne([{...alert,option_expiry_max_days:6}]),40);
+  assert.equal(chooseOne([{...alert,option_expiry_min_days:31,option_expiry_max_days:45}]),null);
+  assert.equal(chooseOne([{...alert,option_expiry_min_days:0.5,option_expiry_max_days:2.5}]),null);
+  assert.equal(chooseOne([{...alert,option_expiry_min_days:null,option_expiry_max_days:12}]),null);
+  assert.equal(chooseOne([{...alert,option_expiry_min_days:null,option_expiry_max_days:null}]),40);
 });
 test('reports a specific safe blocker for an ineligible ETH alert', () => {
   assert.equal(explainAlertFailure([]),'alert_unavailable');
   assert.equal(explainAlertFailure([{...alert,is_active:false}]),'alert_inactive');
   assert.equal(explainAlertFailure([{...alert,rules_json:'[]'}]),'alert_rules_missing');
-  assert.equal(explainAlertFailure([{...alert,option_expiry_min_days:8}]),'alert_expiry_incompatible');
+  assert.equal(explainAlertFailure([{...alert,option_expiry_min_days:31,option_expiry_max_days:45}]),'alert_expiry_incompatible');
+  assert.equal(expiryWindowAllowed({...alert,option_expiry_min_days:8,option_expiry_max_days:12}),true);
+  assert.equal(expiryWindowAllowed({...alert,option_expiry_min_days:1,option_expiry_max_days:2}),false);
+  assert.equal(expiryWindowAllowed({...alert,option_expiry_min_days:30,option_expiry_max_days:180}),true);
+  assert.equal(expiryWindowAllowed({...alert,option_expiry_min_days:31,option_expiry_max_days:180}),false);
+  assert.equal(expiryWindowAllowed({...alert,option_expiry_min_days:13,option_expiry_max_days:12}),false);
   assert.equal(explainAlertFailure([alert,{...alert,id:41}]),'alert_ambiguous');
 });
 test('binds only alertIds while retaining a paused bot and original risk limits',async()=>{
