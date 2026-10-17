@@ -17,6 +17,12 @@ const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'EXPIRED
 const ACTIVE = new Set(['NEW', 'PARTIALLY_FILLED', 'ACCEPTED']);
 const clean = (value) => String(value ?? '');
 
+// El piloto ETH debe abrir de forma atómica: 0 o 100 % del lote.
+// El TP que descansa en el libro y los cierres mantienen GTC.
+const orderTimeInForce = (order) =>
+  order.action === 'open' && /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(order.symbol || '')
+    ? 'FOK' : 'GTC';
+
 function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly, now }) {
   const side = position.side;
   const origin = Number(minPrice);
@@ -199,6 +205,7 @@ class OptionsLiveExecution {
         const response = await client.placeOrder({
           symbol: order.symbol, side: order.side, quantity: order.quantity,
           price: order.limitPrice, reduceOnly: action.type === 'close',
+          timeInForce: orderTimeInForce(order),
           clientOrderId: order.clientOrderId,
         });
         // Resultado = acuse de recepción; NO se registra posición aquí.
@@ -251,7 +258,7 @@ class OptionsLiveExecution {
     if (state.quantity == null || !Number.isFinite(Number(state.quantity)) ||
         Math.abs(Number(state.quantity) - order.quantity) > 1e-8 ||
         (state.type != null && state.type !== 'LIMIT') ||
-        (state.timeInForce != null && state.timeInForce !== 'GTC')) {
+        (state.timeInForce != null && state.timeInForce !== orderTimeInForce(order))) {
       throw new Error('Binance order terms disagree with local ledger');
     }
     const orderId = clean(state.orderId);
@@ -314,6 +321,15 @@ class OptionsLiveExecution {
       throw new Error('Trade quantities disagree with Binance order');
     }
     for (const trade of trades) await this.repo.applyTrade({ ...order, orderId }, trade);
+    // FOK significa todo o nada. Una respuesta parcial contradice el
+    // contrato de seguridad del piloto; registrar fills confirmados para
+    // no ocultar posiciones reales, pero NO cerrar el incidente ni
+    // considerar la apertura segura. El reconciliador alertará a operador.
+    if (orderTimeInForce(order) === 'FOK' &&
+        (status === 'PARTIALLY_FILLED' ||
+         (executed > 0 && executed < order.quantity - 1e-8))) {
+      throw new Error('FOK ETH entry anomalous partial fill: manual reconciliation required');
+    }
     if (TERMINAL.has(status) && Math.abs(sum - executed) < 1e-8) {
       await this.repo.finishOrder(order.id, orderId, executed);
     }
@@ -783,4 +799,5 @@ module.exports = new OptionsLiveExecution();
 module.exports.OptionsLiveExecution = OptionsLiveExecution;
 module.exports.normalizeTrade = normalizeTrade;
 module.exports.actionKey = actionKey;
+module.exports.orderTimeInForce = orderTimeInForce;
 module.exports.WINDOW_MS = WINDOW_MS;
