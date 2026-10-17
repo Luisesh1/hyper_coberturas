@@ -609,3 +609,42 @@ test('EXPERIMENT: FOK with zero fill expires then only retries after reconciliat
   assert.equal(f.broker.length,3);
   assert.equal(f.broker[2].timeInForce,'FOK');
 });
+
+test('EXPERIMENT: stale depth and process unavailability are no-protection cases',async()=>{
+  const f=harness({syntheticTpExperimentalEnabled:true});
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,9301);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:35.4,ask:36});
+  const p={...f.positions[0],quote:{bid:35.4,ask:36}};
+  const params=alert.validateParams(BOT_PARAMS);
+  const action=alert.evaluate({now:f.clock.now,positions:[p],params})[0];
+  f.setDepth({T:f.clock.now-11_000,bids:[['35.4','0.01']],asks:[['36','0.01']]});
+  assert.equal(await f.runner.executeLive(strategy,action,
+    {now:f.clock.now,params,positions:[p],produced:[]}),null);
+  assert.equal(f.broker.length,1);
+  assert.equal(f.positions[0].quantity,.01);
+  assert.ok(f.outcomes.some(o=>o.reason==='tp_full_size_depth_unavailable'));
+  // If the runner is down there is no exchange-native TP at all.
+  assert.equal(f.broker.some(o=>o.side==='SELL'),false);
+});
+
+test('EXPERIMENT: stop-loss path uses full-size FOK without resting GTC',async()=>{
+  const f=harness({syntheticTpExperimentalEnabled:true});
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,9401);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12});
+  f.setDepth({T:f.clock.now,bids:[['11.70','0.01']],asks:[['12','0.01']]});
+  const p={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const params=alert.validateParams(BOT_PARAMS);
+  const stop=alert.evaluate({now:f.clock.now,positions:[p],params})[0];
+  assert.equal(stop.reason,'stop_loss');
+  const r=await f.runner.executeLive(strategy,stop,
+    {now:f.clock.now,params,positions:[p],produced:[]});
+  assert.equal(r.status,'submitted');
+  assert.equal(f.broker.length,2);
+  assert.equal(f.broker[1].timeInForce,'FOK');
+  assert.equal(f.broker[1].reduceOnly,true);
+  assert.equal(f.broker[1].price,11.7);
+});
