@@ -27,7 +27,7 @@ function emptyResult(mode, off) {
       signalBound: false, telegramConfigured: false,
     },
     eligibleAlerts: 0, bullish: 0, bearish: 0,
-    telegramTest: 'not_requested',
+    telegramTest: mode === '--send-test' ? 'skipped' : 'not_requested',
   };
 }
 
