@@ -8,9 +8,17 @@ const defaultDb = require('../db');
 const { BOT_PARAMS, BOT_LIMITS, MARKER, paramsMatch } =
   require('./options-pilot-configure-paused');
 const { strategyFits, globalFits } = require('./options-pilot-strategy-readiness');
+const { validateParams } = require('../services/options/templates/alert-signal');
 const { assetToUnderlying } =
   require('../services/options/options-auto-trading.service');
 const USER_ID = 1;
+// La configuración persistida se creó mediante validateParams(BOT_PARAMS),
+// que añade defaults como tpAtrMultiplier y tpHorizonHours.
+const EXPECTED_PARAMS = validateParams(BOT_PARAMS);
+const REASONS = new Set(['none','global_limits','strategy_missing','strategy_config_mismatch',
+  'alert_inactive','alert_rules_missing','alert_expiry_incompatible',
+  'alert_ambiguous','alert_unavailable','alert_already_other','concurrent_change']);
+const blocked = reason => ({ status:'blocked', reason, ordersSent:0 });
 
 function parseObject(x) {
   if (x && typeof x === 'object' && !Array.isArray(x)) return x;
@@ -40,6 +48,23 @@ function chooseOne(rows) {
     (a.option_expiry_max_days == null || Number(a.option_expiry_max_days) >= 7));
   return active.length === 1 ? Number(active[0].id) : null;
 }
+/** Returns only a categorical blocker, never private alert details. */
+function explainAlertFailure(rows) {
+  const candidates = (rows || []).filter(a =>
+    a?.direction === 'bullish' && Number.isSafeInteger(Number(a?.id)) &&
+    Number(a.id) > 0 &&
+    parseArray(a.asset_list_json)?.some(asset => assetToUnderlying(asset) === 'ETH'));
+  if (!candidates.length) return 'alert_unavailable';
+  const active = candidates.filter(a => a.is_active === true);
+  if (!active.length) return 'alert_inactive';
+  const withRules = active.filter(a => (parseArray(a.rules_json)?.length || 0) > 0);
+  if (!withRules.length) return 'alert_rules_missing';
+  const expiry = withRules.filter(a =>
+    (a.option_expiry_min_days == null || Number(a.option_expiry_min_days) <= 7) &&
+    (a.option_expiry_max_days == null || Number(a.option_expiry_max_days) >= 7));
+  return expiry.length > 1 ? 'alert_ambiguous' : 'alert_expiry_incompatible';
+}
+
 function flagsOff(env) {
   return env.OPTIONS_LIVE_TRADING_ENABLED === 'false' &&
     env.OPTIONS_LIVE_PRODUCTION_APPROVED === 'false' &&
@@ -72,36 +97,36 @@ async function apply({
       [USER_ID],
     );
     if (settings.length !== 1 || !globalFits(parseObject(settings[0].value))) {
-      return { status: 'blocked', ordersSent: 0 };
+      return blocked('global_limits');
     }
     const matches = strategies.filter(s =>
       s.name === MARKER && s.template === 'alert_signal' &&
       s.underlying === 'ETH' && s.mode === 'paused');
-    if (matches.length !== 1) return { status: 'blocked', ordersSent: 0 };
+    if (matches.length !== 1) return blocked('strategy_missing');
     const strategy = matches[0];
     const params = parseObject(strategy.params);
     const limits = parseObject(strategy.limits);
     if (!params || !limits ||
-      !paramsMatch({ ...params, alertIds: [] }, BOT_PARAMS) ||
+      !paramsMatch({ ...params, alertIds: [] }, EXPECTED_PARAMS) ||
       !paramsMatch(limits, BOT_LIMITS) ||
       !strategyFits({
         id: Number(strategy.id), userId: USER_ID, template: strategy.template,
         underlying: strategy.underlying, mode: strategy.mode,
         params, limits,
-      })) return { status: 'blocked', ordersSent: 0 };
+      })) return blocked('strategy_config_mismatch');
 
     const { rows: alertRows } = await tx.query(
       'SELECT id, is_active, direction, asset_list_json, rules_json, option_expiry_min_days, option_expiry_max_days FROM alerts WHERE user_id=$1 FOR UPDATE',
       [USER_ID],
     );
     const alertId = chooseOne(alertRows);
-    if (!alertId) return { status: 'blocked', ordersSent: 0 };
+    if (!alertId) return blocked(explainAlertFailure(alertRows));
     if (params.alertIds?.length === 1 &&
       Number(params.alertIds[0]) === alertId) {
-      return { status: 'already_bound', ordersSent: 0 };
+      return { status: 'already_bound', reason:'none', ordersSent: 0 };
     }
     if (!Array.isArray(params.alertIds) || params.alertIds.length) {
-      return { status: 'blocked', ordersSent: 0 };
+      return blocked('alert_already_other');
     }
     const { rows: updated } = await tx.query(
       "UPDATE options_strategies SET params=jsonb_set(params, '{alertIds}', $2::jsonb, true), updated_at=$3 " +
@@ -109,15 +134,18 @@ async function apply({
       [Number(strategy.id), JSON.stringify([alertId]), now(), USER_ID],
     );
     if (updated.length !== 1) throw new Error('Concurrent pilot alert change');
-    return { status: 'bound', ordersSent: 0 };
+    return { status: 'bound', reason:'none', ordersSent: 0 };
   });
 }
 
 function summaryLines(outcome) {
   if (!outcome || !['bound','already_bound','blocked'].includes(outcome.status) ||
-    outcome.ordersSent !== 0) throw new Error('Invalid pilot alert binding result');
+    outcome.ordersSent !== 0 || !REASONS.has(outcome.reason) ||
+    (outcome.status !== 'blocked' && outcome.reason !== 'none'))
+    throw new Error('Invalid pilot alert binding result');
   return [
     'pilot_alert_binding_status=' + outcome.status,
+    'pilot_alert_binding_reason=' + outcome.reason,
     'pilot_alert_binding_strategy_mode=paused',
     'pilot_alert_binding_orders_sent=0',
     'pilot_alert_binding_live_enabled=no',
@@ -139,4 +167,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }).finally(() => defaultDb.pool.end());
 }
-module.exports = { chooseOne, flagsOff, apply, summaryLines };
+module.exports = { chooseOne, explainAlertFailure, flagsOff, apply, summaryLines };

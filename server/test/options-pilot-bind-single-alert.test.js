@@ -1,9 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { apply, chooseOne, summaryLines } =
+const { apply, chooseOne, explainAlertFailure, summaryLines } =
   require('../src/scripts/options-pilot-bind-single-alert');
 const { BOT_PARAMS, BOT_LIMITS, MARKER } =
   require('../src/scripts/options-pilot-configure-paused');
+const { validateParams } = require('../src/services/options/templates/alert-signal');
+const normalized = validateParams(BOT_PARAMS);
 const env = {
   OPTIONS_LIVE_TRADING_ENABLED:'false',
   OPTIONS_LIVE_PRODUCTION_APPROVED:'false',
@@ -11,7 +13,7 @@ const env = {
 };
 const base = {
   id:2, user_id:1, name:MARKER, template:'alert_signal',
-  underlying:'ETH', mode:'paused', params:BOT_PARAMS, limits:BOT_LIMITS,
+  underlying:'ETH', mode:'paused', params:normalized, limits:BOT_LIMITS,
 };
 const alert = {
   id:40, is_active:true, direction:'bullish',
@@ -44,10 +46,18 @@ test('accepts only a unique active ETH bullish alert with rules and proper expir
   assert.equal(chooseOne([{...alert,option_expiry_min_days:8}]),null);
   assert.equal(chooseOne([{...alert,option_expiry_max_days:6}]),null);
 });
+test('reports a specific safe blocker for an ineligible ETH alert', () => {
+  assert.equal(explainAlertFailure([]),'alert_unavailable');
+  assert.equal(explainAlertFailure([{...alert,is_active:false}]),'alert_inactive');
+  assert.equal(explainAlertFailure([{...alert,rules_json:'[]'}]),'alert_rules_missing');
+  assert.equal(explainAlertFailure([{...alert,option_expiry_min_days:8}]),'alert_expiry_incompatible');
+  assert.equal(explainAlertFailure([alert,{...alert,id:41}]),'alert_ambiguous');
+});
 test('binds only alertIds while retaining a paused bot and original risk limits',async()=>{
   const {db,calls}=mockDb();
   const result=await apply({db,env,now:()=>7777});
   assert.equal(result.status,'bound');
+  assert.equal(result.reason,'none');
   assert.equal(result.ordersSent,0);
   const writes=calls.filter(c=>/^\s*(UPDATE|INSERT|DELETE)\b/.test(c.sql));
   assert.equal(writes.length,1);
@@ -55,9 +65,17 @@ test('binds only alertIds while retaining a paused bot and original risk limits'
   assert.match(writes[0].sql,/params=jsonb_set/);
   assert.deepEqual(writes[0].args,[2,'[40]',7777,1]);
   assert.match(summaryLines(result).join('\n'),/pilot_alert_binding_live_enabled=no/);
+  assert.match(summaryLines(result).join('\n'),/pilot_alert_binding_reason=none/);
+});
+test('rejects unnormalized fixture but accepts actual stored normalized parameters',async()=>{
+  const wrong = mockDb({strategies:[{...base,params:BOT_PARAMS}]});
+  const result = await apply({db:wrong.db,env});
+  assert.equal(result.status,'blocked');
+  assert.equal(result.reason,'strategy_config_mismatch');
+  assert.equal(wrong.calls.some(c=>c.sql.startsWith('UPDATE')),false);
 });
 test('already linked alert does not mutate DB and remains paused',async()=>{
-  const {db,calls}=mockDb({strategies:[{...base,params:{...BOT_PARAMS,alertIds:[40]}}]});
+  const {db,calls}=mockDb({strategies:[{...base,params:{...normalized,alertIds:[40]}}]});
   assert.equal((await apply({db,env})).status,'already_bound');
   assert.equal(calls.some(c=>c.sql.startsWith('UPDATE')),false);
 });
@@ -65,8 +83,9 @@ test('ambiguous alerts, invalid strategy and live exposure fail without mutation
   for(const scenario of [
     {alerts:[alert,{...alert,id:41}]},
     {alerts:[]},
+    {strategies:[{...base,params:{...normalized,tpHorizonHours:99}}]},
     {strategies:[{...base,mode:'live'}]},
-    {strategies:[{...base,params:{...BOT_PARAMS,alertIds:[999]}}]},
+    {strategies:[{...base,params:{...normalized,alertIds:[999]}}]},
     {global:{maxDailyLossUsdt:500,maxMarginUsdt:500,maxLiveStrategies:3,notifyTelegram:false}},
     {positions:[{id:99}]},
     {orders:[{id:99}]},
@@ -88,5 +107,6 @@ test('live flags fail before DB access and no order API exists',async()=>{
     env:{...env,OPTIONS_LIVE_TRADING_ENABLED:'true'},
   }));
   assert.equal(called,0);
-  assert.throws(()=>summaryLines({status:'bound',ordersSent:1}));
+  assert.throws(()=>summaryLines({status:'bound',reason:'none',ordersSent:1}));
+  assert.throws(()=>summaryLines({status:'blocked',reason:'not_a_real_reason',ordersSent:0}));
 });
