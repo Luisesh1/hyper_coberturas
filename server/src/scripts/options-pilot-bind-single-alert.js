@@ -37,6 +37,23 @@ function parseArray(x) {
   } catch { return null; }
 }
 
+/**
+ * El runner filtra los vencimientos al rango de la alerta y despues elige
+ * el mas cercano a expiryDays. No exige que expiryDays caiga DENTRO del rango.
+ * Esta validacion solo permite ventanas que se crucen con 3..30 dias,
+ * rango conservador de la revision de contratos del piloto.
+ */
+function expiryWindowAllowed(alert) {
+  const lo = alert?.option_expiry_min_days;
+  const hi = alert?.option_expiry_max_days;
+  if (lo == null && hi == null) return true;
+  if (lo == null || hi == null) return false;
+  const min = Number(lo);
+  const max = Number(hi);
+  return Number.isFinite(min) && Number.isFinite(max) && min > 0 &&
+    max <= 180 && min <= max && min <= 30 && max >= 3;
+}
+
 function chooseOne(rows) {
   if (!Array.isArray(rows)) return null;
   const active = rows.filter(a => a?.is_active === true &&
@@ -44,8 +61,7 @@ function chooseOne(rows) {
     Number.isSafeInteger(Number(a.id)) && Number(a.id) > 0 &&
     parseArray(a.asset_list_json)?.some(asset => assetToUnderlying(asset) === 'ETH') &&
     (parseArray(a.rules_json)?.length || 0) > 0 &&
-    (a.option_expiry_min_days == null || Number(a.option_expiry_min_days) <= 7) &&
-    (a.option_expiry_max_days == null || Number(a.option_expiry_max_days) >= 7));
+    expiryWindowAllowed(a));
   return active.length === 1 ? Number(active[0].id) : null;
 }
 /** Returns only a categorical blocker, never private alert details. */
@@ -60,8 +76,7 @@ function explainAlertFailure(rows) {
   const withRules = active.filter(a => (parseArray(a.rules_json)?.length || 0) > 0);
   if (!withRules.length) return 'alert_rules_missing';
   const expiry = withRules.filter(a =>
-    (a.option_expiry_min_days == null || Number(a.option_expiry_min_days) <= 7) &&
-    (a.option_expiry_max_days == null || Number(a.option_expiry_max_days) >= 7));
+    expiryWindowAllowed(a));
   return expiry.length > 1 ? 'alert_ambiguous' : 'alert_expiry_incompatible';
 }
 
@@ -167,4 +182,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }).finally(() => defaultDb.pool.end());
 }
-module.exports = { chooseOne, explainAlertFailure, flagsOff, apply, summaryLines };
+module.exports = { expiryWindowAllowed, chooseOne, explainAlertFailure, flagsOff, apply, summaryLines };
