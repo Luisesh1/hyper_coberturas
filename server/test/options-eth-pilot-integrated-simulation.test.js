@@ -530,7 +530,7 @@ test('TP GTC initially partial can reconcile final full fill without fabricating
   assert.equal(f.broker.length,2);
 });
 
-test('EXPERIMENT opt-in: no GTC resting TP, FOK full-size reaches exact fixed target',async()=>{
+test('EXPERIMENT opt-in: no GTC resting TP, FOK full-size reaches fixed target',async()=>{
   const f=harness({syntheticTpExperimentalEnabled:true});
   await f.runEntry();
   f.setFill(f.broker[0],.01,23.60,9001);
@@ -538,10 +538,10 @@ test('EXPERIMENT opt-in: no GTC resting TP, FOK full-size reaches exact fixed ta
   assert.equal(postFill.errors,0);
   assert.equal(postFill.protection.syntheticSkipped,1);
   assert.equal(f.broker.length,1,'synthetic mode does NOT create resting GTC');
-  f.setQuote({bid:35.4,ask:36,mark:35.5});
-  f.setDepth({T:f.clock.now,bids:[['35.40','0.005'],['35.40','0.005']],
+  f.setQuote({bid:35.5,ask:36,mark:35.6});
+  f.setDepth({T:f.clock.now,bids:[['35.50','0.005'],['35.50','0.005']],
     asks:[['36.00','0.01']]});
-  const p={...f.positions[0],quote:{bid:35.4,ask:36,mark:35.5}};
+  const p={...f.positions[0],quote:{bid:35.5,ask:36,mark:35.6}};
   const params=alert.validateParams(BOT_PARAMS);
   const actions=alert.evaluate({now:f.clock.now,positions:[p],params});
   assert.equal(actions[0].reason,'take_profit');
@@ -552,8 +552,8 @@ test('EXPERIMENT opt-in: no GTC resting TP, FOK full-size reaches exact fixed ta
   assert.equal(f.broker[1].side,'SELL');
   assert.equal(f.broker[1].timeInForce,'FOK');
   assert.equal(f.broker[1].reduceOnly,true);
-  assert.equal(f.broker[1].price,35.4);
-  f.setFill(f.broker[1],.01,35.4,9002);
+  assert.equal(f.broker[1].price,35.5);
+  f.setFill(f.broker[1],.01,35.5,9002);
   await f.engine.reconcilePending();
   assert.equal(f.positions[0].quantity,0);
 });
@@ -563,17 +563,17 @@ test('EXPERIMENT: partial book or quote falling under target must not POST',asyn
   await f.runEntry();
   f.setFill(f.broker[0],.01,23.60,9101);
   await f.engine.reconcilePending();
-  f.setQuote({bid:35.4,ask:36,mark:35.5});
-  const p={...f.positions[0],quote:{bid:35.4,ask:36,mark:35.5}};
+  f.setQuote({bid:35.5,ask:36,mark:35.6});
+  const p={...f.positions[0],quote:{bid:35.5,ask:36,mark:35.6}};
   const params=alert.validateParams(BOT_PARAMS);
   const tp=alert.evaluate({now:f.clock.now,positions:[p],params})[0];
   assert.equal(tp.reason,'take_profit');
-  f.setDepth({T:f.clock.now,bids:[['35.40','0.005']],asks:[['36','0.01']]});
+  f.setDepth({T:f.clock.now,bids:[['35.50','0.005']],asks:[['36','0.01']]});
   assert.equal(await f.runner.executeLive(strategy,tp,
     {now:f.clock.now,params,positions:[p],produced:[]}),null);
   assert.equal(f.broker.length,1,'insufficient qty must not send SELL');
   assert.ok(f.outcomes.some(o=>o.reason==='tp_full_size_depth_unavailable'));
-  f.setDepth({T:f.clock.now,bids:[['35.40','0.005'],['35.30','0.005']],
+  f.setDepth({T:f.clock.now,bids:[['35.50','0.005'],['35.30','0.005']],
     asks:[['36','0.01']]});
   assert.equal(await f.runner.executeLive(strategy,tp,
     {now:f.clock.now,params,positions:[p],produced:[]}),null);
@@ -587,9 +587,9 @@ test('EXPERIMENT: FOK with zero fill expires then only retries after reconciliat
   await f.runEntry();
   f.setFill(f.broker[0],.01,23.60,9201);
   await f.engine.reconcilePending();
-  f.setQuote({bid:35.4,ask:36});
-  f.setDepth({T:f.clock.now,bids:[['35.4','0.01']],asks:[['36','0.01']]});
-  const p={...f.positions[0],quote:{bid:35.4,ask:36}};
+  f.setQuote({bid:35.5,ask:36});
+  f.setDepth({T:f.clock.now,bids:[['35.5','0.01']],asks:[['36','0.01']]});
+  const p={...f.positions[0],quote:{bid:35.5,ask:36}};
   const params=alert.validateParams(BOT_PARAMS);
   const tp=alert.evaluate({now:f.clock.now,positions:[p],params})[0];
   await f.runner.executeLive(strategy,tp,
@@ -602,7 +602,7 @@ test('EXPERIMENT: FOK with zero fill expires then only retries after reconciliat
   assert.equal(f.positions[0].quantity,.01);
   assert.equal(f.records.find(o=>o.clientOrderId===f.broker[1].clientOrderId).status,'final');
   f.clock.now+=60_000;
-  f.setDepth({T:f.clock.now,bids:[['35.4','0.01']],asks:[['36','0.01']]});
+  f.setDepth({T:f.clock.now,bids:[['35.5','0.01']],asks:[['36','0.01']]});
   const retry=await f.runner.executeLive(strategy,tp,
     {now:f.clock.now,params,positions:[p],produced:[]});
   assert.equal(retry.status,'submitted');
@@ -615,11 +615,11 @@ test('EXPERIMENT: stale depth and process unavailability are no-protection cases
   await f.runEntry();
   f.setFill(f.broker[0],.01,23.60,9301);
   await f.engine.reconcilePending();
-  f.setQuote({bid:35.4,ask:36});
-  const p={...f.positions[0],quote:{bid:35.4,ask:36}};
+  f.setQuote({bid:35.5,ask:36});
+  const p={...f.positions[0],quote:{bid:35.5,ask:36}};
   const params=alert.validateParams(BOT_PARAMS);
   const action=alert.evaluate({now:f.clock.now,positions:[p],params})[0];
-  f.setDepth({T:f.clock.now-11_000,bids:[['35.4','0.01']],asks:[['36','0.01']]});
+  f.setDepth({T:f.clock.now-11_000,bids:[['35.5','0.01']],asks:[['36','0.01']]});
   assert.equal(await f.runner.executeLive(strategy,action,
     {now:f.clock.now,params,positions:[p],produced:[]}),null);
   assert.equal(f.broker.length,1);
