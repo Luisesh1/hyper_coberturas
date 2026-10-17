@@ -6,7 +6,8 @@
  * - Endpoints públicos: exchangeInfo, mark, ticker, depth, index y openInterest.
  * - Endpoints firmados (HMAC-SHA256 sobre el query string con `timestamp` y
  *   `recvWindow`, cabecera `X-MBX-APIKEY`): cuenta, posiciones, órdenes y
- *   trades. Binance Opciones solo admite órdenes LIMIT, siempre GTC.
+ *   trades. Binance Opciones admite LIMIT con GTC/FOK. FOK se usa para
+ *   entradas y cierres estándar ETH; TP resting GTC. Sin stop garantizado.
  * - `getApiRestrictions()` consulta el endpoint spot
  *   `/sapi/v1/account/apiRestrictions` con la misma key para saber si hay
  *   restricción por IP y si los retiros están habilitados.
