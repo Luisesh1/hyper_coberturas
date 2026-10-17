@@ -126,6 +126,12 @@ function describeLeg({ side, type }, strike) {
 
 /** P&L de una pata en % de la prima de entrada (positivo = ganancia). */
 function pnlPct(position) {
+  // Nunca activar una salida de un bot real por mark/Black-Scholes cuando
+  // Binance no ofrece un bid/ask ejecutable. El fallback teórico en
+  // closeValue es útil para shadow, pero NO para disparar stops/TP reales.
+  const executable = position?.quote?.[position.side === 'BUY' ? 'bid' : 'ask'];
+  if (executable == null || !Number.isFinite(Number(executable)) ||
+      Number(executable) <= 0) return null;
   const value = closeValue(position);
   if (value == null) return null;
   const premium = position.entryPrice * position.quantity;
