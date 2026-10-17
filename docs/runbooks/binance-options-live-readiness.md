@@ -116,6 +116,50 @@ ETH-261023-2500-C. La última barrera del motor exige coincidencia
 exacta y bloquea cualquier apertura diferente. La lógica de cierre y
 la protección real siguen pendientes de validación con fills reales.
 
+## Preparación autorizada del bot ETH — SIN TRADING (17 oct 2026)
+
+El usuario autorizó **reducir los límites de riesgo y crear una estrategia
+exclusiva PAUSADA**, sin enviar órdenes ni habilitar trading. La PR #16
+implementa un ajuste transaccional de un solo uso, que se ejecuta durante
+el despliegue SOLO si el commit desplegado tiene el asunto exacto
+"Merge PR #16: prepare paused ETH pilot with 1 USDT risk limits (live OFF)".
+
+El script no lee claves Binance ni hace solicitudes de trading. Exige
+OPTIONS_LIVE_TRADING_ENABLED=false y OPTIONS_LIVE_PRODUCTION_APPROVED=false,
+sin autorización live; no permite modificar si hay bots live, posiciones
+reales abiertas ni historial de órdenes reales en el ledger. Actúa
+exclusivamente en la cuenta interna 1 bajo advisory lock por usuario.
+
+Límites globales objetivo:
+- maxMarginUsdt = como máximo 1 USDT (jamás subir un límite menor).
+- maxDailyLossUsdt = como máximo 1 USDT de pérdidas realizadas por día.
+- maxLiveStrategies = 1; notifyTelegram = true.
+
+Estrategia dedicada (no altera la estrategia anterior):
+- Nombre: PILOTO ETH - compra unica - PAUSADO.
+- Modo: paused, sin alertIds asociados. Plantilla alert_signal, ETH, buy_with.
+- Cantidad: 0.01. contractCount = 1, maxOpenPositions=1,
+  maxTradesPerDay=1, no reverse; onOpposite=close.
+- capitalUsdt=0.26, maxPremiumUsdt=0.26.
+- takeProfitPct=50, stopLossPct=50, exitHoursBeforeExpiry=24,
+  takeProfitMode=fixed.
+- Límites por bot: maxOrdersPerDay=3, maxDailyLossUsdt=1,
+  maxMarginUsdt=1 USDT.
+
+Las escrituras de settings y de creación de estrategia ocurren en
+**una sola transacción PostgreSQL**. Repetir el mismo commit es seguro:
+reutiliza el marcador exacto, valida los mismos parámetros y no crea
+duplicados. Si cambió el bot marcador o existe exposición, falla con
+rollback. No cambia otras estrategias ni activa nuevas órdenes.
+
+No confundir pérdida diaria realizada o margen con un stop garantizado:
+un BUY de opciones puede perder la totalidad de la prima y los stops
+requieren liquidez. La propuesta BUY 0.01 ETH-261023-2500-C con
+LIMIT máximo 23.60 USDT sigue SIN ejecutarse. Antes de operar se
+requiere revalidación de precio y comisiones, autorización transaccional,
+vinculación de la estrategia y revisión de las salidas protectoras.
+Los flags live continúan OFF.
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**
