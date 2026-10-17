@@ -490,6 +490,21 @@ class OptionsLiveExecution {
         this.logger.warn('options_live_attention_notify_failed', {
           liveOrderId: Number(order.id), error: err.message,
         });
+        // The claim is made before network delivery for cross-replica
+        // deduplication. On failure, release only THAT claim so the next
+        // reconciliation cycle can retry without waiting fifteen minutes.
+        // Keep the order in ATTENTION and do not alter any Binance order.
+        if (typeof this.repo.releaseAttentionNotification === 'function' &&
+            order.attention_notified_at != null) {
+          try {
+            await this.repo.releaseAttentionNotification(
+              Number(order.id), Number(order.attention_notified_at));
+          } catch (releaseErr) {
+            this.logger.warn('options_live_attention_claim_release_failed', {
+              liveOrderId: Number(order.id), error: releaseErr.message,
+            });
+          }
+        }
       }
     }
     return sent;

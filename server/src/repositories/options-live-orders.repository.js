@@ -629,10 +629,27 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     const { rows } = await db.query(
       "UPDATE options_live_orders SET attention_notified_at=$2 WHERE id=$1 " +
       "AND status='attention' AND attention_notified_at <= $3 " +
-      "RETURNING id,user_id,strategy_id,symbol,client_order_id,last_error,deadline_at",
+      "RETURNING id,user_id,strategy_id,symbol,client_order_id,last_error,deadline_at,attention_notified_at",
       [id, time, time - intervalMs]
     );
     return rows[0] || null;
+  }
+
+  /** Return an alert claim to the queue when Telegram delivery failed.
+   * Compare the claimed timestamp to avoid undoing a newer replica claim.
+   * Only an attention order can be released; this never changes its status.
+   */
+  async function releaseAttentionNotification(id, claimAt) {
+    if (!Number.isSafeInteger(Number(id)) || !(Number(id) > 0) ||
+        !Number.isSafeInteger(Number(claimAt)) || !(Number(claimAt) > 0)) {
+      throw new Error('Invalid attention alert release token');
+    }
+    const { rows } = await db.query(
+      "UPDATE options_live_orders SET attention_notified_at=0 " +
+      "WHERE id=$1 AND status='attention' AND attention_notified_at=$2 RETURNING id",
+      [id, claimAt]
+    );
+    return rows.length > 0;
   }
 
   async function listAttentionOrders(limit = 100) {
@@ -840,7 +857,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
     deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
-    claimAttentionNotification, listAttentionOrders,
+    claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
     applyTrade, finishOrder };
