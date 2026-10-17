@@ -97,3 +97,25 @@ Si falla una consulta o el bot se reinicia, recuperar por
 
 **Resultado de esta iteración:** procedimientos y código de verificación
 preparados; **sin órdenes reales ejecutadas, sin permisos habilitados**.
+
+## Protección adicional: TP GTC con ejecución parcial (17 de octubre)
+
+- Al conciliar una orden GTC con fill parcial y una salida solicitada
+  (stop, señal o vencimiento del plazo), consultar la cantidad efectivamente
+  ejecutada en Binance y el filtro LOT_SIZE más reciente.
+- Si el resto **no constituye una nueva orden válida** bajo minQty/stepSize,
+  **NO cancelar el TP residente**. Registrar únicamente trades reales,
+  mantener el incidente ATTENTION y notificar intervención del operador.
+  No enviar otro SELL ni redondear la posición restante.
+- Si el resto **sí** es operable, se permite el flujo previo de cancelación,
+  verificación terminal y cierre FOK para el remanente confirmado.
+- Una orden que YA esté cancelada/expirada con resto inferior al mínimo
+  **no se puede restaurar automáticamente**. Se debe conciliar con Binance,
+  evaluar asistencia del exchange o liquidación al vencimiento y mantener
+  entradas nuevas bloqueadas. **No garantiza el stop ni un cierre total**.
+- Carrera residual: Binance puede llenar parcialmente entre el último
+  getOrder y la confirmación de cancelación. Las pruebas automatizadas
+  no eliminan esa ventana; NO-GO para trading autónomo hasta validar
+  semántica real del exchange o disponer de procedimiento probado.
+- Este cambio conserva ambos flags de trading en false y se despliega
+  automáticamente por la CI sin enviar órdenes reales.
