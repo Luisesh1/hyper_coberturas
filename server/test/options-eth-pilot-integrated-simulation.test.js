@@ -526,3 +526,55 @@ test('TP GTC initially partial can reconcile final full fill without fabricating
   assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'final');
   assert.equal(f.broker.length,2);
 });
+
+test('partial GTC TP below minQty: stop never cancels resting order or sends dust close',async()=>{
+  const f=harness();
+  await f.runEntry(911);
+  f.setFill(f.broker[0],.01,23.60,9911);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  assert.equal(tp.timeInForce,'GTC');
+  f.setFill(tp,.005,35.40,9912);
+  assert.equal((await f.engine.reconcilePending()).errors,1);
+  assert.equal(f.positions[0].quantity,.005);
+
+  f.setQuote({bid:11.70,ask:12,mark:11.80});
+  const p={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[p],
+    params:alert.validateParams(BOT_PARAMS)});
+  assert.equal(actions[0].reason,'stop_loss');
+  const exit=await f.runner.executeLive(strategy,actions[0],{
+    now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[],
+  });
+  assert.equal(exit.status,'tp_cancel_requested','persist stop intent');
+  const after=await f.engine.reconcilePending();
+  assert.equal(after.errors,1,'record ongoing uncloseable remainder incident');
+  assert.equal(tp.status,'PARTIALLY_FILLED','never cancel existing GTC with dust');
+  assert.equal(f.broker.length,2,'never send a second sell that violates minQty');
+  assert.equal(f.positions[0].quantity,.005,'record real exposure');
+  assert.ok(f.warnings.includes('options_live_reconciliation_failed'));
+
+  // Once the still-resting GTC finishes, reconcile without inventing a fill.
+  f.setFill(tp,.005,35.40,9913);
+  const completed=await f.engine.reconcilePending();
+  assert.equal(completed.errors,0);
+  assert.equal(f.positions[0].quantity,0);
+  assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'final');
+  assert.equal(f.broker.length,2,'no duplicate FOK on a closed position');
+});
+
+test('partial GTC TP below minQty: deadline does not strand residue by canceling',async()=>{
+  const f=harness();
+  await f.runEntry(912);
+  f.setFill(f.broker[0],.01,23.60,9921);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  f.setFill(tp,.005,35.40,9922);
+  assert.equal((await f.engine.reconcilePending()).errors,1);
+  f.clock.now=f.records.find(o=>o.purpose==='take_profit').deadlineAt+1000;
+  const result=await f.engine.reconcilePending();
+  assert.equal(result.errors,1);
+  assert.equal(tp.status,'PARTIALLY_FILLED','do not cancel invalid remaining lot at deadline');
+  assert.equal(f.broker.length,2);
+  assert.equal(f.positions[0].quantity,.005);
+});
