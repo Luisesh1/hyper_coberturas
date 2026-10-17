@@ -155,3 +155,19 @@ test('no network, no trade methods or credential access in setup source',()=>{
   assert.match(s,/mode='live'/);
   assert.match(s,/await tx\.query\('SELECT pg_advisory_xact_lock/);
 });
+
+test('one-time deploy applies ONLY on the exact PR #16 merge release',()=>{
+  const yaml=fs.readFileSync(path.resolve(__dirname,
+    '../../.github/workflows/deploy.yml'),'utf8');
+  const step=yaml.split('- name: Preparar UNA vez el piloto ETH pausado')[1]
+    ?.split('- name: Revisar opciones ETH públicas')[0];
+  assert.ok(step);
+  assert.match(step,/expected='Merge PR #16: prepare paused ETH pilot with 1 USDT risk limits \(live OFF\)'/);
+  assert.match(step,/git log -1 --pretty=%s/);
+  assert.match(step,/if \[ "\$subject" != "\$expected" \]/);
+  assert.match(step,/options-pilot-configure-paused\.js --apply-paused-only/);
+  assert.match(step,/pilot_setup_orders_sent=0/);
+  assert.match(step,/pilot_setup_live_enabled=no/);
+  assert.match(step,/pilot_ready=no/);
+  assert.doesNotMatch(step,/OPTIONS_LIVE_TRADING_ENABLED=true|OPTIONS_LIVE_PRODUCTION_APPROVED=true|placeOrder/);
+});
