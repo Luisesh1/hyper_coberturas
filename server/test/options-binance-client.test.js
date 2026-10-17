@@ -218,3 +218,34 @@ test('endpoints de ejercicios y bills son GET firmados y preservan IDs 64-bit', 
   assert.match(calls[1].url, /\/eapi\/v1\/bill\?/);
   assert.equal(new URL(calls[1].url).searchParams.get('currency'), 'USDT');
 });
+
+test('ETH pilot FOK is signed exactly, closes keep GTC and invalid modes fail before POST',async()=>{
+  const {calls,fetchImpl}=recordingFetch(()=>jsonResponse({orderId:'9001',status:'FILLED'}));
+  const client=createBinanceOptionsClient({
+    apiKey:API_KEY,apiSecret:API_SECRET,fetchImpl,now:()=>1700000000000,
+  });
+  await client.placeOrder({symbol:'ETH-261023-2500-C',side:'BUY',
+    quantity:0.01,price:23.60,timeInForce:'FOK',clientOrderId:'PILOT-FOK-TEST'});
+  assert.equal(calls.length,1);
+  const q=new URL(calls[0].url).searchParams;
+  assert.equal(q.get('timeInForce'),'FOK');
+  assert.equal(q.get('type'),'LIMIT');
+  assert.equal(q.get('quantity'),'0.01');
+  assert.equal(q.get('price'),'23.6');
+  assert.equal(q.get('clientOrderId'),'PILOT-FOK-TEST');
+  const raw=new URL(calls[0].url).search.slice(1);
+  const [unsigned,sig]=raw.split('&signature=');
+  assert.equal(sig,crypto.createHmac('sha256',API_SECRET).update(unsigned).digest('hex'));
+  await client.placeOrder({symbol:'ETH-261023-2500-C',side:'SELL',
+    quantity:0.01,price:35.4,reduceOnly:true});
+  assert.equal(new URL(calls[1].url).searchParams.get('timeInForce'),'GTC');
+  await assert.rejects(()=>client.placeOrder({
+    symbol:'ETH-261023-2500-C',side:'BUY',quantity:0.01,
+    price:23.6,timeInForce:'IOC',
+  }),/timeInForce/);
+  await assert.rejects(()=>client.placeOrder({
+    symbol:'ETH-261023-2500-C',side:'BUY',quantity:0.01,
+    price:23.6,timeInForce:'FOK',postOnly:true,
+  }),/postOnly/);
+  assert.equal(calls.length,2);
+});
