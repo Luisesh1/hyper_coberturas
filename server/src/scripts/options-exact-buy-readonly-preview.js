@@ -85,7 +85,7 @@ function roundupCents(number) {
   return Math.ceil((number - 1e-10) * 100) / 100;
 }
 
-async function preview({ client, input, at = Date.now(), env = process.env }) {
+async function preview({ client, input, at = Date.now(), now = Date.now, env = process.env }) {
   const { symbol, quantity, maxLimit } = input;
   const qty=Number(quantity), max=Number(maxLimit);
   const premiumMax=qty * max;
@@ -126,9 +126,11 @@ async function preview({ client, input, at = Date.now(), env = process.env }) {
   } catch (_) { states.exactFilters=false; }
 
   try { book=await client.getDepth(symbol,20); } catch (_) { book=null; }
+  const depthReceivedAt=now();
   const depthAt=Number(book?.T);
   states.bookFresh=book?.T != null && Number.isSafeInteger(depthAt) &&
-    depthAt <= at + 1000 && depthAt >= at - MAX_BOOK_AGE_MS;
+    depthAt <= depthReceivedAt + 1000 &&
+    depthAt >= depthReceivedAt - MAX_BOOK_AGE_MS;
   const top=states.bookFresh ? bestBook(book,qty,max) : null;
   states.liquidity=Boolean(top && states.quoteValid &&
     top.ask <= Number(quote.askPrice) + 1e-9);
