@@ -74,6 +74,8 @@ test('global limits are checked and every status stays read-only',async()=>{
  const r=await inspect(deps([valid],{...limits,maxMarginUsdt:5000}));
  assert.equal(r.checks.globalRiskRestricted,false);
  assert.equal(r.status,'strategy_not_ready');
+ assert.equal(r.candidateStrategyId,null);
+ assert.match(safeLines(r).join('\n'),/strategy_preview_globalRiskRestricted=fail/);
  assert.throws(()=>safeLines({...r,pilotReady:true}));
  const script=fs.readFileSync(path.resolve(__dirname,
   '../src/scripts/options-pilot-strategy-readiness.js'),'utf8');
