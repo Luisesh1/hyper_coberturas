@@ -27,6 +27,9 @@ function checkPolicy({ input, quote, strategy, env }) {
     strategy?.status === 'strategy_candidate' &&
     Number.isSafeInteger(strategy?.candidateStrategyId) &&
     strategy?.candidateStrategyId > 0;
+  // The prepared alert bot currently has alertIds: []. A paused blueprint
+  // is not a valid trigger; do not report even a candidate without it.
+  const entrySignalConfigured = strategy?.entrySignalConfigured === true;
   const liveOff = env?.OPTIONS_LIVE_TRADING_ENABLED === 'false' &&
     env?.OPTIONS_LIVE_PRODUCTION_APPROVED === 'false' &&
     env?.OPTIONS_LIVE_PILOT_AUTHORIZED !== 'true';
@@ -48,13 +51,13 @@ function checkPolicy({ input, quote, strategy, env }) {
     Number(quote?.publicOrder?.quantity) === qty &&
     quote?.publicOrder?.limitPrice === input?.maxLimit;
   return {
-    liveOff, paused, exactSize, riskBudget, exchangeGtc, ethFokEntry,
+    liveOff, paused, entrySignalConfigured, exactSize, riskBudget, exchangeGtc, ethFokEntry,
     priceValidated,
   };
 }
 
 function summaryLines(result) {
-  const expected = ['liveOff','paused','exactSize','riskBudget',
+  const expected = ['liveOff','paused','entrySignalConfigured','exactSize','riskBudget',
     'exchangeGtc','ethFokEntry','priceValidated'];
   if (!result || result.readOnly !== true || result.pilotReady !== false ||
       !['candidate','blocked'].includes(result.status) ||
