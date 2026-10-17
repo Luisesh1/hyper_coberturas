@@ -67,6 +67,7 @@ test('fails on wrong account, size, or risk budget without sending anything',asy
     });
     assert.equal(outcome.status,'blocked');
     assert.equal(outcome.pilotReady,false);
+    assert.ok(attempts <= 2,'at most read-only checks were invoked');
     assert.equal(outcome.checks.riskBudget,Number(candidate.maxLimit)<=23.60 &&
       Number(candidate.quantity)===0.01);
   }
