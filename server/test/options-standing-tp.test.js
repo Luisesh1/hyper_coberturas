@@ -118,7 +118,8 @@ test('TP se registra duradero y se envía reduceOnly inmediatamente tras fill co
   assert.equal(f.log.sent.length, 1);
   assert.deepEqual(f.log.sent[0], {
     symbol: SYMBOL, side: 'SELL', quantity: 0.2, price: 180,
-    reduceOnly: true, clientOrderId: f.orders[0].clientOrderId,
+    reduceOnly: true, timeInForce: 'GTC',
+    clientOrderId: f.orders[0].clientOrderId,
   });
   assert.equal(f.orders[0].status, 'active');
   assert.ok(f.orders[0].deadlineAt - NOW > WINDOW_MS);
