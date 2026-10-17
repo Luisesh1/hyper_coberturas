@@ -16,7 +16,8 @@ const USER_ID = 1;
 // que añade defaults como tpAtrMultiplier y tpHorizonHours.
 const EXPECTED_PARAMS = validateParams(BOT_PARAMS);
 const REASONS = new Set(['none','global_limits','strategy_missing','strategy_config_mismatch',
-  'alert_ineligible_or_ambiguous','alert_already_other','concurrent_change']);
+  'alert_inactive','alert_rules_missing','alert_expiry_incompatible',
+  'alert_ambiguous','alert_unavailable','alert_already_other','concurrent_change']);
 const blocked = reason => ({ status:'blocked', reason, ordersSent:0 });
 
 function parseObject(x) {
@@ -47,6 +48,23 @@ function chooseOne(rows) {
     (a.option_expiry_max_days == null || Number(a.option_expiry_max_days) >= 7));
   return active.length === 1 ? Number(active[0].id) : null;
 }
+/** Returns only a categorical blocker, never private alert details. */
+function explainAlertFailure(rows) {
+  const candidates = (rows || []).filter(a =>
+    a?.direction === 'bullish' && Number.isSafeInteger(Number(a?.id)) &&
+    Number(a.id) > 0 &&
+    parseArray(a.asset_list_json)?.some(asset => assetToUnderlying(asset) === 'ETH'));
+  if (!candidates.length) return 'alert_unavailable';
+  const active = candidates.filter(a => a.is_active === true);
+  if (!active.length) return 'alert_inactive';
+  const withRules = active.filter(a => (parseArray(a.rules_json)?.length || 0) > 0);
+  if (!withRules.length) return 'alert_rules_missing';
+  const expiry = withRules.filter(a =>
+    (a.option_expiry_min_days == null || Number(a.option_expiry_min_days) <= 7) &&
+    (a.option_expiry_max_days == null || Number(a.option_expiry_max_days) >= 7));
+  return expiry.length > 1 ? 'alert_ambiguous' : 'alert_expiry_incompatible';
+}
+
 function flagsOff(env) {
   return env.OPTIONS_LIVE_TRADING_ENABLED === 'false' &&
     env.OPTIONS_LIVE_PRODUCTION_APPROVED === 'false' &&
@@ -102,7 +120,7 @@ async function apply({
       [USER_ID],
     );
     const alertId = chooseOne(alertRows);
-    if (!alertId) return blocked('alert_ineligible_or_ambiguous');
+    if (!alertId) return blocked(explainAlertFailure(alertRows));
     if (params.alertIds?.length === 1 &&
       Number(params.alertIds[0]) === alertId) {
       return { status: 'already_bound', reason:'none', ordersSent: 0 };
@@ -149,4 +167,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }).finally(() => defaultDb.pool.end());
 }
-module.exports = { chooseOne, flagsOff, apply, summaryLines };
+module.exports = { chooseOne, explainAlertFailure, flagsOff, apply, summaryLines };
