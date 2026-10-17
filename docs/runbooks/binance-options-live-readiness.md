@@ -236,8 +236,13 @@ sin enviar órdenes reales ni crear posiciones.
   garantía de cierre. No existe stop exchange-native ni liquidación segura
   certificada. Un snapshot de libro puede cambiar antes del POST.
 - El TP residente se mantiene `LIMIT GTC reduceOnly`. Al observar
-  `PARTIALLY_FILLED` con cualquier ejecución, registrar los trades
-  confirmados, marcar `ATTENTION` y emitir incidente al operador.
+  `PARTIALLY_FILLED` con cualquier ejecución, o incluso un estado terminal
+  `CANCELED/EXPIRED` con `0 < executedQty < requestedQty`, registrar
+  todos los `userTrades` confirmados, mantener la orden en `ATTENTION`
+  e informar al operador. **No terminar como FINAL** una orden de TP que
+  deje un residuo; en rondas futuras se reconsulta por el orderId durable.
+  Tampoco finalizar órdenes terminales cuando Binance reporta
+  `executedQty` diferente de los fills recuperados.
   Los residuos inferiores a `minQty` siguen sin solución validada.
 - Los fills parciales anómalos de una orden FOK de entrada **o salida**
   también se registran y bloquean como atención, nunca se inventa
