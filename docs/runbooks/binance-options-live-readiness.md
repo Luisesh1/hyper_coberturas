@@ -565,3 +565,50 @@ cantidad completa (no solo el primer nivel).
    entrada, cambian una estrategia pausada o modifican flags del VPS.
    Conservar ambos controles `OPTIONS_LIVE_*=false` mientras falten
    evidencias de salida, contrato e intervención humana.
+
+## Decisión del piloto supervisado — 17 oct 2026: TP GTC
+
+**Ruta elegida:** después de que Binance confirme un fill completo de
+la compra FOK y el ledger lo concilie, enviar un **LIMIT GTC reduceOnly**
+residente para tomar ganancias. Para el piloto se conserva
+`takeProfitMode=fixed`, `takeProfitPct=50`, `stopLossPct=50` y
+`exitHoursBeforeExpiry=24`; las entradas y salidas estándar siguen usando
+FOK según las protecciones existentes. No fusionar ni activar la variante
+de TP sintético FOK de PR #20 para este piloto.
+
+**Alcance:** GTC permanece en Binance si se cae el bot, pero NO se garantiza
+la ejecución a precio objetivo y puede tener fills parciales, incluso
+residuos menores al mínimo negociable. El stop del bot no es un stop
+residente en Binance; una caída, desconexión o falta de liquidez puede
+impedir su salida. Mantener alertas persistentes, bloqueo de entradas
+adicionales y resolución supervisada si faltan fills o protección.
+
+**No interpretar "configurado" como "autorizado para operar":**
+- La estrategia preparada por `options-pilot-configure-paused.js` está
+  pausada y usa `alertIds=[]`: no hay una señal de entrada conectada.
+  `options-pilot-strategy-readiness.js` ahora publica
+  `strategy_preview_entry_signal_configured=no` para hacer visible
+  esta condición; `strategy_candidate` solo describe una plantilla.
+- El contrato `ETH-261023-2500-C` y el límite de 23.60 USDT son una
+  referencia histórica, NO condiciones de compra vigentes ni un permiso.
+  Se requiere obtener y revisar de nuevo ticker, profundidad fresca,
+  filtros, cantidad mínima y precio máximo exacto antes de operar.
+- Los topes de la preparación son 0.01 ETH, 1 USDT de pérdida diaria
+  y margen global 1 USDT, con costo máximo de entrada de 20 USDT en
+  la barrera transaccional. No sustituir por el techo general de
+  pérdida declarado de 100 USD ni prometer que un stop lo garantiza.
+- Antes de una compra real: elegir y asociar explícitamente la fuente de
+  señal/entrada, verificar clave/IP/permisos/cuenta aislada, saldos y
+  comisiones, que no hay exposición ni incidencias, recibir autorización
+  separada por contrato, cantidad, precio y vigencia, y ejecutar la
+  transición de producción bajo revisión específica.
+- Tras la única entrada supervisada: confirmar por `getOrder` y
+  `getUserTrades` el fill y la cantidad; confirmar que GTC reduceOnly
+  quedó aceptado y visible en Binance; probar la conciliación, cancelación
+  con fill concurrente, reinicio/alertas y resolución de residuo. Al
+  terminar, desactivar nuevas entradas y documentar el resultado.
+
+**Estado:** cambios de esta rama son exclusivamente de diagnóstico y
+documentación. No cambian las variables de Docker Compose, no activan
+estrategias ni envían órdenes. Los dos flags de trading real deben
+permanecer en `false` hasta superar las verificaciones anteriores.
