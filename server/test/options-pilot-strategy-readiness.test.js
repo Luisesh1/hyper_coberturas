@@ -30,6 +30,8 @@ test('requires exactly one paused/shadow buy-only low risk strategy',async()=>{
  assert.equal(result.status,'strategy_candidate');
  assert.equal(result.candidateStrategyId,41);
  assert.equal(result.pilotReady,false);
+ assert.equal(result.entrySignalConfigured,false); // paused setup has alertIds: []
+ assert.match(safeLines(result).join('\n'),/strategy_preview_entry_signal_configured=no/);
  assert.match(safeLines(result).join('\n'),/strategy_preview_candidate_id=41/);
  assert.match(safeLines(result).join('\n'),/pilot_ready=no/);
 });
@@ -80,4 +82,17 @@ test('global limits are checked and every status stays read-only',async()=>{
  const script=fs.readFileSync(path.resolve(__dirname,
   '../src/scripts/options-pilot-strategy-readiness.js'),'utf8');
  assert.doesNotMatch(script,/\.createStrategy\(|\.updateStrategy\(|\.setMode\(|\.placeOrder\(|\.cancelOrder\(/);
+});
+
+test('pilot distinguishes a valid paused strategy from an actual alert-bound entry',async()=>{
+ const idle=await inspect(deps([{...valid,params:{...valid.params,alertIds:[]}}]));
+ assert.equal(idle.status,'strategy_candidate');
+ assert.equal(idle.entrySignalConfigured,false);
+ const bound=await inspect(deps([{...valid,params:{...valid.params,alertIds:[74]}}]));
+ assert.equal(bound.status,'strategy_candidate');
+ assert.equal(bound.entrySignalConfigured,true);
+ assert.match(safeLines(bound).join('\n'),/strategy_preview_entry_signal_configured=yes/);
+ const absent=await inspect(deps([]));
+ assert.equal(absent.entrySignalConfigured,false);
+ assert.throws(()=>safeLines({...bound,entrySignalConfigured:null}));
 });

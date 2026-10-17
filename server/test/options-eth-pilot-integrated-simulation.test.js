@@ -63,7 +63,9 @@ function harness() {
           orderId: b.orderId, status: b.status }));
     },
     async placeOrder(data) {
-      const row = { ...data, timeInForce:data.timeInForce || 'GTC',
+      // No inventar el TIF predeterminado del exchange en el fake:
+      // la aplicación debe enviar GTC explícito para el TP residente.
+      const row = { ...data, timeInForce:data.timeInForce,
         orderId: String(nextBrokerId++),
         status: 'NEW', executedQty: 0, trades: [] };
       broker.push(row);
