@@ -18,7 +18,7 @@ const EXPECTED_PARAMS = validateParams(BOT_PARAMS);
 const REASONS = new Set(['none','global_limits','strategy_missing','strategy_config_mismatch',
   'alert_inactive','alert_rules_missing','alert_expiry_incompatible',
   'alert_ambiguous','alert_unavailable','alert_already_other','concurrent_change']);
-const blocked = reason => ({ status:'blocked', reason, ordersSent:0 });
+const blocked = reason => ({ status:'blocked', reason, ordersSent:0, windowReview:'not_checked' });
 
 function parseObject(x) {
   if (x && typeof x === 'object' && !Array.isArray(x)) return x;
@@ -40,8 +40,9 @@ function parseArray(x) {
 /**
  * El runner filtra los vencimientos al rango de la alerta y despues elige
  * el mas cercano a expiryDays. No exige que expiryDays caiga DENTRO del rango.
- * Esta validacion solo permite ventanas que se crucen con 3..30 dias,
- * rango conservador de la revision de contratos del piloto.
+ * Vincular una alerta en PAUSA no equivale a aprobar un vencimiento real.
+ * Validar la ventana estructural (<=180 dias) sin modificarla. El rango
+ * conservador 3..30 dias se comprueba INDEPENDIENTEMENTE antes de operar.
  */
 function expiryWindowAllowed(alert) {
   const lo = alert?.option_expiry_min_days;
@@ -51,7 +52,16 @@ function expiryWindowAllowed(alert) {
   const min = Number(lo);
   const max = Number(hi);
   return Number.isFinite(min) && Number.isFinite(max) && min > 0 &&
-    max <= 180 && min <= max && min <= 30 && max >= 3;
+    max <= 180 && min <= max;
+}
+
+function windowReview(alert) {
+  if (alert?.option_expiry_min_days == null && alert?.option_expiry_max_days == null) {
+    return 'template_default';
+  }
+  const min = Number(alert.option_expiry_min_days);
+  const max = Number(alert.option_expiry_max_days);
+  return min <= 30 && max >= 3 ? 'overlaps_3_30' : 'outside_3_30';
 }
 
 function chooseOne(rows) {
@@ -136,9 +146,10 @@ async function apply({
     );
     const alertId = chooseOne(alertRows);
     if (!alertId) return blocked(explainAlertFailure(alertRows));
+    const review = windowReview(alertRows.find(a => Number(a.id) === alertId));
     if (params.alertIds?.length === 1 &&
       Number(params.alertIds[0]) === alertId) {
-      return { status: 'already_bound', reason:'none', ordersSent: 0 };
+      return { status: 'already_bound', reason:'none', ordersSent: 0, windowReview:review };
     }
     if (!Array.isArray(params.alertIds) || params.alertIds.length) {
       return blocked('alert_already_other');
@@ -149,18 +160,20 @@ async function apply({
       [Number(strategy.id), JSON.stringify([alertId]), now(), USER_ID],
     );
     if (updated.length !== 1) throw new Error('Concurrent pilot alert change');
-    return { status: 'bound', reason:'none', ordersSent: 0 };
+    return { status: 'bound', reason:'none', ordersSent: 0, windowReview:review };
   });
 }
 
 function summaryLines(outcome) {
   if (!outcome || !['bound','already_bound','blocked'].includes(outcome.status) ||
     outcome.ordersSent !== 0 || !REASONS.has(outcome.reason) ||
+    !['not_checked','template_default','overlaps_3_30','outside_3_30'].includes(outcome.windowReview) ||
     (outcome.status !== 'blocked' && outcome.reason !== 'none'))
     throw new Error('Invalid pilot alert binding result');
   return [
     'pilot_alert_binding_status=' + outcome.status,
     'pilot_alert_binding_reason=' + outcome.reason,
+    'pilot_alert_binding_contract_window=' + outcome.windowReview,
     'pilot_alert_binding_strategy_mode=paused',
     'pilot_alert_binding_orders_sent=0',
     'pilot_alert_binding_live_enabled=no',
@@ -182,4 +195,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }).finally(() => defaultDb.pool.end());
 }
-module.exports = { expiryWindowAllowed, chooseOne, explainAlertFailure, flagsOff, apply, summaryLines };
+module.exports = { expiryWindowAllowed, windowReview, chooseOne, explainAlertFailure, flagsOff, apply, summaryLines };
