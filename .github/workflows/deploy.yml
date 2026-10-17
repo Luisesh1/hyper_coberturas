@@ -181,3 +181,38 @@ jobs:
             echo '- Las tarifas efectivas, autorización personal y estrategia siguen pendientes.'
             echo '- Trading real: OFF. No se enviaron órdenes.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revisar estrategia y límites del piloto ETH (solo lectura)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-strategy-readiness.js" \
+            >"$RUNNER_TEMP/options-pilot-strategy.log" 2>/dev/null; then
+            echo "::warning::No se pudo validar la estrategia del piloto; NO OPERAR"
+            exit 0
+          fi
+          if ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-pilot-strategy.log" ||
+             ! { grep -Fxq 'strategy_preview_status=strategy_candidate' "$RUNNER_TEMP/options-pilot-strategy.log" ||
+                 grep -Fxq 'strategy_preview_status=strategy_not_ready' "$RUNNER_TEMP/options-pilot-strategy.log"; }; then
+            echo "::warning::Estado desconocido de estrategia; NO OPERAR"
+            exit 0
+          fi
+          grep -E '^strategy_preview_(status|count|noActiveLiveStrategies|noLivePositions|globalRiskRestricted|exactStrategyAvailable|candidate_id|exact_contract_generated|execution_approved)=' \
+            "$RUNNER_TEMP/options-pilot-strategy.log" || true
+          if grep -Fxq 'strategy_preview_status=strategy_not_ready' "$RUNNER_TEMP/options-pilot-strategy.log"; then
+            echo "::warning::Falta estrategia única y/o límites globales de pérdida comprobables: NO OPERAR"
+          else
+            echo "::warning::Estrategia preliminar encontrada; contrato exacto y orden real siguen SIN aprobarse"
+          fi
+          {
+            echo '### Estrategia piloto ETH: solo lectura'
+            echo '- No se creó, habilitó o modificó ningún bot.'
+            echo '- Inspección: una sola estrategia BUY pausada/sombra, límites estrictos, posiciones y bots existentes.'
+            echo '- Los límites globales por defecto exceden el techo conservador y deben revisarse.'
+            echo '- Los stops y TP no garantizan precio de salida ni evitan perder la prima.'
+            echo '- La autorización de una orden no equivale a autorización de trading automático.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -84,6 +84,38 @@ continuas. **Antes de autorizar una ejecución real se requiere una
 revalidación fresca y aprobación expresa de precio, cantidad y riesgo**.
 En todo caso, el trading está OFF y no se hizo ningún POST.
 
+## Inspección de la estrategia de cierre, sin ejecutar (16 oct 2026)
+
+La preparación de la compra propuesta **no equivale a autorización de
+enviar una orden**. El paso de solo lectura de deploy
+options-pilot-strategy-readiness.js comprueba si el usuario interno 1
+ya tiene exactamente una estrategia ETH compatible, PAUSADA o en shadow,
+y si ninguna otra está en live ni hay posiciones reales abiertas.
+
+Para un resultado positivo se exige:
+- Bot de alertas con estructura buy_with, una sola pata, cantidad 0.01,
+  una posición y una entrada como máximo por día, sin reversión (close).
+- TP fijo, stop máximo del 50 % de la prima y salida temporal al menos
+  12 h antes de vencimiento. Un stop no garantiza la ejecución ni el
+  precio de salida: la opción comprada puede perder toda su prima.
+- Prima máxima <=0.26 USDT, capital 0.26 USDT y límites por estrategia
+  explícitos maxOrdersPerDay <=3, maxDailyLossUsdt <=20,
+  maxMarginUsdt <=20.
+- Límites globales maxDailyLossUsdt <=20, maxMarginUsdt <=20,
+  maxLiveStrategies = 1, notifyTelegram = true.
+- Ninguna estrategia live adicional ni posiciones live existentes.
+
+La inspección publica únicamente estados agregados y, si hay un
+único candidato compatible, su ID interno para identificarlo después.
+**Nunca** crea, pausa, activa o edita una estrategia. Si no existe una
+configuración segura, reporta strategy_not_ready y no se opera.
+
+Incluso con estrategia compatible, el bot por alertas elige
+contratos dinámicamente y puede NO generar el símbolo confirmado
+ETH-261023-2500-C. La última barrera del motor exige coincidencia
+exacta y bloquea cualquier apertura diferente. La lógica de cierre y
+la protección real siguen pendientes de validación con fills reales.
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**
