@@ -62,9 +62,16 @@ async function inspect({
     exactStrategyAvailable:matches.length===1,
   };
   const technicalPass=Object.values(checks).every(Boolean);
+  // A paused alert strategy with alertIds: [] is only a safe blueprint:
+  // it cannot produce the first entry from an alert. Do not label it
+  // operationally ready without showing this missing prerequisite.
+  const entrySignalConfigured=technicalPass &&
+    Array.isArray(matches[0].params?.alertIds) &&
+    matches[0].params.alertIds.length>0;
   return {
     readOnly:true,
     pilotReady:false,
+    entrySignalConfigured,
     status:technicalPass?'strategy_candidate':'strategy_not_ready',
     checks,
     strategyCount:strategies.length,
@@ -78,6 +85,7 @@ function safeLines(r) {
   const keys=['accountStrategiesKnown','noActiveLiveStrategies',
     'noLivePositions','globalRiskRestricted','exactStrategyAvailable'];
   if(r?.readOnly!==true||r.pilotReady!==false||
+    typeof r.entrySignalConfigured!=='boolean' ||
     !['strategy_candidate','strategy_not_ready'].includes(r.status) ||
     !Number.isSafeInteger(r.strategyCount)||r.strategyCount<0 ||
     keys.some(k=>typeof r.checks?.[k]!=='boolean') ||
@@ -91,6 +99,7 @@ function safeLines(r) {
     'strategy_preview_count='+r.strategyCount,
     ...keys.map(k=>'strategy_preview_'+k+'='+(r.checks[k]?'pass':'fail')),
     'strategy_preview_candidate_id='+(r.candidateStrategyId??'unverified'),
+    'strategy_preview_entry_signal_configured='+(r.entrySignalConfigured?'yes':'no'),
     'strategy_preview_exact_contract_generated=unverified',
     'strategy_preview_execution_approved=no',
     'pilot_ready=no',
