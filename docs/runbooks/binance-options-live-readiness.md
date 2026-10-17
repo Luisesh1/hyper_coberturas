@@ -602,6 +602,11 @@ adicionales y resolución supervisada si faltan fills o protección.
   comisiones, que no hay exposición ni incidencias, recibir autorización
   separada por contrato, cantidad, precio y vigencia, y ejecutar la
   transición de producción bajo revisión específica.
+- **No apagar prematuramente ambos flags mientras haya una posición
+  abierta**: el ejecutor también usa esos flags para enviar protección y
+  salidas. Si se necesita detener nuevas entradas, hacerlo bajo control
+  supervisado después de garantizar la gestión/cierre de la exposición;
+  no asumir que un kill switch de ejecución preserva el stop del bot.
 - Tras la única entrada supervisada: confirmar por `getOrder` y
   `getUserTrades` el fill y la cantidad; confirmar que GTC reduceOnly
   quedó aceptado y visible en Binance; probar la conciliación, cancelación
