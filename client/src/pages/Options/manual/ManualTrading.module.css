@@ -499,8 +499,9 @@
 
 .mGrid {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr 0.8fr;
+  grid-template-columns: minmax(70px, 0.95fr) minmax(142px, 2.15fr) minmax(32px, 0.42fr) minmax(47px, 0.64fr);
   align-items: center;
+  column-gap: 4px;
 }
 .mHead {
   padding: 6px 4px;
@@ -531,7 +532,26 @@
 .mStrikeVal { font-weight: 600; color: var(--text-bright); font-size: 14px; }
 .mIv { font-size: 11px; color: var(--text-tertiary); }
 .mNum { text-align: right; font-size: 14px; }
-.mDelta { text-align: right; font-size: 13px; color: var(--text-secondary); }
+.mQuoteHead { text-align: center !important; letter-spacing: 0; white-space: nowrap; }
+.mQuoteCell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.18fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+  white-space: nowrap;
+  text-align: center;
+}
+.mQuoteSide { font-size: clamp(9px, 2.6vw, 12px); text-align: center; }
+.mQuoteMid { font-size: clamp(13px, 3.7vw, 16px); font-weight: 700; color: var(--text-bright); }
+.mDelta { text-align: right; font-size: 12px; color: var(--text-secondary); }
+.mLeverage { text-align: right; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+@media (max-width: 360px) {
+  .mGrid { grid-template-columns: minmax(67px, 0.85fr) minmax(137px, 2.15fr) minmax(28px, .4fr) minmax(42px, .6fr); column-gap: 2px; }
+  .mQuoteSide { font-size: 9px; }
+  .mQuoteMid { font-size: 13px; }
+  .mLeverage, .mDelta { font-size: 10px; }
+}
 
 .spotDivider {
   display: flex;
