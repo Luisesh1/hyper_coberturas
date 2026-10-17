@@ -290,7 +290,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(f.broker.length,3);
   assert.equal(f.broker[2].side,'SELL');
   assert.equal(f.broker[2].reduceOnly,true);
-  assert.equal(f.broker[2].timeInForce,'GTC');
+  assert.equal(f.broker[2].timeInForce,'FOK');
   assert.equal(f.broker[2].price,11.70);
 
   f.setFill(f.broker[2],.01,11.70,8002);
@@ -364,9 +364,57 @@ test('partial fill of a GTC resting TP can leave uncloseable dust: not yet certi
   // Partial *closing* fill can still create dust even when entry was FOK.
   f.setFill(f.broker[1],.005,35.40,8202);
   const result=await f.engine.reconcilePending();
-  assert.equal(result.errors,0);
+  assert.equal(result.errors,1,'partial resting TP must trigger incident after trades');
   assert.equal(f.positions[0].quantity,.005);
   assert.equal(f.broker[1].status,'PARTIALLY_FILLED');
+  assert.ok(f.records.some(o=>o.purpose==='take_profit'&&o.status==='attention'));
+  assert.ok(f.warnings.includes('options_live_reconciliation_failed'));
   assert.equal(f.broker.length,2,'no invented extra close below LOT_SIZE');
-  // This hazard remains an explicit NO-GO for unattended execution.
+  // The partial fill is durable and flagged, NOT an autonomous dust remedy.
+});
+
+test('expired ETH FOK standard exit has zero fill and allows a new deferred close check',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8301);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12});
+  const position={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[position],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[2].timeInForce,'FOK');
+  f.broker[2].status='EXPIRED';
+  f.broker[2].executedQty=0;
+  await f.engine.reconcilePending();
+  assert.equal(f.positions[0].quantity,.01,'no fictitious close after FOK expiry');
+  assert.equal(f.records.find(o=>o.clientOrderId===f.broker[2].clientOrderId).status,'final');
+  f.clock.now+=60_000;
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[3].side,'SELL');
+  assert.equal(f.broker[3].timeInForce,'FOK');
+  assert.equal(f.broker[3].reduceOnly,true);
+});
+
+test('anomalous partial ETH FOK close books real fill then enters ATTENTION',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8401);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12});
+  const position={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[position],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[2].timeInForce,'FOK');
+  f.setFill(f.broker[2],.005,11.70,8402);
+  const result=await f.engine.reconcilePending();
+  assert.equal(result.errors,1);
+  assert.equal(f.positions[0].quantity,.005);
+  assert.ok(f.records.some(o=>o.action==='close'&&o.purpose==='standard'&&o.status==='attention'));
+  assert.equal(f.broker.length,3,'do not automatically sell invalid dust');
 });
