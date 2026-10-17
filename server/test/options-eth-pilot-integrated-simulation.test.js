@@ -42,7 +42,6 @@ function harness() {
   };
   const posFor = (id) => positions.find(p => p.id === id);
   const localFor = (id) => records.find(o => o.id === id);
-  const brokerFor = (order) => broker.find(b => String(b.orderId) === String(order.orderId));
   const brokerClient = {
     async getExchangeInfo() { return orderInfo; },
     async getPositions() {
