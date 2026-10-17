@@ -621,6 +621,42 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.length > 0;
   }
 
+  /**
+   * Claim a critical incident alert with the exact timestamp used in the DB.
+   * Caller must release this token if Telegram delivery fails. The legacy
+   * boolean claim API above remains for older callers.
+   */
+  async function claimIncidentNotificationToken(userId, kind, resource, intervalMs = 15 * 60_000) {
+    const time = now();
+    const { rows } = await db.query(
+      "INSERT INTO options_live_incident_notifications " +
+      "(user_id,incident_kind,resource,last_notified_at) VALUES ($1,$2,$3,$4) " +
+      "ON CONFLICT (user_id,incident_kind,resource) DO UPDATE " +
+      "SET last_notified_at=EXCLUDED.last_notified_at " +
+      "WHERE options_live_incident_notifications.last_notified_at <= $5 " +
+      "RETURNING last_notified_at",
+      [userId, kind, resource, time, time - intervalMs]
+    );
+    return rows.length ? Number(rows[0].last_notified_at) : null;
+  }
+
+  /**
+   * Only release this worker's failed delivery attempt; a concurrent
+   * successful alert or another newer claim must never be reset.
+   */
+  async function releaseIncidentNotification(userId, kind, resource, claimAt) {
+    if (!Number.isSafeInteger(Number(claimAt)) || Number(claimAt) <= 0) {
+      throw new Error('Invalid incident notification token');
+    }
+    const { rows } = await db.query(
+      "UPDATE options_live_incident_notifications SET last_notified_at=0 " +
+      "WHERE user_id=$1 AND incident_kind=$2 AND resource=$3 " +
+      "AND last_notified_at=$4 RETURNING user_id",
+      [userId, kind, resource, claimAt]
+    );
+    return rows.length > 0;
+  }
+
   /** Alertas operativas: reclamar envío a Telegram a lo sumo 1/15 minutos.
    * Es atómico entre réplicas, persiste tras reinicios, no contiene secretos.
    */
@@ -859,6 +895,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
+    claimIncidentNotificationToken, releaseIncidentNotification,
     markSending, markActive, markAttention, claimReconcile, releaseReconcile,
     applyTrade, finishOrder };
 }
