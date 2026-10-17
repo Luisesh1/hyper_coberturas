@@ -55,6 +55,32 @@ export function useOrderActions({ onDone, quoteForSymbol }) {
     return run(() => optionsApi.placeOrder(order), 'Orden enviada');
   }, [confirm, run]);
 
+  // Cierre por precio objetivo: orden LIMIT GTC reduce-only, no trigger STOP.
+  // La confirmación advierte cuando la orden puede cruzar el libro de inmediato.
+  const closePositionAtPrice = useCallback(async (position, targetPrice) => {
+    const side = isLongPosition(position) ? 'SELL' : 'BUY';
+    const quantity = Math.abs(Number(position?.quantity));
+    const price = Number(targetPrice);
+    if (!position?.symbol || !Number.isFinite(price) || price <= 0
+      || !Number.isFinite(quantity) || quantity <= 0) {
+      const msg = 'Precio o cantidad inválida para cerrar esta posición';
+      setError(msg);
+      addNotification?.('error', msg);
+      return null;
+    }
+    const ok = await confirm({
+      title: 'Cerrar a precio objetivo',
+      message: `${SIDE_LABEL[side]} ${fmtNum(quantity, 2)} contratos de ${position.symbol} a un precio límite de ${fmtPrice(price)} USDT por contrato (prima total ${fmtNum(price * quantity, 2)} USDT). Se enviará una orden GTC solo-reducir con dinero real; puede ejecutarse inmediatamente si hay un precio compatible. No es una orden stop-loss.`,
+      confirmLabel: 'Enviar cierre límite',
+      variant: 'danger',
+    });
+    if (!ok) return null;
+    return run(
+      () => optionsApi.placeOrder({ symbol: position.symbol, side, quantity, price, reduceOnly: true }),
+      'Orden límite de cierre enviada',
+    );
+  }, [addNotification, confirm, run]);
+
   const cancelOrder = useCallback(async (order) => {
     const ok = await confirm({
       title: 'Cancelar orden',
@@ -89,5 +115,5 @@ export function useOrderActions({ onDone, quoteForSymbol }) {
     );
   }, [addNotification, confirm, quoteForSymbol, run]);
 
-  return { dialog, pending, error, clearError: () => setError(null), submitOrder, cancelOrder, closePosition };
+  return { dialog, pending, error, clearError: () => setError(null), submitOrder, cancelOrder, closePosition, closePositionAtPrice };
 }
