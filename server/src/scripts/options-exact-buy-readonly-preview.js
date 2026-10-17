@@ -149,6 +149,13 @@ async function preview({ client, input, at = Date.now(), now = Date.now, env = p
   try { openOrders=await client.getOpenOrders(); } catch (_) { openOrders=null; }
   states.isolated=accountIsolated(positions,openOrders);
 
+  // Signed account/permissions GETs can take tens of seconds after the
+  // public orderbook response. Recheck freshness at the END of preflight:
+  // a once-valid book cannot authorize a stale price recommendation.
+  states.bookFresh=states.bookFresh &&
+    now() >= depthAt && now() - depthAt <= MAX_BOOK_AGE_MS;
+  states.liquidity=states.liquidity && states.bookFresh;
+
   const technicalPass=['flagsOff','listed','quoteValid','exactFilters',
     'liquidity','permissions','isolated'].every(k=>states[k]===true);
   const eligible=technicalPass && states.balanceEnough === true;
