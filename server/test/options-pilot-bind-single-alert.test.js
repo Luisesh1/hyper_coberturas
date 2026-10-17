@@ -18,7 +18,8 @@ const alert = {
   asset_list_json:'["ETHUSDT"]', rules_json:'[{"id":1}]',
   option_expiry_min_days:5, option_expiry_max_days:12,
 };
-function mockDb({ strategies=[base], alerts=[alert], positions=[], orders=[] }={}) {
+function mockDb({ strategies=[base], alerts=[alert], positions=[], orders=[],
+  global={maxDailyLossUsdt:1,maxMarginUsdt:1,maxLiveStrategies:1,notifyTelegram:true} }={}) {
   const calls=[];
   const db={ transaction:async(fn)=>fn({query:async(sql,args)=>{
     calls.push({sql,args});
@@ -26,6 +27,7 @@ function mockDb({ strategies=[base], alerts=[alert], positions=[], orders=[] }={
     if(sql.includes('SELECT * FROM options_strategies'))return {rows:strategies};
     if(sql.includes('SELECT id FROM options_strategy_positions'))return {rows:positions};
     if(sql.includes('SELECT id FROM options_live_orders'))return {rows:orders};
+    if(sql.includes("key='options_limits'"))return {rows:[{value:JSON.stringify(global)}]};
     if(sql.includes('FROM alerts WHERE'))return {rows:alerts};
     if(sql.includes('UPDATE options_strategies'))return {rows:[{id:2}]};
     throw Error('Unexpected SQL: '+sql);
@@ -65,6 +67,7 @@ test('ambiguous alerts, invalid strategy and live exposure fail without mutation
     {alerts:[]},
     {strategies:[{...base,mode:'live'}]},
     {strategies:[{...base,params:{...BOT_PARAMS,alertIds:[999]}}]},
+    {global:{maxDailyLossUsdt:500,maxMarginUsdt:500,maxLiveStrategies:3,notifyTelegram:false}},
     {positions:[{id:99}]},
     {orders:[{id:99}]},
   ]){
