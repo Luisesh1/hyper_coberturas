@@ -152,7 +152,7 @@ router.get('/pilot/gtc-diagnostic', requireSuperuser, asyncHandler(async (req, r
     testedQuantity: '0.01',
     hypotheticalPartialFill: '0.005',
     hypotheticalRemainder: '0.005',
-    note: 'Solo comprueba reglas de nueva orden y cuenta aislada. NO verifica fill parcial real ni capacidad de liquidar el residuo.',
+    note: 'Consulta filtros, aislamiento y una muestra publica de ejecuciones. Una muestra sin fracciones NO prueba su imposibilidad. El TP propio y cierre del residuo siguen sin verificar.',
   } });
 }));
 
