@@ -16,6 +16,7 @@ const CAP_USDT = 20;
 const ENTRY_FEE_BOUND = 0.10;
 const MAX_SPREAD = 0.10;
 const MIN_EXPIRY_MS = 3 * 86400_000;
+const MAX_BOOK_AGE_MS = 10_000;
 const APPROVED_PATTERN = /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/;
 const validPos = v => v !== null && v !== undefined && v !== '' &&
   Number.isFinite(Number(v)) && Number(v) > 0;
@@ -37,16 +38,33 @@ function parseInputs(argv) {
 }
 
 function bestBook(book, qty, maxLimit) {
-  if (!book || !Array.isArray(book.asks) || !Array.isArray(book.bids)) return null;
+  if (!book || !Array.isArray(book.asks) || !Array.isArray(book.bids) ||
+      !validPos(qty) || !validPos(maxLimit)) return null;
   const levels = rows => rows.filter(x => Array.isArray(x) && validPos(x[0]) && validPos(x[1]))
     .map(x => ({ price: Number(x[0]), qty: Number(x[1]) }));
   const asks = levels(book.asks).sort((a,b) => a.price - b.price);
   const bids = levels(book.bids).sort((a,b) => b.price - a.price);
   if (!asks.length || !bids.length || asks[0].price <= bids[0].price ||
-      asks[0].qty < qty || bids[0].qty < qty ||
       asks[0].price > maxLimit ||
       (asks[0].price - bids[0].price) / asks[0].price > MAX_SPREAD) return null;
+  // FOK needs the entire quantity within the maximum LIMIT, not just
+  // the quantity displayed at the best ask (or best bid for exitability).
+  const covers = (levels, allowed) => {
+    let remaining=Number(qty), worst=null;
+    for (const level of levels) {
+      if (!allowed(level.price)) break;
+      remaining-=level.qty;
+      worst=level.price;
+      if (remaining <= 1e-10) return worst;
+    }
+    return null;
+  };
+  const worstAsk=covers(asks, price => price <= maxLimit + 1e-9);
+  const worstBid=covers(bids, price =>
+    (asks[0].price - price)/asks[0].price <= MAX_SPREAD + 1e-9);
+  if (worstAsk == null || worstBid == null) return null;
   return { ask: asks[0].price, bid: bids[0].price,
+    worstAsk, worstBid,
     spreadFraction: (asks[0].price - bids[0].price) / asks[0].price };
 }
 
@@ -67,7 +85,7 @@ function roundupCents(number) {
   return Math.ceil((number - 1e-10) * 100) / 100;
 }
 
-async function preview({ client, input, at = Date.now(), env = process.env }) {
+async function preview({ client, input, at = Date.now(), now = Date.now, env = process.env }) {
   const { symbol, quantity, maxLimit } = input;
   const qty=Number(quantity), max=Number(maxLimit);
   const premiumMax=qty * max;
@@ -89,24 +107,31 @@ async function preview({ client, input, at = Date.now(), env = process.env }) {
     validPos(meta.unit) && Number(meta.expiryDate) > at + MIN_EXPIRY_MS);
   try { quote=await client.getTicker(symbol); } catch (_) { quote=null; }
   if (Array.isArray(quote)) quote=quote.find(x => x.symbol === symbol) || null;
-  states.quoteValid=Boolean(quote && quote.symbol === symbol &&
+  states.marketQuotePresent=Boolean(quote && quote.symbol === symbol &&
     validPos(quote.askPrice) && validPos(quote.bidPrice) &&
-    Number(quote.bidPrice) <= Number(quote.askPrice) &&
-    Number(quote.askPrice) <= max);
+    Number(quote.bidPrice) <= Number(quote.askPrice));
+  states.priceWithinLimit=states.marketQuotePresent &&
+    Number(quote.askPrice) <= max + 1e-9;
+  states.quoteValid=states.marketQuotePresent && states.priceWithinLimit;
   try {
-    if (states.listed && states.quoteValid) {
+    if (states.listed && states.marketQuotePresent) {
       requireOrderFilters(exchange, { symbol, price:String(quote.askPrice),
         quantity }, at, at+10*60000);
-      // La orden propuesta usa el precio LIMIT máximo, por lo que ese
-      // precio también debe cumplir los filtros exactos de Binance.
+      // Validate the exact approved price independently of market movement;
+      // a stale limit is not a filter failure.
       requireOrderFilters(exchange, { symbol, price:maxLimit, quantity },
         at, at+10*60000);
       states.exactFilters=true;
     } else states.exactFilters=false;
   } catch (_) { states.exactFilters=false; }
 
-  try { book=await client.getDepth(symbol,10); } catch (_) { book=null; }
-  const top=bestBook(book,qty,max);
+  try { book=await client.getDepth(symbol,20); } catch (_) { book=null; }
+  const depthReceivedAt=now();
+  const depthAt=Number(book?.T);
+  states.bookFresh=book?.T != null && Number.isSafeInteger(depthAt) &&
+    depthAt <= depthReceivedAt + 1000 &&
+    depthAt >= depthReceivedAt - MAX_BOOK_AGE_MS;
+  const top=states.bookFresh ? bestBook(book,qty,max) : null;
   states.liquidity=Boolean(top && states.quoteValid &&
     top.ask <= Number(quote.askPrice) + 1e-9);
 
@@ -124,6 +149,13 @@ async function preview({ client, input, at = Date.now(), env = process.env }) {
   try { openOrders=await client.getOpenOrders(); } catch (_) { openOrders=null; }
   states.isolated=accountIsolated(positions,openOrders);
 
+  // Signed account/permissions GETs can take tens of seconds after the
+  // public orderbook response. Recheck freshness at the END of preflight:
+  // a once-valid book cannot authorize a stale price recommendation.
+  states.bookFresh=states.bookFresh &&
+    now() >= depthAt && now() - depthAt <= MAX_BOOK_AGE_MS;
+  states.liquidity=states.liquidity && states.bookFresh;
+
   const technicalPass=['flagsOff','listed','quoteValid','exactFilters',
     'liquidity','permissions','isolated'].every(k=>states[k]===true);
   const eligible=technicalPass && states.balanceEnough === true;
@@ -136,9 +168,13 @@ async function preview({ client, input, at = Date.now(), env = process.env }) {
     eligible,
     publicOrder:{
       symbol, quantity, limitPrice:maxLimit,
-      bid:states.quoteValid ? String(quote.bidPrice) : null,
-      ask:states.quoteValid ? String(quote.askPrice) : null,
+      bid:states.marketQuotePresent ? String(quote.bidPrice) : null,
+      ask:states.marketQuotePresent ? String(quote.askPrice) : null,
       expiry:states.listed ? new Date(Number(meta.expiryDate)).toISOString() : null,
+      reason:!states.marketQuotePresent ? 'quote_unavailable'
+        : !states.priceWithinLimit ? 'ask_above_limit'
+          : !states.bookFresh ? 'depth_missing_or_stale'
+            : !states.liquidity ? 'depth_insufficient' : 'quote_checked',
     },
     entryPremiumCapUsdt:roundupCents(premiumMax),
     entryFeeReserveUsdt:roundupCents(feeBound),
@@ -148,14 +184,18 @@ async function preview({ client, input, at = Date.now(), env = process.env }) {
   };
 }
 
-const CHECKS=['flagsOff','listed','quoteValid','exactFilters',
-  'liquidity','balanceKnown','balanceEnough','permissions','isolated'];
+const CHECKS=['flagsOff','listed','marketQuotePresent','priceWithinLimit',
+  'quoteValid','exactFilters','bookFresh','liquidity',
+  'balanceKnown','balanceEnough','permissions','isolated'];
+const PUBLIC_REASONS=['quote_unavailable','ask_above_limit',
+  'depth_missing_or_stale','depth_insufficient','quote_checked'];
 
 function outputLines(r) {
   if (!r || r.readOnly!==true || r.pilotReady!==false ||
       !['pass','blocked','unverified'].includes(r.technicalStatus) ||
       !Number.isFinite(r.reviewedAt) ||
       !r.publicOrder || !APPROVED_PATTERN.test(r.publicOrder.symbol || '') ||
+      !PUBLIC_REASONS.includes(r.publicOrder.reason) ||
       !validPos(r.publicOrder.quantity) || !validPos(r.publicOrder.limitPrice) ||
       !validPos(r.entryTotalCapUsdt) || r.entryTotalCapUsdt > CAP_USDT ||
       !r.checks || CHECKS.some(k => ![true,false,null].includes(r.checks[k]))) {
@@ -172,6 +212,7 @@ function outputLines(r) {
     'preview_limit_usdt='+pub.limitPrice,
     'preview_bid_usdt='+(pub.bid ?? 'unverified'),
     'preview_ask_usdt='+(pub.ask ?? 'unverified'),
+    'preview_market_reason='+pub.reason,
     'preview_expiry='+(pub.expiry ?? 'unverified'),
     'preview_premium_cap_usdt='+r.entryPremiumCapUsdt.toFixed(2),
     'preview_entry_fee_reserve_usdt='+r.entryFeeReserveUsdt.toFixed(2),
@@ -201,4 +242,4 @@ if (require.main===module) {
     process.exitCode=1;
   });
 }
-module.exports={parseInputs,bestBook,availableUsdt,preview,outputLines,CAP_USDT};
+module.exports={parseInputs,bestBook,availableUsdt,preview,outputLines,CAP_USDT,MAX_BOOK_AGE_MS};

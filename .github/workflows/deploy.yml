@@ -207,7 +207,7 @@ jobs:
           fi
           # No exponer datos de cuenta, ni siquiera saldos. El script solo
           # emite precios PUBLICOS y booleans de las comprobaciones privadas.
-          grep -E '^preview_(status|symbol|side|quantity|limit_usdt|bid_usdt|ask_usdt|entry_total_cap_usdt|flagsOff|listed|quoteValid|exactFilters|liquidity|balanceKnown|balanceEnough|permissions|isolated)=' \
+          grep -E '^preview_(status|symbol|side|quantity|limit_usdt|bid_usdt|ask_usdt|market_reason|entry_total_cap_usdt|flagsOff|listed|marketQuotePresent|priceWithinLimit|quoteValid|exactFilters|bookFresh|liquidity|balanceKnown|balanceEnough|permissions|isolated)=' \
             "$RUNNER_TEMP/options-exact-buy-preview.log" || true
           if grep -Fxq 'preview_status=pass' "$RUNNER_TEMP/options-exact-buy-preview.log"; then
             echo "::warning::Preflight preliminar favorable: SIN autorización de trading ni estrategia; NO OPERAR."
@@ -216,7 +216,9 @@ jobs:
           fi
           {
             echo '### Vista previa de una compra ETH (datos privados minimizados)'
-            echo '- Solo se comprueba una propuesta: 0.01 ETH-261023-2500-C, precio LIMIT <=23.60 USDT.'
+            echo '- Solo se comprueba una propuesta HISTÓRICA: 0.01 ETH-261023-2500-C, precio LIMIT <=23.60 USDT.'
+            echo '- Si el ask actual supera el límite, se informa ask_above_limit. No subir precio automáticamente ni habilitar trading.'
+            echo '- El libro debe tener timestamp fresco y volumen completo dentro del límite; una vista previa favorable no es permiso de orden.'
             echo '- No se muestra patrimonio ni saldo, únicamente estado suficiente/insuficiente/desconocido.'
             echo '- Las tarifas efectivas, autorización personal y estrategia siguen pendientes.'
             echo '- Trading real: OFF. No se enviaron órdenes.'

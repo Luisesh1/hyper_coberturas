@@ -523,3 +523,45 @@ Las salidas pendientes son notificadas a Telegram como cierre manual
 requerido. No confundir ocho/nueve trabajos CI exitosos con la aprobación
 para activar operaciones: el contrato real con Binance sigue sin
 certificarse desde este chat.
+
+
+## Diagnóstico exacto de cotización tras el merge #19 (sin órdenes)
+
+La comprobación automática `options-exact-buy-readonly-preview.js` utiliza una
+propuesta histórica, **no** una orden autorizada:
+`ETH-261023-2500-C 0.01 LIMIT 23.60`. Si el ask de Binance cambia por
+encima de 23.60, el preflight debe informar
+`preview_market_reason=ask_above_limit`, con el bid/ask públicos
+verificados. **No subir el precio máximo, cambiar de contrato ni enviar
+una orden automáticamente.** Es movimiento del mercado, no una falla de
+autenticación ni evidencia de que falten precios.
+
+`preview_market_reason=quote_unavailable` indica que no pudo obtenerse
+una cotización utilizable; `depth_missing_or_stale` indica que la
+profundidad no tiene timestamp de Binance reciente; y
+`depth_insufficient` indica que no se puede cubrir la cantidad completa
+dentro del límite de precio aceptado. La evaluación conserva
+`pilot_ready=no` incluso cuando la propuesta pasa técnicamente. La
+cotización y el libro se verifican por separado, el libro se exige
+con menos de 10 segundos de antigüedad frente al instante real en que
+se recibe, y se suma volumen por nivel para un cierre/entrada FOK de
+cantidad completa (no solo el primer nivel).
+
+**Condiciones que el código por sí solo NO puede eliminar:**
+
+1. Un `LIMIT GTC reduceOnly` de 0.01 ETH todavía puede llenar 0.005
+   y dejar una posición inferior al mínimo. Aún no hay evidencia de
+   excepción Binance al `LOT_SIZE` para cerrarla. El código detecta,
+   alerta y bloquea más actividad, pero no crea un cierre garantizado.
+2. La variante FOK sintética está aislada en PR #20 y OFF por defecto.
+   Evita el comportamiento normal de fill parcial pero deja la salida
+   sin protección residente si el proceso se cae o se pierde el tick.
+   No se puede llamar a esto un stop garantizado.
+3. Sin una operación real separadamente autorizada y supervisada, no
+   existen evidencias de `getOrder`, `userTrades`, cancelación,
+   reinicio de orden incierta y liquidación real. Los tests simulados no
+   equivalen a esas evidencias.
+4. Ni una cotización favorable ni una CI verde activan permiso de
+   entrada, cambian una estrategia pausada o modifican flags del VPS.
+   Conservar ambos controles `OPTIONS_LIVE_*=false` mientras falten
+   evidencias de salida, contrato e intervención humana.
