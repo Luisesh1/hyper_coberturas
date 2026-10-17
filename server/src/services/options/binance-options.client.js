@@ -246,7 +246,13 @@ function createBinanceOptionsClient({
     getOpenOrders(symbol) {
       return request('GET', '/eapi/v1/openOrders', { params: { symbol }, signed: true });
     },
-    placeOrder({ symbol, side, quantity, price, postOnly, reduceOnly, clientOrderId }) {
+    placeOrder({ symbol, side, quantity, price, timeInForce = 'GTC', postOnly, reduceOnly, clientOrderId }) {
+      if (!['GTC', 'FOK'].includes(timeInForce)) {
+        throw new ValidationError('Binance Options: timeInForce no permitido');
+      }
+      if (timeInForce === 'FOK' && postOnly) {
+        throw new ValidationError('FOK no puede combinarse con postOnly');
+      }
       return request('POST', '/eapi/v1/order', {
         signed: true,
         params: {
@@ -255,7 +261,7 @@ function createBinanceOptionsClient({
           type: 'LIMIT',
           quantity,
           price,
-          timeInForce: 'GTC',
+          timeInForce,
           postOnly: postOnly ? 'true' : undefined,
           reduceOnly: reduceOnly ? 'true' : undefined,
           clientOrderId,

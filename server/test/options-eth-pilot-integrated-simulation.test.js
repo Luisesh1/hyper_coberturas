@@ -54,7 +54,8 @@ function harness() {
           orderId: b.orderId, status: b.status }));
     },
     async placeOrder(data) {
-      const row = { ...data, orderId: String(nextBrokerId++),
+      const row = { ...data, timeInForce:data.timeInForce || 'GTC',
+        orderId: String(nextBrokerId++),
         status: 'NEW', executedQty: 0, trades: [] };
       broker.push(row);
       return { orderId: row.orderId, symbol: data.symbol, side: data.side,
@@ -67,7 +68,7 @@ function harness() {
       return { orderId:b.orderId, clientOrderId:b.clientOrderId,
         symbol:b.symbol, side:b.side, quantity:String(b.quantity),
         executedQty:String(b.executedQty), status:b.status,
-        type:'LIMIT',timeInForce:'GTC' };
+        type:'LIMIT',timeInForce:b.timeInForce };
     },
     async getUserTrades({symbol,fromId,limit}) {
       return broker.flatMap(b=>b.trades).filter(t=>t.symbol===symbol &&
@@ -253,8 +254,9 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(initial.status,'submitted');
   assert.equal(f.broker.length,1);
   assert.deepEqual({symbol:f.broker[0].symbol,side:f.broker[0].side,
-    qty:f.broker[0].quantity,price:f.broker[0].price,reduceOnly:f.broker[0].reduceOnly},
-    {symbol:SYMBOL,side:'BUY',qty:.01,price:23.60,reduceOnly:false});
+    qty:f.broker[0].quantity,price:f.broker[0].price,reduceOnly:f.broker[0].reduceOnly,
+    tif:f.broker[0].timeInForce},
+    {symbol:SYMBOL,side:'BUY',qty:.01,price:23.60,reduceOnly:false,tif:'FOK'});
   // Binance acknowledgement is not a fill: no position yet.
   assert.equal(f.positions.length,0);
   // The exchange-level open-order guard must block a second BUY before
@@ -269,6 +271,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(f.broker.length,2);
   assert.equal(f.broker[1].side,'SELL');
   assert.equal(f.broker[1].reduceOnly,true);
+  assert.equal(f.broker[1].timeInForce,'GTC');
   assert.equal(f.broker[1].quantity,.01);
   assert.equal(f.broker[1].price,35.40);
   assert.equal((await f.engine.reconcilePending()).protectionSent.sent,0);
@@ -287,6 +290,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(f.broker.length,3);
   assert.equal(f.broker[2].side,'SELL');
   assert.equal(f.broker[2].reduceOnly,true);
+  assert.equal(f.broker[2].timeInForce,'GTC');
   assert.equal(f.broker[2].price,11.70);
 
   f.setFill(f.broker[2],.01,11.70,8002);
@@ -325,10 +329,44 @@ test('partial fill below minimum executable lot is flagged; no fictitious TP',as
   await f.runEntry();
   f.setFill(f.broker[0],.005,23.60,8011);
   const result=await f.engine.reconcilePending();
+  assert.equal(result.errors,1,'FOK partial must raise an incident after confirmed trades');
   assert.equal(result.protection.queued,0);
   assert.equal(f.positions[0].quantity,.005);
+  assert.ok(f.records.some(o=>o.action==='open'&&o.status==='attention'));
+  assert.ok(f.warnings.includes('options_live_reconciliation_failed'));
   assert.equal(f.broker.length,1,'cannot place invalid 0.005 option TP');
   assert.ok(f.warnings.includes('options_tp_coverage_pending'));
   assert.ok(f.notices.some(n=>n.includes('TP aún no protegido')));
   // Fail-closed: this simulation DOES NOT certify unattended live rollout.
+});
+
+test('FOK rejected without any fill creates no position and still exhausts one-shot entry',async()=>{
+  const f=harness();
+  const entry=await f.runEntry();
+  assert.equal(entry.status,'submitted');
+  assert.equal(f.broker[0].timeInForce,'FOK');
+  f.broker[0].status='EXPIRED';
+  f.broker[0].executedQty=0;
+  const outcome=await f.engine.reconcilePending();
+  assert.equal(outcome.errors,0);
+  assert.equal(f.positions.length,0);
+  assert.equal(f.records[0].status,'final');
+  assert.equal((await f.runEntry(95)).status,'duplicate_or_unresolved');
+  assert.equal(f.broker.length,1);
+});
+
+test('partial fill of a GTC resting TP can leave uncloseable dust: not yet certified unattended',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8201);
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[1].timeInForce,'GTC');
+  // Partial *closing* fill can still create dust even when entry was FOK.
+  f.setFill(f.broker[1],.005,35.40,8202);
+  const result=await f.engine.reconcilePending();
+  assert.equal(result.errors,0);
+  assert.equal(f.positions[0].quantity,.005);
+  assert.equal(f.broker[1].status,'PARTIALLY_FILLED');
+  assert.equal(f.broker.length,2,'no invented extra close below LOT_SIZE');
+  // This hazard remains an explicit NO-GO for unattended execution.
 });
