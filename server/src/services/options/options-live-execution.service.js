@@ -1,12 +1,13 @@
 /**
  * Motor real de ejecución Binance Options.
- * LIMIT GTC durante 10 minutos, sin fills sintéticos.
+ * LIMIT para Binance Options: ETH FOK al abrir y al cerrar (excepto TP resting GTC), sin fills sintéticos.
  * Orden durable -> POST único -> status/trades -> cancelar remanente -> ledger.
  */
 const liveRepo = require('../../repositories/options-live-orders.repository');
 const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
 const { validateBinanceOrderBatch } = require('./options-order-filters');
+const { fullSizeFokLimit } = require('./options-fok-depth');
 const { enforcePilotEntry } = require('./options-live-pilot-policy');
 const { parseSymbol } = require('./options-utils');
 const { projectTakeProfit } = require('./options-take-profit');
@@ -17,11 +18,15 @@ const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'EXPIRED
 const ACTIVE = new Set(['NEW', 'PARTIALLY_FILLED', 'ACCEPTED']);
 const clean = (value) => String(value ?? '');
 
-// El piloto ETH debe abrir de forma atómica: 0 o 100 % del lote.
-// El TP que descansa en el libro y los cierres mantienen GTC.
-const orderTimeInForce = (order) =>
-  order.action === 'open' && /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(order.symbol || '')
+// En ETH, las entradas y los cierres estándar usan FOK para evitar
+// residuos por ejecuciones parciales. El TP residente necesita GTC:
+// el riesgo de fills parciales de TP aún bloquea el piloto automático.
+const orderTimeInForce = (order) => {
+  const eth = /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(order.symbol || '');
+  return eth && (order.action === 'open' ||
+    (order.action === 'close' && order.purpose !== 'take_profit'))
     ? 'FOK' : 'GTC';
+};
 
 function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly, now }) {
   const side = position.side;
@@ -278,6 +283,17 @@ class OptionsLiveExecution {
       }
       state = await client.getOrder({ symbol: order.symbol, orderId });
       status = clean(state?.status).toUpperCase();
+      // A canceled order can still have fills. The post-cancel GET must
+      // belong to the exact same order and preserve the signed terms.
+      if (!state || clean(state.orderId) !== orderId ||
+          state.symbol !== order.symbol || state.side !== order.side ||
+          (state.clientOrderId && state.clientOrderId !== order.clientOrderId) ||
+          !Number.isFinite(Number(state.quantity)) ||
+          Math.abs(Number(state.quantity) - order.quantity) > 1e-8 ||
+          (state.type != null && state.type !== 'LIMIT') ||
+          (state.timeInForce != null && state.timeInForce !== orderTimeInForce(order))) {
+        throw new Error('Post-cancel Binance order identity or terms mismatch');
+      }
       if (!TERMINAL.has(status) && !ACTIVE.has(status)) {
         throw new Error('Unable to verify cancellation status');
       }
@@ -321,16 +337,27 @@ class OptionsLiveExecution {
       throw new Error('Trade quantities disagree with Binance order');
     }
     for (const trade of trades) await this.repo.applyTrade({ ...order, orderId }, trade);
-    // FOK significa todo o nada. Una respuesta parcial contradice el
-    // contrato de seguridad del piloto; registrar fills confirmados para
-    // no ocultar posiciones reales, pero NO cerrar el incidente ni
-    // considerar la apertura segura. El reconciliador alertará a operador.
+    // Registrar PRIMERO los trades confirmados para no ocultar exposición.
+    // FOK es todo o nada: un fill parcial de entrada O salida es anómalo.
     if (orderTimeInForce(order) === 'FOK' &&
         (status === 'PARTIALLY_FILLED' ||
          (executed > 0 && executed < order.quantity - 1e-8))) {
-      throw new Error('FOK ETH entry anomalous partial fill: manual reconciliation required');
+      throw new Error('FOK ETH order anomalous partial fill: manual reconciliation required');
     }
-    if (TERMINAL.has(status) && Math.abs(sum - executed) < 1e-8) {
+    // Un TP GTC también puede cancelarse o expirar DESPUÉS de ejecutar
+    // parcialmente. El estado terminal no convierte un resto < minQty en
+    // posición cerrada: conservar ATTENTION hasta intervención explícita.
+    if (order.purpose === 'take_profit' &&
+        ((status === 'PARTIALLY_FILLED' && executed > 0) ||
+         (executed > 0 && executed < order.quantity - 1e-8))) {
+      throw new Error('GTC take-profit incompletely executed: residual position requires operator review');
+    }
+    // Binance puede declarar estado terminal antes de que getUserTrades
+    // muestre todos los fills. Nunca declarar FINAL sin toda la evidencia.
+    if (TERMINAL.has(status) && Math.abs(sum - executed) >= 1e-8) {
+      throw new Error('Terminal Binance order has missing or inconsistent trades');
+    }
+    if (TERMINAL.has(status)) {
       await this.repo.finishOrder(order.id, orderId, executed);
     }
   }
@@ -647,8 +674,23 @@ class OptionsLiveExecution {
     let sent = 0;
     for (const request of pending) {
       try {
-        const quote = await this.market.getQuote(request.symbol, { fresh: true });
-        const price = request.side === 'BUY' ? Number(quote?.bid) : Number(quote?.ask);
+        const closingSide = request.side === 'BUY' ? 'SELL' : 'BUY';
+        let price;
+        if (/^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(request.symbol || '')) {
+          // FOK is all-or-nothing: the best bid alone may lack enough volume.
+          // Read the actual book and bound slippage BEFORE creating an order.
+          const client = await this.credentials.getClientForUser(request.userId);
+          if (typeof client.getDepth !== 'function') {
+            throw new Error('Binance depth unavailable for full-size FOK exit');
+          }
+          const book = await client.getDepth(request.symbol, 20);
+          price = fullSizeFokLimit({
+            book, side: closingSide, quantity: request.quantity, nowMs: this.now(),
+          });
+        } else {
+          const quote = await this.market.getQuote(request.symbol, { fresh: true });
+          price = request.side === 'BUY' ? Number(quote?.bid) : Number(quote?.ask);
+        }
         if (!Number.isFinite(price) || price <= 0) throw new Error('No executable deferred close price');
         const res = await this.submit(
           { id: request.strategyId, userId: request.userId, template: 'alert_signal' },
@@ -656,7 +698,7 @@ class OptionsLiveExecution {
             detail: 'Salida pendiente tras cancelar y conciliar TP',
             legs: [{
               positionId: request.positionId, symbol: request.symbol,
-              side: request.side === 'BUY' ? 'SELL' : 'BUY',
+              side: closingSide,
               quantity: request.quantity, price,
             }] },
           { now: this.now(),

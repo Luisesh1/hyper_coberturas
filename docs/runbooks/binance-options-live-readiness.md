@@ -222,6 +222,39 @@ rediseñar salidas de forma que no dejen residuos, antes de operar.
 La estrategia 2 permanece pausada, flags de trading real OFF,
 sin enviar órdenes reales ni crear posiciones.
 
+
+## Salidas ETH FOK e incidentes TP — 17 oct 2026
+
+- Las salidas estándar de ETH (stop, vencimiento y cierre diferido) usan
+  `LIMIT FOK reduceOnly`. El precio límite procede de `GET /eapi/v1/depth`
+  con máximo 20 niveles: exigir libro de ambas caras coherente, `T` presente
+  y con antigüedad <=10 s (máximo 2 s en el futuro), volumen acumulado de
+  la **cantidad completa** y degradación máxima de precio de **10%**
+  frente al mejor nivel. No usar el mejor bid sin verificar volumen.
+  Si falla cualquier check, NO enviar orden; mantener salida pendiente y
+  alertar. Si el FOK no encuentra contrapartida completa, expira sin
+  garantía de cierre. No existe stop exchange-native ni liquidación segura
+  certificada. Un snapshot de libro puede cambiar antes del POST.
+- El TP residente se mantiene `LIMIT GTC reduceOnly`. Al observar
+  `PARTIALLY_FILLED` con cualquier ejecución, o incluso un estado terminal
+  `CANCELED/EXPIRED` con `0 < executedQty < requestedQty`, registrar
+  todos los `userTrades` confirmados, mantener la orden en `ATTENTION`
+  e informar al operador. **No terminar como FINAL** una orden de TP que
+  deje un residuo; en rondas futuras se reconsulta por el orderId durable.
+  Tampoco finalizar órdenes terminales cuando Binance reporta
+  `executedQty` diferente de los fills recuperados.
+  Los residuos inferiores a `minQty` siguen sin solución validada.
+- Los fills parciales anómalos de una orden FOK de entrada **o salida**
+  también se registran y bloquean como atención, nunca se inventa
+  cierre. Las pruebas in-memory verifican FOK rechazado y reintento
+  condicionado, así como dust anómalo.
+- **NO-GO**: este cambio NO certifica el TP GTC, stop exchange-native,
+  capacidad de cerrar lotes inferiores al mínimo ni acceso live.
+  Se mantienen ambos flags de producción en `false` y estrategia pausada.
+
+Fuente oficial (FOK y reduceOnly):
+https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-options/api/rest-api/trade
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**

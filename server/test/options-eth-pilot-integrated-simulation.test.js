@@ -31,6 +31,7 @@ function harness() {
   let nextLocalId = 1;
   let nextBrokerId = 7000;
   let quote = { bid: 23.20, ask: 23.60, mark: 23.40, delta: 0.35, spot: 2400 };
+  let depthOverride = null;
   const orderInfo = {
     optionSymbols: [{
       symbol: SYMBOL, status: 'TRADING', quoteAsset: 'USDT',
@@ -44,6 +45,14 @@ function harness() {
   const localFor = (id) => records.find(o => o.id === id);
   const brokerClient = {
     async getExchangeInfo() { return orderInfo; },
+    async getDepth(symbol, limit) {
+      assert.equal(symbol,SYMBOL);
+      assert.equal(limit,20);
+      return depthOverride || {
+        T:clock.now, bids:[[String(quote.bid),'0.01']],
+        asks:[[String(quote.ask),'0.01']],
+      };
+    },
     async getPositions() {
       return positions.filter(p => p.quantity > 0).map(p =>
         ({ symbol: p.symbol, side: 'LONG', quantity: String(p.quantity) }));
@@ -245,7 +254,8 @@ function harness() {
     return runner.executeLive(strategy,entry,ctx);
   };
   return {clock,broker,records,positions,repo,engine,runner,
-    notices,warnings,runEntry,setFill,setQuote(q){quote={...quote,...q};}};
+    notices,warnings,runEntry,setFill,setQuote(q){quote={...quote,...q};},
+    setDepth(d){depthOverride=d;}};
 }
 
 test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP -> deferred close',async()=>{
@@ -290,7 +300,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(f.broker.length,3);
   assert.equal(f.broker[2].side,'SELL');
   assert.equal(f.broker[2].reduceOnly,true);
-  assert.equal(f.broker[2].timeInForce,'GTC');
+  assert.equal(f.broker[2].timeInForce,'FOK');
   assert.equal(f.broker[2].price,11.70);
 
   f.setFill(f.broker[2],.01,11.70,8002);
@@ -364,9 +374,153 @@ test('partial fill of a GTC resting TP can leave uncloseable dust: not yet certi
   // Partial *closing* fill can still create dust even when entry was FOK.
   f.setFill(f.broker[1],.005,35.40,8202);
   const result=await f.engine.reconcilePending();
-  assert.equal(result.errors,0);
+  assert.equal(result.errors,1,'partial resting TP must trigger incident after trades');
   assert.equal(f.positions[0].quantity,.005);
   assert.equal(f.broker[1].status,'PARTIALLY_FILLED');
+  assert.ok(f.records.some(o=>o.purpose==='take_profit'&&o.status==='attention'));
+  assert.ok(f.warnings.includes('options_live_reconciliation_failed'));
   assert.equal(f.broker.length,2,'no invented extra close below LOT_SIZE');
-  // This hazard remains an explicit NO-GO for unattended execution.
+  // The partial fill is durable and flagged, NOT an autonomous dust remedy.
+});
+
+test('expired ETH FOK standard exit has zero fill and allows a new deferred close check',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8301);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12});
+  const position={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[position],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[2].timeInForce,'FOK');
+  f.broker[2].status='EXPIRED';
+  f.broker[2].executedQty=0;
+  await f.engine.reconcilePending();
+  assert.equal(f.positions[0].quantity,.01,'no fictitious close after FOK expiry');
+  assert.equal(f.records.find(o=>o.clientOrderId===f.broker[2].clientOrderId).status,'final');
+  f.clock.now+=60_000;
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[3].side,'SELL');
+  assert.equal(f.broker[3].timeInForce,'FOK');
+  assert.equal(f.broker[3].reduceOnly,true);
+});
+
+test('anomalous partial ETH FOK close books real fill then enters ATTENTION',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8401);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12});
+  const position={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[position],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[2].timeInForce,'FOK');
+  f.setFill(f.broker[2],.005,11.70,8402);
+  const result=await f.engine.reconcilePending();
+  assert.equal(result.errors,1);
+  assert.equal(f.positions[0].quantity,.005);
+  assert.ok(f.records.some(o=>o.action==='close'&&o.purpose==='standard'&&o.status==='attention'));
+  assert.equal(f.broker.length,3,'do not automatically sell invalid dust');
+});
+
+test('FOK close prices across enough depth within bounded slippage',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8501);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12.0});
+  f.setDepth({T:f.clock.now, bids:[['11.70','0.005'],['11.60','0.005']],
+    asks:[['12.0','0.01']]});
+  const p={...f.positions[0],quote:{bid:11.70,ask:12.0}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[p],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[2].timeInForce,'FOK');
+  assert.equal(f.broker[2].reduceOnly,true);
+  assert.equal(f.broker[2].price,11.6);
+});
+
+test('FOK exit with insufficient or stale depth remains pending and sends no SELL',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8601);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12});
+  const p={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[p],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  f.setDepth({T:f.clock.now,bids:[['11.70','0.005']],asks:[['12.00','0.01']]});
+  const missing=await f.engine.reconcilePending();
+  assert.equal(missing.deferred.sent,0);
+  assert.equal(f.broker.length,2,'never submit SELL on insufficient depth');
+  assert.ok(f.warnings.includes('options_deferred_exit_pending'));
+  assert.equal(f.positions[0].quantity,.01);
+  f.setDepth({T:f.clock.now-11_000,bids:[['11.70','0.01']],asks:[['12','0.01']]});
+  const stale=await f.engine.reconcilePending();
+  assert.equal(stale.deferred.sent,0);
+  assert.equal(f.broker.length,2,'stale snapshot must never be submitted');
+  f.setDepth({T:f.clock.now,bids:[['11.70','0.01']],asks:[['12','0.01']]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker.length,3,'retry requires a new valid depth snapshot');
+  assert.equal(f.broker[2].timeInForce,'FOK');
+});
+
+test('terminal CANCELED after partial GTC TP keeps durable ATTENTION and dust',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8701);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  f.setFill(tp,.005,35.40,8702);
+  tp.status='CANCELED';
+  const first=await f.engine.reconcilePending();
+  assert.equal(first.errors,1,'terminal TP partial still requires attention');
+  assert.equal(f.positions[0].quantity,.005);
+  assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'attention');
+  assert.equal(f.broker.length,2,'never create a below-minimum close or new TP');
+  const repeat=await f.engine.reconcilePending();
+  assert.equal(repeat.errors,1,'rechecking the terminal partial cannot clear incident');
+  assert.equal(f.broker.length,2);
+  assert.equal(f.positions[0].quantity,.005,'tradeId dedup protects remaining quantity');
+});
+
+test('terminal canceled TP with missing getUserTrades never invents a fill',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8801);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  tp.status='CANCELED';
+  tp.executedQty=.005;
+  const r=await f.engine.reconcilePending();
+  assert.equal(r.errors,1);
+  assert.equal(f.positions[0].quantity,.01,'missing trade cannot adjust ledger');
+  assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'attention');
+  assert.equal(f.broker.length,2);
+});
+
+test('TP GTC initially partial can reconcile final full fill without fabricating a close',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8901);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  f.setFill(tp,.005,35.40,8902);
+  assert.equal((await f.engine.reconcilePending()).errors,1);
+  f.setFill(tp,.005,35.40,8903);
+  const r=await f.engine.reconcilePending();
+  assert.equal(r.errors,0,'full verified trades permit terminal final');
+  assert.equal(f.positions[0].quantity,0);
+  assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'final');
+  assert.equal(f.broker.length,2);
 });
