@@ -1,6 +1,6 @@
 /**
  * Motor real de ejecución Binance Options.
- * LIMIT GTC durante 10 minutos, sin fills sintéticos.
+ * LIMIT para Binance Options: ETH FOK al abrir y al cerrar (excepto TP resting GTC), sin fills sintéticos.
  * Orden durable -> POST único -> status/trades -> cancelar remanente -> ledger.
  */
 const liveRepo = require('../../repositories/options-live-orders.repository');
@@ -17,11 +17,15 @@ const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'EXPIRED
 const ACTIVE = new Set(['NEW', 'PARTIALLY_FILLED', 'ACCEPTED']);
 const clean = (value) => String(value ?? '');
 
-// El piloto ETH debe abrir de forma atómica: 0 o 100 % del lote.
-// El TP que descansa en el libro y los cierres mantienen GTC.
-const orderTimeInForce = (order) =>
-  order.action === 'open' && /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(order.symbol || '')
+// En ETH, las entradas y los cierres estándar usan FOK para evitar
+// residuos por ejecuciones parciales. El TP residente necesita GTC:
+// el riesgo de fills parciales de TP aún bloquea el piloto automático.
+const orderTimeInForce = (order) => {
+  const eth = /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(order.symbol || '');
+  return eth && (order.action === 'open' ||
+    (order.action === 'close' && order.purpose !== 'take_profit'))
     ? 'FOK' : 'GTC';
+};
 
 function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly, now }) {
   const side = position.side;
@@ -321,14 +325,19 @@ class OptionsLiveExecution {
       throw new Error('Trade quantities disagree with Binance order');
     }
     for (const trade of trades) await this.repo.applyTrade({ ...order, orderId }, trade);
-    // FOK significa todo o nada. Una respuesta parcial contradice el
-    // contrato de seguridad del piloto; registrar fills confirmados para
-    // no ocultar posiciones reales, pero NO cerrar el incidente ni
-    // considerar la apertura segura. El reconciliador alertará a operador.
+    // Registrar PRIMERO los trades confirmados para no ocultar exposición.
+    // FOK es todo o nada: un fill parcial de entrada O salida es anómalo.
     if (orderTimeInForce(order) === 'FOK' &&
         (status === 'PARTIALLY_FILLED' ||
          (executed > 0 && executed < order.quantity - 1e-8))) {
-      throw new Error('FOK ETH entry anomalous partial fill: manual reconciliation required');
+      throw new Error('FOK ETH order anomalous partial fill: manual reconciliation required');
+    }
+    // Un TP residente GTC SÍ puede ejecutarse parcialmente y dejar dust
+    // bajo LOT_SIZE. Alertar aunque Binance mantenga la orden abierta;
+    // ningún sistema debe interpretarlo como un cierre protegido total.
+    if (order.purpose === 'take_profit' &&
+        status === 'PARTIALLY_FILLED' && executed > 0) {
+      throw new Error('GTC take-profit partially filled: residual position requires operator review');
     }
     if (TERMINAL.has(status) && Math.abs(sum - executed) < 1e-8) {
       await this.repo.finishOrder(order.id, orderId, executed);
