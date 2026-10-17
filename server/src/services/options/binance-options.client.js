@@ -210,6 +210,16 @@ function createBinanceOptionsClient({
     getDepth(symbol, limit = 10) {
       return request('GET', '/eapi/v1/depth', { params: { symbol, limit } });
     },
+    // Operaciones publicas (ejecuciones de mercado, NO ordenes privadas).
+    // La muestra ayuda a detectar fills fuera del lote, pero no prueba
+    // que todas las ejecuciones futuras respeten la misma granularidad.
+    getRecentTrades(symbol, limit = 100) {
+      if (!/^ETH-\d{6}-\d+(?:\.\d+)?-C$/.test(String(symbol)) ||
+          !Number.isInteger(limit) || limit < 1 || limit > 500) {
+        throw new ValidationError('Parametros de operaciones publicas invalidos');
+      }
+      return request('GET', '/eapi/v1/trades', { params: { symbol, limit } });
+    },
     getIndex(underlyingPair) {
       return request('GET', '/eapi/v1/index', { params: { underlying: underlyingPair } });
     },

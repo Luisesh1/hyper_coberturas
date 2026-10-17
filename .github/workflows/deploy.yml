@@ -259,7 +259,7 @@ jobs:
             echo '- La autorización de una orden no equivale a autorización de trading automático.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Diagnosticar residuo GTC con Binance tras integrar PR 31 (solo GET)
+      - name: Muestrear ejecuciones publicas de ETH GTC tras deploy (solo GET)
         if: github.event_name == 'workflow_run'
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
@@ -267,13 +267,7 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
-          # Ejecutar solo al instalar el merge especifico; cualquier otra release omite.
-          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
-            "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
-          if [ "$subject" != 'Merge PR #31: add Binance GTC read-only diagnostic' ]; then
-            echo 'gtc_dust_deploy_check=skipped_other_release'
-            exit 0
-          fi
+          # Reporte informativo cada deploy: filtros y trades publicos. Nunca opera.
           # No abre ni cancela ordenes, no cambia flags ni escribe en PostgreSQL.
           if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
             "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-gtc-dust-readonly.js ETH-261023-2500-C" \
@@ -287,7 +281,7 @@ jobs:
           fi
           grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/gtc-dust-once.log" || true
           {
-            echo '### Diagnostico GTC Binance despues de PR #31 (solo lectura)'
+            echo '### Diagnostico GTC Binance tras deploy (solo lectura)'
             grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/gtc-dust-once.log" || true
             echo
             echo '**NO-GO:** el filtro de nuevo SELL no demuestra que Binance cierre una orden GTC con fill parcial.'

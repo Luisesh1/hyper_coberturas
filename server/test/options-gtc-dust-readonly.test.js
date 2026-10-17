@@ -19,9 +19,10 @@ function exchange(minQty = '0.01', stepSize = '0.01') {
   }] };
 }
 
-function readonlyClient(info = exchange()) {
+function readonlyClient(info = exchange(), publicTrades = []) {
   return {
     getExchangeInfo: async () => info,
+    getRecentTrades: async () => publicTrades,
     getPositions: async () => [],
     getOpenOrders: async () => [],
     getApiRestrictions: async () => ({
@@ -33,14 +34,17 @@ function readonlyClient(info = exchange()) {
   };
 }
 
-test('current Binance lot forbids replacing 0.005 of a 0.01 GTC order', async () => {
+test('0.005 no es nueva orden valida, pero eso NO demuestra un fill parcial real', async () => {
   const outcome = await assess({ client: readonlyClient(), symbol, env: off, now });
-  assert.equal(outcome.status, 'risk_detected');
+  assert.equal(outcome.status, 'filter_only');
   assert.equal(outcome.initialOrderValid, true);
   assert.equal(outcome.residualNewOrderValid, false);
+  assert.equal(outcome.tradeEvidenceStatus, 'no_trades');
+  assert.equal(outcome.observedTrades, 0);
   assert.equal(outcome.pilotReady, false);
   const lines = summaryLines(outcome).join('\n');
   assert.match(lines, /gtc_dust_new_residual_order_filter=fail/);
+  assert.match(lines, /gtc_dust_public_trades_status=no_trades/);
   assert.match(lines, /gtc_dust_existing_gtc_partial_behavior=unverified/);
   assert.match(lines, /gtc_dust_real_orders_sent=0/);
   assert.match(lines, /pilot_ready=no/);
@@ -54,6 +58,40 @@ test('if exchange permits 0.005 new order, real GTC behavior stays unverified', 
   assert.equal(outcome.status, 'filter_only');
   assert.equal(outcome.residualNewOrderValid, true);
   assert.match(summaryLines(outcome).join('\n'), /actual_residual_liquidation=unverified/);
+});
+
+test('una ejecucion publica de 0.005 demuestra que el riesgo puede existir', async () => {
+  const outcome = await assess({ client: readonlyClient(exchange(), [
+    { symbol, qty: '0.01' }, { symbol, qty: '0.005' },
+  ]), symbol, env: off, now });
+  assert.equal(outcome.status, 'risk_detected');
+  assert.equal(outcome.tradeEvidenceStatus, 'out_of_lot_observed');
+  assert.equal(outcome.observedTrades, 2);
+  assert.equal(outcome.observedOutOfLotTrades, 1);
+  assert.equal(outcome.pilotReady, false);
+});
+
+test('ejecuciones publicas alineadas no prueban que sea imposible un fill parcial', async () => {
+  const outcome = await assess({ client: readonlyClient(exchange(), [
+    { symbol, qty: '0.01' }, { symbol, qty: '0.02' },
+  ]), symbol, env: off, now });
+  assert.equal(outcome.status, 'filter_only');
+  assert.equal(outcome.tradeEvidenceStatus, 'lot_aligned_observed');
+  assert.equal(outcome.observedTrades, 2);
+  assert.equal(outcome.pilotReady, false);
+});
+
+test('error o muestra mal formada queda inconclusa sin autorizar trading', async () => {
+  const c = readonlyClient();
+  c.getRecentTrades = async () => { throw new Error('public API down'); };
+  const noData = await assess({ client: c, symbol, env: off, now });
+  assert.equal(noData.tradeEvidenceStatus, 'unavailable');
+  assert.equal(noData.status, 'filter_only');
+  const malformed = await assess({ client: readonlyClient(exchange(), [
+    { symbol: 'OTRO', qty: '0.005' },
+  ]), symbol, env: off, now });
+  assert.equal(malformed.tradeEvidenceStatus, 'unavailable');
+  assert.equal(malformed.pilotReady, false);
 });
 
 test('unknown exchange filters never count as clearance', async () => {

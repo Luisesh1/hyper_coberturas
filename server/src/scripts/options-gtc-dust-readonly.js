@@ -44,7 +44,35 @@ function checkLot(exchange, symbol, now = Date.now()) {
   const initialOrderValid = validNewOrderQty(ORIGINAL_QTY, filter, info);
   const residualNewOrderValid = validNewOrderQty(EXAMPLE_REMAINING, filter, info);
   if (initialOrderValid === null || residualNewOrderValid === null) return null;
-  return { initialOrderValid, residualNewOrderValid };
+  return { initialOrderValid, residualNewOrderValid,
+    minQty: String(filter.minQty), stepSize: String(filter.stepSize) };
+}
+
+/**
+ * Consulta de muestras públicas de trades: un único fill incompatible con
+ * minQty/stepSize DEMUESTRA que el filtro de entrada no protege cada ejecución.
+ * Cero anomalías en una muestra NO demuestra imposibilidad de fracciones.
+ */
+function assessTradeSample(trades, lot, symbol) {
+  if (!Array.isArray(trades) || !lot) {
+    return { tradeEvidenceStatus: 'unavailable', observedTrades: 0,
+      observedOutOfLotTrades: 0 };
+  }
+  const valid = trades.every(t => t && t.symbol === symbol &&
+    /^\d+(?:\.\d+)?$/.test(String(t.qty)) && Number(t.qty) > 0);
+  if (!valid) {
+    return { tradeEvidenceStatus: 'unavailable', observedTrades: 0,
+      observedOutOfLotTrades: 0 };
+  }
+  const outOfLot = trades.filter(t =>
+    Number(t.qty) < Number(lot.minQty) ||
+    !matchesStep(String(t.qty), lot.minQty, lot.stepSize)
+  ).length;
+  return {
+    tradeEvidenceStatus: outOfLot ? 'out_of_lot_observed' :
+      trades.length ? 'lot_aligned_observed' : 'no_trades',
+    observedTrades: trades.length, observedOutOfLotTrades: outOfLot,
+  };
 }
 
 function blocked(flagsOff = false) {
@@ -52,7 +80,9 @@ function blocked(flagsOff = false) {
     status: 'blocked', flagsOff, filtersChecked: false,
     accountIsolated: false, permissionsSafe: false,
     initialOrderValid: false, residualNewOrderValid: null,
-    readOnly: true, pilotReady: false,
+    lotMinQty: null, lotStepSize: null,
+    tradeEvidenceStatus: 'unavailable', observedTrades: 0,
+    observedOutOfLotTrades: 0, readOnly: true, pilotReady: false,
   };
 }
 
@@ -62,10 +92,12 @@ async function assess({ client, symbol, env = process.env, now = Date.now }) {
   const results = await Promise.allSettled([
     client.getExchangeInfo(), client.getPositions(),
     client.getOpenOrders(), client.getApiRestrictions(),
+    client.getRecentTrades(symbol, 100),
   ]);
-  const [exchange, positions, orders, restrictions] =
+  const [exchange, positions, orders, restrictions, publicTrades] =
     results.map(r => r.status === 'fulfilled' ? r.value : null);
   const lot = checkLot(exchange, symbol, now());
+  const sample = assessTradeSample(publicTrades, lot, symbol);
   const isolated = accountIsolated(positions, orders);
   const permissions = restrictions?.ipRestrict === true &&
     restrictions?.enableWithdrawals === false &&
@@ -75,13 +107,18 @@ async function assess({ client, symbol, env = process.env, now = Date.now }) {
     return { ...blocked(true), filtersChecked: Boolean(lot),
       initialOrderValid: Boolean(lot?.initialOrderValid),
       residualNewOrderValid: lot?.residualNewOrderValid ?? null,
-      accountIsolated: isolated, permissionsSafe: permissions };
+      lotMinQty: lot?.minQty ?? null, lotStepSize: lot?.stepSize ?? null,
+      ...sample, accountIsolated: isolated, permissionsSafe: permissions };
   }
   return {
-    status: lot.residualNewOrderValid ? 'filter_only' : 'risk_detected',
+    // Nueva orden 0.005 invalida NO demuestra fill real de 0.005.
+    // Solo una ejecucion publica fuera del lote aporta evidencia positiva.
+    status: sample.tradeEvidenceStatus === 'out_of_lot_observed' ?
+      'risk_detected' : 'filter_only',
     flagsOff: true, filtersChecked: true,
     accountIsolated: true, permissionsSafe: true,
     initialOrderValid: true, residualNewOrderValid: lot.residualNewOrderValid,
+    lotMinQty: lot.minQty, lotStepSize: lot.stepSize, ...sample,
     readOnly: true, pilotReady: false,
   };
 }
@@ -111,6 +148,9 @@ function summaryLines(report) {
     'gtc_dust_new_residual_order_filter=' +
       (report.residualNewOrderValid === null ? 'unverified' :
         check(report.residualNewOrderValid)),
+    'gtc_dust_public_trades_status=' + report.tradeEvidenceStatus,
+    'gtc_dust_public_trades_sample_count=' + report.observedTrades,
+    'gtc_dust_public_trades_out_of_lot=' + report.observedOutOfLotTrades,
     'gtc_dust_existing_gtc_partial_behavior=unverified',
     'gtc_dust_actual_residual_liquidation=unverified',
     'gtc_dust_real_orders_sent=0',
@@ -144,4 +184,5 @@ if (require.main === module) {
   });
 }
 
-module.exports = { flagsAreOff, validNewOrderQty, checkLot, assess, summaryLines };
+module.exports = { flagsAreOff, validNewOrderQty, checkLot,
+  assessTradeSample, assess, summaryLines };

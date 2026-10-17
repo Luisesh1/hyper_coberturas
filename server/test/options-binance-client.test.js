@@ -74,6 +74,23 @@ test('los endpoints públicos no firman ni envían la key', async () => {
   assert.equal(calls[0].init.headers['X-MBX-APIKEY'], undefined);
 });
 
+test('getRecentTrades usa solo GET publico, valida contrato y no firma', async () => {
+  const { calls, fetchImpl } = recordingFetch(() => jsonResponse([
+    { symbol: 'ETH-261023-2500-C', qty: '0.01' },
+  ]));
+  const client = createBinanceOptionsClient({
+    apiKey: API_KEY, apiSecret: API_SECRET, fetchImpl,
+  });
+  const rows = await client.getRecentTrades('ETH-261023-2500-C', 50);
+  assert.equal(rows.length, 1);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.headers['X-MBX-APIKEY'], undefined);
+  assert.equal(calls[0].url,
+    'https://eapi.binance.com/eapi/v1/trades?symbol=ETH-261023-2500-C&limit=50');
+  assert.throws(() => client.getRecentTrades('ETH;rm -rf /'));
+  assert.equal(calls.length, 1);
+});
+
 test('getAccount usa /eapi/v1/marginAccount (Binance retiró /eapi/v1/account: 404)', async () => {
   const { calls, fetchImpl } = recordingFetch(() => jsonResponse({ asset: [], greek: [] }));
   const client = createBinanceOptionsClient({ apiKey: API_KEY, apiSecret: API_SECRET, fetchImpl });

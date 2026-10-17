@@ -66,11 +66,15 @@ capacidad real de cierre son comprobaciones independientes.
   símbolos/filtros, liquidez, precios y costes exactos al momento de operar.
 - Confirmar aviso Telegram efectivo y monitorización externa; un cron
   de cinco horas no sirve como protección de una posición abierta.
-- **Resolver y demostrar** con Binance real que un fill parcial del TP
-  GTC no deja 0.005 contratos que Binance rechazaría cerrar
-  por `minQty=0.01`, o disponer de procedimiento operativo probado
-  para cerrar sin abrir exposición adicional. Registrar evidencias.
-  Este caso actualmente es **NO-GO para trading autónomo**.
+- **Demostrar la granularidad efectiva de ejecuciones del TP GTC**.
+  LOT_SIZE / minQty / stepSize son filtros para la cantidad de nuevas
+  ordenes: que 0.005 no sea una orden valida NO prueba que el matching
+  engine nunca ejecute un fill de 0.005. Una muestra publica de
+  `GET /eapi/v1/trades` puede detectar el contraejemplo, pero la ausencia
+  de fracciones en hasta 100 trades tampoco prueba la imposibilidad.
+  Si el cierre deja menos del minimo, aplicar la guarda conservadora;
+  demostrar por separado el cierre o conseguir confirmacion vinculante
+  del exchange. Mantener **NO-GO para trading autónomo**.
 - Validar con operaciones de prueba específicamente autorizadas
   `getOrder`, `userTrades`, cancelación con fill simultáneo,
   recuperación de `sending/attention`, salida y eventual
@@ -119,3 +123,20 @@ preparados; **sin órdenes reales ejecutadas, sin permisos habilitados**.
   semántica real del exchange o disponer de procedimiento probado.
 - Este cambio conserva ambos flags de trading en false y se despliega
   automáticamente por la CI sin enviar órdenes reales.
+
+## Evidencia de granularidad — 17 de octubre de 2026
+
+- Documentacion Binance Options LOT_SIZE: valida cantidades de orden
+  `quantity >= minQty`, `quantity <= maxQty` y
+  `(quantity - minQty) % stepSize == 0`.
+  https://developers.binance.com/en/docs/products/derivatives-trading-options/common-definition
+- Binance declara `PARTIALLY_FILLED` como estado de orden, pero no
+  documenta expresamente que cada match respete `minQty`/`stepSize`.
+- La comprobacion nueva lee hasta 100 operaciones publicas del
+  simbolo mediante `GET /eapi/v1/trades`, ademas de filtros y
+  aislamiento de cuenta, sin enviar/cancelar ordenes ni registrar trading.
+  https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-options/api/rest-api/market-data
+- Si aparece un trade menor al lote o fuera de la cuadricula, hay evidencia
+  POSITIVA del riesgo. Si los observados respetan el lote, la prueba sigue
+  inconclusa respecto al TP propio y los fills futuros. Un GET no aprueba
+  una operacion real; `pilot_ready=no` siempre.
