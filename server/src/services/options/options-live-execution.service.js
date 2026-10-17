@@ -6,7 +6,7 @@
 const liveRepo = require('../../repositories/options-live-orders.repository');
 const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
-const { validateBinanceOrderBatch } = require('./options-order-filters');
+const { validateBinanceOrderBatch, matchesStep } = require('./options-order-filters');
 const { fullSizeFokLimit } = require('./options-fok-depth');
 const { enforcePilotEntry } = require('./options-live-pilot-policy');
 const { parseSymbol } = require('./options-utils');
@@ -27,6 +27,28 @@ const orderTimeInForce = (order) => {
     (order.action === 'close' && order.purpose !== 'take_profit'))
     ? 'FOK' : 'GTC';
 };
+
+/**
+ * Determine whether a *new* reduceOnly close for the remaining contracts
+ * would be legal under the current exchange lot filter. An existing resting
+ * TP may continue matching even when its remainder is no longer orderable.
+ * Unknown filters are a HARD BLOCK, not permission to cancel.
+ */
+function isOrderableRemainder(exchange, symbol, remaining) {
+  const item = (exchange?.optionSymbols || []).find((s) => s.symbol === symbol);
+  const filter = (item?.filters || []).find((f) => f.filterType === 'LOT_SIZE') ||
+    (item?.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
+  const min = Number(filter?.minQty);
+  const step = Number(filter?.stepSize);
+  const max = Number(filter?.maxQty ?? item?.maxQty);
+  if (!item || !filter || !(min > 0) || !(step > 0) ||
+      !Number.isFinite(remaining) || remaining <= 0) {
+    throw new Error('Cannot establish Binance TP residual lot constraints');
+  }
+  const qty = Number(remaining.toFixed(12));
+  return qty >= min && (!Number.isFinite(max) || max <= 0 || qty <= max) &&
+    matchesStep(String(qty), filter.minQty, filter.stepSize);
+}
 
 function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly, now }) {
   const side = position.side;
@@ -273,7 +295,31 @@ class OptionsLiveExecution {
     if (!TERMINAL.has(status) && !ACTIVE.has(status)) {
       throw new Error(`Unrecognized Binance order status: ${status}`);
     }
-    if ((this.now() >= order.deadlineAt || order.cancelRequested) && !TERMINAL.has(status)) {
+    // Binance may partially fill the GTC TP in fractions below minQty.
+    // Once that happens, canceling the already-resting TP can strand dust
+    // that Binance rejects as a new close. Preserve the existing exchange
+    // order rather than converting a LIVE partial into an uncloseable one.
+    // This cannot prevent a fill racing with a cancel request; such terminal
+    // partials remain incidents (never declared FINAL).
+    let preserveRestingPartial = false;
+    const cancellationDue = (this.now() >= order.deadlineAt || order.cancelRequested) &&
+      !TERMINAL.has(status);
+    if (cancellationDue && order.purpose === 'take_profit') {
+      const filledBeforeCancel = Number(state.executedQty);
+      if (!Number.isFinite(filledBeforeCancel) || filledBeforeCancel < 0 ||
+          filledBeforeCancel > order.quantity + 1e-8) {
+        throw new Error('Cannot validate GTC partial quantity before cancel');
+      }
+      if (status === 'PARTIALLY_FILLED' && filledBeforeCancel <= 0) {
+        throw new Error('Binance reports partial GTC without executed quantity');
+      }
+      if (filledBeforeCancel > 0 && filledBeforeCancel < order.quantity - 1e-8) {
+        const exchangeInfo = await client.getExchangeInfo();
+        const remaining = order.quantity - filledBeforeCancel;
+        preserveRestingPartial = !isOrderableRemainder(exchangeInfo, order.symbol, remaining);
+      }
+    }
+    if (cancellationDue && !preserveRestingPartial) {
       // Nunca enviar otro cierre antes de confirmar la cancelación del TP.
       try {
         await client.cancelOrder({ symbol: order.symbol, orderId });
@@ -337,6 +383,17 @@ class OptionsLiveExecution {
       throw new Error('Trade quantities disagree with Binance order');
     }
     for (const trade of trades) await this.repo.applyTrade({ ...order, orderId }, trade);
+    // Do not cancel an already-resting TP with unorderable dust.
+    // The confirmed partial fill is booked first; ATTENTION and Telegram
+    // alert then block unsupervised trading. Leave the GTC order on Binance.
+    if (preserveRestingPartial) {
+      if (Math.abs(sum - executed) >= 1e-8) {
+        throw new Error('GTC TP remaining lot unsafe and Binance trades not yet complete');
+      }
+      throw new Error('GTC_PARTIAL_DUST: keep resting TP on Binance; cancel would strand ' +
+        Number((order.quantity - executed).toFixed(12)) + ' contracts below valid lot. ' +
+        'Stop/expiry exit needs supervised exchange reconciliation.');
+    }
     // Registrar PRIMERO los trades confirmados para no ocultar exposición.
     // FOK es todo o nada: un fill parcial de entrada O salida es anómalo.
     if (orderTimeInForce(order) === 'FOK' &&
@@ -885,3 +942,4 @@ module.exports.normalizeTrade = normalizeTrade;
 module.exports.actionKey = actionKey;
 module.exports.orderTimeInForce = orderTimeInForce;
 module.exports.WINDOW_MS = WINDOW_MS;
+module.exports.isOrderableRemainder = isOrderableRemainder;
