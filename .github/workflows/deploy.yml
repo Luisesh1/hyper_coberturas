@@ -107,6 +107,46 @@ jobs:
           echo "Health check fallo tras el deploy"
           exit 1
 
+      - name: Preparar UNA vez el piloto ETH pausado y límites de 1 USDT (sin trading)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          # Este cambio de configuración fue autorizado explícitamente.
+          # Solo actuar en el commit de merge de la PR #16; en cualquier
+          # despliegue posterior, incluso manual, omitir la mutación.
+          expected='Merge PR #16: prepare paused ETH pilot with 1 USDT risk limits (live OFF)'
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          if [ "$subject" != "$expected" ]; then
+            echo 'pilot_setup=skipped_other_release'
+            exit 0
+          fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-configure-paused.js --apply-paused-only" \
+            | tee "$RUNNER_TEMP/pilot-setup.log"
+          for required in \
+            'pilot_setup_status=prepared_paused' \
+            'pilot_setup_strategy_mode=paused' \
+            'pilot_setup_global_risk=pass' \
+            'pilot_setup_orders_sent=0' \
+            'pilot_setup_live_enabled=no' \
+            'pilot_ready=no'; do
+            if ! grep -Fxq "$required" "$RUNNER_TEMP/pilot-setup.log"; then
+              echo "::error::La configuración de piloto no completó todas sus comprobaciones"
+              exit 1
+            fi
+          done
+          {
+            echo '### Configuración autorizada del piloto ETH'
+            echo '- Estrategia nueva PAUSADA, sin alertas y sin órdenes.'
+            echo '- Límites globales y por estrategia reducidos a 1 USDT.'
+            echo '- Otras estrategias conservadas, sin activar trading real.'
+            echo '- Esta acción está limitada al merge específico de la PR #16.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Revisar opciones ETH públicas tras el deploy (informativo, sin órdenes)
         env:
           SERVER_USER: ${{ secrets.SERVER_USER }}
