@@ -239,11 +239,11 @@ test('ETH pilot FOK is signed exactly, closes keep GTC and invalid modes fail be
   await client.placeOrder({symbol:'ETH-261023-2500-C',side:'SELL',
     quantity:0.01,price:35.4,reduceOnly:true});
   assert.equal(new URL(calls[1].url).searchParams.get('timeInForce'),'GTC');
-  await assert.rejects(()=>client.placeOrder({
+  assert.throws(()=>client.placeOrder({
     symbol:'ETH-261023-2500-C',side:'BUY',quantity:0.01,
     price:23.6,timeInForce:'IOC',
   }),/timeInForce/);
-  await assert.rejects(()=>client.placeOrder({
+  assert.throws(()=>client.placeOrder({
     symbol:'ETH-261023-2500-C',side:'BUY',quantity:0.01,
     price:23.6,timeInForce:'FOK',postOnly:true,
   }),/postOnly/);
