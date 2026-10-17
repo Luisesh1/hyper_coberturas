@@ -31,6 +31,7 @@ function harness() {
   let nextLocalId = 1;
   let nextBrokerId = 7000;
   let quote = { bid: 23.20, ask: 23.60, mark: 23.40, delta: 0.35, spot: 2400 };
+  let depthOverride = null;
   const orderInfo = {
     optionSymbols: [{
       symbol: SYMBOL, status: 'TRADING', quoteAsset: 'USDT',
@@ -44,6 +45,14 @@ function harness() {
   const localFor = (id) => records.find(o => o.id === id);
   const brokerClient = {
     async getExchangeInfo() { return orderInfo; },
+    async getDepth(symbol, limit) {
+      assert.equal(symbol,SYMBOL);
+      assert.equal(limit,20);
+      return depthOverride || {
+        T:clock.now, bids:[[String(quote.bid),'0.01']],
+        asks:[[String(quote.ask),'0.01']],
+      };
+    },
     async getPositions() {
       return positions.filter(p => p.quantity > 0).map(p =>
         ({ symbol: p.symbol, side: 'LONG', quantity: String(p.quantity) }));
@@ -245,7 +254,8 @@ function harness() {
     return runner.executeLive(strategy,entry,ctx);
   };
   return {clock,broker,records,positions,repo,engine,runner,
-    notices,warnings,runEntry,setFill,setQuote(q){quote={...quote,...q};}};
+    notices,warnings,runEntry,setFill,setQuote(q){quote={...quote,...q};},
+    setDepth(d){depthOverride=d;}};
 }
 
 test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP -> deferred close',async()=>{
@@ -417,4 +427,50 @@ test('anomalous partial ETH FOK close books real fill then enters ATTENTION',asy
   assert.equal(f.positions[0].quantity,.005);
   assert.ok(f.records.some(o=>o.action==='close'&&o.purpose==='standard'&&o.status==='attention'));
   assert.equal(f.broker.length,3,'do not automatically sell invalid dust');
+});
+
+test('FOK close prices across enough depth within bounded slippage',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8501);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12.0});
+  f.setDepth({T:f.clock.now, bids:[['11.70','0.005'],['11.60','0.005']],
+    asks:[['12.0','0.01']]});
+  const p={...f.positions[0],quote:{bid:11.70,ask:12.0}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[p],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker[2].timeInForce,'FOK');
+  assert.equal(f.broker[2].reduceOnly,true);
+  assert.equal(f.broker[2].price,11.6);
+});
+
+test('FOK exit with insufficient or stale depth remains pending and sends no SELL',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8601);
+  await f.engine.reconcilePending();
+  f.setQuote({bid:11.70,ask:12});
+  const p={...f.positions[0],quote:{bid:11.70,ask:12}};
+  const actions=alert.evaluate({now:f.clock.now,positions:[p],
+    params:alert.validateParams(BOT_PARAMS)});
+  await f.runner.executeLive(strategy,actions[0],
+    {now:f.clock.now,params:alert.validateParams(BOT_PARAMS),produced:[]});
+  f.setDepth({T:f.clock.now,bids:[['11.70','0.005']],asks:[['12.00','0.01']]});
+  const missing=await f.engine.reconcilePending();
+  assert.equal(missing.deferred.sent,0);
+  assert.equal(f.broker.length,2,'never submit SELL on insufficient depth');
+  assert.ok(f.warnings.includes('options_deferred_exit_pending'));
+  assert.equal(f.positions[0].quantity,.01);
+  f.setDepth({T:f.clock.now-11_000,bids:[['11.70','0.01']],asks:[['12','0.01']]});
+  const stale=await f.engine.reconcilePending();
+  assert.equal(stale.deferred.sent,0);
+  assert.equal(f.broker.length,2,'stale snapshot must never be submitted');
+  f.setDepth({T:f.clock.now,bids:[['11.70','0.01']],asks:[['12','0.01']]});
+  await f.engine.reconcilePending();
+  assert.equal(f.broker.length,3,'retry requires a new valid depth snapshot');
+  assert.equal(f.broker[2].timeInForce,'FOK');
 });
