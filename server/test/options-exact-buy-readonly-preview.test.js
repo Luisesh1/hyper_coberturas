@@ -167,3 +167,19 @@ test('full-size limit can sweep multiple fresh levels but never pay above approv
  }));
  assert.equal(insufficient.checks.liquidity,false);
 });
+
+test('book becoming stale during slow signed account checks is fail-closed',async()=>{
+ let clock=now;
+ const client=fixture({
+  getAccount:async()=>{
+   clock+=11_000;
+   return {asset:[{asset:'USDT',available:'5.00'}]};
+  },
+ });
+ const result=await preview({client,input:request,at:now,now:()=>clock,env:flagsOff});
+ assert.equal(result.checks.marketQuotePresent,true);
+ assert.equal(result.checks.bookFresh,false);
+ assert.equal(result.checks.liquidity,false);
+ assert.equal(result.eligible,false);
+ assert.equal(result.publicOrder.reason,'depth_missing_or_stale');
+});
