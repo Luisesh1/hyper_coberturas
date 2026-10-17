@@ -7,7 +7,7 @@
 const defaultDb = require('../db');
 const { BOT_PARAMS, BOT_LIMITS, MARKER, paramsMatch } =
   require('./options-pilot-configure-paused');
-const { strategyFits } = require('./options-pilot-strategy-readiness');
+const { strategyFits, globalFits } = require('./options-pilot-strategy-readiness');
 const { assetToUnderlying } =
   require('../services/options/options-auto-trading.service');
 const USER_ID = 1;
@@ -66,6 +66,13 @@ async function apply({
     );
     if (positions.length || orders.length || strategies.some(s => s.mode === 'live')) {
       throw new Error('Pilot user has live activity; no alert binding allowed');
+    }
+    const { rows: settings } = await tx.query(
+      "SELECT value FROM settings WHERE user_id=$1 AND key='options_limits' FOR UPDATE",
+      [USER_ID],
+    );
+    if (settings.length !== 1 || !globalFits(parseObject(settings[0].value))) {
+      return { status: 'blocked', ordersSent: 0 };
     }
     const matches = strategies.filter(s =>
       s.name === MARKER && s.template === 'alert_signal' &&
