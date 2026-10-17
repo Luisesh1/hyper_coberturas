@@ -15,7 +15,7 @@
 
 const { Router } = require('express');
 const asyncHandler = require('../middleware/async-handler');
-const { authenticate } = require('../middleware/auth.middleware');
+const { authenticate, requireSuperuser } = require('../middleware/auth.middleware');
 const { ValidationError } = require('../errors/app-error');
 const db = require('../db');
 const logger = require('../services/logger.service');
@@ -120,6 +120,41 @@ async function loadPositionOrigins(userId) {
     return new Map();
   }
 }
+
+// Diagnostico GTC privado: solo usuarios superuser de la cuenta piloto #1.
+// Recalcula filtros/cuenta reales mediante GETs de Binance; NO crea/cancela
+// ordenes, no escribe DB, no activa flags y siempre responde pilotReady=false.
+router.get('/pilot/gtc-diagnostic', requireSuperuser, asyncHandler(async (req, res) => {
+  if (req.user.userId !== 1) {
+    throw new ValidationError('La cuenta no coincide con la cuenta aislada del piloto');
+  }
+  const symbol = String(req.query.symbol || '');
+  if (!/^ETH-\d{6}-\d+(?:\.\d+)?-C$/.test(symbol)) {
+    throw new ValidationError('Contrato ETH CALL invalido');
+  }
+  const { assess } = require('../scripts/options-gtc-dust-readonly');
+  const env = process.env;
+  // Desactivar cualquier consulta firmada si un permiso de trading esta ON.
+  const flagsOff = env.OPTIONS_LIVE_TRADING_ENABLED === 'false' &&
+    env.OPTIONS_LIVE_PRODUCTION_APPROVED === 'false' &&
+    env.OPTIONS_LIVE_PILOT_AUTHORIZED !== 'true';
+  let report;
+  if (!flagsOff) {
+    report = await assess({ client: null, symbol, env });
+  } else {
+    const client = await optionsCredentials.getClientForUser(req.user.userId);
+    report = await assess({ client, symbol, env });
+  }
+  res.set('Cache-Control', 'no-store');
+  res.json({ success: true, data: {
+    ...report,
+    symbol,
+    testedQuantity: '0.01',
+    hypotheticalPartialFill: '0.005',
+    hypotheticalRemainder: '0.005',
+    note: 'Solo comprueba reglas de nueva orden y cuenta aislada. NO verifica fill parcial real ni capacidad de liquidar el residuo.',
+  } });
+}));
 
 // ------------------------------------------------------------------
 // Mercado (datos públicos)
