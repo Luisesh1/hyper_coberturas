@@ -87,7 +87,7 @@ test('getRecentTrades usa solo GET publico, valida contrato y no firma', async (
   assert.equal(calls[0].init.headers['X-MBX-APIKEY'], undefined);
   assert.equal(calls[0].url,
     'https://eapi.binance.com/eapi/v1/trades?symbol=ETH-261023-2500-C&limit=50');
-  await assert.rejects(() => client.getRecentTrades('ETH;rm -rf /'));
+  assert.throws(() => client.getRecentTrades('ETH;rm -rf /'));
   assert.equal(calls.length, 1);
 });
 
