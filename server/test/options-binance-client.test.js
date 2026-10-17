@@ -219,7 +219,7 @@ test('endpoints de ejercicios y bills son GET firmados y preservan IDs 64-bit', 
   assert.equal(new URL(calls[1].url).searchParams.get('currency'), 'USDT');
 });
 
-test('ETH pilot FOK is signed exactly, closes keep GTC and invalid modes fail before POST',async()=>{
+test('ETH pilot FOK entry and reduceOnly FOK exit are signed; resting TP stays GTC',async()=>{
   const {calls,fetchImpl}=recordingFetch(()=>jsonResponse({orderId:'9001',status:'FILLED'}));
   const client=createBinanceOptionsClient({
     apiKey:API_KEY,apiSecret:API_SECRET,fetchImpl,now:()=>1700000000000,
@@ -236,9 +236,25 @@ test('ETH pilot FOK is signed exactly, closes keep GTC and invalid modes fail be
   const raw=new URL(calls[0].url).search.slice(1);
   const [unsigned,sig]=raw.split('&signature=');
   assert.equal(sig,crypto.createHmac('sha256',API_SECRET).update(unsigned).digest('hex'));
+  // A standard stop/deferred SELL is FOK (not the resting TP).
   await client.placeOrder({symbol:'ETH-261023-2500-C',side:'SELL',
-    quantity:0.01,price:35.4,reduceOnly:true});
-  assert.equal(new URL(calls[1].url).searchParams.get('timeInForce'),'GTC');
+    quantity:0.01,price:11.7,timeInForce:'FOK',reduceOnly:true,
+    clientOrderId:'PILOT-FOK-CLOSE'});
+  const signedClose=new URL(calls[1].url);
+  const closeParams=signedClose.searchParams;
+  assert.equal(closeParams.get('side'),'SELL');
+  assert.equal(closeParams.get('timeInForce'),'FOK');
+  assert.equal(closeParams.get('reduceOnly'),'true');
+  assert.equal(closeParams.get('postOnly'),null);
+  assert.equal(closeParams.get('clientOrderId'),'PILOT-FOK-CLOSE');
+  const [closeUnsigned,closeSig]=signedClose.search.slice(1).split('&signature=');
+  assert.equal(closeSig,crypto.createHmac('sha256',API_SECRET)
+    .update(closeUnsigned).digest('hex'));
+  // A separate resting take-profit remains GTC reduce-only.
+  await client.placeOrder({symbol:'ETH-261023-2500-C',side:'SELL',
+    quantity:0.01,price:35.4,timeInForce:'GTC',reduceOnly:true});
+  assert.equal(new URL(calls[2].url).searchParams.get('timeInForce'),'GTC');
+  assert.equal(new URL(calls[2].url).searchParams.get('reduceOnly'),'true');
   assert.throws(()=>client.placeOrder({
     symbol:'ETH-261023-2500-C',side:'BUY',quantity:0.01,
     price:23.6,timeInForce:'IOC',
@@ -247,5 +263,5 @@ test('ETH pilot FOK is signed exactly, closes keep GTC and invalid modes fail be
     symbol:'ETH-261023-2500-C',side:'BUY',quantity:0.01,
     price:23.6,timeInForce:'FOK',postOnly:true,
   }),/postOnly/);
-  assert.equal(calls.length,2);
+  assert.equal(calls.length,3);
 });
