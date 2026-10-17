@@ -283,6 +283,17 @@ class OptionsLiveExecution {
       }
       state = await client.getOrder({ symbol: order.symbol, orderId });
       status = clean(state?.status).toUpperCase();
+      // A canceled order can still have fills. The post-cancel GET must
+      // belong to the exact same order and preserve the signed terms.
+      if (!state || clean(state.orderId) !== orderId ||
+          state.symbol !== order.symbol || state.side !== order.side ||
+          (state.clientOrderId && state.clientOrderId !== order.clientOrderId) ||
+          !Number.isFinite(Number(state.quantity)) ||
+          Math.abs(Number(state.quantity) - order.quantity) > 1e-8 ||
+          (state.type != null && state.type !== 'LIMIT') ||
+          (state.timeInForce != null && state.timeInForce !== orderTimeInForce(order))) {
+        throw new Error('Post-cancel Binance order identity or terms mismatch');
+      }
       if (!TERMINAL.has(status) && !ACTIVE.has(status)) {
         throw new Error('Unable to verify cancellation status');
       }
@@ -333,14 +344,20 @@ class OptionsLiveExecution {
          (executed > 0 && executed < order.quantity - 1e-8))) {
       throw new Error('FOK ETH order anomalous partial fill: manual reconciliation required');
     }
-    // Un TP residente GTC SÍ puede ejecutarse parcialmente y dejar dust
-    // bajo LOT_SIZE. Alertar aunque Binance mantenga la orden abierta;
-    // ningún sistema debe interpretarlo como un cierre protegido total.
+    // Un TP GTC también puede cancelarse o expirar DESPUÉS de ejecutar
+    // parcialmente. El estado terminal no convierte un resto < minQty en
+    // posición cerrada: conservar ATTENTION hasta intervención explícita.
     if (order.purpose === 'take_profit' &&
-        status === 'PARTIALLY_FILLED' && executed > 0) {
-      throw new Error('GTC take-profit partially filled: residual position requires operator review');
+        ((status === 'PARTIALLY_FILLED' && executed > 0) ||
+         (executed > 0 && executed < order.quantity - 1e-8))) {
+      throw new Error('GTC take-profit incompletely executed: residual position requires operator review');
     }
-    if (TERMINAL.has(status) && Math.abs(sum - executed) < 1e-8) {
+    // Binance puede declarar estado terminal antes de que getUserTrades
+    // muestre todos los fills. Nunca declarar FINAL sin toda la evidencia.
+    if (TERMINAL.has(status) && Math.abs(sum - executed) >= 1e-8) {
+      throw new Error('Terminal Binance order has missing or inconsistent trades');
+    }
+    if (TERMINAL.has(status)) {
       await this.repo.finishOrder(order.id, orderId, executed);
     }
   }
