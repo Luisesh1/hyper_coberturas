@@ -70,7 +70,7 @@ async function inspect({
     strategyCount:strategies.length,
     // Solo IDs internos de estrategias que cumplieron los criterios.
     // Un candidato no implica que una señal produzca el contrato elegido.
-    candidateStrategyId:matches.length===1?matches[0].id:null,
+    candidateStrategyId:technicalPass?matches[0].id:null,
   };
 }
 
