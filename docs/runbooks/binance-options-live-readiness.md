@@ -193,6 +193,35 @@ El stop porcentual sigue sin garantizar el precio de salida.
 La validación de ejecución real, fees efectivos y conciliación
 real Binance quedan pendientes. No declarar `pilot_ready=yes`.
 
+## Endurecimiento: entrada ETH FOK y residuos de cierres (17 oct 2026)
+
+Binance Options documenta timeInForce=FOK para POST /eapi/v1/order:
+una LIMIT BUY FOK se llena íntegramente inmediatamente o se cancela.
+Fuente: https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-options/api/rest-api/trade
+
+Las aperturas ETH usan FOK. Las salidas siguen en GTC para no alterar
+el TP resting ni el cierre diferido. El cliente valida FOK y firma el
+parámetro; rechaza FOK+postOnly. El reconciliador contrasta TIF y
+bloquea cualquier llenado parcial anómalo FOK, pero registra antes
+todos los fills confirmados y deja un incidente para intervención
+humana. No inventa posiciones ni reintenta la apertura.
+
+Pruebas sin dinero:
+- Entrada FOK completa, TP GTC, stop, cancelación, salida y no reentrada.
+- Entrada FOK expirada sin fills: no posición, permiso consumido.
+- Respuesta anómala FOK con 0.005, menor que minQty 0.01: hay alerta,
+  conciliación de fills y ninguna orden inválida.
+- TP GTC con cierre parcial 0.005: se demuestra que puede quedar
+  residuo bajo lote mínimo.
+
+**NO-GO para un piloto autónomo**: FOK en entrada no elimina
+posibles restos de la venta TP o de cierre GTC. No existe evidencia
+de una vía reduceOnly permitida para cantidades inferiores al filtro
+LOT_SIZE. Investigar cierre posible con evidencia del exchange o
+rediseñar salidas de forma que no dejen residuos, antes de operar.
+La estrategia 2 permanece pausada, flags de trading real OFF,
+sin enviar órdenes reales ni crear posiciones.
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**
