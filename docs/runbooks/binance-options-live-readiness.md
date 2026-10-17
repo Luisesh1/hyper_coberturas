@@ -555,3 +555,18 @@ en producción** ni constituye autorización para operar.
   de recovery/restart/outages, confirmación de frecuencia y alertas,
   verificación actual de Binance, supervisión humana y autorización
   explícita por orden. Sin esto, mantener trading real apagado.
+
+
+### Prueba de reinicio con FOK ya aceptado (simulación)
+
+La suite integrada ahora simula un crash justo después del POST FOK, con
+`exchangeOrderId` aún no registrado y estado durable `sending`.
+Tras reconstruir un ejecutor nuevo sobre el mismo repositorio, el
+reconciliador consulta Binance usando el `clientOrderId` persistido,
+recupera el mismo `orderId` y nunca reenvía esa orden. Después de
+`EXPIRED` sin fill, el ledger cierra la orden con cantidad cero y solo
+entonces se permite un nuevo FOK si el precio y el libro siguen cumpliendo
+las restricciones. **Se trata de una prueba con Binance simulado**: faltan
+pruebas de interrupción real, conexión, 429/5xx, latencia, alertas
+Telegram y recuperación de `getUserTrades` real. No resuelve que el
+precio objetivo pueda desaparecer durante la caída. Mantener NO-GO.
