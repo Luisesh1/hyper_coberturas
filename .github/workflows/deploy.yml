@@ -385,6 +385,18 @@ jobs:
             echo 'pilot_dedicated_alert=skipped_other_release'
             exit 0
           fi
+          # Solo lectura: detecta ajustes previos sin revelar valores
+          # del usuario ni restaurar una configuracion modificada.
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-alert-diagnose-readonly.js --read-only" \
+            >"$RUNNER_TEMP/pilot-dedicated-diff.log" 2>/dev/null; then
+            echo '::error::No fue posible inspeccionar la estrategia en solo lectura'
+            exit 1
+          fi
+          grep -Fxq 'pilot_alert_diag_read_only=yes' "$RUNNER_TEMP/pilot-dedicated-diff.log" || exit 1
+          grep -Fxq 'pilot_alert_diag_orders_sent=0' "$RUNNER_TEMP/pilot-dedicated-diff.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/pilot-dedicated-diff.log" || exit 1
+          grep -E '^(pilot_alert_diag_|pilot_ready=)' "$RUNNER_TEMP/pilot-dedicated-diff.log"
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
             "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-create-dedicated-alert.js --create-paused-only" \
             >"$RUNNER_TEMP/pilot-exclusive-alert.log" 2>/dev/null || {
@@ -400,7 +412,8 @@ jobs:
             'pilot_dedicated_alert_trading_enabled=no' \
             'pilot_ready=no'; do
             grep -Fxq "$required" "$RUNNER_TEMP/pilot-exclusive-alert.log" || {
-              echo "::error::Poscondicion incompleta en alerta piloto"
+              grep -E '^pilot_dedicated_alert_(status|reason)=' "$RUNNER_TEMP/pilot-exclusive-alert.log" || true
+              echo "::error::Poscondicion incompleta en alerta piloto; no hubo ordenes"
               exit 1
             }
           done
