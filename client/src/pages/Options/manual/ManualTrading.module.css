@@ -800,3 +800,68 @@
   font-size: 13px;
   font-weight: 700;
 }
+
+
+/* Valor de la prima y cierre al precio elegido por el usuario. */
+.posCardBlock { min-width: 0; }
+.posPremium {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.posPremium strong { color: var(--text-bright); font-weight: 700; }
+.posRightColumn { flex-direction: column; align-items: flex-end; gap: 6px; }
+.posTargetBtn { font-size: 11px; min-height: 36px; padding: 0 8px; white-space: nowrap; }
+.closeAtPriceForm {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.closeAtPriceTableCell { padding: 0 !important; }
+.closeAtPriceTableCell .closeAtPriceForm { max-width: 540px; }
+.closeAtPriceLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.closeAtPriceInput {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 280px;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  font-size: 16px;
+}
+.closeAtPriceInput:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.closeAtPricePreview,
+.closeAtPriceNote,
+.closeAtPriceError { margin: 0; font-size: 12px; line-height: 1.45; }
+.closeAtPricePreview { color: var(--text-primary); }
+.closeAtPriceNote { color: var(--text-secondary); }
+.closeAtPriceError { color: var(--red-light); }
+.closeAtPriceActions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.closeAtPriceActions button {
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.closeAtPriceCancel { border: 1px solid var(--border-strong); background: transparent; color: var(--text-primary); }
+.closeAtPriceSubmit { border: 0; background: var(--indigo-dark-bg); color: var(--text-bright); font-weight: 600 !important; }
+.closeAtPriceActions button:disabled { opacity: .45; cursor: not-allowed; }
