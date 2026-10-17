@@ -18,7 +18,7 @@ function fixture(overrides={}){
     {filterType:'LOT_SIZE',minQty:'0.01',maxQty:'100',stepSize:'0.01'}],
   }]}),
   getTicker:async()=>({symbol,bidPrice:'23.40',askPrice:'23.60'}),
-  getDepth:async()=>({bids:[['23.40','0.10']],asks:[['23.60','0.10']]}),
+  getDepth:async()=>({T:now,bids:[['23.40','0.10']],asks:[['23.60','0.10']]}),
   getAccount:async()=>({asset:[{asset:'USDT',available:'5.00',
     equity:'1000',marginBalance:'1000'}]}),
   getApiRestrictions:async()=>({ipRestrict:true,enableWithdrawals:false,
@@ -31,7 +31,7 @@ function fixture(overrides={}){
  };
 }
 const calculate=(client=fixture(),env=flagsOff)=>
- preview({client,input:request,at:now,env});
+ preview({client,input:request,at:now,now:()=>now,env});
 
 test('strict preview inputs never authorize a trade or exceed conservative cap',()=>{
  assert.deepEqual(parseInputs(['1',symbol,'0.01','23.60']),request);
@@ -88,8 +88,13 @@ test('ask above authorized limit, wide spread and thin depth block',async()=>{
   ({symbol,bidPrice:'23.40',askPrice:'23.70'})}));
  assert.equal(risen.technicalStatus,'blocked');
  assert.equal(risen.checks.quoteValid,false);
+ assert.equal(risen.checks.marketQuotePresent,true);
+ assert.equal(risen.checks.priceWithinLimit,false);
+ assert.equal(risen.checks.exactFilters,true);
+ assert.match(outputLines(risen).join('\n'),/preview_ask_usdt=23.70/);
+ assert.match(outputLines(risen).join('\n'),/preview_market_reason=ask_above_limit/);
  const thin=await calculate(fixture({getDepth:async()=>
-  ({bids:[['23.40','0.001']],asks:[['23.60','0.10']]})}));
+  ({T:now,bids:[['23.40','0.001']],asks:[['23.60','0.10']]})}));
  assert.equal(thin.checks.liquidity,false);
  assert.equal(bestBook({bids:[['20','1']],asks:[['23.6','1']]},.01,23.6),null);
 });
@@ -122,4 +127,43 @@ test('deploy only previews GET-only buy without exposing account or placing orde
  assert.match(step,/preview_balanceEnough|balanceEnough/);
  assert.match(step,/NO OPERAR/);
  assert.doesNotMatch(step,/placeOrder|cancelOrder|OPTIONS_LIVE_TRADING_ENABLED:\s*"true"/);
+});
+
+test('Binance quote outage is not misreported as an expensive valid ask',async()=>{
+ const unavailable=await calculate(fixture({getTicker:async()=>{throw Error('timeout');}}));
+ assert.equal(unavailable.checks.marketQuotePresent,false);
+ assert.equal(unavailable.publicOrder.reason,'quote_unavailable');
+ assert.match(outputLines(unavailable).join('\n'),/preview_ask_usdt=unverified/);
+ assert.equal(unavailable.technicalStatus,'blocked');
+});
+
+test('read-only preview fails on stale/missing depth timestamps, even when bid/ask look valid',async()=>{
+ for(const T of [undefined,now-11_000,now+2000]){
+  const f=fixture({getDepth:async()=>({
+   ...(T===undefined?{}:{T}),bids:[['23.40','0.10']],asks:[['23.60','0.10']],
+  })});
+  const result=await calculate(f);
+  assert.equal(result.checks.bookFresh,false);
+  assert.equal(result.checks.liquidity,false);
+  assert.equal(result.technicalStatus,'blocked');
+  assert.equal(result.publicOrder.reason,'depth_missing_or_stale');
+ }
+});
+
+test('full-size limit can sweep multiple fresh levels but never pay above approved max',async()=>{
+ const book={T:now,bids:[['23.40','0.006'],['23.30','0.004']],
+  asks:[['23.50','0.006'],['23.60','0.004']]};
+ const result=await calculate(fixture({
+  getDepth:async()=>book,
+  getTicker:async()=>({symbol,bidPrice:'23.40',askPrice:'23.50'}),
+ }));
+ assert.equal(result.checks.liquidity,true);
+ assert.equal(result.eligible,true);
+ assert.equal(bestBook(book,0.01,23.6).worstAsk,23.6);
+ assert.equal(bestBook(book,0.01,23.5),null);
+ const insufficient=await calculate(fixture({
+  getDepth:async()=>({...book,asks:[['23.50','0.005'],['23.70','0.005']]}),
+  getTicker:async()=>({symbol,bidPrice:'23.40',askPrice:'23.50'}),
+ }));
+ assert.equal(insufficient.checks.liquidity,false);
 });
