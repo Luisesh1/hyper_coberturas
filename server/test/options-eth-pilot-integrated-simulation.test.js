@@ -54,7 +54,8 @@ function harness() {
           orderId: b.orderId, status: b.status }));
     },
     async placeOrder(data) {
-      const row = { ...data, orderId: String(nextBrokerId++),
+      const row = { ...data, timeInForce:data.timeInForce || 'GTC',
+        orderId: String(nextBrokerId++),
         status: 'NEW', executedQty: 0, trades: [] };
       broker.push(row);
       return { orderId: row.orderId, symbol: data.symbol, side: data.side,
