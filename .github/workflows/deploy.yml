@@ -368,3 +368,80 @@ jobs:
             echo
             echo 'El bot sigue PAUSADO, con trading real OFF y sin ordenes enviadas.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Crear senal ETH 7-14 dias exclusiva y vincular al piloto PAUSADO
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          # La unica autorizacion de escritura aplica a este commit y a
+          # crear una COPIA de la alerta. No activar modo live ni Binance POST.
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          if [ "$subject" != 'ops(options): clone dedicated ETH 7-14 pilot alert' ]; then
+            echo 'pilot_dedicated_alert=skipped_other_release'
+            exit 0
+          fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-create-dedicated-alert.js --create-paused-only" \
+            >"$RUNNER_TEMP/pilot-exclusive-alert.log" 2>/dev/null || {
+              echo "::error::No se pudo configurar alerta exclusiva; NO OPERAR"
+              exit 1
+            }
+          for required in \
+            'pilot_dedicated_alert_expiry=7_14' \
+            'pilot_dedicated_alert_source_untouched=yes' \
+            'pilot_dedicated_alert_telegram_duplication=off' \
+            'pilot_dedicated_alert_strategy_mode=paused' \
+            'pilot_dedicated_alert_orders_sent=0' \
+            'pilot_dedicated_alert_trading_enabled=no' \
+            'pilot_ready=no'; do
+            grep -Fxq "$required" "$RUNNER_TEMP/pilot-exclusive-alert.log" || {
+              echo "::error::Poscondicion incompleta en alerta piloto"
+              exit 1
+            }
+          done
+          grep -Eq '^pilot_dedicated_alert_status=(created_and_bound|already_bound)$' \
+            "$RUNNER_TEMP/pilot-exclusive-alert.log" || {
+              grep -E '^pilot_dedicated_alert_(status|reason)=' \
+                "$RUNNER_TEMP/pilot-exclusive-alert.log" || true
+              echo "::error::La alerta exclusiva sigue bloqueada; NO OPERAR"
+              exit 1
+            }
+          grep -E '^(pilot_dedicated_alert_|pilot_ready=)' "$RUNNER_TEMP/pilot-exclusive-alert.log"
+
+          # Verificacion por segunda transaccion independiente, sin mutaciones.
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-create-dedicated-alert.js --verify-only" \
+            >"$RUNNER_TEMP/pilot-exclusive-verify.log" 2>/dev/null || {
+              echo "::error::Verificacion independiente fallida"
+              exit 1
+            }
+          grep -Fxq 'pilot_dedicated_alert_status=verified' \
+            "$RUNNER_TEMP/pilot-exclusive-verify.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/pilot-exclusive-verify.log" || exit 1
+          grep -E '^(pilot_dedicated_alert_|pilot_ready=)' "$RUNNER_TEMP/pilot-exclusive-verify.log"
+
+          # Confirmar ahora que la estrategia escucha la COPIA, no la original.
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-channel-probe.js --read-only" \
+            >"$RUNNER_TEMP/pilot-exclusive-channel.log" 2>/dev/null || exit 1
+          for required in \
+            'pilot_channel_status=channel_candidate' \
+            'pilot_channel_signalBound=pass' \
+            'pilot_channel_telegramConfigured=pass' \
+            'pilot_channel_orders_sent=0' \
+            'pilot_ready=no'; do
+            grep -Fxq "$required" "$RUNNER_TEMP/pilot-exclusive-channel.log" || exit 1
+          done
+          {
+            echo '### Alerta exclusiva del piloto ETH'
+            grep -E '^(pilot_dedicated_alert_|pilot_ready=)' "$RUNNER_TEMP/pilot-exclusive-verify.log"
+            grep -E '^(pilot_channel_(status|signalBound|telegramConfigured|orders_sent)=)' \
+              "$RUNNER_TEMP/pilot-exclusive-channel.log"
+            echo
+            echo 'La alerta original no se modifico; bot PAUSADO; Binance no recibio ordenes.'
+          } >> "$GITHUB_STEP_SUMMARY"
