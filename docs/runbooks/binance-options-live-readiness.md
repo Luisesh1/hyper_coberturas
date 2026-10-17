@@ -160,6 +160,39 @@ requiere revalidación de precio y comisiones, autorización transaccional,
 vinculación de la estrategia y revisión de las salidas protectoras.
 Los flags live continúan OFF.
 
+## Simulación integral del piloto ETH — 17 oct 2026
+
+Prueba automatizada sin credenciales ni red de Binance:
+`server/test/options-eth-pilot-integrated-simulation.test.js`.
+Usa el template `alert_signal`, `OptionsStrategyRunner.executeLive` y
+`OptionsLiveExecution` reales contra un exchange y un ledger en memoria.
+Los flags de trading de producción permanecen OFF. Ningún POST llega
+a Binance.
+
+Cobertura: señal BUY ETH-261023-2500-C de 0.01 a 23.60 USDT, acuse sin
+fill ficticio, protección TP 35.40 (+50% de prima), stop simulado con
+bid 11.70 (pérdida superior al 50% de prima), cancelación confirmada
+del TP, orden SELL reduceOnly diferida a precio bid fresco y conciliación
+del cierre; segunda entrada bloqueada tanto antes como después.
+También se prueba salida por tiempo 24 h antes del vencimiento.
+El motor continúa siendo fail-closed ante órdenes pendientes.
+
+**Bloqueo NO-GO detectado:** un fill parcial de 0.005 frente a
+minQty/stepSize de 0.01 deja una posición que el exchange podría no
+permitir cerrar en un lote válido. El guard no inventa un take-profit
+y emite incidente `TP_NOT_PROTECTED`, pero eso NO equivale a una
+protección ejecutable. Antes de permitir live, demostrar cómo se
+resuelve cualquier cantidad residual inferior al mínimo (o demostrar
+con evidencia del exchange que tales fills no son posibles bajo esta
+configuración) y ensayar una salida real segura.
+
+**Corrección adicional:** el template `alert_signal` ya no usa mark
+ni Black-Scholes como sustituto de un bid/ask ejecutable para
+disparar stop o TP; con precio ausente devuelve `no_quote`.
+El stop porcentual sigue sin garantizar el precio de salida.
+La validación de ejecución real, fees efectivos y conciliación
+real Binance quedan pendientes. No declarar `pilot_ready=yes`.
+
 ## Barreras de seguridad
 
 - Dos variables en backend: `OPTIONS_LIVE_TRADING_ENABLED=true` **y**
