@@ -150,6 +150,7 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
           tradesLoading={acct.tradesLoading}
           pending={actions.pending}
           onClosePosition={actions.closePosition}
+          onCloseAtPrice={actions.closePositionAtPrice}
           onCancelOrder={actions.cancelOrder}
         />
         {confirmDialog}
@@ -194,6 +195,7 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
         tradesLoading={acct.tradesLoading}
         pending={actions.pending}
         onClose={actions.closePosition}
+        onCloseAtPrice={actions.closePositionAtPrice}
         onCancel={actions.cancelOrder}
       />
       {confirmDialog}
