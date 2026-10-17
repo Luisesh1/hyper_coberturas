@@ -474,3 +474,53 @@ test('FOK exit with insufficient or stale depth remains pending and sends no SEL
   assert.equal(f.broker.length,3,'retry requires a new valid depth snapshot');
   assert.equal(f.broker[2].timeInForce,'FOK');
 });
+
+test('terminal CANCELED after partial GTC TP keeps durable ATTENTION and dust',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8701);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  f.setFill(tp,.005,35.40,8702);
+  tp.status='CANCELED';
+  const first=await f.engine.reconcilePending();
+  assert.equal(first.errors,1,'terminal TP partial still requires attention');
+  assert.equal(f.positions[0].quantity,.005);
+  assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'attention');
+  assert.equal(f.broker.length,2,'never create a below-minimum close or new TP');
+  const repeat=await f.engine.reconcilePending();
+  assert.equal(repeat.errors,1,'rechecking the terminal partial cannot clear incident');
+  assert.equal(f.broker.length,2);
+  assert.equal(f.positions[0].quantity,.005,'tradeId dedup protects remaining quantity');
+});
+
+test('terminal canceled TP with missing getUserTrades never invents a fill',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8801);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  tp.status='CANCELED';
+  tp.executedQty=.005;
+  const r=await f.engine.reconcilePending();
+  assert.equal(r.errors,1);
+  assert.equal(f.positions[0].quantity,.01,'missing trade cannot adjust ledger');
+  assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'attention');
+  assert.equal(f.broker.length,2);
+});
+
+test('TP GTC initially partial can reconcile final full fill without fabricating a close',async()=>{
+  const f=harness();
+  await f.runEntry();
+  f.setFill(f.broker[0],.01,23.60,8901);
+  await f.engine.reconcilePending();
+  const tp=f.broker[1];
+  f.setFill(tp,.005,35.40,8902);
+  assert.equal((await f.engine.reconcilePending()).errors,1);
+  f.setFill(tp,.005,35.40,8903);
+  const r=await f.engine.reconcilePending();
+  assert.equal(r.errors,0,'full verified trades permit terminal final');
+  assert.equal(f.positions[0].quantity,0);
+  assert.equal(f.records.find(o=>o.clientOrderId===tp.clientOrderId).status,'final');
+  assert.equal(f.broker.length,2);
+});
