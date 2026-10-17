@@ -190,7 +190,7 @@ function AppContent() {
                 <Route path="/alertas"     element={<AlertsPage />} />
                 <Route path="/opciones"    element={<OptionsPage />} />
                 {/* Diagnostico oculto para superuser: no se publica en la navegacion. */}
-                {isSuperuser && <Route path="/opciones/diagnostico-gtc" element={<GtcDiagnosticPage />} />}
+                {isSuperuser && <Route path="/opciones/diagnosticos" element={<GtcDiagnosticPage />} />}
                 <Route path="/config"     element={<SettingsPage />} />
                 {/* Ruta oculta — no aparece en el navbar. Acciones de
                     recovery / mantenimiento manual. Acceso por URL directo. */}
