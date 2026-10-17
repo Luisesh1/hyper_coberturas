@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { apply, chooseOne, summaryLines } =
+const { apply, chooseOne, explainAlertFailure, summaryLines } =
   require('../src/scripts/options-pilot-bind-single-alert');
 const { BOT_PARAMS, BOT_LIMITS, MARKER } =
   require('../src/scripts/options-pilot-configure-paused');
@@ -45,6 +45,13 @@ test('accepts only a unique active ETH bullish alert with rules and proper expir
   assert.equal(chooseOne([{...alert,rules_json:'[]'}]),null);
   assert.equal(chooseOne([{...alert,option_expiry_min_days:8}]),null);
   assert.equal(chooseOne([{...alert,option_expiry_max_days:6}]),null);
+});
+test('reports a specific safe blocker for an ineligible ETH alert', () => {
+  assert.equal(explainAlertFailure([]),'alert_unavailable');
+  assert.equal(explainAlertFailure([{...alert,is_active:false}]),'alert_inactive');
+  assert.equal(explainAlertFailure([{...alert,rules_json:'[]'}]),'alert_rules_missing');
+  assert.equal(explainAlertFailure([{...alert,option_expiry_min_days:8}]),'alert_expiry_incompatible');
+  assert.equal(explainAlertFailure([alert,{...alert,id:41}]),'alert_ambiguous');
 });
 test('binds only alertIds while retaining a paused bot and original risk limits',async()=>{
   const {db,calls}=mockDb();
