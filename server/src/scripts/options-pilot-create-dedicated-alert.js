@@ -56,7 +56,7 @@ function eligibleSource(row) {
     Array.isArray(rules) && rules.length > 0 &&
     Number.isFinite(threshold) && threshold >= 0 && threshold <= 100 &&
     Number.isInteger(cooldown) && cooldown >= 0 &&
-    ['binance','hyperliquid'].includes(row?.datasource);
+    ['binance','hyperliquid','yahoo'].includes(row?.datasource);
 }
 function expectedClone(source) {
   if (!eligibleSource(source)) return null;
