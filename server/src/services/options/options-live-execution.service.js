@@ -590,7 +590,9 @@ class OptionsLiveExecution {
         }
       }
     }
-    return { attempted: positions.length, queued, syntheticSkipped };
+    return { attempted: positions.length, queued,
+      ...(syntheticSkipped ? { syntheticSkipped } : {}),
+    };
   }
 
   /** El POST de TP es idempotente: CAS queued→sending ANTES de la red.
