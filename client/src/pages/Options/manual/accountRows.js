@@ -9,14 +9,19 @@ export function sideLabel(side) {
 
 export function positionView(p) {
   const long = isLongPosition(p);
+  const quantity = Math.abs(Number(p.quantity));
+  const mark = p.markPrice == null || p.markPrice === '' ? null : Number(p.markPrice);
+  const premiumCurrent = Number.isFinite(mark) && mark >= 0 && Number.isFinite(quantity)
+    ? mark * quantity : null;
   return {
     key: p.symbol,
     symbol: p.symbol,
     long,
     side: long ? 'Compra' : 'Venta',
-    qty: Math.abs(Number(p.quantity)),
+    qty: quantity,
     entry: p.entryPrice,
     mark: p.markPrice,
+    premiumCurrent,
     pnl: p.unrealizedPnl,
     delta: p.delta,
     theta: p.theta,

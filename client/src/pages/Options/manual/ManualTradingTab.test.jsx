@@ -162,6 +162,29 @@ describe('ManualTradingTab · escritorio', () => {
     }));
   });
 
+  it('muestra la prima total a mark y el precio de entrada', async () => {
+    renderTab();
+    expect(await screen.findByText('455,00 USDT')).toBeTruthy(); // 910 × 0,5
+    expect(screen.getByText('1.180')).toBeTruthy();
+  });
+
+  it('permite programar cierre límite de una posición corta, sin envío previo a confirmar', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: 'Cerrar a precio BTC-261031-70000-C' }));
+    const input = screen.getByRole('textbox', { name: 'Precio objetivo para BTC-261031-70000-C' });
+    await user.type(input, '850,5');
+    expect(screen.getByText('425,25 USDT')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Revisar orden de cierre' }));
+    expect(optionsApi.placeOrder).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog', { name: 'Cerrar a precio objetivo' });
+    expect(dialog.textContent).toMatch(/no es una orden stop-loss/i);
+    await user.click(within(dialog).getByRole('button', { name: 'Enviar cierre límite' }));
+    await waitFor(() => expect(optionsApi.placeOrder).toHaveBeenCalledWith({
+      symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.5, price: 850.5, reduceOnly: true,
+    }));
+  });
+
   it('cancelar una orden abierta pide confirmación', async () => {
     const user = userEvent.setup();
     renderTab();
@@ -247,6 +270,34 @@ describe('ManualTradingTab · móvil', () => {
     await waitFor(() => expect(optionsApi.placeOrder).toHaveBeenCalledWith(expect.objectContaining({
       side: 'BUY', reduceOnly: true,
     })));
+  });
+
+  it('muestra entrada y prima total actual en cartera móvil y permite cierre objetivo', async () => {
+    const user = userEvent.setup();
+    renderTab({ isMobile: true });
+    await user.click(await screen.findByRole('button', { name: /Posiciones · 1/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Cartera' });
+    expect(within(sheet).getByText('Entrada: 1.180 USDT/contrato')).toBeTruthy();
+    expect(within(sheet).getByText('Mark: 910 USDT/contrato')).toBeTruthy();
+    expect(within(sheet).getByText(/Prima actual:/).textContent).toContain('455,00 USDT');
+    await user.click(within(sheet).getByRole('button', { name: 'Cerrar a precio BTC-261031-70000-C' }));
+    const input = within(sheet).getByRole('textbox', { name: 'Precio objetivo para BTC-261031-70000-C' });
+    await user.type(input, 'abc');
+    await user.click(within(sheet).getByRole('button', { name: 'Revisar orden de cierre' }));
+    expect(within(sheet).getByRole('alert').textContent).toMatch(/precio objetivo válido/);
+    expect(optionsApi.placeOrder).not.toHaveBeenCalled();
+    await user.clear(input);
+    await user.type(input, '800');
+    await user.click(within(sheet).getByRole('button', { name: 'Revisar orden de cierre' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cerrar a precio objetivo' });
+    await user.click(within(dialog).getByRole('button', { name: 'Volver' }));
+    expect(optionsApi.placeOrder).not.toHaveBeenCalled();
+    await user.click(within(sheet).getByRole('button', { name: 'Revisar orden de cierre' }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Cerrar a precio objetivo' }))
+      .getByRole('button', { name: 'Enviar cierre límite' }));
+    await waitFor(() => expect(optionsApi.placeOrder).toHaveBeenCalledWith({
+      symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.5, price: 800, reduceOnly: true,
+    }));
   });
 
   it('deslizar una posición revela «Cerrar»', async () => {

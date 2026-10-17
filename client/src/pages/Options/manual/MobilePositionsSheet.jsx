@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import CloseAtPriceForm from './CloseAtPriceForm';
 import BottomSheet from '../../TradingView/components/BottomSheet';
 import { useSwipeToReveal } from '../../TradingView/components/useSwipeToReveal';
 import { fmtDateTime, fmtNum, fmtPrice, fmtSigned, toneOf } from '../format';
@@ -36,7 +38,7 @@ function SwipeCard({ id, swipe, actionLabel, actionAria, onAction, disabled, chi
       <div
         className={`${styles.swipeTrack} ${swipe.isDragging(id) ? styles.swipeTrackDragging : ''}`}
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
-        onPointerDown={(e) => { if (!e.target.closest?.('button')) handlers.onPointerDown(e); }}
+        onPointerDown={(e) => { if (!e.target.closest?.('button, input, label')) handlers.onPointerDown(e); }}
         onPointerMove={handlers.onPointerMove}
         onPointerUp={handlers.onPointerUp}
         onPointerCancel={handlers.onPointerCancel}
@@ -50,9 +52,10 @@ function SwipeCard({ id, swipe, actionLabel, actionAria, onAction, disabled, chi
 
 export default function MobilePositionsSheet({
   open, onClose, section, onSection, configured, account, positions, openOrders, trades, tradesLoading,
-  pending, onClosePosition, onCancelOrder,
+  pending, onClosePosition, onCloseAtPrice, onCancelOrder,
 }) {
   const swipe = useSwipeToReveal({ revealWidth: REVEAL_WIDTH, enabled: open });
+  const [editingSymbol, setEditingSymbol] = useState(null);
   const g = account?.greeks || {};
   const counts = { positions: positions.length, orders: openOrders.length, history: null };
 
@@ -79,7 +82,7 @@ export default function MobilePositionsSheet({
                 role="tab"
                 aria-selected={section === s.key}
                 className={`${styles.sheetSegBtn} ${section === s.key ? styles.sheetSegOn : ''}`}
-                onClick={() => { swipe.close(); onSection(s.key); }}
+                onClick={() => { swipe.close(); setEditingSymbol(null); onSection(s.key); }}
               >
                 {s.label}{counts[s.key] != null ? ` · ${counts[s.key]}` : ''}
               </button>
@@ -102,23 +105,50 @@ export default function MobilePositionsSheet({
                         disabled={pending}
                         onAction={() => onClosePosition(raw)}
                       >
-                        <div className={styles.posCard}>
-                          <span className={styles.posText}>
-                            <span className={`${styles.mono} ${styles.posSymbol}`}>{p.symbol}</span>
-                            <span className={styles.posMeta}>{p.side} {fmtNum(p.qty, 2)} · {p.origin}</span>
-                          </span>
-                          <span className={styles.posRight}>
-                            <span className={`${styles.mono} ${styles.posPnl} ${styles[toneOf(p.pnl)]}`}>{fmtSigned(p.pnl, 2)}</span>
-                            <button
-                              type="button"
-                              className={styles.posBtn}
-                              disabled={pending}
-                              aria-label={`Cerrar ${p.symbol}`}
-                              onClick={() => onClosePosition(raw)}
-                            >
-                              Cerrar
-                            </button>
-                          </span>
+                        <div className={styles.posCardBlock}>
+                          <div className={styles.posCard}>
+                            <span className={styles.posText}>
+                              <span className={`${styles.mono} ${styles.posSymbol}`}>{p.symbol}</span>
+                              <span className={styles.posMeta}>{p.side} {fmtNum(p.qty, 2)} · {p.origin}</span>
+                              <span className={styles.posMeta}>Entrada: {fmtPrice(p.entry)} USDT/contrato</span>
+                              <span className={styles.posMeta}>Mark: {fmtPrice(p.mark)} USDT/contrato</span>
+                              <span className={styles.posPremium}>
+                                Prima actual: <strong className={styles.mono}>
+                                  {p.premiumCurrent == null ? '—' : `${fmtNum(p.premiumCurrent, 2)} USDT`}
+                                </strong>
+                              </span>
+                            </span>
+                            <span className={`${styles.posRight} ${styles.posRightColumn}`}>
+                              <span className={`${styles.mono} ${styles.posPnl} ${styles[toneOf(p.pnl)]}`}>{fmtSigned(p.pnl, 2)}</span>
+                              <button
+                                type="button"
+                                className={styles.posBtn}
+                                disabled={pending}
+                                aria-label={`Cerrar ${p.symbol}`}
+                                onClick={() => onClosePosition(raw)}
+                              >
+                                Cerrar
+                              </button>
+                              <button
+                                type="button"
+                                className={`${styles.posBtn} ${styles.posTargetBtn}`}
+                                disabled={pending}
+                                aria-expanded={editingSymbol === p.key}
+                                aria-label={`Cerrar a precio ${p.symbol}`}
+                                onClick={() => setEditingSymbol(editingSymbol === p.key ? null : p.key)}
+                              >
+                                Cerrar a precio
+                              </button>
+                            </span>
+                          </div>
+                          {editingSymbol === p.key && (
+                            <CloseAtPriceForm
+                              position={raw}
+                              pending={pending}
+                              onSubmit={onCloseAtPrice}
+                              onCancel={() => setEditingSymbol(null)}
+                            />
+                          )}
                         </div>
                       </SwipeCard>
                     );
