@@ -286,3 +286,41 @@ jobs:
             echo
             echo '**NO-GO:** el filtro de nuevo SELL no demuestra que Binance cierre una orden GTC con fill parcial.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comprobar elegibilidad de señal ETH y canal Telegram
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          # Solo el deploy de este cambio autorizado envia un mensaje de
+          # prueba de Telegram. Cualquier otro deploy hace solo lectura.
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          mode='--read-only'
+          if [ "$subject" = 'ops(options): deploy pilot channel verification' ]; then
+            mode='--send-test'
+          fi
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-channel-probe.js '$mode'" \
+            >"$RUNNER_TEMP/pilot-channel-probe.log" 2>/dev/null; then
+            echo '::warning::Diagnostico de canal no disponible; NO OPERAR'
+            exit 0
+          fi
+          if ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/pilot-channel-probe.log" ||
+             ! grep -Fxq 'pilot_channel_orders_sent=0' "$RUNNER_TEMP/pilot-channel-probe.log" ||
+             ! grep -Eq '^pilot_channel_status=(channel_candidate|blocked)$' "$RUNNER_TEMP/pilot-channel-probe.log"; then
+            echo '::warning::Reporte de canal incompleto; NO OPERAR'
+            exit 0
+          fi
+          grep -E '^(pilot_channel_|pilot_ready=)' "$RUNNER_TEMP/pilot-channel-probe.log"
+          {
+            echo '### Señal ETH y Telegram: prueba controlada (NO habilita trading)'
+            grep -E '^(pilot_channel_|pilot_ready=)' "$RUNNER_TEMP/pilot-channel-probe.log"
+            echo
+            echo '- Un ACK de Telegram NO prueba recepción humana.'
+            echo '- Ninguna orden se envio a Binance. La estrategia permanece pausada.'
+            echo '- No se imprime identidad del usuario, secretos, saldo ni nombres de sus alertas.'
+          } >> "$GITHUB_STEP_SUMMARY"
