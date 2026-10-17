@@ -1,0 +1,128 @@
+name: Binance Options GTC - diagnostico SOLO LECTURA
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "ETH CALL listado (no es una orden)"
+        required: true
+        type: string
+        default: "ETH-261023-2500-C"
+      max_limit_usdt:
+        description: "Limite historico o de referencia, solo para preflight GET"
+        required: true
+        type: string
+        default: "23.60"
+      confirmation:
+        description: "Escribe READ_ONLY para confirmar que NO se enviaran ordenes"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binance-gtc-readonly-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    steps:
+      - name: Validar ejecucion manual y parametros sin expansion de comandos
+        env:
+          SYMBOL: ${{ inputs.symbol }}
+          MAX_LIMIT: ${{ inputs.max_limit_usdt }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRMATION" != 'READ_ONLY' ||
+                ! "$SYMBOL" =~ ^ETH-[0-9]{6}-[0-9]+(\.[0-9]+)?-C$ ||
+                ! "$MAX_LIMIT" =~ ^[0-9]+(\.[0-9]{1,12})?$ ]]; then
+            echo '::error::Parametros invalidos o falta confirmar READ_ONLY'
+            exit 2
+          fi
+
+      - name: Configurar SSH con huella verificada
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_KNOWN_HOSTS: ${{ secrets.SERVER_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SERVER_HOST" && test -n "$SERVER_SSH_KEY" && test -n "$SERVER_SSH_KNOWN_HOSTS"
+          mkdir -p -m 700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_rsa
+          printf '%s\n' "$SERVER_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_rsa ~/.ssh/known_hosts
+          ssh-keygen -F "$SERVER_HOST" -f ~/.ssh/known_hosts >/dev/null
+
+      - name: Verificar version desplegada y controles de trading APAGADOS
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SERVER_USER" && test -n "$SERVER_HOST" && test -n "$DEPLOY_PATH"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && test \"\$(git rev-parse HEAD)\" = '$TARGET_SHA' && docker compose -f docker-compose.prod.yml exec -T server node -e 'if (process.env.OPTIONS_LIVE_TRADING_ENABLED !== \"false\" || process.env.OPTIONS_LIVE_PRODUCTION_APPROVED !== \"false\" || process.env.OPTIONS_LIVE_PILOT_AUTHORIZED === \"true\") process.exit(2)'"
+          echo 'gtc_readonly_deployed_gate=pass'
+
+      - name: Consultar filtros y cuenta en Binance sin crear ordenes
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SYMBOL: ${{ inputs.symbol }}
+        run: |
+          set -euo pipefail
+          # Entrada validada en el paso 1; se valida de nuevo antes del SSH.
+          [[ "$SYMBOL" =~ ^ETH-[0-9]{6}-[0-9]+(\.[0-9]+)?-C$ ]] || exit 2
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-gtc-dust-readonly.js '$SYMBOL'" \
+            > "$RUNNER_TEMP/gtc-dust.log" 2>/dev/null; then
+            grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/gtc-dust.log" || true
+            echo '::error::Diagnostico de filtros bloqueado o no disponible; NO OPERAR'
+            exit 1
+          fi
+          grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/gtc-dust.log"
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/gtc-dust.log"
+          grep -Eq '^gtc_dust_status=(risk_detected|filter_only)$' "$RUNNER_TEMP/gtc-dust.log"
+          {
+            echo '### Diagnostico de filtros Binance ETH GTC — SOLO LECTURA'
+            grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/gtc-dust.log"
+            echo
+            echo '**NO-GO:** El diagnostico de filtros no prueba una liquidacion real de 0.005 ni garantiza el TP.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ejecutar preflight existente (sin autorizar orden real)
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SYMBOL: ${{ inputs.symbol }}
+          MAX_LIMIT: ${{ inputs.max_limit_usdt }}
+        run: |
+          set -euo pipefail
+          [[ "$SYMBOL" =~ ^ETH-[0-9]{6}-[0-9]+(\.[0-9]+)?-C$ ]] || exit 2
+          [[ "$MAX_LIMIT" =~ ^[0-9]+(\.[0-9]{1,12})?$ ]] || exit 2
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-gtc-pilot-readiness.js 1 '$SYMBOL' 0.01 '$MAX_LIMIT'" \
+            > "$RUNNER_TEMP/gtc-readiness.log" 2>/dev/null; then
+            echo '::warning::Preflight no disponible; NO OPERAR'
+            exit 0
+          fi
+          grep -E '^(gtc_pilot_|pilot_ready=)' "$RUNNER_TEMP/gtc-readiness.log" || true
+          if ! grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/gtc-readiness.log"; then
+            echo '::error::Formato no seguro del preflight'
+            exit 1
+          fi
+          {
+            echo '### Readiness preflight (NO autoriza trading)'
+            grep -E '^(gtc_pilot_|pilot_ready=)' "$RUNNER_TEMP/gtc-readiness.log" || true
+          } >> "$GITHUB_STEP_SUMMARY"
