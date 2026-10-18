@@ -551,3 +551,31 @@ jobs:
             echo
             echo 'Candidatos teoricos no autorizan compra: se exige contrato, permiso exacto y revision de costes.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revisar CALL 7-14 dias liquido mas barato bajo 20 USDT (solo GET)
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-7-14-affordability-readonly.js --read-only" \
+            >"$RUNNER_TEMP/pilot-affordability.log" 2>/dev/null; then
+            echo '::warning::No se pudo consultar la alternativa 7-14 dias: NO OPERAR'
+            exit 0
+          fi
+          grep -Fxq 'pilot_7_14_affordability_read_only=yes' "$RUNNER_TEMP/pilot-affordability.log" || exit 1
+          grep -Fxq 'pilot_7_14_affordability_cap_usdt=20' "$RUNNER_TEMP/pilot-affordability.log" || exit 1
+          grep -Fxq 'pilot_7_14_affordability_orders_sent=0' "$RUNNER_TEMP/pilot-affordability.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/pilot-affordability.log" || exit 1
+          grep -Eq '^pilot_7_14_affordability_status=(liquid_candidate|depth_unverified|no_quote)$' \
+            "$RUNNER_TEMP/pilot-affordability.log" || exit 1
+          grep -E '^(pilot_7_14_affordability_|pilot_ready=)' "$RUNNER_TEMP/pilot-affordability.log"
+          {
+            echo '### Cotizacion publica ETH CALL 7-14 dias bajo 20 USDT'
+            grep -E '^(pilot_7_14_affordability_|pilot_ready=)' "$RUNNER_TEMP/pilot-affordability.log"
+            echo
+            echo 'No autoriza orden real. Precios caducan y comisiones efectivas no verificadas.'
+          } >> "$GITHUB_STEP_SUMMARY"
