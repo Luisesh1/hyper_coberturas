@@ -579,3 +579,50 @@ jobs:
             echo
             echo 'No autoriza orden real. Precios caducan y comisiones efectivas no verificadas.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verificar compra EXACTA ETH 261030 2550 CALL autorizada (solo GET)
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          if [ "$subject" != 'ops(options): verify approved ETH 261030-2550-C 0.01 cap36' ]; then
+            echo 'pilot_exact_authorized_preflight=skipped_other_release'
+            exit 0
+          fi
+          # GET firmado de cuenta y datos PUBLICOS de libro. Ni POST ni cambios de DB.
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-exact-buy-readonly-preview.js 1 ETH-261030-2550-C 0.01 36.00" \
+            >"$RUNNER_TEMP/pilot-exact-authorized-preview.log" 2>/dev/null; then
+            echo '::error::Exact BUY preflight unavailable, do not trade'
+            exit 1
+          fi
+          for expected in \
+            'preview_symbol=ETH-261030-2550-C' \
+            'preview_side=BUY' \
+            'preview_quantity=0.01' \
+            'preview_limit_usdt=36.00' \
+            'preview_entry_total_cap_usdt=0.40' \
+            'preview_flagsOff=pass' \
+            'pilot_ready=no'; do
+            grep -Fxq "$expected" "$RUNNER_TEMP/pilot-exact-authorized-preview.log" || {
+              echo '::error::Unexpected exact BUY preview: no trade permitted'
+              exit 1
+            }
+          done
+          grep -Eq '^preview_status=(pass|blocked|unverified)$' \
+            "$RUNNER_TEMP/pilot-exact-authorized-preview.log" || exit 1
+          grep -E '^(preview_|pilot_ready=)' "$RUNNER_TEMP/pilot-exact-authorized-preview.log"
+          {
+            echo '### Contrato BUY ETH autorizado (solo PREVIEW)'
+            grep -E '^(preview_|pilot_ready=)' "$RUNNER_TEMP/pilot-exact-authorized-preview.log"
+            echo
+            echo 'Una vista previa no ejecuta orden ni autoriza habilitacion permanente del bot.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if ! grep -Fxq 'preview_status=pass' "$RUNNER_TEMP/pilot-exact-authorized-preview.log"; then
+            echo '::warning::La orden autorizada NO pasa liquidez o controles; NO OPERAR'
+          fi
