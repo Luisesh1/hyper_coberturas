@@ -626,3 +626,61 @@ jobs:
           if ! grep -Fxq 'preview_status=pass' "$RUNNER_TEMP/pilot-exact-authorized-preview.log"; then
             echo '::warning::La orden autorizada NO pasa liquidez o controles; NO OPERAR'
           fi
+
+      - name: Ajustar SOLO piloto ETH independiente pausado (0.36 prima, 0.40 capital)
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          if [ "$subject" != 'ops(options): update independent paused ETH pilot to 0.40 budget' ]; then
+            echo 'pilot_budget_update=skipped_other_release'
+            exit 0
+          fi
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-adjust-independent-budget-paused.js --apply-paused-only" \
+            >"$RUNNER_TEMP/options-budget-apply.log" 2>/dev/null; then
+            echo '::error::No se pudo ajustar el presupuesto del piloto pausado; trading no habilitado'
+            exit 1
+          fi
+          grep -Eq '^pilot_budget_status=(adjusted_paused|already_adjusted)$' \
+            "$RUNNER_TEMP/options-budget-apply.log" || {
+              echo '::error::Ajuste no aplicado; no activar trading'
+              exit 1
+            }
+          for expected in \
+            'pilot_budget_max_premium_usdt=0.36' \
+            'pilot_budget_max_capital_usdt=0.40' \
+            'pilot_budget_existing_strategy_preserved=yes' \
+            'pilot_budget_existing_alert_preserved=yes' \
+            'pilot_budget_strategy_mode=paused' \
+            'pilot_budget_trading_enabled=no' \
+            'pilot_budget_orders_sent=0' \
+            'pilot_ready=no'; do
+            grep -Fxq "$expected" "$RUNNER_TEMP/options-budget-apply.log" || {
+              echo '::error::Invariante de seguridad del presupuesto falló'
+              exit 1
+            }
+          done
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-adjust-independent-budget-paused.js --verify-only" \
+            >"$RUNNER_TEMP/options-budget-verify.log" 2>/dev/null; then
+            echo '::error::No se pudo verificar el presupuesto del piloto pausado'
+            exit 1
+          fi
+          grep -Fxq 'pilot_budget_status=verified' "$RUNNER_TEMP/options-budget-verify.log" || exit 1
+          grep -Fxq 'pilot_budget_strategy_mode=paused' "$RUNNER_TEMP/options-budget-verify.log" || exit 1
+          grep -Fxq 'pilot_budget_trading_enabled=no' "$RUNNER_TEMP/options-budget-verify.log" || exit 1
+          grep -Fxq 'pilot_budget_orders_sent=0' "$RUNNER_TEMP/options-budget-verify.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-budget-verify.log" || exit 1
+          grep -E '^(pilot_budget_|pilot_ready=)' "$RUNNER_TEMP/options-budget-verify.log"
+          {
+            echo '### Presupuesto piloto ETH independiente'
+            grep -E '^(pilot_budget_|pilot_ready=)' "$RUNNER_TEMP/options-budget-verify.log"
+            echo
+            echo 'Trading real sigue OFF. Ejecutor de salida y cierre parcial aún requieren validación.'
+          } >> "$GITHUB_STEP_SUMMARY"
