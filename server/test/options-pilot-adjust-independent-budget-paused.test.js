@@ -112,5 +112,5 @@ test('will not even reach DB if trading controls are on',async()=>{
 test('does not contain trading calls, configuration flag writes or unrelated strategy update',()=>{
  const source=fs.readFileSync(path.resolve(__dirname,
  '../src/scripts/options-pilot-adjust-independent-budget-paused.js'),'utf8');
- assert.doesNotMatch(source,/\.placeOrder\(|\.cancelOrder\(|\.setMode\(|INSERT INTO|UPDATE alerts|UPDATE settings|OPTIONS_LIVE_TRADING_ENABLED\s*=/);
+ assert.doesNotMatch(source,/\.placeOrder\(|\.cancelOrder\(|\.setMode\(|INSERT INTO|UPDATE alerts|UPDATE settings|OPTIONS_LIVE_TRADING_ENABLED\s*=(?!=)/);
 });
