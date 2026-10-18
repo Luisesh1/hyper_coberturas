@@ -523,3 +523,31 @@ jobs:
             echo
             echo 'Se preservo la estrategia original. Trading real continua deshabilitado.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revisar mercado ETH 7-14d del piloto independiente (solo GET)
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-market-readonly-7-14.js --read-only" \
+            >"$RUNNER_TEMP/pilot-7-14-market.log" 2>/dev/null; then
+            echo '::warning::Mercado 7-14 dias no verificable: NO OPERAR'
+            exit 0
+          fi
+          grep -Fxq 'pilot_7_14_market_read_only=yes' "$RUNNER_TEMP/pilot-7-14-market.log" || exit 1
+          grep -Fxq 'pilot_7_14_market_entry_cap_usdt=0.26' "$RUNNER_TEMP/pilot-7-14-market.log" || exit 1
+          grep -Fxq 'pilot_7_14_market_orders_sent=0' "$RUNNER_TEMP/pilot-7-14-market.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/pilot-7-14-market.log" || exit 1
+          grep -Eq '^pilot_7_14_market_status=(market_candidate|no_premium_candidate|insufficient_depth)$' \
+            "$RUNNER_TEMP/pilot-7-14-market.log" || exit 1
+          grep -E '^(pilot_7_14_market_|pilot_ready=)' "$RUNNER_TEMP/pilot-7-14-market.log"
+          {
+            echo '### Liquidez CALL ETH 7-14 dias dentro de 0.26 USDT'
+            grep -E '^(pilot_7_14_market_|pilot_ready=)' "$RUNNER_TEMP/pilot-7-14-market.log"
+            echo
+            echo 'Candidatos teoricos no autorizan compra: se exige contrato, permiso exacto y revision de costes.'
+          } >> "$GITHUB_STEP_SUMMARY"
