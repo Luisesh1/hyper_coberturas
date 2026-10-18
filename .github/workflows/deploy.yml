@@ -381,10 +381,8 @@ jobs:
           # crear una COPIA de la alerta. No activar modo live ni Binance POST.
           subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
             "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
-          if [ "$subject" != 'ops(options): clone dedicated ETH 7-14 pilot alert' ]; then
-            echo 'pilot_dedicated_alert=skipped_other_release'
-            exit 0
-          fi
+          # Este diagnostico no modifica datos y se ejecuta en CADA deploy.
+          # La creacion queda protegida por el asunto exacto del commit.
           # Solo lectura: detecta ajustes previos sin revelar valores
           # del usuario ni restaurar una configuracion modificada.
           if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
@@ -397,6 +395,14 @@ jobs:
           grep -Fxq 'pilot_alert_diag_orders_sent=0' "$RUNNER_TEMP/pilot-dedicated-diff.log" || exit 1
           grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/pilot-dedicated-diff.log" || exit 1
           grep -E '^(pilot_alert_diag_|pilot_ready=)' "$RUNNER_TEMP/pilot-dedicated-diff.log"
+          {
+            echo '### Diagnostico de la estrategia piloto, solo lectura'
+            grep -E '^(pilot_alert_diag_|pilot_ready=)' "$RUNNER_TEMP/pilot-dedicated-diff.log"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$subject" != 'ops(options): clone dedicated ETH 7-14 pilot alert' ]; then
+            echo 'pilot_dedicated_alert=skipped_other_release'
+            exit 0
+          fi
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
             "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-create-dedicated-alert.js --create-paused-only" \
             >"$RUNNER_TEMP/pilot-exclusive-alert.log" 2>/dev/null || {
