@@ -464,3 +464,62 @@ jobs:
             echo
             echo 'La alerta original no se modifico; bot PAUSADO; Binance no recibio ordenes.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Crear piloto ETH independiente 7-14d con bot PAUSADO (liberacion unica)
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          if [ "$subject" != 'ops(options): provision new paused ETH 7-14 pilot' ]; then
+            echo 'pilot_independent=skipped_other_release'
+            exit 0
+          fi
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-create-independent-paused.js --create-paused-only" \
+            >"$RUNNER_TEMP/pilot-independent-create.log" 2>/dev/null; then
+            echo '::error::Pilot independent provisioning failed without enabling trading'
+            exit 1
+          fi
+          grep -E '^(pilot_independent_|pilot_ready=)' "$RUNNER_TEMP/pilot-independent-create.log" || true
+          for expected in \
+            'pilot_independent_source_strategy_unchanged=yes' \
+            'pilot_independent_original_alert_unchanged=yes' \
+            'pilot_independent_expiry=7_14' \
+            'pilot_independent_telegram_duplicate=off' \
+            'pilot_independent_strategy_mode=paused' \
+            'pilot_independent_orders_sent=0' \
+            'pilot_independent_live_enabled=no' \
+            'pilot_ready=no'; do
+            grep -Fxq "$expected" "$RUNNER_TEMP/pilot-independent-create.log" || {
+              echo '::error::Pilot independent provisioning blocked; no trading allowed'
+              exit 1
+            }
+          done
+          grep -Eq '^pilot_independent_status=(created_paused|already_prepared)$' \
+            "$RUNNER_TEMP/pilot-independent-create.log" || {
+              echo '::error::Pilot independent provisioning blocked; no trading allowed'
+              exit 1
+            }
+
+          # Independent inspection: MUST be idempotent and MUST NOT write DB.
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-pilot-create-independent-paused.js --verify-only" \
+            >"$RUNNER_TEMP/pilot-independent-verify.log" 2>/dev/null; then
+            echo '::error::Pilot verification unavailable: no real trading permitted'
+            exit 1
+          fi
+          grep -E '^(pilot_independent_|pilot_ready=)' "$RUNNER_TEMP/pilot-independent-verify.log" || true
+          grep -Fxq 'pilot_independent_status=verified' "$RUNNER_TEMP/pilot-independent-verify.log" || exit 1
+          grep -Fxq 'pilot_independent_orders_sent=0' "$RUNNER_TEMP/pilot-independent-verify.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/pilot-independent-verify.log" || exit 1
+          {
+            echo '### Nuevo piloto ETH independiente (7-14 dias)'
+            grep -E '^(pilot_independent_|pilot_ready=)' "$RUNNER_TEMP/pilot-independent-verify.log"
+            echo
+            echo 'Se preservo la estrategia original. Trading real continua deshabilitado.'
+          } >> "$GITHUB_STEP_SUMMARY"
