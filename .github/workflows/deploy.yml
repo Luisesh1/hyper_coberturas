@@ -684,3 +684,37 @@ jobs:
             echo
             echo 'Trading real sigue OFF. Ejecutor de salida y cierre parcial aún requieren validación.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revisar TP GTC del CONTRATO ETH aprobado (solo GET, sin operaciones)
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          if [ "$subject" != 'ops(options): update independent paused ETH pilot to 0.40 budget' ]; then
+            echo 'pilot_target_exit_diagnostic=skipped_other_release'
+            exit 0
+          fi
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-gtc-dust-readonly.js ETH-261030-2550-C" \
+            >"$RUNNER_TEMP/options-target-gtc.log" 2>/dev/null; then
+            echo '::warning::GET Binance GTC del contrato exacto no disponible; trading real BLOQUEADO'
+            exit 0
+          fi
+          grep -Fxq 'gtc_dust_read_only=yes' "$RUNNER_TEMP/options-target-gtc.log" || exit 1
+          grep -Fxq 'gtc_dust_initial_qty=0.01' "$RUNNER_TEMP/options-target-gtc.log" || exit 1
+          grep -Fxq 'gtc_dust_real_orders_sent=0' "$RUNNER_TEMP/options-target-gtc.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/options-target-gtc.log" || exit 1
+          grep -Eq '^gtc_dust_status=(filter_only|risk_detected|blocked)$' \
+            "$RUNNER_TEMP/options-target-gtc.log" || exit 1
+          grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/options-target-gtc.log"
+          {
+            echo '### Riesgo de TP GTC para ETH-261030-2550-C'
+            grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/options-target-gtc.log"
+            echo
+            echo 'No hay certificacion de cierre de TP parcialmente ejecutado ni de stop garantizado.'
+          } >> "$GITHUB_STEP_SUMMARY"
