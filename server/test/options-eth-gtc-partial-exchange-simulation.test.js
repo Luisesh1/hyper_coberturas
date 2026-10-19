@@ -17,7 +17,7 @@ function mockExchange({status='PARTIALLY_FILLED',filled=PARTIAL,
   lotMin='0.01',lotStep='0.01',filtersKnown=true,
   tradesComplete=true,allowCancel=false}={}){
  const calls={getOrder:0,getExchangeInfo:0,getUserTrades:0,cancel:0,
-  tradesApplied:[],markedActive:[],finalized:[]};
+  tradesApplied:[],markedActive:[],finalized:[],audits:[]};
  const order={
   id:77,userId:1,strategyId:13,
   symbol:SYMBOL,side:'SELL',purpose:'take_profit',action:'close',
@@ -56,7 +56,7 @@ function mockExchange({status='PARTIALLY_FILLED',filled=PARTIAL,
  };
  const executor=new OptionsLiveExecution({
   repo,credentials:{},market:{},enabled:false,now:()=>NOW,
-  logger:{warn(){}},notify:async()=>{},
+  logger:{warn(kind,details){calls.audits.push({kind,details})}},notify:async()=>{},
   settlement:{reconcileExpired:async()=>{}},
  });
  return {executor,client,order,calls};
@@ -72,6 +72,18 @@ test('ETH GTC TP 0.005/0.01 stays on Binance and records fill before ATTENTION',
  assert.equal(f.calls.tradesApplied[0][1].quantity,PARTIAL);
  assert.equal(f.calls.finalized.length,0,'never falsely finalize a partial');
  assert.equal(f.calls.getExchangeInfo,1);
+ const audit=f.calls.audits.find(x=>x.kind==='options_gtc_partial_exit_incident');
+ assert.ok(audit,'a partial TP must produce an incident trace');
+ assert.equal(audit.details.observedAt,new Date(NOW).toISOString());
+ assert.equal(audit.details.symbol,SYMBOL);
+ assert.equal(audit.details.binanceOrderId,ORDER_ID);
+ assert.equal(audit.details.originalQty,.01);
+ assert.equal(audit.details.executedQty,.005);
+ assert.equal(audit.details.remainingQty,.005);
+ assert.equal(audit.details.firstFillAt,new Date(NOW-2000).toISOString());
+ assert.equal(audit.details.lastFillAt,new Date(NOW-2000).toISOString());
+ assert.equal(audit.details.tpOrderPreserved,true);
+ assert.equal(audit.details.requiresOperatorReview,true);
 });
 
 test('ETH GTC TP incomplete trades: block without cancel or false FINAL',async()=>{
@@ -98,6 +110,11 @@ test('ETH GTC terminal canceled partial: do not falsely close remaining 0.005',a
  assert.equal(f.calls.cancel,0);
  assert.equal(f.calls.tradesApplied.length,1);
  assert.equal(f.calls.finalized.length,0);
+ const audit=f.calls.audits.find(x=>x.kind==='options_gtc_partial_exit_incident');
+ assert.ok(audit);
+ assert.equal(audit.details.binanceStatus,'CANCELED');
+ assert.equal(audit.details.remainingQty,.005);
+ assert.equal(audit.details.tpOrderPreserved,false);
 });
 
 test('ETH GTC TP fully filled gets reconciled normally',async()=>{
@@ -106,6 +123,7 @@ test('ETH GTC TP fully filled gets reconciled normally',async()=>{
  assert.equal(f.calls.cancel,0);
  assert.equal(f.calls.finalized.length,1);
  assert.equal(f.calls.tradesApplied.length,1);
+ assert.equal(f.calls.audits.filter(x=>x.kind==='options_gtc_partial_exit_incident').length,0);
 });
 
 test('even with a valid residual lot, cancelled partial remains ATTENTION for review',async()=>{
