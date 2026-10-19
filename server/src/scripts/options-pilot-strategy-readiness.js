@@ -10,6 +10,11 @@ const { validateParams }=require('../services/options/templates/alert-signal');
 const USER_ID=1;
 const MAX_ENTRY_USDT=0.26;
 const MAX_TOTAL_USDT=20;
+// Solo el piloto ETH independiente autorizado admite 0.36 prima / 0.40
+// capital. Los demás bots conservan el perfil estricto anterior.
+const INDEPENDENT_MARKER='PILOTO ETH 7-14 - independiente - PAUSADO';
+const INDEPENDENT_PREMIUM=0.36;
+const INDEPENDENT_CAPITAL=0.40;
 const allowed=(x,a,b)=>Number.isFinite(Number(x))&&Number(x)>=a&&Number(x)<=b;
 
 function strategyFits(s) {
@@ -19,7 +24,22 @@ function strategyFits(s) {
   let p;
   try { p=validateParams(s.params); } catch (_) { return false; }
   const l=s.limits || {};
-  return p.structure==='buy_with' &&
+  const oldBudget=allowed(p.maxPremiumUsdt,0.01,MAX_ENTRY_USDT) &&
+    allowed(p.capitalUsdt,MAX_ENTRY_USDT,MAX_ENTRY_USDT);
+  // Admisible SOLO para la nueva estrategia independiente pausada,
+  // vinculada a UNA alerta. No aumenta presupuestos de terceros.
+  const newBudget=s.name===INDEPENDENT_MARKER &&
+    s.mode==='paused' &&
+    p.maxPremiumUsdt===INDEPENDENT_PREMIUM &&
+    p.capitalUsdt===INDEPENDENT_CAPITAL &&
+    p.structure==='buy_with' && p.targetDelta===0.35 &&
+    p.takeProfitMode==='fixed' && p.takeProfitPct===50 &&
+    p.stopLossPct===50 && p.expiryDays===7 &&
+    Array.isArray(p.alertIds) && p.alertIds.length===1 &&
+    l.maxOrdersPerDay===3 &&
+    allowed(l.maxDailyLossUsdt,0,1) &&
+    allowed(l.maxMarginUsdt,0,1);
+  return (oldBudget||newBudget) && p.structure==='buy_with' &&
     p.contractCount===1 && p.quantity===0.01 &&
     p.maxOpenPositions===1 && p.maxTradesPerDay===1 &&
     p.onOpposite==='close' &&
@@ -27,8 +47,6 @@ function strategyFits(s) {
     allowed(p.takeProfitPct,1,100) &&
     allowed(p.stopLossPct,1,50) &&
     allowed(p.exitHoursBeforeExpiry,12,72) &&
-    allowed(p.maxPremiumUsdt,0.01,MAX_ENTRY_USDT) &&
-    allowed(p.capitalUsdt,MAX_ENTRY_USDT,MAX_ENTRY_USDT) &&
     allowed(l.maxOrdersPerDay,1,3) &&
     allowed(l.maxDailyLossUsdt,0,MAX_TOTAL_USDT) &&
     allowed(l.maxMarginUsdt,0,MAX_TOTAL_USDT);
