@@ -116,3 +116,39 @@ test('even with a valid residual lot, cancelled partial remains ATTENTION for re
  assert.equal(f.calls.tradesApplied.length,1);
  assert.equal(f.calls.finalized.length,0);
 });
+
+test('reconciler records ATTENTION and issues alert without canceling partial resting TP',async()=>{
+ const f=mockExchange();
+ const status={attention:false,alerted:false,released:false};
+ const notifications=[];
+ f.executor.credentials={getClientForUser:async()=>f.client};
+ f.executor.repo={
+  ...f.executor.repo,
+  async listUnresolved(){return [f.order]},
+  async claimReconcile(){return {...f.order,leaseUntil:NOW+5000}},
+  async releaseReconcile(){status.released=true},
+  async markAttention(){status.attention=true},
+  async listAttentionOrders(){return status.attention?[f.order.id]:[]},
+  async claimAttentionNotification(){
+   if(status.alerted)return null;
+   status.alerted=true;
+   return {user_id:1,strategy_id:f.order.strategyId,
+     symbol:SYMBOL,client_order_id:CLIENT_ID,
+     last_error:'GTC_PARTIAL_DUST',attention_notified_at:NOW};
+  },
+ };
+ f.executor.notify=async(userId,message)=>notifications.push({userId,message});
+ f.executor.lastExternalScanAt=NOW;
+ const result=await f.executor.reconcilePending();
+ assert.equal(result.checked,1);
+ assert.equal(result.errors,1);
+ assert.equal(result.alerts,1);
+ assert.equal(status.attention,true);
+ assert.equal(status.released,true);
+ assert.equal(status.alerted,true);
+ assert.equal(notifications.length,1);
+ assert.match(notifications[0].message,/Binance Opciones sin conciliar/);
+ assert.equal(f.calls.cancel,0);
+ assert.equal(f.calls.finalized.length,0);
+ assert.equal(f.calls.tradesApplied.length,1);
+});
