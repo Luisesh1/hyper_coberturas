@@ -1,5 +1,5 @@
 /**
- * Sanitized read-only diagnostic for paused ETH pilot source binding.
+ * Sanitized read-only diagnostic for paused ETH pilot and its source binding.
  * No secrets, names, alert IDs, parameters' values or account figures.
  * Explicitly NOT an operational go-live preflight.
  */
@@ -7,6 +7,10 @@
 const dbDefault=require('../db');
 const { BOT_PARAMS,BOT_LIMITS,MARKER,paramsMatch }=
   require('./options-pilot-configure-paused');
+const {BOT_MARKER:INDEPENDENT_MARKER}=
+  require('./options-pilot-create-independent-paused');
+const {NEW_PARAMS:INDEPENDENT_PARAMS}=
+  require('./options-pilot-adjust-independent-budget-paused');
 const { validateParams }=require('../services/options/templates/alert-signal');
 const { strategyFits,globalFits }=require('./options-pilot-strategy-readiness');
 
@@ -29,7 +33,14 @@ function off(env) {
     env.OPTIONS_LIVE_PILOT_AUTHORIZED!=='true';
 }
 function compute({rows=[],limits=null,livePositions=[],orders=[]}={}) {
-  const matches=rows.filter(s=>s?.name===MARKER);
+  // The original strategy can be user-customized. Once an independent pilot
+  // exists, audit its approved configuration instead of comparing the source
+  // with an obsolete blueprint. Duplicates never fall back to the source.
+  const independent=rows.filter(s=>s?.name===INDEPENDENT_MARKER);
+  const target=independent.length?'independent':'source';
+  const expected=target==='independent'?INDEPENDENT_PARAMS:EXPECTED_PARAMS;
+  const matches=target==='independent'?independent:
+    rows.filter(s=>s?.name===MARKER);
   const s=matches.length===1?matches[0]:null;
   const params=safeObject(s?.params), ownLimits=safeObject(s?.limits);
   const pKeys=params?Object.keys(params).sort():[];
@@ -49,20 +60,20 @@ function compute({rows=[],limits=null,livePositions=[],orders=[]}={}) {
       Array.isArray(orders) && orders.length===0 &&
       rows.every(row=>row.mode!=='live'),
     strategyFits:Boolean(s && params && ownLimits && strategyFits({
-      id:Number(s.id),userId:USER_ID,underlying:s.underlying,
+      id:Number(s.id),userId:USER_ID,name:s.name,underlying:s.underlying,
       template:s.template,mode:s.mode,params,limits:ownLimits,
     })),
   };
   for(const key of PARAM_KEYS)
     checks['param_'+key]=Boolean(params) &&
-      JSON.stringify(params[key])===JSON.stringify(EXPECTED_PARAMS[key]);
+      JSON.stringify(params[key])===JSON.stringify(expected[key]);
   for(const key of LIMIT_KEYS)
     checks['limit_'+key]=Boolean(ownLimits) &&
       JSON.stringify(ownLimits[key])===JSON.stringify(BOT_LIMITS[key]);
   // Block if a future refactor drops fields or unexpectedly alters the schema.
-  if (!paramsMatch({...EXPECTED_PARAMS,alertIds:[]},EXPECTED_PARAMS))
+  if (!paramsMatch({...expected,alertIds:[]},expected))
     throw new Error('Invalid expected pilot config');
-  return {readOnly:true,pilotReady:false,checks};
+  return {readOnly:true,pilotReady:false,target,checks};
 }
 const CHECKS=[
   'singlePilotMarker','strategyPaused','templateEth','paramShape',
@@ -71,10 +82,12 @@ const CHECKS=[
 ];
 function lines(result) {
   if (result?.readOnly!==true || result?.pilotReady!==false ||
+    !['source','independent'].includes(result.target) ||
     CHECKS.some(k=>typeof result.checks?.[k]!=='boolean') ||
     Object.keys(result.checks).length!==CHECKS.length) throw new Error('Invalid diagnostic');
   return [
     'pilot_alert_diag_read_only=yes',
+    'pilot_alert_diag_target='+result.target,
     ...CHECKS.map(k=>'pilot_alert_diag_'+k+'='+
       (result.checks[k]?'pass':'fail')),
     'pilot_alert_diag_orders_sent=0',
