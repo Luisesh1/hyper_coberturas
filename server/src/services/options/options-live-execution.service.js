@@ -256,6 +256,38 @@ class OptionsLiveExecution {
     return { status: 'submitted', sent };
   }
 
+  /**
+   * Evidencia estructurada de un TP GTC parcialmente ejecutado.
+   * Solo registra datos ya confirmados en Binance; nunca modifica órdenes.
+   * El ledger y la marca ATTENTION siguen siendo la fuente durable.
+   */
+  recordGtcPartialIncident({ order, orderId, status, executed, trades, preservedResting }) {
+    const first = trades[0];
+    const last = trades[trades.length - 1];
+    this.logger.warn('options_gtc_partial_exit_incident', {
+      observedAt: new Date(this.now()).toISOString(),
+      liveOrderId: order.id,
+      userId: order.userId,
+      strategyId: order.strategyId,
+      positionId: order.positionId ?? null,
+      symbol: order.symbol,
+      binanceOrderId: orderId,
+      clientOrderId: order.clientOrderId,
+      binanceStatus: status,
+      originalQty: order.quantity,
+      executedQty: executed,
+      remainingQty: Number((order.quantity - executed).toFixed(12)),
+      reconciledTradeCount: trades.length,
+      firstFillAt: first ? new Date(first.at).toISOString() : null,
+      lastFillAt: last ? new Date(last.at).toISOString() : null,
+      tpOrderPreserved: preservedResting,
+      cancelRequested: order.cancelRequested === true,
+      deadlineAt: Number.isFinite(Number(order.deadlineAt))
+        ? new Date(Number(order.deadlineAt)).toISOString() : null,
+      requiresOperatorReview: true,
+    });
+  }
+
   async reconcileOrder(order, client) {
     if (order.purpose === 'take_profit' && this.now() >= order.deadlineAt &&
         typeof this.repo.requestDeadlineExit === 'function') {
@@ -390,6 +422,9 @@ class OptionsLiveExecution {
       if (Math.abs(sum - executed) >= 1e-8) {
         throw new Error('GTC TP remaining lot unsafe and Binance trades not yet complete');
       }
+      this.recordGtcPartialIncident({
+        order, orderId, status, executed, trades, preservedResting: true,
+      });
       throw new Error('GTC_PARTIAL_DUST: keep resting TP on Binance; cancel would strand ' +
         Number((order.quantity - executed).toFixed(12)) + ' contracts below valid lot. ' +
         'Stop/expiry exit needs supervised exchange reconciliation.');
@@ -407,6 +442,11 @@ class OptionsLiveExecution {
     if (order.purpose === 'take_profit' &&
         ((status === 'PARTIALLY_FILLED' && executed > 0) ||
          (executed > 0 && executed < order.quantity - 1e-8))) {
+      if (Math.abs(sum - executed) < 1e-8) {
+        this.recordGtcPartialIncident({
+          order, orderId, status, executed, trades, preservedResting: false,
+        });
+      }
       throw new Error('GTC take-profit incompletely executed: residual position requires operator review');
     }
     // Binance puede declarar estado terminal antes de que getUserTrades
