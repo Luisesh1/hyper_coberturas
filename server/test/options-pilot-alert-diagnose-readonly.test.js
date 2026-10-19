@@ -6,6 +6,10 @@ const {compute,lines,diagnose,EXPECTED_PARAMS}=
   require('../src/scripts/options-pilot-alert-diagnose-readonly');
 const {BOT_LIMITS,MARKER}=
   require('../src/scripts/options-pilot-configure-paused');
+const {BOT_MARKER:INDEPENDENT_MARKER}=
+  require('../src/scripts/options-pilot-create-independent-paused');
+const {NEW_PARAMS:INDEPENDENT_PARAMS}=
+  require('../src/scripts/options-pilot-adjust-independent-budget-paused');
 const limits={maxMarginUsdt:1,maxDailyLossUsdt:1,maxLiveStrategies:1,notifyTelegram:true};
 const base={id:2,user_id:1,name:MARKER,mode:'paused',
   template:'alert_signal',underlying:'ETH',
@@ -49,4 +53,31 @@ test('source never sends or mutates exchange orders or database',()=>{
     '../src/scripts/options-pilot-alert-diagnose-readonly.js'),'utf8');
   assert.doesNotMatch(source,/\.placeOrder\(|\.cancelOrder\(|\.updateStrategy\(|\.setMode\(/);
   assert.doesNotMatch(source,/db\.query\(['"](?:UPDATE|INSERT|DELETE)/);
+});
+
+test('independent paused pilot at 0.36/0.40 passes despite a customized source',()=>{
+  const customized={...base,params:{...base.params,quantity:0.02}};
+  const independent={...base,id:3,name:INDEPENDENT_MARKER,
+    params:{...INDEPENDENT_PARAMS,alertIds:[77]}};
+  const report=compute({rows:[customized,independent],limits,livePositions:[],orders:[]});
+  const s=lines(report).join('\n');
+  assert.match(s,/pilot_alert_diag_target=independent/);
+  assert.match(s,/pilot_alert_diag_strategyFits=pass/);
+  assert.match(s,/pilot_alert_diag_param_maxPremiumUsdt=pass/);
+  assert.match(s,/pilot_alert_diag_limit_maxMarginUsdt=pass/);
+  assert.doesNotMatch(s,/0\.36|0\.40|PILOTO ETH|alertIds:|77/);
+});
+
+test('independent drift or duplicate fails rather than falling back to source',()=>{
+  const independent={...base,id:3,name:INDEPENDENT_MARKER,
+    params:{...INDEPENDENT_PARAMS,alertIds:[77]}};
+  const changed={...independent,params:{...independent.params,stopLossPct:75}};
+  const bad=lines(compute({rows:[base,changed],limits,livePositions:[],orders:[]})).join('\n');
+  assert.match(bad,/pilot_alert_diag_target=independent/);
+  assert.match(bad,/pilot_alert_diag_param_stopLossPct=fail/);
+  assert.match(bad,/pilot_alert_diag_strategyFits=fail/);
+  const duplicate=lines(compute({rows:[base,independent,independent],
+    limits,livePositions:[],orders:[]})).join('\n');
+  assert.match(duplicate,/pilot_alert_diag_singlePilotMarker=fail/);
+  assert.match(duplicate,/pilot_alert_diag_strategyFits=fail/);
 });
