@@ -96,3 +96,38 @@ test('pilot distinguishes a valid paused strategy from an actual alert-bound ent
  assert.equal(absent.entrySignalConfigured,false);
  assert.throws(()=>safeLines({...bound,entrySignalConfigured:null}));
 });
+
+test('new independent 0.40 budget is recognized only with exact pause + alert + risk caps',async()=>{
+ const independent={
+  ...valid,id:77,name:'PILOTO ETH 7-14 - independiente - PAUSADO',
+  limits:{maxOrdersPerDay:3,maxDailyLossUsdt:1,maxMarginUsdt:1},
+  params:{...valid.params,alertIds:[119],
+    expiryDays:7,targetDelta:.35,
+    maxPremiumUsdt:.36,capitalUsdt:.40},
+ };
+ assert.equal(strategyFits(independent),true);
+ const oldModified={...valid,id:41,params:{...valid.params,quantity:.02}};
+ const readiness=await inspect(deps([oldModified,independent],
+  {maxDailyLossUsdt:1,maxMarginUsdt:1,maxLiveStrategies:1,notifyTelegram:true}));
+ assert.equal(readiness.status,'strategy_candidate');
+ assert.equal(readiness.candidateStrategyId,77);
+ assert.equal(readiness.entrySignalConfigured,true);
+ assert.equal(readiness.pilotReady,false);
+ assert.match(safeLines(readiness).join('\n'),/strategy_preview_entry_signal_configured=yes/);
+ for(const bad of [
+  {...independent,name:'otro-bot'},
+  {...independent,mode:'shadow'},
+  {...independent,params:{...independent.params,alertIds:[]}},
+  {...independent,params:{...independent.params,alertIds:[119,120]}},
+  {...independent,params:{...independent.params,maxPremiumUsdt:.41}},
+  {...independent,params:{...independent.params,capitalUsdt:.41}},
+  {...independent,params:{...independent.params,stopLossPct:70}},
+  {...independent,params:{...independent.params,takeProfitMode:'volatility'}},
+  {...independent,params:{...independent.params,expiryDays:30}},
+  {...independent,params:{...independent.params,targetDelta:.6}},
+  {...independent,limits:{...independent.limits,maxDailyLossUsdt:5}},
+  {...independent,limits:{...independent.limits,maxMarginUsdt:5}},
+ ]){
+  assert.equal(strategyFits(bad),false,'reject altered independent pilot budget or safeguards');
+ }
+});
