@@ -108,10 +108,11 @@ test('ETH GTC TP fully filled gets reconciled normally',async()=>{
  assert.equal(f.calls.tradesApplied.length,1);
 });
 
-test('different valid lot size can allow cancel/replacement after partial',async()=>{
+test('even with a valid residual lot, cancelled partial remains ATTENTION for review',async()=>{
  const f=mockExchange({lotMin:'0.005',lotStep:'0.005',allowCancel:true});
- await f.executor.reconcileOrder(f.order,f.client);
+ await assert.rejects(f.executor.reconcileOrder(f.order,f.client),
+  /residual position requires operator review/);
  assert.equal(f.calls.cancel,1);
  assert.equal(f.calls.tradesApplied.length,1);
- assert.equal(f.calls.finalized.length,1);
+ assert.equal(f.calls.finalized.length,0);
 });
