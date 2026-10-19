@@ -14,7 +14,7 @@ const NOW=Date.UTC(2026,9,19,0,0,0);
 const ORDER_QTY=.01,PARTIAL=.005;
 
 function mockExchange({status='PARTIALLY_FILLED',filled=PARTIAL,
-  lotMin='0.01',lotStep='0.01',filtersKnown=true,terminal=false,
+  lotMin='0.01',lotStep='0.01',filtersKnown=true,
   tradesComplete=true,allowCancel=false}={}){
  const calls={getOrder:0,getExchangeInfo:0,getUserTrades:0,cancel:0,
   tradesApplied:[],markedActive:[],finalized:[]};
