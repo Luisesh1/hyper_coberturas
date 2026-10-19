@@ -693,12 +693,7 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
-          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
-          if [ "$subject" != 'ops(options): update independent paused ETH pilot to 0.40 budget' ]; then
-            echo 'pilot_target_exit_diagnostic=skipped_other_release'
-            exit 0
-          fi
+          # Read-only exchange GET on EVERY release. Never send or cancel orders.
           if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
             "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-gtc-dust-readonly.js ETH-261030-2550-C" \
             >"$RUNNER_TEMP/options-target-gtc.log" 2>/dev/null; then
