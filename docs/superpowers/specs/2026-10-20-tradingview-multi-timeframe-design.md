@@ -237,3 +237,54 @@ Test (vitest + Testing Library) con `lightweight-charts` mockeado
   amarillo oscuro `#b8860b`.
 - Ambas líneas del puntero toman el color.
 - `CrosshairMode.Normal` en esta vista y horas en UTC.
+
+---
+
+# Ampliación (2026-10-20): pantalla dividida multi-activo
+
+Pedido del usuario: reutilizar la vista multi-temporalidad para ver **hasta 4
+activos independientes** en la misma pantalla. Aprobado en el chat.
+
+## Comportamiento
+
+- La pantalla `/trading-view/multi` tiene dos **modos** con un selector
+  segmentado en la barra (escritorio) y en la cabecera (móvil):
+  **Multi‑TF** (lo ya hecho, sin cambios) y **Multi‑activo**. El modo se
+  persiste y también se puede abrir con `?mode=assets` (`?mode=tf` o sin
+  parámetro = el guardado, por defecto Multi‑TF).
+- **Multi‑activo:** distribuciones `1×2`, `1×3`, `2×2` en escritorio (por
+  defecto `2×2`); cada panel tiene **su propio activo** y **su propia
+  temporalidad**. Activos por defecto: `BTC, ETH, SOL, HYPE` en `hyperliquid`,
+  todos en `15m` (decisión de Claude). En móvil, **2 paneles apilados** (los
+  dos primeros de la lista móvil, por defecto `BTC` y `ETH` en `15m`).
+- Cada panel muestra un **botón de activo** en su cabecera (símbolo +
+  datasource, chevron) que abre el `AssetPickerModal` existente para ese
+  panel. Táctil ≥44 px en móvil.
+- Indicadores guardados y margen derecho: igual que Multi‑TF (mismo
+  `SyncedChart`).
+- **Puntero compartido opcional** (interruptor, por defecto **apagado** en
+  este modo — decisión de Claude): al encenderlo se sincroniza **solo el
+  tiempo**. Mismo cálculo y colores (verde = misma apertura, amarillo oscuro =
+  dentro de la vela, aviso fuera de vista). En los gráficos destino **no se
+  dibuja la línea horizontal** de precio (`horzLine.visible = false`, sin
+  etiqueta) y el precio que se pasa a `setCrosshairPosition` es el cierre de la
+  vela resuelta. El gráfico origen conserva su puntero completo.
+- La barra superior en Multi‑activo no muestra precio (cada panel muestra su
+  cierre). "Puntero: 19 oct 20:45 · BTC 15m" cuando hay sincronización.
+- Preferencias separadas: `localStorage` `tv_split_prefs_v1` =
+  `{ layout, panels: [4 × { symbol, datasource, timeframe }],
+  mobilePanels: [2 × {…}], sync }`, validadas como las de Multi‑TF. Modo en
+  `tv_multi_mode_v1` (`'tf' | 'assets'`).
+- El botón "Multi‑TF" de TradingView se mantiene (abre la pantalla en el modo
+  guardado).
+
+## Contrato nuevo de `SyncedChart` (§B, aditivo, compatible)
+
+- `syncPrice = true`: con `false`, en modo destino oculta la línea horizontal
+  y su etiqueta (`crosshair.horzLine.visible = false, labelVisible = false`) y
+  usa el cierre de la vela resuelta como precio; al volver a `true` o sin
+  sincronización restaura `visible/labelVisible = true`.
+- `onAssetClick` (opcional): si está, la cabecera muestra antes del selector
+  de temporalidad un `<button>` con `asset.symbol` (y `asset.datasource` en
+  pequeño salvo en `compact`), `aria-label="Cambiar activo (actual: BTC)"`,
+  `data-testid="asset-btn-<index>"`, que llama `onAssetClick(index)`.
