@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { createChart, CandlestickSeries, CrosshairMode, PriceScaleMode } from 'lightweight-charts';
 import { marketApi, settingsApi } from '../../services/api';
 import { useTradingContext } from '../../context/TradingContext';
@@ -14,7 +14,7 @@ import MobileDrawingBar, { MobileDrawingBanner } from './components/MobileDrawin
 import MobileSettingsSheet from './components/MobileSettingsSheet';
 import {
   ChevronDownIcon, CollapseIcon, ExpandIcon, EyeIcon, EyeOffIcon,
-  IndicatorsIcon, MoreIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
+  GridIcon, IndicatorsIcon, MoreIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
 } from './components/icons';
 import BottomSheet from './components/BottomSheet';
 import mobileStyles from './components/MobileChrome.module.css';
@@ -952,6 +952,15 @@ export default function TradingViewPage() {
           <span className={styles.btnIcon}><ReplayIcon size={14} /></span>
           <span>Replay{replayActive ? ' ●' : ''}</span>
         </button>
+        <Link
+          to={`/trading-view/multi?symbol=${encodeURIComponent(asset.symbol)}&datasource=${encodeURIComponent(asset.datasource)}`}
+          className={styles.refreshBtn}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}
+          title="Ver varias temporalidades con puntero sincronizado"
+        >
+          <span className={styles.btnIcon}><GridIcon size={14} /></span>
+          <span>Multi‑TF</span>
+        </Link>
         <button
           type="button"
           className={`${styles.refreshBtn} ${styles.settingsBtn}`}
@@ -1019,6 +1028,13 @@ export default function TradingViewPage() {
             {loadingHistory && <span className={styles.histSpinner}>↻</span>}
           </span>
         </div>
+        <Link
+          to={`/trading-view/multi?symbol=${encodeURIComponent(asset.symbol)}&datasource=${encodeURIComponent(asset.datasource)}`}
+          className={styles.mIconBtn}
+          aria-label="Multi‑TF: varias temporalidades"
+        >
+          <GridIcon />
+        </Link>
         <button
           type="button"
           className={styles.mIconBtn}
