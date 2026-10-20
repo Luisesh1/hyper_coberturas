@@ -27,6 +27,7 @@ const BotsPage             = lazy(() => import('./pages/Bots/BotsPage'));
 const BacktestingPage      = lazy(() => import('./pages/Backtesting/BacktestingPage'));
 const HidenActionsPage     = lazy(() => import('./pages/HidenActions/HidenActionsPage'));
 const TradingViewPage      = lazy(() => import('./pages/TradingView/TradingViewPage'));
+const MultiTimeframePage   = lazy(() => import('./pages/TradingView/multi/MultiTimeframePage'));
 const AlertsPage           = lazy(() => import('./pages/Alerts/AlertsPage'));
 const SmartContractsPage   = lazy(() => import('./pages/SmartContracts/SmartContractsPage'));
 const OptionsPage          = lazy(() => import('./pages/Options/OptionsPage'));
@@ -55,7 +56,7 @@ const BASE_NAV = [
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
 
-const FULLSCREEN_ROUTES = new Set(['/trading-view']);
+const FULLSCREEN_ROUTES = new Set(['/trading-view', '/trading-view/multi']);
 // Rutas a todo el ancho (sin el panel de precios lateral) pero con el
 // padding y el scroll normales del contenido.
 const WIDE_ROUTES = new Set(['/opciones']);
@@ -187,6 +188,7 @@ function AppContent() {
                 <Route path="/contratos" element={<SmartContractsPage />} />
                 <Route path="/metricas"   element={<MetricasPage />} />
                 <Route path="/trading-view" element={<TradingViewPage />} />
+                <Route path="/trading-view/multi" element={<MultiTimeframePage />} />
                 <Route path="/alertas"     element={<AlertsPage />} />
                 <Route path="/opciones"    element={<OptionsPage />} />
                 {/* Diagnostico oculto para superuser: no se publica en la navegacion. */}
