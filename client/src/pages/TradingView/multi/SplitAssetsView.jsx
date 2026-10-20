@@ -18,6 +18,11 @@ export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
   // Índice del panel cuyo activo se está eligiendo (null = cerrado).
   const [pickerIndex, setPickerIndex] = useState(null);
 
+  // Al cruzar el breakpoint la lista visible cambia: el índice elegido ya no vale.
+  useEffect(() => {
+    setPickerIndex(null);
+  }, [isMobile]);
+
   const updatePrefs = useCallback((patch) => {
     setPrefs((prev) => {
       const next = { ...prev, ...patch(prev) };
@@ -28,7 +33,7 @@ export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
 
   const listKey = isMobile ? 'mobilePanels' : 'panels';
   const layout = LAYOUTS.find((l) => l.id === prefs.layout) || LAYOUTS[LAYOUTS.length - 1];
-  const visible = isMobile ? prefs.mobilePanels : prefs.panels.slice(0, layout.count);
+  const visible = isMobile ? prefs.mobilePanels.slice(0, 2) : prefs.panels.slice(0, layout.count);
   const syncEnabled = prefs.sync === true;
   const { sync, setSync, onPointer } = usePointerSync(syncEnabled);
 
@@ -53,7 +58,7 @@ export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
   const handleSelectAsset = (next) => {
     const i = pickerIndex;
     setPickerIndex(null);
-    if (i == null) return;
+    if (i == null || i < 0 || i >= visible.length) return;
     updatePanel(i, { symbol: next.symbol, datasource: next.datasource });
     // El origen pasa a otro activo: su instante ya no vale para los demás.
     if (sync?.sourceIndex === i) setSync(null);

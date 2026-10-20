@@ -248,10 +248,11 @@ activos independientes** en la misma pantalla. Aprobado en el chat.
 ## Comportamiento
 
 - La pantalla `/trading-view/multi` tiene dos **modos** con un selector
-  segmentado en la barra (escritorio) y en la cabecera (móvil):
+  segmentado en la barra (escritorio) y, en móvil, en su propia fila bajo la
+  cabecera (botones de 44 px, no dentro de la cabecera):
   **Multi‑TF** (lo ya hecho, sin cambios) y **Multi‑activo**. El modo se
-  persiste y también se puede abrir con `?mode=assets` (`?mode=tf` o sin
-  parámetro = el guardado, por defecto Multi‑TF).
+  persiste. Un `?mode=tf|assets` explícito abre ese modo (y lo guarda); sin el
+  parámetro se abre el modo guardado (por defecto Multi‑TF).
 - **Multi‑activo:** distribuciones `1×2`, `1×3`, `2×2` en escritorio (por
   defecto `2×2`); cada panel tiene **su propio activo** y **su propia
   temporalidad**. Activos por defecto: `BTC, ETH, SOL, HYPE` en `hyperliquid`,

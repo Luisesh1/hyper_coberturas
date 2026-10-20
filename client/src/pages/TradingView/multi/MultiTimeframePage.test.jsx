@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('./SyncedChart', () => ({
@@ -435,6 +435,27 @@ describe('MultiTimeframePage', () => {
       expect(symbols()).toEqual(['BTC', 'DOGE']);
       expect(splitPrefs().mobilePanels[1].symbol).toBe('DOGE');
       expect(splitPrefs().panels[1].symbol).toBe('ETH');
+    });
+
+    it('cruzar a móvil con el selector abierto en el panel 3 lo cierra y no rompe', () => {
+      const listeners = new Set();
+      const mql = {
+        matches: false,
+        media: '',
+        addEventListener: (_e, fn) => listeners.add(fn),
+        removeEventListener: (_e, fn) => listeners.delete(fn),
+      };
+      window.matchMedia = vi.fn().mockImplementation(() => mql);
+      renderPage('/trading-view/multi?mode=assets');
+      fireEvent.click(screen.getByTestId('asset-btn-3'));
+      expect(screen.getByTestId('picker-pick')).toBeTruthy();
+
+      mql.matches = true;
+      act(() => { listeners.forEach((fn) => fn()); });
+
+      expect(screen.queryByTestId('picker-pick')).toBeNull();
+      expect(symbols()).toEqual(['BTC', 'ETH']);
+      expect(splitPrefs()?.mobilePanels?.length ?? 2).toBe(2);
     });
 
     it('móvil Multi‑TF también muestra el selector de modo', () => {
