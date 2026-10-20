@@ -715,6 +715,6 @@ jobs:
             echo '### Riesgo de TP GTC para ETH-261030-2550-C'
             grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/options-target-gtc.log"
             echo
-            echo 'No se observaron fills menores al lote salvo que el diagnostico marque risk_detected. No se infiere riesgo real a partir de un ejemplo 0.005.'
+            echo 'Solo un diagnostico risk_detected acredita fills sub-lote; un ejemplo 0.005 no es evidencia de ejecucion real.'
             echo 'Cierres, liquidez y costos aun requieren verificaciones independientes para trading real.'
           } >> "$GITHUB_STEP_SUMMARY"
