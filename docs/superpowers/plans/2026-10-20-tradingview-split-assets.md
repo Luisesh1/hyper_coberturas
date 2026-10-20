@@ -19,17 +19,17 @@
 
 ## Review Focus
 
-1. Cambiar el activo de un panel con sincronización encendida y el puntero puesto en él: el `sync` se limpia y no queda puntero fantasma. → test Tarea B.
+1. Cambiar el activo de un panel con sincronización encendida y el puntero puesto en él: el `sync` se limpia y no queda puntero fantasma. → test Tarea 2.
 2. Dos paneles con el mismo activo y temporalidad: ambos `exact`. → cubierto por `resolveSyncedTime` (Tarea 1 previa).
-3. Volver de Multi‑activo a Multi‑TF conserva las prefs de cada modo por separado. → test Tarea B.
-4. `syncPrice=false` → al apagar la sincronización la línea horizontal vuelve a verse en todos. → test Tarea A.
-5. Prefs corruptas o con activos sin `symbol` → defaults por panel. → test Tarea B.
+3. Volver de Multi‑activo a Multi‑TF conserva las prefs de cada modo por separado. → test Tarea 2.
+4. `syncPrice=false` → al apagar la sincronización la línea horizontal vuelve a verse en todos. → test Tarea 1.
+5. Prefs corruptas o con activos sin `symbol` → defaults por panel. → test Tarea 2.
 
 ## Ejecución
 
-Tareas A y B en paralelo en worktrees basados en la rama `feat/tradingview-multi-timeframe` (HEAD actual). A solo toca `SyncedChart.*`; B toca `crosshairSync.*`, `MultiTimeframePage.*` y `e2e/tradingview-multi.spec.js` (B mockea `SyncedChart` en sus tests unitarios). Luego integración + e2e (lead).
+Tareas 1 y 2 en paralelo en worktrees basados en la rama `feat/tradingview-multi-timeframe` (HEAD actual). 1 solo toca `SyncedChart.*`; 2 toca `crosshairSync.*`, `MultiTimeframePage.*` y `e2e/tradingview-multi.spec.js` (2 mockea `SyncedChart` en sus tests unitarios). Luego integración + e2e (lead).
 
-### Task A: `SyncedChart` — `syncPrice` y `onAssetClick`
+### Task 1: `SyncedChart` — `syncPrice` y `onAssetClick`
 
 **Files:** Modify `client/src/pages/TradingView/multi/SyncedChart.jsx`, `SyncedChart.module.css`; Test `SyncedChart.test.jsx`.
 
@@ -43,11 +43,11 @@ Tareas A y B en paralelo en worktrees basados en la rama `feat/tradingview-multi
 - [ ] Implementar (la clave de `applyLines` debe incluir `syncPrice` para no cachear opciones viejas).
 - [ ] `npx vitest run src/pages/TradingView/multi/` verde, `npx eslint src/pages/TradingView/multi/` limpio, commit `feat(tradingview): synced chart supports time-only sync and a per-panel asset button`.
 
-### Task B: modo Multi‑activo en la página
+### Task 2: modo Multi‑activo en la página
 
 **Files:** Modify `crosshairSync.js` (+ test), `MultiTimeframePage.jsx`, `MultiTimeframePage.module.css` (+ test), `e2e/tradingview-multi.spec.js`. Si `MultiTimeframePage.jsx` supera ~450 líneas, extraer el modo a `multi/SplitAssetsView.jsx` (misma carpeta) y dejar la página como contenedor.
 
-**Consumes:** `SyncedChart` con `syncPrice` y `onAssetClick` (Tarea A; en tests unitarios se mockea).
+**Consumes:** `SyncedChart` con `syncPrice` y `onAssetClick` (Tarea 1; en tests unitarios se mockea).
 
 **Produces (crosshairSync.js):** `SPLIT_PREFS_KEY = 'tv_split_prefs_v1'`, `MULTI_MODE_KEY = 'tv_multi_mode_v1'`, `DEFAULT_SPLIT = { layout: '2x2', panels: [BTC,ETH,SOL,HYPE en hyperliquid 15m], mobilePanels: [BTC, ETH en hyperliquid 15m], sync: false }`, `loadSplitPrefs()`, `saveSplitPrefs(prefs)`, `loadMultiMode()` → `'tf'|'assets'` (default `'tf'`), `saveMultiMode(mode)`.
 
