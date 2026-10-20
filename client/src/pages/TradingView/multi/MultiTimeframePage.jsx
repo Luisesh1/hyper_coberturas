@@ -7,19 +7,23 @@ import AssetPickerModal from '../components/AssetPickerModal';
 import { ChevronDownIcon, ChevronLeftIcon } from '../components/icons';
 import { MOBILE_QUERY, useMediaQuery } from '../useMediaQuery';
 import SyncedChart from './SyncedChart';
+import SplitAssetsView from './SplitAssetsView';
+import { Legend, ModeSwitch, SyncSwitch, TOUCH_HINT } from './MultiControls';
+import usePointerSync from './usePointerSync';
 import { formatPrice } from './chartTheme';
 import {
   LAYOUTS,
-  SYNC_COLORS,
+  MULTI_MODES,
   formatSyncTime,
+  loadMultiMode,
   loadMultiPrefs,
+  saveMultiMode,
   saveMultiPrefs,
 } from './crosshairSync';
 import styles from './MultiTimeframePage.module.css';
 
 const ASSET_STORAGE_KEY = 'tv_selected_asset_v1';
 const MOBILE_COUNT = 3;
-const TOUCH_HINT = 'Mantén pulsado y arrastra sobre un gráfico';
 
 function loadStoredAsset() {
   try {
@@ -41,28 +45,16 @@ function storeAsset(asset) {
   } catch { /* noop */ }
 }
 
-function Legend({ className }) {
-  return (
-    <span className={`${styles.legend} ${className || ''}`}>
-      <span className={styles.legendItem}>
-        <span className={styles.legendLine} style={{ borderTopStyle: 'solid', borderTopColor: SYNC_COLORS.exact }} />
-        Misma apertura
-      </span>
-      <span className={styles.legendItem}>
-        <span className={styles.legendLine} style={{ borderTopStyle: 'dashed', borderTopColor: SYNC_COLORS.near }} />
-        Dentro de la vela
-      </span>
-    </span>
-  );
-}
-
 export default function MultiTimeframePage() {
   const { selectedAsset, addNotification } = useTradingContext();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const urlSymbol = searchParams.get('symbol');
   const urlDatasource = searchParams.get('datasource');
+  const urlMode = MULTI_MODES.includes(searchParams.get('mode')) ? searchParams.get('mode') : null;
   const isMobile = useMediaQuery(MOBILE_QUERY);
 
+  // Modo: ?mode=tf|assets manda; sin parámetro, el guardado (Multi‑TF por defecto).
+  const [mode, setMode] = useState(() => urlMode || loadMultiMode());
   const [prefs, setPrefs] = useState(loadMultiPrefs);
   const [asset, setAsset] = useState(() => {
     if (urlSymbol) {
@@ -75,7 +67,6 @@ export default function MultiTimeframePage() {
     };
   });
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [sync, setSync] = useState(null);
   // Indicadores guardados en /trading-view (se editan allí). null = cargando.
   const [indicators, setIndicators] = useState(null);
 
@@ -106,6 +97,13 @@ export default function MultiTimeframePage() {
       : { symbol: urlSymbol, datasource: urlDatasource || 'binance', name: urlSymbol }));
   }, [urlSymbol, urlDatasource]);
 
+  useEffect(() => {
+    if (urlMode) setMode(urlMode);
+  }, [urlMode]);
+  useEffect(() => {
+    saveMultiMode(mode);
+  }, [mode]);
+
   // Móvil: sube el botón de logs de dev (misma clase que TradingView).
   useEffect(() => {
     if (!isMobile) return undefined;
@@ -127,8 +125,7 @@ export default function MultiTimeframePage() {
     [isMobile, prefs.mobileTimeframes, prefs.timeframes, layout.count],
   );
   const syncEnabled = prefs.sync !== false;
-  const syncEnabledRef = useRef(syncEnabled);
-  syncEnabledRef.current = syncEnabled;
+  const { sync, setSync, onPointer } = usePointerSync(syncEnabled);
 
   // Precio de la barra superior: último cierre del panel 0. Se guarda con la
   // clave par+temporalidad, así al cambiar cualquiera de las dos deja de
@@ -143,32 +140,28 @@ export default function MultiTimeframePage() {
   }, []);
   const shownPrice = lastPrice && lastPrice.key === priceKey ? formatPrice(lastPrice.price) : null;
 
-  // Puntero: se agrupa por fotograma para no re-renderizar por cada píxel.
-  const pendingRef = useRef(null);
-  const rafRef = useRef(0);
-  const scheduledRef = useRef(false);
-  const onPointer = useCallback((index, p) => {
-    // Con la sincronización apagada nadie lee `sync`: no se re-renderiza.
-    if (!syncEnabledRef.current) return;
-    pendingRef.current = { value: p ? { sourceIndex: index, ...p } : null };
-    if (scheduledRef.current) return;
-    scheduledRef.current = true;
-    rafRef.current = requestAnimationFrame(() => {
-      scheduledRef.current = false;
-      const pending = pendingRef.current;
-      pendingRef.current = null;
-      if (pending) setSync(pending.value);
-    });
-  }, []);
-  useEffect(() => () => {
-    if (scheduledRef.current) cancelAnimationFrame(rafRef.current);
-  }, []);
-
   // Un origen que ya no existe (otra distribución) o sync apagado → sin puntero.
   const activeSync = syncEnabled && sync && sync.sourceIndex < panelTimeframes.length ? sync : null;
   useEffect(() => {
     if (sync && !activeSync) setSync(null);
-  }, [sync, activeSync]);
+  }, [sync, activeSync, setSync]);
+
+  const changeMode = (next) => {
+    if (next === mode) return;
+    setSync(null);
+    setMode(next);
+    // Sin esto el ?mode= de la URL volvería a imponerse en back/forward.
+    if (searchParams.has('mode')) {
+      const params = new URLSearchParams(searchParams);
+      params.delete('mode');
+      setSearchParams(params, { replace: true });
+    }
+  };
+  const modeSwitch = (mobile) => <ModeSwitch mode={mode} onChange={changeMode} mobile={mobile} />;
+
+  if (mode === 'assets') {
+    return <SplitAssetsView isMobile={isMobile} indicators={indicators} modeSwitch={modeSwitch} />;
+  }
 
   const pointerLabel = activeSync
     ? `Puntero: ${formatSyncTime(activeSync.timeSec)} · ${panelTimeframes[activeSync.sourceIndex]}`
@@ -209,20 +202,6 @@ export default function MultiTimeframePage() {
     </div>
   ));
 
-  const syncSwitch = (label, className) => (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={syncEnabled}
-      aria-label="Puntero sincronizado"
-      className={`${styles.syncBtn} ${syncEnabled ? styles.syncBtnOn : ''} ${className || ''}`}
-      onClick={toggleSync}
-    >
-      <span className={styles.syncKnob} aria-hidden="true" />
-      <span>{label}</span>
-    </button>
-  );
-
   const picker = (
     <AssetPickerModal
       open={pickerOpen}
@@ -256,8 +235,9 @@ export default function MultiTimeframePage() {
               {shownPrice}
             </span>
           )}
-          {syncSwitch('Sync', styles.mSync)}
+          <SyncSwitch checked={syncEnabled} onToggle={toggleSync} label="Sync" className={styles.mSync} />
         </header>
+        <div className={styles.mModeRow}>{modeSwitch(true)}</div>
         <div className={styles.mStack}>{panels}</div>
         <footer className={styles.mBar}>
           <div className={styles.mPointer} aria-live="off">{pointerLabel}</div>
@@ -272,6 +252,7 @@ export default function MultiTimeframePage() {
   return (
     <div className={styles.page}>
       <div className={styles.toolbar}>
+        {modeSwitch(false)}
         <Link to="/trading-view" className={styles.btn}>
           <ChevronLeftIcon size={14} />
           <span>Gráfico único</span>
@@ -305,7 +286,7 @@ export default function MultiTimeframePage() {
             </button>
           ))}
         </div>
-        {syncSwitch('Puntero sincronizado')}
+        <SyncSwitch checked={syncEnabled} onToggle={toggleSync} label="Puntero sincronizado" />
         <span className={styles.pointer}>{pointerLabel}</span>
         <Legend />
       </div>
