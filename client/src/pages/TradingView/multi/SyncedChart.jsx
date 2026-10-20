@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { createChart, CandlestickSeries, CrosshairMode, LineStyle } from 'lightweight-charts';
+import {
+  createChart, CandlestickSeries, CrosshairMode, LineStyle, TrackingModeExitMode,
+} from 'lightweight-charts';
 import { marketApi } from '../../../services/api';
 import {
   SYNC_COLORS,
@@ -7,6 +9,7 @@ import {
   MULTI_TIMEFRAMES,
   resolveSyncedTime,
   statusLabel,
+  compactStatusLabel,
   formatSyncTime,
 } from './crosshairSync';
 import {
@@ -18,6 +21,7 @@ import {
   getPriceFormatOptions,
   formatPrice,
 } from './chartTheme';
+import { getInitialChartViewport } from '../chartViewport';
 import styles from './SyncedChart.module.css';
 
 const CANDLE_LIMIT = 500;
@@ -64,6 +68,7 @@ export default function SyncedChart({
   syncEnabled = true,
   sync = null,
   onPointer,
+  onLastPrice,
   compact = false,
 }) {
   const selectId = useId();
@@ -74,8 +79,10 @@ export default function SyncedChart({
   const appliedRef = useRef('none'); // 'none' | 'source' | 'target'
   const linesKeyRef = useRef('default');
   const onPointerRef = useRef(onPointer);
+  const onLastPriceRef = useRef(onLastPrice);
   const indexRef = useRef(index);
   onPointerRef.current = onPointer;
+  onLastPriceRef.current = onLastPrice;
   indexRef.current = index;
 
   const [candles, setCandles] = useState([]);
@@ -115,6 +122,10 @@ export default function SyncedChart({
         secondsVisible: false,
       },
       crosshair: { mode: CrosshairMode.Normal },
+      // Táctil: al soltar el dedo se sale del modo seguimiento. Con el valor
+      // por defecto (OnNextTap) el gráfico origen se quedaba con un puntero
+      // gris y el siguiente arrastre movía el puntero en vez de desplazar.
+      trackingMode: { exitMode: TrackingModeExitMode.OnTouchEnd },
     });
     const series = chart.addSeries(CandlestickSeries, {
       upColor: THEME.up,
@@ -184,6 +195,13 @@ export default function SyncedChart({
         const nextPrecision = getPricePrecisionFromCandles(next);
         seriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
         seriesRef.current?.setData(next.map(toBar));
+        // Mismo encuadre que la página principal: la última vela queda algo
+        // separada de la escala de precios para ver de un vistazo el final.
+        const { rightOffset, barSpacing } = getInitialChartViewport(
+          hostRef.current?.clientWidth,
+          next.length,
+        );
+        chartRef.current?.timeScale().applyOptions({ barSpacing, rightOffset });
         chartRef.current?.timeScale().scrollToRealTime();
         setPrecision(nextPrecision);
         setCandles(next);
@@ -216,6 +234,13 @@ export default function SyncedChart({
         });
         if (cancelled || !Array.isArray(recent) || recent.length === 0) return;
         if (candlesRef.current !== current) return; // recarga en curso
+        // Hueco (pestaña oculta, móvil bloqueado, red caída): `limit: 2` no
+        // basta para rellenarlo, así que se recarga el histórico completo.
+        const tfMs = (TF_SECONDS[timeframe] || 0) * 1000;
+        if (tfMs > 0 && recent[0].time > current[current.length - 1].time + tfMs) {
+          setReloadKey((k) => k + 1);
+          return;
+        }
         const next = [...current];
         let changed = false;
         for (const c of recent) {
@@ -239,14 +264,28 @@ export default function SyncedChart({
       }
     }
 
+    // Al volver a la pestaña (o desbloquear el móvil) se recarga: mientras
+    // estuvo oculta no hubo polling y podría faltar más de una vela.
+    function onVisibility() {
+      if (!document.hidden) setReloadKey((k) => k + 1);
+    }
+
     const firstId = setTimeout(tick, Math.min(intervalMs, 3_000));
     const intervalId = setInterval(tick, intervalMs);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
       clearTimeout(firstId);
       clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [asset?.symbol, asset?.datasource, timeframe]);
+
+  // --- 3b) Último cierre hacia la página (precio de la barra superior) ---
+  useEffect(() => {
+    const last = candles[candles.length - 1];
+    if (last) onLastPriceRef.current?.(indexRef.current, last.close);
+  }, [candles]);
 
   // --- 4) Aplica el puntero sincronizado ---
   useEffect(() => {
@@ -297,6 +336,7 @@ export default function SyncedChart({
   const showSync = syncEnabled && !!sync && !!resolution;
   const chipStatus = showSync ? (isSource ? 'source' : resolution.status) : null;
   const chipText = showSync ? statusLabel(resolution, { isSource }) : '';
+  const chipShort = showSync && compact ? compactStatusLabel(resolution, { isSource }) : chipText;
   const outSide = showSync && !isSource && resolution.status === 'out' ? resolution.side : null;
 
   const shownCandle = useMemo(() => {
@@ -349,9 +389,17 @@ export default function SyncedChart({
             className={`${styles.chip} ${styles[`chip_${chipStatus}`]}`}
             data-testid={`sync-chip-${index}`}
             data-status={chipStatus}
+            title={chipText}
           >
             <span className={styles.chipDot} aria-hidden="true" />
-            {chipText}
+            <span
+              className={styles.chipText}
+              data-testid={`sync-chip-text-${index}`}
+              aria-hidden={chipShort !== chipText ? 'true' : undefined}
+            >
+              {chipShort}
+            </span>
+            {chipShort !== chipText && <span className={styles.srOnly}>{chipText}</span>}
           </span>
         )}
       </header>
@@ -363,7 +411,6 @@ export default function SyncedChart({
           <div
             className={`${styles.edge} ${outSide === 'left' ? styles.edgeLeft : styles.edgeRight}`}
             data-testid={`sync-out-${index}`}
-            role="status"
           >
             <span>
               {outSide === 'left' ? '◀︎ ' : ''}

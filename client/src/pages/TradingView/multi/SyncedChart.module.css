@@ -94,6 +94,7 @@
 }
 
 .chip {
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -223,4 +224,13 @@
 
 .compact .edgeRight {
   right: 52px;
+}
+
+/* El texto va en su propio span: en un inline-flex el texto suelto no
+   admite ellipsis y se cortaba en seco. */
+.chipText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

@@ -14,7 +14,7 @@ import MobileDrawingBar, { MobileDrawingBanner } from './components/MobileDrawin
 import MobileSettingsSheet from './components/MobileSettingsSheet';
 import {
   ChevronDownIcon, CollapseIcon, ExpandIcon, EyeIcon, EyeOffIcon,
-  FibIcon, IndicatorsIcon, MoreIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
+  GridIcon, IndicatorsIcon, MoreIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
 } from './components/icons';
 import BottomSheet from './components/BottomSheet';
 import mobileStyles from './components/MobileChrome.module.css';
@@ -958,7 +958,7 @@ export default function TradingViewPage() {
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}
           title="Ver varias temporalidades con puntero sincronizado"
         >
-          <span className={styles.btnIcon}><FibIcon size={14} /></span>
+          <span className={styles.btnIcon}><GridIcon size={14} /></span>
           <span>Multi‑TF</span>
         </Link>
         <button
@@ -1033,7 +1033,7 @@ export default function TradingViewPage() {
           className={styles.mIconBtn}
           aria-label="Multi‑TF: varias temporalidades"
         >
-          <FibIcon />
+          <GridIcon />
         </Link>
         <button
           type="button"

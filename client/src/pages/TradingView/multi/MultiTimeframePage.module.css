@@ -51,6 +51,13 @@
 .assetButton:hover { border-color: #4a9eff; }
 .assetSymbol { font-weight: 700; color: #f1f5f9; }
 .assetSource { font-size: 0.72rem; color: #9aa3b0; text-transform: capitalize; }
+.price {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f1f5f9;
+}
 
 .layoutGroup {
   display: inline-flex;
@@ -201,6 +208,17 @@
   text-overflow: ellipsis;
 }
 .mAssetSource { font-size: 0.72rem; color: #9aa3b0; text-transform: capitalize; }
+.mPrice {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f1f5f9;
+}
 .mSync {
   margin-left: auto;
   min-height: 44px;

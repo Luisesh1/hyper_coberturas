@@ -125,4 +125,46 @@ test.describe('TradingView multi-temporalidad (móvil 390px)', () => {
     await page.screenshot({ path: 'test-results/tv-multi-mobile.png' });
     expect(errores).toEqual([]);
   });
+
+  test('táctil: tras mantener pulsado y soltar, el siguiente arrastre desplaza (no deja puntero)', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/trading-view/multi?symbol=ETH&datasource=hyperliquid');
+    await expect(page.locator('[data-testid="synced-chart-1"] canvas').first()).toBeVisible();
+    const box = await page.getByTestId('synced-chart-1').boundingBox();
+    const y = box.y + box.height * 0.6;
+    const x0 = box.x + box.width * 0.6;
+
+    // Playwright solo ofrece `tap`; el arrastre táctil se envía por CDP.
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type, x) => cdp.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(x), y: Math.round(y) }],
+    });
+
+    // 1) Mantener pulsado (> long tap de lightweight-charts) y arrastrar:
+    //    el puntero sincronizado aparece con este gráfico como origen.
+    await touch('touchStart', x0);
+    await page.waitForTimeout(700);
+    for (let k = 1; k <= 6; k++) {
+      await touch('touchMove', x0 - k * 12);
+      await page.waitForTimeout(30);
+    }
+    await expect(page.getByTestId('sync-chip-1')).toHaveAttribute('data-status', 'source');
+
+    // 2) Al soltar se limpia en todos.
+    await touch('touchEnd', x0 - 72);
+    await expect(page.locator('[data-testid^="sync-chip-"]')).toHaveCount(0);
+
+    // 3) Un arrastre rápido posterior desplaza el gráfico: con
+    //    exitMode=OnNextTap el gráfico seguía en modo seguimiento y este
+    //    arrastre movía el puntero (reaparecían los chips).
+    await touch('touchStart', x0);
+    for (let k = 1; k <= 6; k++) {
+      await touch('touchMove', x0 + k * 12);
+      await page.waitForTimeout(16);
+      await expect(page.locator('[data-testid^="sync-chip-"]')).toHaveCount(0);
+    }
+    await touch('touchEnd', x0 + 72);
+    await expect(page.locator('[data-testid^="sync-chip-"]')).toHaveCount(0);
+  });
 });

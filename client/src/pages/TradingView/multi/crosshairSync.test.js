@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   SYNC_COLORS, MULTI_PREFS_KEY, DEFAULT_SYNC,
-  resolveSyncedTime, formatOffset, formatSyncTime, statusLabel,
+  resolveSyncedTime, formatOffset, formatSyncTime, statusLabel, compactStatusLabel,
   loadMultiPrefs, saveMultiPrefs,
 } from './crosshairSync.js';
 
@@ -97,6 +97,17 @@ describe('formato', () => {
       status: 'near', candleTimeSec: Date.UTC(2026, 9, 19, 20, 0) / 1000, offsetSec: 2700,
     }, { isSource: false })).toBe('Dentro de la vela 19 oct 20:00 (+45m)');
     expect(statusLabel({ status: 'out' }, { isSource: false })).toBe('Fuera de vista');
+  });
+  it('compactStatusLabel: near corto "≈HH:MM +offset", el resto igual', () => {
+    expect(compactStatusLabel({
+      status: 'near', candleTimeSec: Date.UTC(2026, 9, 19, 20, 0) / 1000, offsetSec: 2700,
+    }, { isSource: false })).toBe('≈20:00 +45m');
+    expect(compactStatusLabel({
+      status: 'near', candleTimeSec: Date.UTC(2026, 9, 19, 8, 0) / 1000, offsetSec: 6300,
+    }, { isSource: false })).toBe('≈08:00 +1h 45m');
+    expect(compactStatusLabel({ status: 'near', candleTimeSec: 0, offsetSec: 60 }, { isSource: true })).toBe('Origen');
+    expect(compactStatusLabel({ status: 'exact' }, { isSource: false })).toBe('Coincide exacto');
+    expect(compactStatusLabel({ status: 'out' }, { isSource: false })).toBe('Fuera de vista');
   });
 });
 

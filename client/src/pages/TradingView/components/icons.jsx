@@ -49,6 +49,8 @@ export const CursorIcon = (p) => <Svg {...p}><path d="M5 3l14 8-6 2-2 6z" /></Sv
 export const TrendlineIcon = (p) => <Svg {...p}><path d="M5 19L19 5" /><circle cx="5" cy="19" r="2" /><circle cx="19" cy="5" r="2" /></Svg>;
 export const HorizontalLineIcon = (p) => <Svg {...p}><path d="M3 12h18" /></Svg>;
 export const RectangleIcon = (p) => <Svg {...p}><rect x="4" y="6" width="16" height="12" rx="1" /></Svg>;
+// Rejilla 2×2: vista de varios gráficos (multi-temporalidad).
+export const GridIcon = (p) => <Svg {...p}><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></Svg>;
 export const FibIcon = (p) => <Svg {...p}><path d="M3 5h18M3 10h18M3 14h18M3 19h18" /></Svg>;
 export const RulerIcon = (p) => <Svg {...p}><path d="M3 16L16 3l5 5L8 21z" /><path d="M7 12l2 2M10 9l2 2M13 6l2 2" /></Svg>;
 

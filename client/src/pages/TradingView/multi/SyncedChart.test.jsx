@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 // ---- lightweight-charts falso -------------------------------------------
 const lw = vi.hoisted(() => {
-  const state = { chart: null, series: null, handler: null };
+  const state = { chart: null, series: null, handler: null, visibleRange: null };
   const LineStyle = { Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3, SparseDotted: 4 };
   const CrosshairMode = { Normal: 0, Magnet: 1, Hidden: 2, MagnetOHLC: 3 };
   function makeChart() {
@@ -14,7 +14,7 @@ const lw = vi.hoisted(() => {
       coordinateToPrice: vi.fn(() => 2600),
     };
     const timeScale = {
-      getVisibleRange: vi.fn(() => null),
+      getVisibleRange: vi.fn(() => state.visibleRange),
       applyOptions: vi.fn(),
       scrollToRealTime: vi.fn(),
     };
@@ -40,6 +40,7 @@ vi.mock('lightweight-charts', () => ({
   CandlestickSeries: { type: 'Candlestick' },
   CrosshairMode: lw.CrosshairMode,
   LineStyle: lw.LineStyle,
+  TrackingModeExitMode: { OnTouchEnd: 0, OnNextTap: 1 },
 }));
 
 // ---- API: velas de 1h desde 2026-10-19 00:00 UTC ------------------------
@@ -53,45 +54,6 @@ const CANDLES_1H = Array.from({ length: 24 }, (_, i) => ({
 vi.mock('../../../services/api', () => ({
   marketApi: { getCandles: vi.fn() },
 }));
-
-// ---- crosshairSync: implementación pequeña y fiel al spec §A -----------
-vi.mock('./crosshairSync', async (importOriginal) => {
-  const actual = await importOriginal();
-  const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sept', 'oct', 'nov', 'dic'];
-  const pad = (n) => String(n).padStart(2, '0');
-  function formatSyncTime(sec) {
-    const d = new Date(sec * 1000);
-    return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-  }
-  function formatOffset(sec) {
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    if (d) return h ? `${d}d ${h}h` : `${d}d`;
-    if (h) return m ? `${h}h ${m}m` : `${h}h`;
-    return `${m}m`;
-  }
-  function resolveSyncedTime(t, candles, tfSec, visibleRange) {
-    const none = (side) => ({ status: 'out', candleTimeSec: null, offsetSec: 0, side });
-    if (!candles?.length) return none(null);
-    const first = candles[0].time / 1000;
-    if (t < first) return none('left');
-    let c = null;
-    for (const k of candles) if (k.time / 1000 <= t) c = k;
-    const open = c.time / 1000;
-    if (t >= open + tfSec) return none('right');
-    if (visibleRange && open < visibleRange.from) return { status: 'out', candleTimeSec: open, offsetSec: t - open, side: 'left' };
-    if (visibleRange && open > visibleRange.to) return { status: 'out', candleTimeSec: open, offsetSec: t - open, side: 'right' };
-    return { status: t === open ? 'exact' : 'near', candleTimeSec: open, offsetSec: t - open, side: null };
-  }
-  function statusLabel(res, { isSource } = {}) {
-    if (isSource) return 'Origen';
-    if (res.status === 'exact') return 'Coincide exacto';
-    if (res.status === 'near') return `Dentro de la vela ${formatSyncTime(res.candleTimeSec)} (+${formatOffset(res.offsetSec)})`;
-    return 'Fuera de vista';
-  }
-  return { ...actual, resolveSyncedTime, statusLabel, formatOffset, formatSyncTime };
-});
 
 import { marketApi } from '../../../services/api';
 import { LineStyle, CrosshairMode, createChart } from 'lightweight-charts';
@@ -133,6 +95,7 @@ function lastCrosshairOptions() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  lw.state.visibleRange = null;
   marketApi.getCandles.mockResolvedValue(CANDLES_1H.map((c) => ({ ...c })));
 });
 
@@ -273,4 +236,143 @@ describe('SyncedChart', () => {
     await waitForData();
     await waitFor(() => expect(screen.getByTestId('synced-close-0').textContent).toContain('2,528'));
   });
+
+  it('táctil: sale del modo seguimiento al soltar (sin puntero gris pegado)', async () => {
+    renderChart();
+    await waitForData();
+    expect(createChart).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ trackingMode: { exitMode: 0 } }), // OnTouchEnd
+    );
+  });
+
+  it('aviso derecho "▶" cuando la vela queda después del rango visible', async () => {
+    // Rango visible que termina 5 h antes de la vela señalada.
+    lw.state.visibleRange = { from: BASE_MS / 1000, to: T20 - 5 * 3600 };
+    renderChart({ sync: { sourceIndex: 1, timeSec: T20, price: 2500 } });
+    await waitForData();
+    const edge = await screen.findByTestId('sync-out-0');
+    expect(edge.textContent).toContain('▶');
+    expect(edge.textContent).not.toContain('◀');
+    expect(edge.textContent).toContain('19 oct 20:00 fuera de vista');
+    expect(screen.getByTestId('sync-chip-0').getAttribute('data-status')).toBe('out');
+    expect(lw.state.chart.setCrosshairPosition).not.toHaveBeenCalled();
+  });
+
+  it('el aviso de fuera de vista no se anuncia en cada movimiento', async () => {
+    const before = BASE_MS / 1000 - 3 * 3600;
+    renderChart({ sync: { sourceIndex: 1, timeSec: before, price: 2500 } });
+    await waitForData();
+    const edge = await screen.findByTestId('sync-out-0');
+    expect(edge.getAttribute('role')).toBeNull();
+  });
+
+  it('chip: el texto va en un span recortable y el completo en title', async () => {
+    renderChart({ sync: { sourceIndex: 1, timeSec: T20 + 45 * 60, price: 2500 } });
+    await waitForData();
+    const chip = await screen.findByTestId('sync-chip-0');
+    const full = 'Dentro de la vela 19 oct 20:00 (+45m)';
+    expect(chip.getAttribute('title')).toBe(full);
+    const text = screen.getByTestId('sync-chip-text-0');
+    expect(text.textContent).toBe(full);
+    expect(text.getAttribute('aria-hidden')).toBeNull();
+  });
+
+  it('compacto: etiqueta corta "≈20:00 +45m" para dentro de la vela', async () => {
+    renderChart({ compact: true, sync: { sourceIndex: 1, timeSec: T20 + 45 * 60, price: 2500 } });
+    await waitForData();
+    const chip = await screen.findByTestId('sync-chip-0');
+    expect(screen.getByTestId('sync-chip-text-0').textContent).toBe('≈20:00 +45m');
+    const full = 'Dentro de la vela 19 oct 20:00 (+45m)';
+    expect(chip.getAttribute('title')).toBe(full);
+    // El lector de pantalla recibe el texto completo, no el abreviado.
+    expect(screen.getByTestId('sync-chip-text-0').getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByText(full)).toBeTruthy();
+  });
+
+  it('encuadre inicial: la última vela queda separada de la escala de precios', async () => {
+    renderChart();
+    await waitForData();
+    const ts = lw.state.chart.timeScale();
+    await waitFor(() => expect(ts.scrollToRealTime).toHaveBeenCalled());
+    const opts = ts.applyOptions.mock.calls.map(([o]) => o).find((o) => o?.rightOffset != null);
+    expect(opts.rightOffset).toBeGreaterThan(0);
+    expect(opts.barSpacing).toBeGreaterThan(0);
+    // Primero se encuadra y luego se lleva al final.
+    expect(ts.applyOptions.mock.invocationCallOrder[0])
+      .toBeLessThan(ts.scrollToRealTime.mock.invocationCallOrder[0]);
+  });
+
+  it('encuadre también al recargar por cambio de temporalidad', async () => {
+    const { rerender } = renderChart();
+    await waitForData();
+    const ts = lw.state.chart.timeScale();
+    ts.applyOptions.mockClear();
+    rerender(
+      <SyncedChart asset={ASSET} timeframe="4h" timeframes={TFS} index={0} syncEnabled sync={null} />,
+    );
+    await waitFor(() => expect(ts.applyOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ rightOffset: expect.any(Number), barSpacing: expect.any(Number) }),
+    ));
+  });
+
+  it('onLastPrice: avisa del cierre de la última vela al cargar', async () => {
+    const onLastPrice = vi.fn();
+    renderChart({ onLastPrice });
+    await waitForData();
+    await waitFor(() => expect(onLastPrice).toHaveBeenLastCalledWith(0, 2528));
+  });
 });
+
+describe('SyncedChart · polling en vivo', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function advance(ms) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  }
+  const fullLoads = () => marketApi.getCandles.mock.calls.filter(([a]) => a.limit === 500).length;
+  const LAST = CANDLES_1H[CANDLES_1H.length - 1];
+
+  it('un polling que cambia la última vela vuelve a llamar onLastPrice', async () => {
+    const onLastPrice = vi.fn();
+    renderChart({ onLastPrice });
+    await advance(0);
+    expect(onLastPrice).toHaveBeenLastCalledWith(0, 2528);
+    marketApi.getCandles.mockResolvedValue([
+      { ...CANDLES_1H[CANDLES_1H.length - 2] },
+      { ...LAST, close: 2600 },
+    ]);
+    await advance(3_000);
+    expect(onLastPrice).toHaveBeenLastCalledWith(0, 2600);
+    expect(lw.state.series.update).toHaveBeenCalled();
+  });
+
+  it('hueco tras pestaña oculta: si la primera vela del polling salta velas, recarga completa', async () => {
+    renderChart();
+    await advance(0);
+    expect(fullLoads()).toBe(1);
+    marketApi.getCandles.mockResolvedValueOnce([
+      { ...LAST, time: LAST.time + 3 * HOUR_MS },
+      { ...LAST, time: LAST.time + 4 * HOUR_MS },
+    ]);
+    await advance(3_000);
+    expect(fullLoads()).toBe(2);
+    // No se añadieron velas sueltas a través del hueco.
+    expect(lw.state.series.update).not.toHaveBeenCalled();
+  });
+
+  it('al volver a estar visible la pestaña recarga las velas', async () => {
+    renderChart();
+    await advance(0);
+    expect(fullLoads()).toBe(1);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(0);
+    expect(fullLoads()).toBe(2);
+  });
+});
+

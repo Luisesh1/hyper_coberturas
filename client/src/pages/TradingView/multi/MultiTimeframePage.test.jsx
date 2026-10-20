@@ -19,41 +19,11 @@ vi.mock('./SyncedChart', () => ({
         onClick={() => props.onPointer(props.index, { timeSec: Date.UTC(2025, 9, 19, 20, 45) / 1000, price: 100 })}
       />
       <button type="button" data-testid={`pointer-clear-${props.index}`} onClick={() => props.onPointer(props.index, null)} />
+      <button type="button" data-testid={`price-${props.index}`} onClick={() => props.onLastPrice?.(props.index, 2345.5 + props.index)} />
+      <button type="button" data-testid={`tf-${props.index}`} onClick={() => props.onTimeframeChange('1m')} />
     </div>
   ),
 }));
-
-vi.mock('./crosshairSync', () => {
-  const KEY = 'tv_multi_prefs_v1';
-  const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-  const defaults = () => ({
-    layout: '2x2',
-    timeframes: ['5m', '15m', '1h', '4h'],
-    mobileTimeframes: ['5m', '1h', '4h'],
-    sync: true,
-  });
-  return {
-    SYNC_COLORS: { exact: '#3ddc84', near: '#b8860b', out: '#8690a0' },
-    MULTI_TIMEFRAMES: ['1m', '5m', '15m', '1h', '4h', '1d', '1w'],
-    LAYOUTS: [
-      { id: '1x2', label: '1×2', count: 2, cols: 2, rows: 1 },
-      { id: '1x3', label: '1×3', count: 3, cols: 3, rows: 1 },
-      { id: '2x2', label: '2×2', count: 4, cols: 2, rows: 2 },
-    ],
-    formatSyncTime: (sec) => {
-      const d = new Date(sec * 1000);
-      const p = (n) => String(n).padStart(2, '0');
-      return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-    },
-    loadMultiPrefs: () => {
-      try {
-        const raw = localStorage.getItem(KEY);
-        return raw ? { ...defaults(), ...JSON.parse(raw) } : defaults();
-      } catch { return defaults(); }
-    },
-    saveMultiPrefs: (p) => { try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* noop */ } },
-  };
-});
 
 vi.mock('../../../context/TradingContext', () => ({
   useTradingContext: () => ({ selectedAsset: 'SOL' }),
@@ -89,7 +59,7 @@ const tfs = () => screen.getAllByTestId(/^synced-chart-\d+$/).map((el) => el.dat
 describe('MultiTimeframePage', () => {
   beforeEach(() => {
     localStorage.clear();
-    vi.stubGlobal('requestAnimationFrame', (cb) => { cb(0); return 1; });
+    vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { cb(0); return 1; }));
     vi.stubGlobal('cancelAnimationFrame', () => {});
     setMobile(false);
   });
@@ -197,5 +167,46 @@ describe('MultiTimeframePage', () => {
     expect(sw.textContent).toBe('Sync');
     fireEvent.click(sw);
     expect(screen.getByTestId('synced-chart-0').dataset.syncEnabled).toBe('false');
+  });
+
+  it('con la sincronización apagada onPointer no programa actualizaciones', () => {
+    renderPage();
+    fireEvent.click(screen.getByRole('switch', { name: /Puntero sincronizado/i }));
+    requestAnimationFrame.mockClear();
+    fireEvent.click(screen.getByTestId('pointer-1'));
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+    expect(screen.getByTestId('synced-chart-0').dataset.sync).toBe('null');
+  });
+
+  it('precio de la barra superior: solo el del panel 0, con formatPrice', () => {
+    renderPage();
+    expect(screen.queryByTestId('multi-price')).toBeNull();
+    fireEvent.click(screen.getByTestId('price-1'));
+    expect(screen.queryByTestId('multi-price')).toBeNull();
+    fireEvent.click(screen.getByTestId('price-0'));
+    expect(screen.getByTestId('multi-price').textContent).toBe('2,345.50');
+  });
+
+  it('el precio se reinicia al cambiar de par o la temporalidad del panel 0', () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('price-0'));
+    expect(screen.getByTestId('multi-price')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('tf-1'));
+    expect(screen.getByTestId('multi-price')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('tf-0'));
+    expect(screen.queryByTestId('multi-price')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('price-0'));
+    expect(screen.getByTestId('multi-price')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Cambiar par/i }));
+    fireEvent.click(screen.getByTestId('picker-pick'));
+    expect(screen.queryByTestId('multi-price')).toBeNull();
+  });
+
+  it('móvil: el precio aparece en la cabecera', () => {
+    setMobile(true);
+    renderPage();
+    fireEvent.click(screen.getByTestId('price-0'));
+    expect(screen.getByTestId('multi-price').textContent).toBe('2,345.50');
   });
 });

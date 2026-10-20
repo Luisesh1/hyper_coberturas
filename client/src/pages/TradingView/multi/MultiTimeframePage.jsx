@@ -5,6 +5,7 @@ import AssetPickerModal from '../components/AssetPickerModal';
 import { ChevronDownIcon, ChevronLeftIcon } from '../components/icons';
 import { MOBILE_QUERY, useMediaQuery } from '../useMediaQuery';
 import SyncedChart from './SyncedChart';
+import { formatPrice } from './chartTheme';
 import {
   LAYOUTS,
   SYNC_COLORS,
@@ -103,12 +104,29 @@ export default function MultiTimeframePage() {
     [isMobile, prefs.mobileTimeframes, prefs.timeframes, layout.count],
   );
   const syncEnabled = prefs.sync !== false;
+  const syncEnabledRef = useRef(syncEnabled);
+  syncEnabledRef.current = syncEnabled;
+
+  // Precio de la barra superior: último cierre del panel 0. Se guarda con la
+  // clave par+temporalidad, así al cambiar cualquiera de las dos deja de
+  // mostrarse hasta que llega el precio nuevo.
+  const priceKey = `${asset.symbol}|${asset.datasource}|${panelTimeframes[0]}`;
+  const priceKeyRef = useRef(priceKey);
+  priceKeyRef.current = priceKey;
+  const [lastPrice, setLastPrice] = useState(null);
+  const onLastPrice = useCallback((index, price) => {
+    if (index !== 0) return;
+    setLastPrice({ key: priceKeyRef.current, price });
+  }, []);
+  const shownPrice = lastPrice && lastPrice.key === priceKey ? formatPrice(lastPrice.price) : null;
 
   // Puntero: se agrupa por fotograma para no re-renderizar por cada píxel.
   const pendingRef = useRef(null);
   const rafRef = useRef(0);
   const scheduledRef = useRef(false);
   const onPointer = useCallback((index, p) => {
+    // Con la sincronización apagada nadie lee `sync`: no se re-renderiza.
+    if (!syncEnabledRef.current) return;
     pendingRef.current = { value: p ? { sourceIndex: index, ...p } : null };
     if (scheduledRef.current) return;
     scheduledRef.current = true;
@@ -161,6 +179,7 @@ export default function MultiTimeframePage() {
         syncEnabled={syncEnabled}
         sync={activeSync}
         onPointer={onPointer}
+        onLastPrice={onLastPrice}
         compact={isMobile}
       />
     </div>
@@ -208,6 +227,11 @@ export default function MultiTimeframePage() {
             </span>
             <ChevronDownIcon size={16} />
           </button>
+          {shownPrice && (
+            <span className={styles.mPrice} data-testid="multi-price" title="Último precio (primer gráfico)">
+              {shownPrice}
+            </span>
+          )}
           {syncSwitch('Sync', styles.mSync)}
         </header>
         <div className={styles.mStack}>{panels}</div>
@@ -239,6 +263,11 @@ export default function MultiTimeframePage() {
           <span className={styles.assetSource}>{asset.datasource}</span>
           <ChevronDownIcon size={14} />
         </button>
+        {shownPrice && (
+          <span className={styles.price} data-testid="multi-price" title="Último precio (primer gráfico)">
+            {shownPrice}
+          </span>
+        )}
         <div className={styles.layoutGroup} role="group" aria-label="Distribución">
           {LAYOUTS.map((l) => (
             <button

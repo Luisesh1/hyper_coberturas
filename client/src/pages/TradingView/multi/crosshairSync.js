@@ -81,6 +81,18 @@ export function statusLabel(resolution, { isSource } = {}) {
   return 'Fuera de vista';
 }
 
+// Versión corta para la cabecera compacta (móvil): "≈20:00 +45m" con la hora
+// UTC de apertura de la vela contenedora. El texto completo va en title/aria.
+export function compactStatusLabel(resolution, { isSource } = {}) {
+  if (!isSource && resolution?.status === 'near') {
+    const d = new Date(resolution.candleTimeSec * 1000);
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    return `≈${hh}:${mm} +${formatOffset(resolution.offsetSec)}`;
+  }
+  return statusLabel(resolution, { isSource });
+}
+
 function validTfList(value, length, fallback) {
   if (!Array.isArray(value) || value.length !== length) return [...fallback];
   if (!value.every((tf) => MULTI_TIMEFRAMES.includes(tf))) return [...fallback];
