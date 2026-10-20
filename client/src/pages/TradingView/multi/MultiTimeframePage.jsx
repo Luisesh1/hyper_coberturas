@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { settingsApi } from '../../../services/api';
 import { useTradingContext } from '../../../context/TradingContext';
+import { getDefaultChartIndicators } from '../indicators/defaults';
 import AssetPickerModal from '../components/AssetPickerModal';
 import { ChevronDownIcon, ChevronLeftIcon } from '../components/icons';
 import { MOBILE_QUERY, useMediaQuery } from '../useMediaQuery';
@@ -55,7 +57,7 @@ function Legend({ className }) {
 }
 
 export default function MultiTimeframePage() {
-  const { selectedAsset } = useTradingContext();
+  const { selectedAsset, addNotification } = useTradingContext();
   const [searchParams] = useSearchParams();
   const urlSymbol = searchParams.get('symbol');
   const urlDatasource = searchParams.get('datasource');
@@ -74,6 +76,27 @@ export default function MultiTimeframePage() {
   });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sync, setSync] = useState(null);
+  // Indicadores guardados en /trading-view (se editan allí). null = cargando.
+  const [indicators, setIndicators] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await settingsApi.getChartIndicators();
+        if (cancelled) return;
+        const list = Array.isArray(res?.indicators) ? res.indicators : [];
+        setIndicators(list.length > 0 ? list : getDefaultChartIndicators().indicators);
+      } catch (err) {
+        if (cancelled) return;
+        setIndicators(getDefaultChartIndicators().indicators);
+        addNotification?.('alert', `No se pudo cargar tu config de indicadores: ${err?.message || err}`);
+      }
+    })();
+    return () => { cancelled = true; };
+    // Solo al montar: la lista se edita en /trading-view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Reaccionar a cambios del query (back/forward) sin remount.
   useEffect(() => {
@@ -180,6 +203,7 @@ export default function MultiTimeframePage() {
         sync={activeSync}
         onPointer={onPointer}
         onLastPrice={onLastPrice}
+        indicators={indicators || undefined}
         compact={isMobile}
       />
     </div>

@@ -22,10 +22,12 @@ import {
   formatPrice,
 } from './chartTheme';
 import { getInitialChartViewport } from '../chartViewport';
+import { createIndicatorsController } from '../indicators/renderAdapter';
 import styles from './SyncedChart.module.css';
 
 const CANDLE_LIMIT = 500;
 const POLL_LIMIT = 2;
+const NO_INDICATORS = [];
 
 function toBar(c) {
   return {
@@ -69,12 +71,14 @@ export default function SyncedChart({
   sync = null,
   onPointer,
   onLastPrice,
+  indicators = NO_INDICATORS,
   compact = false,
 }) {
   const selectId = useId();
   const hostRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const indicatorsCtrlRef = useRef(null);
   const candlesRef = useRef([]);
   const appliedRef = useRef('none'); // 'none' | 'source' | 'target'
   const linesKeyRef = useRef('default');
@@ -138,6 +142,9 @@ export default function SyncedChart({
     });
     chartRef.current = chart;
     seriesRef.current = series;
+    // Indicadores guardados del usuario (overlays en el panel de precio y
+    // osciladores en sub-paneles), mismo controlador que /trading-view.
+    indicatorsCtrlRef.current = createIndicatorsController(chart);
 
     // Solo los movimientos reales del usuario traen `sourceEvent`; los
     // eventos sintéticos (actualización de datos, salida del ratón) se ignoran
@@ -148,7 +155,12 @@ export default function SyncedChart({
         emitPointer(null);
         return;
       }
-      const price = series.coordinateToPrice(param.point.y);
+      // En un sub-panel (oscilador) la `y` no es de la escala de precio: se
+      // propaga el cierre de la vela señalada.
+      const inSubPane = param.paneIndex != null && param.paneIndex !== 0;
+      const price = inSubPane
+        ? findCandle(candlesRef.current, param.time)?.close
+        : series.coordinateToPrice(param.point.y);
       if (price == null || !Number.isFinite(price)) {
         emitPointer(null);
         return;
@@ -159,6 +171,8 @@ export default function SyncedChart({
 
     return () => {
       chart.unsubscribeCrosshairMove(handleMove);
+      indicatorsCtrlRef.current?.removeAll();
+      indicatorsCtrlRef.current = null;
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -280,6 +294,16 @@ export default function SyncedChart({
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [asset?.symbol, asset?.datasource, timeframe]);
+
+  // --- 3a) Indicadores: al cargar, en cada polling con cambios y al cambiar
+  // la lista. `render` ya omite los ocultos (`visible === false`). Sin velas
+  // (recarga o error) se quitan para no dejar los del par/temporalidad previo.
+  useEffect(() => {
+    const ctrl = indicatorsCtrlRef.current;
+    if (!ctrl) return;
+    if (candles.length === 0) ctrl.render(NO_INDICATORS, candles);
+    else ctrl.render(indicators, candles);
+  }, [indicators, candles]);
 
   // --- 3b) Último cierre hacia la página (precio de la barra superior) ---
   useEffect(() => {

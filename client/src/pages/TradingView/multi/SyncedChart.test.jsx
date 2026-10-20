@@ -51,17 +51,31 @@ const CANDLES_1H = Array.from({ length: 24 }, (_, i) => ({
   open: 2500 + i, high: 2510 + i, low: 2490 + i, close: 2505 + i,
 }));
 
+// ---- indicadores: controlador falso ------------------------------------
+const ind = vi.hoisted(() => ({ controller: null }));
+vi.mock('../indicators/renderAdapter', () => ({
+  createIndicatorsController: vi.fn(() => {
+    ind.controller = { render: vi.fn(), removeAll: vi.fn(), getValuesAt: vi.fn(() => []) };
+    return ind.controller;
+  }),
+}));
+
 vi.mock('../../../services/api', () => ({
   marketApi: { getCandles: vi.fn() },
 }));
 
 import { marketApi } from '../../../services/api';
 import { LineStyle, CrosshairMode, createChart } from 'lightweight-charts';
+import { createIndicatorsController } from '../indicators/renderAdapter';
 import SyncedChart from './SyncedChart';
 
 const ASSET = { symbol: 'ETH', datasource: 'binance' };
 const TFS = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'];
 const T20 = Math.floor((BASE_MS + 20 * HOUR_MS) / 1000); // 19 oct 20:00 UTC
+const INDICATORS = [
+  { uid: 'sqz', type: 'sqzmom', params: {}, style: {}, visible: true },
+  { uid: 'ema', type: 'ema', params: { length: 20 }, style: {}, visible: false },
+];
 
 function renderChart(props = {}) {
   const onPointer = vi.fn();
@@ -324,6 +338,53 @@ describe('SyncedChart', () => {
   });
 });
 
+describe('SyncedChart · indicadores', () => {
+  it('crea el controlador con el chart y dibuja los indicadores con las velas en ms', async () => {
+    renderChart({ indicators: INDICATORS });
+    await waitForData();
+    expect(createIndicatorsController).toHaveBeenCalledWith(lw.state.chart);
+    await waitFor(() => expect(ind.controller.render).toHaveBeenCalledWith(
+      INDICATORS,
+      expect.arrayContaining([expect.objectContaining({ time: BASE_MS, close: 2505 })]),
+    ));
+    const [, candles] = ind.controller.render.mock.calls.at(-1);
+    expect(candles).toHaveLength(24);
+  });
+
+  it('vuelve a dibujar al cambiar la lista de indicadores', async () => {
+    const { rerender } = renderChart({ indicators: INDICATORS });
+    await waitForData();
+    await waitFor(() => expect(ind.controller.render).toHaveBeenCalled());
+    const next = [INDICATORS[0]];
+    rerender(
+      <SyncedChart asset={ASSET} timeframe="1h" timeframes={TFS} index={0} syncEnabled sync={null} indicators={next} />,
+    );
+    await waitFor(() => expect(ind.controller.render).toHaveBeenLastCalledWith(next, expect.any(Array)));
+  });
+
+  it('al desmontar quita los indicadores antes de destruir el chart', async () => {
+    const { unmount } = renderChart({ indicators: INDICATORS });
+    await waitForData();
+    unmount();
+    expect(ind.controller.removeAll).toHaveBeenCalled();
+    expect(ind.controller.removeAll.mock.invocationCallOrder[0])
+      .toBeLessThan(lw.state.chart.remove.mock.invocationCallOrder[0]);
+  });
+
+  it('puntero sobre un sub-panel: propaga el cierre de la vela, no la coordenada', async () => {
+    const { onPointer } = renderChart({ indicators: INDICATORS });
+    await waitForData();
+    lw.state.series.coordinateToPrice.mockClear();
+    lw.state.handler({ time: T20, point: { x: 10, y: 20 }, paneIndex: 1, sourceEvent: {} });
+    expect(onPointer).toHaveBeenCalledWith(0, { timeSec: T20, price: 2525 });
+    expect(lw.state.series.coordinateToPrice).not.toHaveBeenCalled();
+
+    onPointer.mockClear();
+    lw.state.handler({ time: T20, point: { x: 10, y: 20 }, paneIndex: 0, sourceEvent: {} });
+    expect(onPointer).toHaveBeenCalledWith(0, { timeSec: T20, price: 2600 });
+  });
+});
+
 describe('SyncedChart · polling en vivo', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });
@@ -350,6 +411,19 @@ describe('SyncedChart · polling en vivo', () => {
     await advance(3_000);
     expect(onLastPrice).toHaveBeenLastCalledWith(0, 2600);
     expect(lw.state.series.update).toHaveBeenCalled();
+  });
+
+  it('un polling que cambia datos redibuja los indicadores con las velas nuevas', async () => {
+    renderChart({ indicators: INDICATORS });
+    await advance(0);
+    const before = ind.controller.render.mock.calls.length;
+    expect(before).toBeGreaterThan(0);
+    marketApi.getCandles.mockResolvedValue([{ ...LAST }, { ...LAST, time: LAST.time + HOUR_MS, close: 2700 }]);
+    await advance(3_000);
+    expect(ind.controller.render.mock.calls.length).toBeGreaterThan(before);
+    const [list, candles] = ind.controller.render.mock.calls.at(-1);
+    expect(list).toBe(INDICATORS);
+    expect(candles.at(-1)).toEqual(expect.objectContaining({ time: LAST.time + HOUR_MS, close: 2700 }));
   });
 
   it('hueco tras pestaña oculta: si la primera vela del polling salta velas, recarga completa', async () => {

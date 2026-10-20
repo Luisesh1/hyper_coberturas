@@ -12,6 +12,7 @@ vi.mock('./SyncedChart', () => ({
       data-compact={String(!!props.compact)}
       data-symbol={props.asset.symbol}
       data-datasource={props.asset.datasource}
+      data-indicators={JSON.stringify(props.indicators ?? null)}
     >
       <button
         type="button"
@@ -25,6 +26,11 @@ vi.mock('./SyncedChart', () => ({
   ),
 }));
 
+const api = vi.hoisted(() => ({ getChartIndicators: null }));
+vi.mock('../../../services/api', () => ({
+  settingsApi: { getChartIndicators: (...a) => api.getChartIndicators(...a) },
+}));
+
 vi.mock('../../../context/TradingContext', () => ({
   useTradingContext: () => ({ selectedAsset: 'SOL' }),
 }));
@@ -35,7 +41,9 @@ vi.mock('../components/AssetPickerModal', () => ({
     : null),
 }));
 
+import { waitFor } from '@testing-library/react';
 import MultiTimeframePage from './MultiTimeframePage';
+import { getDefaultChartIndicators } from '../indicators/defaults';
 
 function setMobile(isMobile) {
   window.matchMedia = vi.fn().mockImplementation((query) => ({
@@ -59,6 +67,7 @@ const tfs = () => screen.getAllByTestId(/^synced-chart-\d+$/).map((el) => el.dat
 describe('MultiTimeframePage', () => {
   beforeEach(() => {
     localStorage.clear();
+    api.getChartIndicators = vi.fn().mockResolvedValue({ indicators: [] });
     vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { cb(0); return 1; }));
     vi.stubGlobal('cancelAnimationFrame', () => {});
     setMobile(false);
@@ -208,5 +217,29 @@ describe('MultiTimeframePage', () => {
     renderPage();
     fireEvent.click(screen.getByTestId('price-0'));
     expect(screen.getByTestId('multi-price').textContent).toBe('2,345.50');
+  });
+
+  const indicatorsOf = (i) => JSON.parse(screen.getByTestId(`synced-chart-${i}`).dataset.indicators);
+
+  it('indicadores: carga la lista guardada una vez y la pasa a cada gráfico', async () => {
+    const saved = [{ uid: 'r1', type: 'rsi', params: { length: 14 }, style: {}, visible: true }];
+    api.getChartIndicators.mockResolvedValue({ indicators: saved });
+    renderPage();
+    await waitFor(() => expect(indicatorsOf(0)).toEqual(saved));
+    for (let i = 1; i < 4; i += 1) expect(indicatorsOf(i)).toEqual(saved);
+    fireEvent.click(screen.getByRole('button', { name: '1×3' }));
+    expect(api.getChartIndicators).toHaveBeenCalledTimes(1);
+  });
+
+  it('indicadores: lista vacía → defaults', async () => {
+    renderPage();
+    await waitFor(() => expect(indicatorsOf(0)).toEqual(getDefaultChartIndicators().indicators));
+  });
+
+  it('indicadores: error al cargar → defaults sin romper', async () => {
+    api.getChartIndicators.mockRejectedValue(new Error('500'));
+    renderPage();
+    await waitFor(() => expect(indicatorsOf(2)).toEqual(getDefaultChartIndicators().indicators));
+    expect(tfs()).toEqual(['5m', '15m', '1h', '4h']);
   });
 });
