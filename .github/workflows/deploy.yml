@@ -284,7 +284,8 @@ jobs:
             echo '### Diagnostico GTC Binance tras deploy (solo lectura)'
             grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/gtc-dust-once.log" || true
             echo
-            echo '**NO-GO:** el filtro de nuevo SELL no demuestra que Binance cierre una orden GTC con fill parcial.'
+            echo 'Nota: LOT_SIZE regula nuevas ordenes. Un remanente 0.005 es un ejemplo hipotetico, no un fill observado.'
+            echo 'La muestra publica no demuestra imposibilidad absoluta; el reconciliador conserva protecciones ante estados imprevistos.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comprobar elegibilidad de señal ETH y canal Telegram
@@ -707,9 +708,13 @@ jobs:
           grep -Eq '^gtc_dust_status=(filter_only|risk_detected|blocked)$' \
             "$RUNNER_TEMP/options-target-gtc.log" || exit 1
           grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/options-target-gtc.log"
+          if grep -Fxq 'gtc_dust_status=risk_detected' "$RUNNER_TEMP/options-target-gtc.log"; then
+            echo '::warning::Hay evidencia publica de ejecucion inferior a LOT_SIZE; revisar antes de operar'
+          fi
           {
             echo '### Riesgo de TP GTC para ETH-261030-2550-C'
             grep -E '^(gtc_dust_|pilot_ready=)' "$RUNNER_TEMP/options-target-gtc.log"
             echo
-            echo 'No hay certificacion de cierre de TP parcialmente ejecutado ni de stop garantizado.'
+            echo 'Solo un diagnostico risk_detected acredita fills sub-lote; un ejemplo 0.005 no es evidencia de ejecucion real.'
+            echo 'Cierres, liquidez y costos aun requieren verificaciones independientes para trading real.'
           } >> "$GITHUB_STEP_SUMMARY"
