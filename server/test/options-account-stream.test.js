@@ -5,6 +5,16 @@ const { createOptionsAccountStream, eventName } = require('../src/services/optio
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
+// Espera a una condición en vez de a un tiempo fijo: el primer `open` del
+// socket falso puede tardar más que un tick corto en una máquina cargada.
+async function waitFor(cond, timeoutMs = 2000) {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) return;
+    await tick(5);
+  }
+}
+
 // WebSocket falso: registra las URLs y deja emitir mensajes a mano.
 function fakeWsFactory() {
   const sockets = [];
@@ -56,11 +66,13 @@ test('eventName lee el evento con y sin sobre stream/data', () => {
   assert.equal(eventName({ foo: 1 }), null);
 });
 
-test('un stream por usuario compartido por varias pestañas y relectura por evento', async () => {
+test('un stream por usuario compartido por varias pestañas y relectura por evento', async (t) => {
   const { stream, sockets, calls } = setup();
+  t.after(() => stream.shutdown());
   const a = []; const b = [];
   const unsubA = stream.subscribe(1, (p) => a.push(p));
   const unsubB = stream.subscribe(1, (p) => b.push(p));
+  await waitFor(() => a.at(-1)?.live && b.at(-1)?.live);
   await tick(30);
   assert.equal(sockets.length, 1, 'un solo WebSocket para el usuario');
   assert.equal(sockets[0].url, 'wss://example.test/private/ws/key1');
@@ -85,10 +97,12 @@ test('un stream por usuario compartido por varias pestañas y relectura por even
   assert.equal(calls.close, 1, 'cierra el listenKey al quedarse sin suscriptores');
 });
 
-test('ante un 429 conserva el último snapshot marcado como stale', async () => {
+test('ante un 429 conserva el último snapshot marcado como stale', async (t) => {
   const { stream, sockets, setFail } = setup();
+  t.after(() => stream.shutdown());
   const seen = [];
   const unsub = stream.subscribe(7, (p) => seen.push(p));
+  await waitFor(() => seen.at(-1)?.live);
   await tick(30);
   const good = seen.at(-1).account.balanceUsdt;
   setFail(Object.assign(new Error('Binance Opciones: límite de peticiones, consulta aplazada'), { code: 'BINANCE_OPTIONS_RATE_LIMIT' }));
@@ -103,12 +117,15 @@ test('ante un 429 conserva el último snapshot marcado como stale', async () => 
   stream.shutdown();
 });
 
-test('listenKeyExpired reconecta con una key nueva', async () => {
+test('listenKeyExpired reconecta con una key nueva', async (t) => {
   const { stream, sockets, calls } = setup({ reconnectBaseMs: 5 });
-  const unsub = stream.subscribe(3, () => {});
-  await tick(30);
+  t.after(() => stream.shutdown());
+  let live = false;
+  const unsub = stream.subscribe(3, (p) => { live = p.live; });
+  await waitFor(() => live);
   sockets[0].push({ e: 'listenKeyExpired' });
-  await tick(40);
+  await waitFor(() => sockets.length >= 2);
+  await tick(10);
   assert.equal(calls.create, 2);
   assert.equal(sockets.length, 2);
   assert.equal(sockets[1].url, 'wss://example.test/private/ws/key2');
