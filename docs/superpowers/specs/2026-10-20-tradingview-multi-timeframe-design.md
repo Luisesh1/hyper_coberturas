@@ -32,10 +32,24 @@ inmediata de "esto es la misma vela" vs "esto es una parte de una vela mayor".
    escritorio encogido.
 5. Puntero sincronizado (conmutable "Puntero sincronizado / independiente").
 6. Velas en vivo (mismo polling por temporalidad que TradingView).
+7. **Indicadores configurados (pedido del usuario, 2026-10-20):** cada gráfico
+   muestra los mismos indicadores que el usuario tiene guardados en
+   TradingView (`settingsApi.getChartIndicators()`, con
+   `getDefaultChartIndicators()` como respaldo), calculados sobre las velas de
+   su propia temporalidad. Se respetan los ocultos (`visible === false`). Se
+   dibujan con el mismo `createIndicatorsController(chart)` de
+   `indicators/renderAdapter.js` (overlays en el panel de precio y osciladores
+   en sub-paneles), que se vuelve a llamar con `render(indicators, candles)` al
+   cargar, en cada polling y al cambiar la lista. La página carga la lista una
+   vez y la pasa como prop `indicators` a cada `SyncedChart`.
+   - Si el puntero está sobre un sub-panel (`param.paneIndex !== 0`), el precio
+     propagado es el cierre de la vela señalada (la coordenada `y` no es de la
+     escala de precio). La línea vertical sigue funcionando igual.
 
 ## No-objetivos
 
-- Indicadores, dibujos y Replay en esta vista (siguen en `/trading-view`).
+- Dibujos y Replay en esta vista (siguen en `/trading-view`).
+- Editar indicadores desde esta vista (se configuran en `/trading-view`).
 - Sincronizar zoom/desplazamiento entre gráficos.
 - Persistir la configuración en el servidor (basta `localStorage`).
 
