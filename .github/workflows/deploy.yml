@@ -718,3 +718,38 @@ jobs:
             echo 'Solo un diagnostico risk_detected acredita fills sub-lote; un ejemplo 0.005 no es evidencia de ejecucion real.'
             echo 'Cierres, liquidez y costos aun requieren verificaciones independientes para trading real.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comprobar UNA vez compra exacta ETH y comision Binance (GET, sin ordenes)
+        if: github.event_name == 'workflow_run'
+        env:
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          subject="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SERVER_USER@$SERVER_HOST" "cd '$DEPLOY_PATH' && git log -1 --pretty=%s")"
+          if [ "$subject" != 'ops(options): execute exact ETH read-only verification with fees' ]; then
+            echo 'exact_eth_preflight=skipped_other_release'
+            exit 0
+          fi
+          if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$SERVER_USER@$SERVER_HOST" \
+            "cd '$DEPLOY_PATH' && docker compose -f docker-compose.prod.yml exec -T server node src/scripts/options-eth-exact-final-readonly.js --read-only 1 ETH-261030-2550-C 0.01 36.00" \
+            >"$RUNNER_TEMP/exact-eth-fee-preflight.log" 2>/dev/null; then
+            echo '::warning::Preflight GET exacto no disponible; NO OPERAR'
+            echo 'exact_eth_status=unavailable'
+            exit 0
+          fi
+          grep -Fxq 'exact_eth_preflight_read_only=yes' "$RUNNER_TEMP/exact-eth-fee-preflight.log" || exit 1
+          grep -Fxq 'exact_eth_orders_sent=0' "$RUNNER_TEMP/exact-eth-fee-preflight.log" || exit 1
+          grep -Fxq 'pilot_ready=no' "$RUNNER_TEMP/exact-eth-fee-preflight.log" || exit 1
+          grep -Eq '^exact_eth_status=(candidate|blocked|unverified)$' "$RUNNER_TEMP/exact-eth-fee-preflight.log" || exit 1
+          grep -E '^(exact_eth_|pilot_ready=)' "$RUNNER_TEMP/exact-eth-fee-preflight.log"
+          {
+            echo '### Preflight exacto ETH y comision real - SOLO LECTURA'
+            grep -E '^(exact_eth_|pilot_ready=)' "$RUNNER_TEMP/exact-eth-fee-preflight.log"
+            echo 'La cotizacion cambia y candidate NO habilita trading ni garantiza ejecucion.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if ! grep -Fxq 'exact_eth_status=candidate' "$RUNNER_TEMP/exact-eth-fee-preflight.log"; then
+            echo '::warning::Existe un control no superado. NO OPERAR'
+          fi
