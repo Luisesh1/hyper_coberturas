@@ -1,8 +1,10 @@
-// STUB de contrato (Tarea 0). La Tarea 1 lo reemplaza por la implementación real.
-// Ver docs/superpowers/specs/2026-10-20-tradingview-multi-timeframe-design.md §A.
+// Lógica pura de la vista multi-temporalidad: resolución del instante
+// señalado en cada gráfico, formato de textos y preferencias persistidas.
 
 export const SYNC_COLORS = { exact: '#3ddc84', near: '#b8860b', out: '#8690a0' };
-export const TF_SECONDS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800 };
+export const TF_SECONDS = {
+  '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800,
+};
 export const MULTI_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'];
 export const LAYOUTS = [
   { id: '1x2', label: '1×2', count: 2, cols: 2, rows: 1 },
@@ -14,15 +16,78 @@ export const DEFAULT_MOBILE_TIMEFRAMES = ['5m', '1h', '4h'];
 export const DEFAULT_SYNC = true;
 export const MULTI_PREFS_KEY = 'tv_multi_prefs_v1';
 
-export function resolveSyncedTime(_tSec, _candles, _tfSec, _visibleRange) {
-  return { status: 'out', candleTimeSec: null, offsetSec: 0, side: null };
+const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+// candles: [{ time(ms), ... }] ascendentes. visibleRange: { from, to } en
+// segundos, o null (todo visible).
+export function resolveSyncedTime(tSec, candles, tfSec, visibleRange) {
+  const out = (side, candleTimeSec = null) => ({ status: 'out', candleTimeSec, offsetSec: 0, side });
+  if (!Array.isArray(candles) || candles.length === 0) return out(null);
+
+  // Última vela con apertura <= tSec (búsqueda binaria).
+  let lo = 0;
+  let hi = candles.length - 1;
+  let idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (candles[mid].time / 1000 <= tSec) { idx = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  if (idx === -1) return out('left');
+
+  const openSec = candles[idx].time / 1000;
+  if (tSec >= openSec + tfSec) return out('right');
+
+  if (visibleRange) {
+    const { from, to } = visibleRange;
+    if (openSec + tfSec <= from) return out('left', openSec);
+    if (openSec > to) return out('right', openSec);
+  }
+
+  const offsetSec = tSec - openSec;
+  return {
+    status: offsetSec === 0 ? 'exact' : 'near',
+    candleTimeSec: openSec,
+    offsetSec,
+    side: null,
+  };
 }
 
-export function formatOffset(_sec) { return ''; }
-export function formatSyncTime(_sec) { return ''; }
-export function statusLabel(_resolution, _opts) { return ''; }
+export function formatOffset(sec) {
+  const total = Math.max(0, Math.floor(sec));
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m && d === 0) parts.push(`${m}m`);
+  if (parts.length === 0) return `${total % 60}s`;
+  return parts.slice(0, 2).join(' ');
+}
 
-export function loadMultiPrefs() {
+export function formatSyncTime(sec) {
+  const d = new Date(sec * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${hh}:${mm}`;
+}
+
+export function statusLabel(resolution, { isSource } = {}) {
+  if (isSource) return 'Origen';
+  if (resolution?.status === 'exact') return 'Coincide exacto';
+  if (resolution?.status === 'near') {
+    return `Dentro de la vela ${formatSyncTime(resolution.candleTimeSec)} (+${formatOffset(resolution.offsetSec)})`;
+  }
+  return 'Fuera de vista';
+}
+
+function validTfList(value, length, fallback) {
+  if (!Array.isArray(value) || value.length !== length) return [...fallback];
+  if (!value.every((tf) => MULTI_TIMEFRAMES.includes(tf))) return [...fallback];
+  return [...value];
+}
+
+function defaultPrefs() {
   return {
     layout: DEFAULT_DESKTOP.layout,
     timeframes: [...DEFAULT_DESKTOP.timeframes],
@@ -31,4 +96,26 @@ export function loadMultiPrefs() {
   };
 }
 
-export function saveMultiPrefs(_prefs) {}
+export function loadMultiPrefs() {
+  try {
+    const raw = localStorage.getItem(MULTI_PREFS_KEY);
+    if (!raw) return defaultPrefs();
+    const p = JSON.parse(raw);
+    if (!p || typeof p !== 'object') return defaultPrefs();
+    const def = defaultPrefs();
+    return {
+      layout: LAYOUTS.some((l) => l.id === p.layout) ? p.layout : def.layout,
+      timeframes: validTfList(p.timeframes, 4, def.timeframes),
+      mobileTimeframes: validTfList(p.mobileTimeframes, 3, def.mobileTimeframes),
+      sync: typeof p.sync === 'boolean' ? p.sync : def.sync,
+    };
+  } catch {
+    return defaultPrefs();
+  }
+}
+
+export function saveMultiPrefs(prefs) {
+  try {
+    localStorage.setItem(MULTI_PREFS_KEY, JSON.stringify(prefs));
+  } catch { /* noop */ }
+}
