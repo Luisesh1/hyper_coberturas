@@ -1,5 +1,6 @@
 import { fmtIv, fmtNum, fmtPrice, fmtStrike } from '../format';
 import ExpiryPills from './ExpiryPills';
+import { quoteMid } from './mobileChainMetrics';
 import styles from './ManualTrading.module.css';
 
 // Índice del strike más cercano al spot (el ATM).
@@ -21,7 +22,7 @@ function QuoteButton({ leg, kind, strike, type, onPick, picked }) {
   return (
     <button
       type="button"
-      className={`${styles.cellBtn} ${side === 'SELL' ? styles.cellSell : styles.cellBuy} ${picked ? styles.cellPicked : ''}`}
+      className={`${styles.cellBtn} ${styles.quoteSideBtn} ${side === 'SELL' ? styles.cellSell : styles.cellBuy} ${picked ? styles.cellPicked : ''}`}
       aria-label={label}
       disabled={!has}
       onClick={() => onPick({ leg, strike, type, side })}
@@ -31,8 +32,21 @@ function QuoteButton({ leg, kind, strike, type, onPick, picked }) {
   );
 }
 
-// Cadena de escritorio: calls | strike | puts. Clic en Bid = vender,
-// en Ask = comprar.
+// Celda combinada: promedio arriba; bid (vender) y ask (comprar) abajo
+// en los laterales, cada uno clicable por separado.
+function QuoteCell({ leg, strike, type, onPick, isPicked }) {
+  const mid = quoteMid(leg?.bid, leg?.ask);
+  return (
+    <div className={styles.quoteCell}>
+      <span className={styles.quoteMid} title="Promedio entre bid y ask">{mid == null ? '—' : fmtPrice(mid)}</span>
+      <QuoteButton leg={leg} kind="bid" strike={strike} type={type} onPick={onPick} picked={isPicked(leg, 'SELL')} />
+      <QuoteButton leg={leg} kind="ask" strike={strike} type={type} onPick={onPick} picked={isPicked(leg, 'BUY')} />
+    </div>
+  );
+}
+
+// Cadena de escritorio: calls | strike | puts. Cada lado agrupa
+// promedio/bid/ask en una celda: clic en Bid = vender, en Ask = comprar.
 export default function OptionChain({ chain, loading, error, expiry, onExpiry, selection, onPick }) {
   const rows = chain?.rows || [];
   const atm = atmIndex(rows, chain?.spot);
@@ -44,7 +58,10 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
     <section aria-label="Cadena de opciones" className={`${styles.card} ${styles.chainCard}`}>
       <div className={styles.chainToolbar}>
         <ExpiryPills expiries={chain?.expiries} value={expiry} onChange={onExpiry} />
-        <span className={styles.chainHint}>Clic en Bid para vender · en Ask para comprar</span>
+        <span className={styles.chainHint}>
+          <span className={styles.itmLegend}><span className={styles.itmSwatch} aria-hidden="true" />Dentro del dinero</span>
+          {' · '}Clic en Bid para vender · en Ask para comprar
+        </span>
       </div>
       {error && !rows.length ? (
         <p className={styles.empty} role="alert">No se pudo cargar la cadena: {error.message}</p>
@@ -55,14 +72,14 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
           <table className={styles.chain}>
             <thead>
               <tr>
-                <th colSpan={5} className={styles.sideCalls}>Calls</th>
+                <th colSpan={4} className={styles.sideCalls}>Calls</th>
                 <th className={styles.center} aria-hidden="true" />
-                <th colSpan={5} className={styles.sidePuts}>Puts</th>
+                <th colSpan={4} className={styles.sidePuts}>Puts</th>
               </tr>
               <tr>
-                <th>Δ</th><th>IV</th><th>Bid</th><th>Ask</th><th>Interés</th>
+                <th>Δ</th><th>IV</th><th className={styles.quoteHead}>Bid · Prom · Ask</th><th>Interés</th>
                 <th className={styles.center}>Strike</th>
-                <th>Bid</th><th>Ask</th><th>IV</th><th>Δ</th><th>Interés</th>
+                <th className={styles.quoteHead}>Bid · Prom · Ask</th><th>IV</th><th>Δ</th><th>Interés</th>
               </tr>
             </thead>
             <tbody>
@@ -77,12 +94,10 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
                   <tr key={r.strike} className={cls}>
                     <td><span className={styles.plain}>{fmtNum(r.call?.delta, 2)}</span></td>
                     <td><span className={styles.plain}>{fmtIv(r.call?.iv)}</span></td>
-                    <td><QuoteButton leg={r.call} kind="bid" strike={r.strike} type="C" onPick={onPick} picked={isPicked(r.call, 'SELL')} /></td>
-                    <td><QuoteButton leg={r.call} kind="ask" strike={r.strike} type="C" onPick={onPick} picked={isPicked(r.call, 'BUY')} /></td>
+                    <td><QuoteCell leg={r.call} strike={r.strike} type="C" onPick={onPick} isPicked={isPicked} /></td>
                     <td><span className={styles.plain}>{fmtNum(r.call?.openInterest, 0)}</span></td>
                     <td className={`${styles.strikeCell} ${styles.mono} ${i === atm ? styles.strikeAtm : ''}`}>{fmtStrike(r.strike)}</td>
-                    <td><QuoteButton leg={r.put} kind="bid" strike={r.strike} type="P" onPick={onPick} picked={isPicked(r.put, 'SELL')} /></td>
-                    <td><QuoteButton leg={r.put} kind="ask" strike={r.strike} type="P" onPick={onPick} picked={isPicked(r.put, 'BUY')} /></td>
+                    <td><QuoteCell leg={r.put} strike={r.strike} type="P" onPick={onPick} isPicked={isPicked} /></td>
                     <td><span className={styles.plain}>{fmtIv(r.put?.iv)}</span></td>
                     <td><span className={styles.plain}>{fmtNum(r.put?.delta, 2)}</span></td>
                     <td><span className={styles.plain}>{fmtNum(r.put?.openInterest, 0)}</span></td>

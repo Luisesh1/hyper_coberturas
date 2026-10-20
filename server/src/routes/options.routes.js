@@ -17,10 +17,13 @@ const { Router } = require('express');
 const asyncHandler = require('../middleware/async-handler');
 const { authenticate, requireSuperuser } = require('../middleware/auth.middleware');
 const { ValidationError } = require('../errors/app-error');
-const db = require('../db');
 const logger = require('../services/logger.service');
 const optionsMarket = require('../services/options/options-market.service');
 const optionsCredentials = require('../services/options/options-credentials.service');
+const optionsAccount = require('../services/options/options-account.service');
+const accountStream = require('../services/options/options-account-stream.service');
+
+const { normalizeOrder } = optionsAccount;
 
 const router = Router();
 router.use(authenticate);
@@ -59,27 +62,6 @@ function parseOptionalBoolean(value, field) {
   return value;
 }
 
-function normalizeOrder(o = {}) {
-  return {
-    orderId: o.orderId != null ? String(o.orderId) : null,
-    clientOrderId: o.clientOrderId || null,
-    symbol: o.symbol,
-    side: o.side,
-    type: o.type || 'LIMIT',
-    price: num(o.price),
-    quantity: num(o.quantity),
-    executedQty: num(o.executedQty),
-    avgPrice: num(o.avgPrice),
-    fee: num(o.fee),
-    status: o.status || null,
-    timeInForce: o.timeInForce || null,
-    postOnly: o.postOnly === true || o.postOnly === 'true',
-    reduceOnly: o.reduceOnly === true || o.reduceOnly === 'true',
-    createdAt: num(o.createTime),
-    updatedAt: num(o.updateTime),
-  };
-}
-
 function normalizeTrade(t = {}) {
   return {
     id: t.id != null ? String(t.id) : null,
@@ -94,31 +76,6 @@ function normalizeTrade(t = {}) {
     liquidity: t.liquidity || null,
     time: num(t.time),
   };
-}
-
-/**
- * Mapa símbolo → nombre de la estrategia dueña de una posición real abierta.
- * La tabla `options_strategy_positions` la crea otra migración (031); si aún
- * no existe, todas las posiciones son manuales.
- */
-async function loadPositionOrigins(userId) {
-  try {
-    const { rows } = await db.query(
-      `SELECT p.symbol, s.name
-         FROM options_strategy_positions p
-         JOIN options_strategies s ON s.id = p.strategy_id
-        WHERE p.user_id = $1 AND p.mode = 'live' AND p.closed_at IS NULL`,
-      [userId]
-    );
-    const map = new Map();
-    for (const row of rows) if (!map.has(row.symbol)) map.set(row.symbol, row.name);
-    return map;
-  } catch (err) {
-    if (err?.code !== '42P01') {
-      logger.warn('options_position_origins_failed', { userId, error: err.message });
-    }
-    return new Map();
-  }
 }
 
 // Diagnostico GTC privado: solo usuarios superuser de la cuenta piloto #1.
@@ -177,67 +134,34 @@ router.get('/chain', asyncHandler(async (req, res) => {
 // Cuenta y posiciones (firmados)
 // ------------------------------------------------------------------
 
-router.get('/account', asyncHandler(async (req, res) => {
-  const client = await optionsCredentials.getClientForUser(req.user.userId);
-  const account = await client.getAccount();
-  const assets = Array.isArray(account?.asset) ? account.asset : [];
-  // Nunca etiquetar el saldo de otro activo como USDT, ni inventar 0
-  // cuando Binance omite datos de margen de la cuenta de opciones.
-  const usdt = assets.find((a) => a.asset === 'USDT') || null;
-  const equity = usdt ? (num(usdt.equity) ?? num(usdt.marginBalance)) : null;
-  const available = num(usdt?.available);
-  const initialMargin = num(usdt?.initialMargin);
-  const marginUsedUsdt = initialMargin != null
-    ? initialMargin
-    : (available != null && equity != null
-      ? Math.max(0, equity - available)
-      : num(usdt?.locked));
-
-  const greeks = { delta: 0, gamma: 0, theta: 0, vega: 0 };
-  for (const g of Array.isArray(account?.greek) ? account.greek : []) {
-    for (const key of Object.keys(greeks)) greeks[key] += num(g[key]) ?? 0;
+/**
+ * Ante un 429 de Binance se sirve el último snapshot del stream en tiempo
+ * real (si lo hay) en vez de dejar la pantalla vacía con un error.
+ */
+async function withRateLimitFallback(userId, pick, load) {
+  try {
+    return await load();
+  } catch (err) {
+    const last = err?.code === 'BINANCE_OPTIONS_RATE_LIMIT' ? accountStream.getLast(userId) : null;
+    if (!last) throw err;
+    return pick(last);
   }
+}
 
-  res.json({
-    success: true,
-    data: {
-      balanceUsdt: equity,
-      marginUsedUsdt,
-      unrealizedPnlUsdt: num(usdt.unrealizedPNL) ?? 0,
-      greeks,
-    },
+router.get('/account', asyncHandler(async (req, res) => {
+  const userId = req.user.userId;
+  const data = await withRateLimitFallback(userId, (last) => last.account, async () => {
+    const client = await optionsCredentials.getClientForUser(userId);
+    return optionsAccount.loadAccount(client);
   });
+  res.json({ success: true, data });
 }));
 
 router.get('/positions', asyncHandler(async (req, res) => {
   const userId = req.user.userId;
-  const client = await optionsCredentials.getClientForUser(userId);
-  const [positions, marks, origins] = await Promise.all([
-    client.getPositions(),
-    optionsMarket.getMarks().catch(() => []),
-    loadPositionOrigins(userId),
-  ]);
-  const markMap = new Map((Array.isArray(marks) ? marks : []).map((m) => [m.symbol, m]));
-
-  const data = (Array.isArray(positions) ? positions : []).map((p) => {
-    const rawQty = num(p.quantity) ?? 0;
-    const side = p.side === 'SHORT' || rawQty < 0 ? 'SHORT' : 'LONG';
-    const quantity = Math.abs(rawQty);
-    const sign = side === 'SHORT' ? -1 : 1;
-    const mark = markMap.get(p.symbol);
-    const delta = num(mark?.delta);
-    const theta = num(mark?.theta);
-    return {
-      symbol: p.symbol,
-      side,
-      quantity,
-      entryPrice: num(p.entryPrice),
-      markPrice: num(p.markPrice) ?? num(mark?.markPrice),
-      unrealizedPnl: num(p.unrealizedPNL),
-      delta: delta != null ? delta * quantity * sign : null,
-      theta: theta != null ? theta * quantity * sign : null,
-      origin: origins.get(p.symbol) || 'manual',
-    };
+  const data = await withRateLimitFallback(userId, (last) => last.positions, async () => {
+    const client = await optionsCredentials.getClientForUser(userId);
+    return optionsAccount.loadPositions(client, userId);
   });
   res.json({ success: true, data });
 }));
@@ -247,9 +171,12 @@ router.get('/positions', asyncHandler(async (req, res) => {
 // ------------------------------------------------------------------
 
 router.get('/orders/open', asyncHandler(async (req, res) => {
-  const client = await optionsCredentials.getClientForUser(req.user.userId);
-  const orders = await client.getOpenOrders();
-  res.json({ success: true, data: (Array.isArray(orders) ? orders : []).map(normalizeOrder) });
+  const userId = req.user.userId;
+  const data = await withRateLimitFallback(userId, (last) => last.openOrders, async () => {
+    const client = await optionsCredentials.getClientForUser(userId);
+    return optionsAccount.loadOpenOrders(client);
+  });
+  res.json({ success: true, data });
 }));
 
 router.post('/orders', asyncHandler(async (req, res) => {
@@ -272,6 +199,7 @@ router.post('/orders', asyncHandler(async (req, res) => {
   logger.info('options_manual_order_placed', {
     userId: req.user.userId, symbol, side, quantity, price, orderId: order?.orderId != null ? String(order.orderId) : null,
   });
+  accountStream.invalidate(req.user.userId);
   res.status(201).json({ success: true, data: normalizeOrder({ symbol, side, price, quantity, postOnly, reduceOnly, ...order }) });
 }));
 
@@ -281,6 +209,7 @@ router.delete('/orders/:symbol/:orderId', asyncHandler(async (req, res) => {
   if (!ORDER_ID_REGEX.test(orderId)) throw new ValidationError('orderId inválido');
   const client = await optionsCredentials.getClientForUser(req.user.userId);
   const result = await client.cancelOrder({ symbol, orderId });
+  accountStream.invalidate(req.user.userId);
   res.json({ success: true, data: normalizeOrder({ symbol, orderId, ...result }) });
 }));
 

@@ -115,6 +115,14 @@
   border-bottom: 1px solid var(--border);
 }
 
+.itmLegend { display: inline-flex; align-items: center; gap: 6px; }
+.itmSwatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--text-bright) 7%, transparent);
+}
 .chainHint { font-size: 12px; color: var(--text-secondary); }
 
 .pills {
@@ -147,6 +155,7 @@
   color: var(--text-bright);
 }
 .pillMeta { font-size: 11px; opacity: 0.7; font-family: var(--font-mono); }
+.pillCountdown { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .tableScroll { overflow-x: auto; }
 
@@ -174,8 +183,10 @@
   border-bottom: 1px solid var(--border-subtle);
   text-align: right;
 }
-.chain tr.itmCall td:nth-child(-n + 5) { background: rgba(34, 197, 94, 0.04); }
-.chain tr.itmPut td:nth-child(n + 7) { background: rgba(239, 68, 68, 0.04); }
+/* In the money: sombreado neutro (como Binance), visible en ambos temas. */
+.chain, .mRow { --itm-bg: color-mix(in srgb, var(--text-bright) 7%, transparent); }
+.chain tr.itmCall td:nth-child(-n + 4) { background: var(--itm-bg); }
+.chain tr.itmPut td:nth-child(n + 6) { background: var(--itm-bg); }
 .chain tr.rowSelected td { background: var(--indigo-dark-bg); }
 
 .strikeCell {
@@ -208,6 +219,32 @@
 .cellSell { color: var(--red-light); }
 .cellBuy { color: var(--green-light); }
 .cellPicked { box-shadow: inset 0 0 0 1px currentColor; }
+
+.chain th.quoteHead { text-align: center; white-space: nowrap; }
+.quoteCell {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas: "mid mid" "bid ask";
+  min-width: 132px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.quoteMid {
+  grid-area: mid;
+  padding: 6px 10px 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-bright);
+  white-space: nowrap;
+}
+.quoteCell .quoteSideBtn {
+  min-height: 28px;
+  padding: 2px 10px 6px;
+  font-size: 12px;
+}
+.quoteCell .quoteSideBtn:nth-of-type(1) { grid-area: bid; text-align: left; }
+.quoteCell .quoteSideBtn:nth-of-type(2) { grid-area: ask; text-align: right; }
 
 .plain {
   display: block;
@@ -526,6 +563,7 @@
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+.mRowItm { background: var(--itm-bg); }
 .mRow:active, .mRowOn { background: var(--indigo-dark-bg); }
 .mRow:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
 .mStrike { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

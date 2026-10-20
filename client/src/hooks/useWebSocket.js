@@ -129,5 +129,12 @@ export function useWebSocket(onMessage) {
     };
   }, [connect]);
 
-  return { isConnected };
+  const send = useCallback((payload) => {
+    const ws = wsRef.current;
+    if (ws?.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(payload));
+    return true;
+  }, []);
+
+  return { isConnected, send };
 }

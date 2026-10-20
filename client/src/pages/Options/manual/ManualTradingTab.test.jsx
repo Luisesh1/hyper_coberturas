@@ -89,6 +89,13 @@ beforeEach(() => {
 });
 
 describe('ManualTradingTab · escritorio', () => {
+  it('agrupa promedio arriba y bid/ask abajo en una sola celda', async () => {
+    renderTab();
+    const bid = await screen.findByRole('button', { name: 'Vender call 70.000 a 900' });
+    const cell = bid.closest('td');
+    expect(within(cell).getByRole('button', { name: 'Comprar call 70.000 a 920' })).toBeTruthy();
+    expect(within(cell).getByTitle('Promedio entre bid y ask').textContent).toBe('910');
+  });
   it('clic en Bid rellena el ticket para vender a ese precio', async () => {
     const user = userEvent.setup();
     renderTab();

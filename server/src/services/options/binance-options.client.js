@@ -138,7 +138,7 @@ function createBinanceOptionsClient({
 } = {}) {
   const secrets = [apiKey, apiSecret].filter(Boolean);
 
-  async function request(method, path, { params = {}, signed = false, base = baseUrl } = {}) {
+  async function request(method, path, { params = {}, signed = false, apiKeyOnly = false, base = baseUrl } = {}) {
     const host = new URL(base).host;
     const retryAt = cooldownByHost.get(host) || 0;
     if (now() < retryAt) {
@@ -157,6 +157,10 @@ function createBinanceOptionsClient({
       }
       const withTime = buildQuery({ ...params, recvWindow, timestamp: now() });
       query = `${withTime}&signature=${signQuery(withTime, apiSecret)}`;
+      headers['X-MBX-APIKEY'] = apiKey;
+    } else if (apiKeyOnly) {
+      // USER_STREAM: solo la cabecera con la key, sin timestamp ni firma.
+      if (!apiKey) throw new ValidationError('Faltan credenciales de Binance Opciones');
       headers['X-MBX-APIKEY'] = apiKey;
     }
 
@@ -305,6 +309,16 @@ function createBinanceOptionsClient({
       return request('GET', '/eapi/v1/bill', {
         signed: true, params: { currency, recordId, startTime, endTime, limit },
       });
+    },
+    // ── User data stream (listenKey válido 60 min; renovar con PUT) ──
+    createListenKey() {
+      return request('POST', '/eapi/v1/listenKey', { apiKeyOnly: true });
+    },
+    keepAliveListenKey() {
+      return request('PUT', '/eapi/v1/listenKey', { apiKeyOnly: true });
+    },
+    closeListenKey() {
+      return request('DELETE', '/eapi/v1/listenKey', { apiKeyOnly: true });
     },
     // Endpoint spot, firmado con la misma key.
     getApiRestrictions() {

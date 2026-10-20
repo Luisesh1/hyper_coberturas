@@ -19,6 +19,7 @@ const db            = require('../db');
 const config        = require('../config');
 const logger        = require('../services/logger.service');
 const devLogSink    = require('../services/dev-log-sink.service');
+const optionsAccountStream = require('../services/options/options-account-stream.service');
 
 const CLIENT_PING_INTERVAL_MS = 20_000;
 const WS_AUTH_TIMEOUT_MS = 5_000;       // tiempo máximo para autenticar tras conexión
@@ -340,6 +341,8 @@ function createWsServer(httpServer) {
 
     ws.on('close', () => {
       clearTimeout(ws._authTimeout);
+      ws._optionsAccountUnsub?.();
+      ws._optionsAccountUnsub = null;
       if (ws.userId) logger.info('ws_client_disconnected', { userId: ws.userId });
     });
 
@@ -381,6 +384,22 @@ function handleClientMessage(ws, msg) {
   switch (msg.type) {
     case 'ping':
       ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+      break;
+
+    // Cuenta de Binance Opciones en tiempo real (un stream por usuario,
+    // compartido por todas sus pestañas).
+    case 'options_account_subscribe': {
+      if (ws._optionsAccountUnsub) break;
+      ws._optionsAccountUnsub = optionsAccountStream.subscribe(ws.userId, (data) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'options_account', data }));
+      });
+      break;
+    }
+
+    case 'options_account_unsubscribe':
+      ws._optionsAccountUnsub?.();
+      ws._optionsAccountUnsub = null;
       break;
 
     case 'subscribe': {

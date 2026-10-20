@@ -73,6 +73,13 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
     </div>
   );
 
+  // Binance limitó (429) pero hay un snapshot previo: se sigue mostrando.
+  const staleNotice = configured && acct.stale && (
+    <div className={styles.notice} role="status">
+      <span>Binance limitó las peticiones: mostrando el último dato de la cuenta; se actualizará solo.</span>
+    </div>
+  );
+
   const confirmDialog = (
     <ConfirmDialog
       open={!!actions.dialog.open}
@@ -93,6 +100,7 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
       <div className={styles.mobileRoot}>
         {notConfigured}
         {errorBanner}
+        {staleNotice}
         <ExpiryPills expiries={chain?.expiries} value={activeExpiry} onChange={setExpiry} scroller />
         {configured && acct.account && (
           <div className={styles.mobileFunds} role="status">
@@ -163,6 +171,7 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
       {notConfigured}
       <GreeksStrip account={configured ? acct.account : null} limits={acct.limits} />
       {errorBanner}
+      {staleNotice}
       {configured && acct.error && (
         <div className={styles.errorBanner} role="alert">
           <span>No se pudo leer la cuenta: {acct.error.message}</span>

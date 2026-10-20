@@ -8,6 +8,9 @@ export function MarketProvider({ children, onMessage }) {
   const [prices, setPrices] = useState({});
   const [isPriceStale, setIsPriceStale] = useState(false);
   const lastPriceAtRef = useRef(null);
+  // `wsReady`: socket autenticado (el servidor ya respondió `connected`).
+  const [wsReady, setWsReady] = useState(false);
+  const listenersRef = useRef(new Set());
 
   const handleWsMessage = useCallback((msg) => {
     if (msg.type === 'hl_message' && msg.data?.channel === 'allMids' && msg.data?.data?.mids) {
@@ -15,10 +18,19 @@ export function MarketProvider({ children, onMessage }) {
       setIsPriceStale(false);
       setPrices(msg.data.data.mids);
     }
+    if (msg.type === 'connected') setWsReady(true);
+    for (const fn of listenersRef.current) fn(msg);
     onMessage?.(msg);
   }, [onMessage]);
 
-  const { isConnected } = useWebSocket(handleWsMessage);
+  const { isConnected, send } = useWebSocket(handleWsMessage);
+  if (!isConnected && wsReady) setWsReady(false);
+
+  // Suscribe un oyente a todos los mensajes del socket; devuelve la baja.
+  const addWsListener = useCallback((fn) => {
+    listenersRef.current.add(fn);
+    return () => listenersRef.current.delete(fn);
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -34,9 +46,17 @@ export function MarketProvider({ children, onMessage }) {
     prices,
     isConnected,
     isPriceStale,
-  }), [prices, isConnected, isPriceStale]);
+    wsReady,
+    wsSend: send,
+    addWsListener,
+  }), [prices, isConnected, isPriceStale, wsReady, send, addWsListener]);
 
   return <MarketContext.Provider value={value}>{children}</MarketContext.Provider>;
+}
+
+// Variante tolerante: devuelve null fuera del proveedor (tests, páginas sueltas).
+export function useOptionalMarket() {
+  return useContext(MarketContext);
 }
 
 export function useMarket() {

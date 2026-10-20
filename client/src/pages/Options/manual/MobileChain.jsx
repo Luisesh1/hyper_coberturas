@@ -10,6 +10,13 @@ export function spotDividerIndex(rows, spot) {
   return i > 0 ? i : -1;
 }
 
+// In the money: call con strike bajo el spot; put con strike sobre el spot.
+export function isItm(type, strike, spot) {
+  const S = Number(spot);
+  if (!Number.isFinite(S)) return false;
+  return type === 'C' ? strike < S : strike > S;
+}
+
 // Cadena móvil: un solo lado (calls o puts), filas de 52 px que abren el
 // ticket, con el spot marcado entre strikes.
 export default function MobileChain({ chain, loading, error, type, onType, selectedSymbol, onPickRow }) {
@@ -38,7 +45,9 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
             Puts
           </button>
         </div>
-        <span className={styles.typeHint}>Toca un strike</span>
+        <span className={`${styles.typeHint} ${styles.itmLegend}`}>
+          <span className={styles.itmSwatch} aria-hidden="true" />ITM · Toca un strike
+        </span>
       </div>
 
       <div className={`${styles.mGrid} ${styles.mHead}`} aria-hidden="true">
@@ -55,6 +64,7 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
             const leg = r[key];
             if (!leg?.symbol) return null;
             const on = leg.symbol === selectedSymbol;
+            const itm = isItm(type, r.strike, chain?.spot);
             const mid = quoteMid(leg.bid, leg.ask);
             const leverage = optionPremiumLeverage(chain?.spot, leg.ask);
             return (
@@ -66,8 +76,8 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
                 )}
                 <button
                   type="button"
-                  className={`${styles.mRow} ${styles.mGrid} ${on ? styles.mRowOn : ''}`}
-                  aria-label={`${type === 'C' ? 'Call' : 'Put'} ${fmtStrike(r.strike)}, bid ${fmtPrice(leg.bid)}, promedio ${fmtPrice(mid)}, ask ${fmtPrice(leg.ask)}, apalancamiento por prima ${leverage == null ? 'no disponible' : fmtNum(leverage, 1) + ' veces'}`}
+                  className={`${styles.mRow} ${styles.mGrid} ${itm ? styles.mRowItm : ''} ${on ? styles.mRowOn : ''}`}
+                  aria-label={`${type === 'C' ? 'Call' : 'Put'} ${fmtStrike(r.strike)}${itm ? ', dentro del dinero' : ''}, bid ${fmtPrice(leg.bid)}, promedio ${fmtPrice(mid)}, ask ${fmtPrice(leg.ask)}, apalancamiento por prima ${leverage == null ? 'no disponible' : fmtNum(leverage, 1) + ' veces'}`}
                   onClick={() => onPickRow({ leg, strike: r.strike, type })}
                 >
                   <span className={styles.mStrike}>
