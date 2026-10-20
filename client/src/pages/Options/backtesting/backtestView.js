@@ -58,13 +58,17 @@ export function dayToMs(day) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+// Mismo tope que options-backtest.service (MAX_RANGE_DAYS).
+const MAX_RANGE_DAYS = 365;
+
 export function defaultForm({ underlying, now = Date.now() } = {}) {
   const today = dayToMs(isoDay(now));
   return {
     selection: '',
     params: {},
     underlying: underlying || 'BTC',
-    from: isoDay(today - 365 * DAY_MS),
+    // 365 días contando hoy completo: el servidor rechaza rangos mayores.
+    from: isoDay(today - (MAX_RANGE_DAYS - 1) * DAY_MS),
     to: isoDay(today),
     capitalUsdt: 5000,
     source: 'dvol',
@@ -103,6 +107,9 @@ export function validateBacktestForm(form, { templates = [], strategies = [], no
   if (from === null) errors.from = 'Fecha no válida';
   if (to === null) errors.to = 'Fecha no válida';
   if (from !== null && to !== null && from >= to) errors.to = 'Debe ser posterior a «Desde»';
+  else if (from !== null && to !== null && (to - from) / DAY_MS + 1 > MAX_RANGE_DAYS) {
+    errors.from = `El rango máximo es de ${MAX_RANGE_DAYS} días`;
+  }
   if (to !== null && to > dayToMs(isoDay(now))) errors.to = 'No puede ser futura';
   if (!(Number(form.capitalUsdt) > 0)) errors.capitalUsdt = 'Debe ser mayor que 0';
   if (!sourceAvailable(form.source, form.underlying)) errors.source = 'DVOL solo existe para BTC y ETH';

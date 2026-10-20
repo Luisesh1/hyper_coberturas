@@ -42,6 +42,12 @@ function fixture({ now = 100_000, onSubmit } = {}) {
       o.orderId = String(orderId);
     },
     async markAttention(id, error) { const o = orders.find((x) => x.id === id); o.status = 'attention'; o.error = error; },
+    async markRejected(id, error) {
+      const o = orders.find((x) => x.id === id);
+      if (o.status !== 'sending' || o.orderId != null || o.processedQty !== 0) return false;
+      Object.assign(o, { status: 'queued', cancelRequested: true, error });
+      return true;
+    },
     async claimReconcile(id) {
       const o = orders.find((x) => x.id === id);
       if (o.leased) return null;
@@ -276,4 +282,35 @@ test('conciliación recupera el estado reclamado aunque el listado previo indiqu
   assert.equal(f.calls.get.length, 1);
   assert.equal(f.orders[0].status, 'active');
   assert.equal(f.calls.post.length, 1);
+});
+
+const { AppError } = require('../src/errors/app-error');
+const binanceError = (code, httpStatus, binanceCode) =>
+  new AppError('Binance', { status: 400, code, details: { endpoint: '/eapi/v1/order', httpStatus, binanceCode } });
+
+test('un rechazo definitivo de Binance no deja la orden en attention para siempre', async () => {
+  const f = fixture({ onSubmit: async () => { throw binanceError('BINANCE_OPTIONS_REJECTED', 400, -2010); } });
+  const result = await f.submit();
+  assert.equal(result.status, 'rejected');
+  assert.notEqual(f.orders[0].status, 'attention');
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.orders[0].processedQty, 0);
+  assert.equal(f.calls.get.length, 0);
+  assert.equal(f.calls.post.length, 1);
+});
+
+test('el enfriamiento local por límite de peticiones tampoco bloquea el lote', async () => {
+  const f = fixture({ onSubmit: async () => {
+    throw new AppError('limite', { status: 429, code: 'BINANCE_OPTIONS_RATE_LIMIT', details: { endpoint: '/eapi/v1/order' } });
+  } });
+  assert.equal((await f.submit()).status, 'rejected');
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[0].status, 'final');
+});
+
+test('un -1007 de Binance (estado desconocido) sigue tratándose como envío ambiguo', async () => {
+  const f = fixture({ onSubmit: async () => { throw binanceError('BINANCE_OPTIONS_REJECTED', 400, -1007); } });
+  assert.equal((await f.submit()).status, 'attention');
+  assert.equal(f.orders[0].status, 'attention');
 });

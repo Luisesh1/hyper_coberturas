@@ -196,6 +196,7 @@ function openFor(ctx, direction, openCount) {
   }
   const { chain } = ctx;
   if (!chain || !chain.rows?.length) return skip('no_chain', 'Sin cadena para el vencimiento objetivo');
+  if (!(Number(spot) > 0)) return skip('no_spot', 'Sin precio spot: no se puede elegir strike ni dimensionar');
   const leg = legFor(params.structure, direction);
   const candidates = chain.rows.map((row) => ({ row, quote: leg.type === 'C' ? row.call : row.put }))
     .filter(({ row, quote }) => quote && Number.isFinite(Number(quote.delta))

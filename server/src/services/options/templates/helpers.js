@@ -21,7 +21,8 @@ function skip(reason, detail) {
 
 /** Vencimiento cuyo `dte` está más cerca de `targetDays` (descarta los de menos de medio día). */
 function pickExpiry(expiries, targetDays) {
-  const candidates = (expiries || []).filter((e) => Number(e.dte) >= 0.5);
+  // `dte` de la cadena real va redondeado hacia arriba; el corte usa el valor exacto.
+  const candidates = (expiries || []).filter((e) => Number(e.dteExact ?? e.dte) >= 0.5);
   if (!candidates.length) return null;
   return candidates.reduce((best, e) => (
     Math.abs(Number(e.dte) - targetDays) < Math.abs(Number(best.dte) - targetDays) ? e : best
@@ -33,6 +34,8 @@ function pickExpiry(expiries, targetDays) {
  * `need` = 'bid' para vender, 'ask' para comprar: sin precio no hay pata.
  */
 function pickLegByDelta(chain, type, targetAbsDelta, spot, need) {
+  // Sin spot no se sabe qué strikes están OTM: no elegir nada.
+  if (!(Number(spot) > 0)) return null;
   let best = null;
   for (const row of chain?.rows || []) {
     const leg = type === 'C' ? row.call : row.put;

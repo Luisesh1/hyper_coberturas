@@ -58,6 +58,12 @@ function fixture({ positions = [], send = async () => ({ orderId: '1234567890123
       const o = orders.find((x) => x.id === id);
       o.status = 'attention';
     },
+    async markRejected(id) {
+      const o = orders.find((x) => x.id === id);
+      if (o.status !== 'sending' || o.orderId != null) return false;
+      Object.assign(o, { status: 'queued', cancelRequested: true });
+      return true;
+    },
     async finishOrder(id, orderId, qty) {
       const o = orders.find((x) => x.id === id);
       assert.equal(Number(qty), Number(o.processedQty));
@@ -254,4 +260,29 @@ test('al vencer el TP se persiste salida temporal ANTES de cancelar el resting',
   await f.engine.reconcileOrder({ ...f.orders[0] }, f.client);
   assert.deepEqual(sequence, ['persist_exit', 'cancel_exchange']);
   assert.equal(f.orders[0].status, 'final');
+});
+
+test('un TP rechazado por Binance no queda en attention bloqueando la posición', async () => {
+  const { AppError } = require('../src/errors/app-error');
+  const f = fixture({ positions: [filledPosition()], send: async () => {
+    throw new AppError('rechazo', { status: 400, code: 'BINANCE_OPTIONS_REJECTED',
+      details: { endpoint: '/eapi/v1/order', httpStatus: 400, binanceCode: -2010 } });
+  } });
+  await f.engine.reconcilePending();
+  assert.equal(f.log.sent.length, 1);
+  assert.equal(f.orders[0].status, 'queued');
+  assert.equal(f.orders[0].cancelRequested, true);
+});
+
+test('las alertas de Telegram usan saltos de línea reales, no la secuencia \\n literal', async () => {
+  const f = fixture({ positions: [filledPosition()], send: async () => { throw new Error('timeout'); } });
+  const messages = [];
+  f.engine.notify = async (_userId, message) => { messages.push(message); };
+  f.repository.claimIncidentNotification = async () => true;
+  await f.engine.reconcilePending();
+  assert.ok(messages.length > 0);
+  for (const m of messages) {
+    assert.ok(!m.includes('\\n'), `mensaje con \\n literal: ${m}`);
+    assert.ok(m.includes('\n'));
+  }
 });

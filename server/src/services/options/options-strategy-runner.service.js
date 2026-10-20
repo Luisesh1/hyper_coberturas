@@ -75,6 +75,9 @@ function utcDayStart(ms) {
 function estimateMargin({ side, type, strike, price, quantity, spot }) {
   const qty = Number(quantity);
   if (side === 'BUY') return Number(price) * qty;
+  // Sin spot el margen de una venta es desconocido: NaN obliga a bloquear
+  // en vez de quedarse solo con la prima.
+  if (!(Number(spot) > 0)) return NaN;
   const otm = type === 'C' ? Math.max(strike - spot, 0) : Math.max(spot - strike, 0);
   return qty * (Number(price) + Math.max(0.15 * spot - otm, 0.1 * spot));
 }
@@ -518,6 +521,9 @@ class OptionsStrategyRunner {
       const margin = p.side === 'SELL' ? estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot }) : 0;
       userMargin += margin;
       if (p.strategyId === strategy.id) strategyMargin += margin;
+    }
+    if (!Number.isFinite(userMargin + newMargin)) {
+      return { ok: false, reason: 'Spot no disponible para estimar el margen de las ventas' };
     }
     if (has(limits.maxMarginUsdt) && strategyMargin + newMargin > Number(limits.maxMarginUsdt)) {
       return { ok: false, reason: `Margen estimado ${(strategyMargin + newMargin).toFixed(2)} USDT supera el límite de la estrategia (${limits.maxMarginUsdt} USDT)` };

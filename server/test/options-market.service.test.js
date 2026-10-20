@@ -173,3 +173,10 @@ test('getQuote fresh exige libro real sin usar la caché de 30 s', async () => {
   assert.ok(calls.some((url) => new URL(url).pathname === '/eapi/v1/mark'
     && new URL(url).searchParams.get('symbol') === 'BTC-261031-68000-C'));
 });
+
+test('getChain expone dteExact fraccional junto al dte entero', async () => {
+  const { service } = buildService();
+  const chain = await service.getChain('BTC');
+  assert.equal(chain.expiries[0].dte, 2);
+  assert.equal(chain.expiries[0].dteExact, (Date.UTC(2026, 9, 16, 8) - NOW) / (24 * 3600 * 1000));
+});

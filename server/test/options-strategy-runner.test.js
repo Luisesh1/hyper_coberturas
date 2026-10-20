@@ -292,3 +292,18 @@ test('start/stop no deja timers colgados y tick no se solapa', async () => {
   runner.running = true;
   assert.deepEqual(await runner.tick(), { skipped: true });
 });
+
+test('modo real: sin spot no se estima el margen de una venta y la entrada se bloquea', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', limits: { maxMarginUsdt: 100000 } });
+  const result = await runner.checkLiveLimits(strategy, [{
+    symbol: 'BTC-261030-66000-C', side: 'SELL', quantity: 0.01,
+    price: 100, strike: 66000, type: 'C', optionType: 'C', delta: 0.2,
+  }], { now: FRIDAY_9, spot: null, positions: [] });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /Spot no disponible/);
+});
+
+test('estimateMargin: una venta sin spot válido no se reduce a la prima', () => {
+  assert.ok(Number.isNaN(estimateMargin({ side: 'SELL', type: 'C', strike: 66000, price: 100, quantity: 1, spot: null })));
+  assert.equal(estimateMargin({ side: 'BUY', type: 'C', strike: 66000, price: 100, quantity: 1, spot: null }), 100);
+});

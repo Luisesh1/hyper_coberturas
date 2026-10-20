@@ -736,6 +736,19 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     );
   }
 
+  /**
+   * Binance rechazó el envío sin crear la orden: volver a 'queued' con
+   * cancelación pedida para que el reconciliador la finalice a cero.
+   */
+  async function markRejected(id, error) {
+    const { rowCount } = await db.query(
+      `UPDATE options_live_orders SET status='queued',cancel_requested=TRUE,last_error=$2,updated_at=$3
+       WHERE id=$1 AND status='sending' AND exchange_order_id IS NULL AND processed_qty=0`,
+      [id, String(error).slice(0, 1000), now()]
+    );
+    return rowCount === 1;
+  }
+
   async function claimReconcile(id, leaseMs = 300_000) {
     const time = now();
     const { rows } = await db.query(
@@ -896,7 +909,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     claimIncidentNotificationToken, releaseIncidentNotification,
-    markSending, markActive, markAttention, claimReconcile, releaseReconcile,
+    markSending, markActive, markAttention, markRejected, claimReconcile, releaseReconcile,
     applyTrade, finishOrder };
 }
 

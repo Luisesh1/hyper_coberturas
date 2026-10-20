@@ -155,3 +155,28 @@ test('protective put compra put Δ≈−0.25 y hace roll antes del vencimiento',
   const pending = t.evaluate({ now: rollAt, spot: SPOT, chain: null, positions: [position], params });
   assert.equal(pending[0].reason, 'roll_pending');
 });
+
+test('num trata null y cadena vacía como dato ausente, no como 0', () => {
+  const { num } = require('../src/services/options/options-utils');
+  assert.equal(num(null), null);
+  assert.equal(num(''), null);
+  assert.equal(num('  '), null);
+  assert.equal(num(0), 0);
+  assert.equal(num('0'), 0);
+});
+
+test('pickExpiry descarta vencimientos a menos de medio día aunque su dte entero sea 1', () => {
+  const expiries = [
+    { code: 'near', dte: 1, dteExact: 1 / 24 },
+    { code: 'next', dte: 2, dteExact: 1 + 1 / 24 },
+  ];
+  assert.equal(templates.pickExpiry(expiries, 1).code, 'next');
+});
+
+test('pickLegByDelta no elige pata sin spot válido', () => {
+  const { pickLegByDelta } = require('../src/services/options/templates/helpers');
+  const chain = chainFor(FRIDAY_9, 7);
+  assert.ok(pickLegByDelta(chain, 'C', 0.25, SPOT, 'bid'));
+  assert.equal(pickLegByDelta(chain, 'C', 0.25, null, 'bid'), null);
+  assert.equal(pickLegByDelta(chain, 'P', 0.25, 0, 'bid'), null);
+});

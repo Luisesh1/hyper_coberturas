@@ -81,3 +81,16 @@ describe('exitReasonLabel', () => {
     expect(rows.map((r) => r.exitReason)).toEqual(['Toma de ganancia', 'Vencimiento', 'Texto libre']);
   });
 });
+
+describe('rango del backtest', () => {
+  it('el rango por defecto cabe en el máximo de 365 días que acepta el servidor', () => {
+    const payload = buildBacktestPayload({ ...defaultForm({ now: NOW }), selection: 'template:short_strangle' });
+    expect(payload.to - payload.from).toBeLessThanOrEqual(365 * 86_400_000);
+  });
+
+  it('avisa en el formulario si el rango supera 365 días', () => {
+    const form = { ...defaultForm({ now: NOW }), selection: 'strategy:1', from: '2025-10-14', to: '2026-10-14' };
+    expect(validateBacktestForm(form, { strategies, now: NOW }).from).toMatch(/365/);
+    expect(validateBacktestForm({ ...form, from: '2025-10-15' }, { strategies, now: NOW }).from).toBeUndefined();
+  });
+});
