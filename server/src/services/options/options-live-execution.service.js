@@ -122,6 +122,19 @@ function actionKey(strategy, action, ctx) {
   return `close:${Math.floor(ctx.now / 60_000)}:${action.legs.map((l) => l.positionId).sort().join(',')}`;
 }
 
+// Binance garantiza que la orden no existe: el cliente no llegó a enviarla
+// (enfriamiento local) o Binance contestó un 4xx con código. -1006/-1007
+// significan "estado de envío desconocido" y siguen siendo ambiguos.
+const UNKNOWN_SEND_CODES = new Set([-1006, -1007]);
+function isDefiniteRejection(err) {
+  if (err?.code === 'BINANCE_OPTIONS_RATE_LIMIT') return true;
+  if (err?.code !== 'BINANCE_OPTIONS_REJECTED' && err?.code !== 'BINANCE_OPTIONS_AUTH_ERROR') return false;
+  const httpStatus = Number(err.details?.httpStatus);
+  const binanceCode = Number(err.details?.binanceCode);
+  return httpStatus >= 400 && httpStatus < 500 && Number.isInteger(binanceCode) &&
+    binanceCode < 0 && !UNKNOWN_SEND_CODES.has(binanceCode);
+}
+
 class OptionsLiveExecution {
   constructor(deps = {}) {
     this.repo = deps.repo || liveRepo;
@@ -245,6 +258,15 @@ class OptionsLiveExecution {
         await this.repo.markActive(order.id, response.orderId);
         sent += 1;
       } catch (err) {
+        // Un rechazo seguro no creó nada en Binance: la pata vuelve a la cola
+        // cancelada y el reconciliador la finaliza a cero sin bloquear el lote.
+        if (isDefiniteRejection(err) && typeof this.repo.markRejected === 'function' &&
+            await this.repo.markRejected(order.id, `Rechazada por Binance: ${err.message}`)) {
+          this.logger.warn('options_live_submission_rejected', {
+            strategyId: strategy.id, liveOrderId: order.id, error: err.message,
+          });
+          return { status: 'rejected', sent, error: err.message };
+        }
         await this.repo.markAttention(order.id, `Envio ambiguo: ${err.message}`);
         this.logger.warn('options_live_submission_uncertain', {
           strategyId: strategy.id, liveOrderId: order.id, error: err.message,
@@ -491,7 +513,7 @@ class OptionsLiveExecution {
           );
           if (claimed) {
             await this.notify(userId,
-              '<b>ALERTA · Órdenes Binance sin seguimiento</b>\\n' +
+              '<b>ALERTA · Órdenes Binance sin seguimiento</b>\n' +
               'Existen ' + orphaned.length + ' órdenes abiertas no conciliadas. ' +
               'Bloquear nuevas entradas y revisar manualmente.');
           }
@@ -503,7 +525,7 @@ class OptionsLiveExecution {
           incidents++;
           if (await this.repo.claimIncidentNotification(userId, 'EXPOSURE_MISMATCH', 'account')) {
             await this.notify(userId,
-              '<b>ALERTA · Exposición Binance distinta del libro</b>\\n' +
+              '<b>ALERTA · Exposición Binance distinta del libro</b>\n' +
               'No abrir nuevas órdenes hasta investigar los fills y posiciones.');
           }
         }
@@ -515,7 +537,7 @@ class OptionsLiveExecution {
         try {
           if (await this.repo.claimIncidentNotification(userId, 'ACCOUNT_AUDIT_UNAVAILABLE', 'account')) {
             await this.notify(userId,
-              '<b>ALERTA · Verificación Binance no disponible</b>\\n' +
+              '<b>ALERTA · Verificación Binance no disponible</b>\n' +
               'Falló la consulta de posiciones/órdenes o credenciales. Revisar la cuenta.');
           }
         } catch (notifyErr) {
@@ -575,7 +597,7 @@ class OptionsLiveExecution {
       try {
         if (await this.sendIncidentAlert(
           position.userId, 'UNPROTECTED_TP', String(position.positionId),
-            '<b>ALERTA · Posición sin TP confirmado</b>\\n' +
+            '<b>ALERTA · Posición sin TP confirmado</b>\n' +
             'Posición #' + position.positionId +
             ': lleva más de dos minutos sin una orden TP activa confirmada. ' +
             'Puede existir una salida/cancelación en curso: revisar Binance y el ledger.'
@@ -606,7 +628,7 @@ class OptionsLiveExecution {
         'Contrato: ' + cleanMsg(order.symbol),
         'Motivo: ' + cleanMsg(String(order.last_error || 'Atención requerida').slice(0, 300)),
         'No enviar nuevas órdenes hasta verificar Binance y el ledger.',
-      ].join('\\n');
+      ].join('\n');
       try {
         await this.notify(Number(order.user_id), message);
         sent++;
@@ -707,7 +729,7 @@ class OptionsLiveExecution {
         try {
           await this.sendIncidentAlert(
             position.userId, 'TP_NOT_PROTECTED', String(position.id),
-              '<b>ALERTA · TP aún no protegido</b>\\n' +
+              '<b>ALERTA · TP aún no protegido</b>\n' +
               'Posición #' + position.id + ': verificar Binance y ledger antes de operar.'
           );
         } catch (notifyErr) {
@@ -763,7 +785,11 @@ class OptionsLiveExecution {
           await this.repo.markActive(claimed.id, ack.orderId);
           sent++;
         } catch (err) {
-          await this.repo.markAttention(claimed.id, 'TP uncertain: ' + err.message);
+          // Rechazo seguro: el TP se finaliza a cero y se vuelve a crear en el
+          // siguiente ciclo; solo un envío ambiguo bloquea la posición.
+          const rejected = isDefiniteRejection(err) && typeof this.repo.markRejected === 'function' &&
+            await this.repo.markRejected(claimed.id, 'TP rechazado por Binance: ' + err.message);
+          if (!rejected) await this.repo.markAttention(claimed.id, 'TP uncertain: ' + err.message);
           throw err;
         }
       } catch (err) {
@@ -774,7 +800,7 @@ class OptionsLiveExecution {
           if (typeof this.repo.claimIncidentNotification === 'function' &&
               await this.repo.claimIncidentNotification(order.userId, 'TP_SUBMIT_PENDING', String(order.positionId))) {
             await this.notify(order.userId,
-              '<b>ALERTA · TP no enviado</b>\\n' +
+              '<b>ALERTA · TP no enviado</b>\n' +
               'Posición #' + order.positionId + ': validar orden y exposición en Binance.');
           }
         } catch (notifyErr) {
@@ -800,7 +826,7 @@ class OptionsLiveExecution {
               await this.repo.claimIncidentNotification(request.userId,
                 'MANUAL_EXIT_REQUIRED', String(request.positionId))) {
             await this.notify(request.userId,
-              '<b>ALERTA · Cierre manual requerido</b>\\n' +
+              '<b>ALERTA · Cierre manual requerido</b>\n' +
               'Trading real apagado y posición #' + request.positionId +
               ' tiene salida pendiente. Revisar Binance.');
           }
@@ -853,7 +879,7 @@ class OptionsLiveExecution {
           if (typeof this.repo.claimIncidentNotification === 'function' &&
               await this.repo.claimIncidentNotification(request.userId, 'DEFERRED_EXIT', String(request.positionId))) {
             await this.notify(request.userId,
-              '<b>ALERTA · Salida aún pendiente</b>\\n' +
+              '<b>ALERTA · Salida aún pendiente</b>\n' +
               'Posición #' + request.positionId + ': revisar TP y órdenes en Binance.');
           }
         } catch (notifyErr) {
@@ -880,7 +906,7 @@ class OptionsLiveExecution {
               await this.repo.claimIncidentNotification(request.userId,
                 'REVERSAL_EXPIRED', String(request.id))) {
             await this.notify(request.userId,
-              '<b>ALERTA · Giro caducado</b>\\n' +
+              '<b>ALERTA · Giro caducado</b>\n' +
               'La salida tardó demasiado. No se abrió una posición nueva.');
           }
           continue;

@@ -120,7 +120,7 @@ async function limitsUsage({ repo, market, strategy, positions, at }) {
       if (!meta || p.side !== 'SELL') continue;
       marginUsedUsdt += estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot });
     }
-    marginUsedUsdt = round2(marginUsedUsdt);
+    marginUsedUsdt = Number.isFinite(marginUsedUsdt) ? round2(marginUsedUsdt) : null;
   } catch { marginUsedUsdt = null; }
   try {
     const quotes = await Promise.all(open.map((p) => market.getQuote(p.symbol)));
@@ -272,6 +272,18 @@ function createOptionsStrategiesService(deps = {}) {
       const current = await repo.countLiveStrategies(userId, strategy.id);
       if (!Number.isFinite(max) || current >= max) {
         throw new AppError(`Ya tienes ${current} estrategia(s) en modo real; el máximo configurado es ${Number.isFinite(max) ? max : 0}`, { status: 400, code: 'MAX_LIVE_STRATEGIES' });
+      }
+    }
+    if (strategy.mode === 'live' && mode !== 'live') {
+      // Fuera de Real el runner y el monitor de TP/salidas ya no ven la
+      // estrategia: sus posiciones reales se quedarían sin stop ni TP.
+      const orders = await liveOrders.listByStrategy(strategy.id);
+      if (orders.some((o) => o.status !== 'final')) {
+        throw new AppError('La estrategia tiene órdenes reales pendientes de conciliación', { status: 409, code: 'PENDING_LIVE_ORDERS' });
+      }
+      const live = await repo.listOpenPositions(strategy.id, 'live');
+      if (live.length) {
+        throw new AppError('La estrategia tiene posiciones reales abiertas: ciérralas antes de sacarla de modo real', { status: 409, code: 'OPEN_LIVE_POSITIONS' });
       }
     }
     return repo.setMode(userId, id, mode);

@@ -56,6 +56,8 @@ function ivToDecimal(iv) {
 }
 
 function num(value) {
+  // Number(null) y Number('') valen 0: un dato ausente no debe convertirse en precio 0.
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }

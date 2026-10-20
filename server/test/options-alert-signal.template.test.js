@@ -149,3 +149,11 @@ test('alert_signal: sin señal solo evalúa salidas', () => {
   const sellSl = run(sp, { positions: [position({ side: 'SELL', type: 'P', entryPrice: 100, quote: { bid: 290, ask: 310 } })] });
   assert.equal(sellSl[0].reason, 'stop_loss');
 });
+
+test('alert_signal: sin spot no abre (no puede distinguir strikes OTM ni dimensionar)', () => {
+  const p = params();
+  const actions = alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: null, chain: chainFor(p.expiryDays),
+    positions: [], params: p, signal: { direction: 'bullish', eventId: 1 }, tradesToday: 0 });
+  assert.ok(!actions.some((a) => a.type === 'open'));
+  assert.ok(actions.some((a) => a.reason === 'no_spot'));
+});

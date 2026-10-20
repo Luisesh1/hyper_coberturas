@@ -126,3 +126,19 @@ test('markSending exige deadline vigente en la transición SQL atómica', async 
   // PostgreSQL no reclama la fila si expiró o tiene cancelRequested.
   assert.equal(await repo.markSending(13), null);
 });
+
+test('markRejected solo devuelve a la cola una orden sending sin id de Binance ni fills', async () => {
+  const repo = createOptionsLiveOrdersRepository({
+    now: () => 5,
+    db: { async query(sql, args) {
+      assert.match(sql, /status='queued'/);
+      assert.match(sql, /cancel_requested=TRUE/);
+      assert.match(sql, /status='sending'/);
+      assert.match(sql, /exchange_order_id IS NULL/);
+      assert.match(sql, /processed_qty=0/);
+      assert.equal(args[0], 21);
+      return { rowCount: 0 };
+    } },
+  });
+  assert.equal(await repo.markRejected(21, 'rechazo'), false);
+});

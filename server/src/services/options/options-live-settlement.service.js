@@ -136,8 +136,8 @@ class OptionsLiveSettlement {
               await this.orders.claimIncidentNotification(group.userId, 'EXERCISE_ATTENTION', group.symbol)) {
             const symbol = String(group.symbol).replace(/&/g, '&amp;').replace(/</g, '&lt;');
             await this.notify(group.userId,
-              '<b>Binance Opciones · Vencimiento pendiente</b>\\n' +
-              symbol + '\\nNo existe evidencia suficiente de liquidación. Revisar Binance y el libro.');
+              '<b>Binance Opciones · Vencimiento pendiente</b>\n' +
+              symbol + '\nNo existe evidencia suficiente de liquidación. Revisar Binance y el libro.');
           }
         } catch (notifyErr) {
           this.logger.warn('options_live_exercise_notify_failed', {
