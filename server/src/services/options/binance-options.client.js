@@ -251,6 +251,10 @@ function createBinanceOptionsClient({
     getAccount() {
       return request('GET', '/eapi/v1/marginAccount', { signed: true });
     },
+    // Tarifa Options maker/taker de la cuenta. GET firmado, sin ordenes.
+    getUserCommission() {
+      return request('GET', '/eapi/v1/commission', { signed: true });
+    },
     getPositions(symbol) {
       return request('GET', '/eapi/v1/position', { params: { symbol }, signed: true });
     },
