@@ -450,3 +450,53 @@ describe('SyncedChart · polling en vivo', () => {
   });
 });
 
+describe('SyncedChart · syncPrice y onAssetClick', () => {
+  const closeAt20 = () => CANDLES_1H.map((c, i) => ({ ...c, close: i === 20 ? 2510 : c.close }));
+
+  it('syncPrice=false en destino: usa el cierre y oculta la línea horizontal; se restaura sin sync', async () => {
+    marketApi.getCandles.mockResolvedValue(closeAt20());
+    const sync = { sourceIndex: 1, timeSec: T20, price: 2500 };
+    const { rerender, onPointer } = renderChart({ sync, syncPrice: false });
+    await waitForData();
+    await waitFor(() => expect(lw.state.chart.setCrosshairPosition)
+      .toHaveBeenCalledWith(2510, T20, lw.state.series));
+    const ch = lastCrosshairOptions();
+    expect(ch.vertLine.color).toBe('#3ddc84');
+    expect(ch.horzLine.visible).toBe(false);
+    expect(ch.horzLine.labelVisible).toBe(false);
+
+    rerender(
+      <SyncedChart
+        asset={ASSET} timeframe="1h" timeframes={TFS} index={0}
+        syncEnabled sync={null} syncPrice={false} onPointer={onPointer}
+      />,
+    );
+    await waitFor(() => expect(lastCrosshairOptions().horzLine.visible).toBe(true));
+    expect(lastCrosshairOptions().horzLine.labelVisible).toBe(true);
+  });
+
+  it('syncPrice=false en el origen conserva la línea horizontal', async () => {
+    renderChart({ sync: { sourceIndex: 0, timeSec: T20, price: 2500 }, syncPrice: false });
+    await waitForData();
+    await waitFor(() => expect(lastCrosshairOptions()).toBeTruthy());
+    expect(lastCrosshairOptions().horzLine.visible).toBe(true);
+    expect(lastCrosshairOptions().horzLine.labelVisible).toBe(true);
+  });
+
+  it('con onAssetClick muestra el botón del activo y lo notifica', async () => {
+    const onAssetClick = vi.fn();
+    renderChart({ onAssetClick, asset: { symbol: 'BTC', datasource: 'binance' } });
+    const btn = screen.getByTestId('asset-btn-0');
+    expect(btn.textContent).toContain('BTC');
+    expect(btn.getAttribute('aria-label')).toBe('Cambiar activo (actual: BTC)');
+    fireEvent.click(btn);
+    expect(onAssetClick).toHaveBeenCalledWith(0);
+    await waitForData();
+  });
+
+  it('sin onAssetClick no hay botón', async () => {
+    renderChart();
+    expect(screen.queryByTestId('asset-btn-0')).toBeNull();
+    await waitForData();
+  });
+});

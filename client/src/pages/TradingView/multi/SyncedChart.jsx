@@ -23,6 +23,7 @@ import {
 } from './chartTheme';
 import { getInitialChartViewport } from '../chartViewport';
 import { createIndicatorsController } from '../indicators/renderAdapter';
+import { ChevronDownIcon } from '../components/icons';
 import styles from './SyncedChart.module.css';
 
 const CANDLE_LIMIT = 500;
@@ -36,9 +37,14 @@ function toBar(c) {
   };
 }
 
-function crosshairLines(color, style, labelBackgroundColor = color) {
+function crosshairLines(color, style, labelBackgroundColor = color, showHorz = true) {
   const line = { color, style, labelBackgroundColor };
-  return { crosshair: { vertLine: line, horzLine: line } };
+  return {
+    crosshair: {
+      vertLine: line,
+      horzLine: { ...line, visible: showHorz, labelVisible: showHorz },
+    },
+  };
 }
 
 const DEFAULT_LINES = crosshairLines(
@@ -69,6 +75,8 @@ export default function SyncedChart({
   index,
   syncEnabled = true,
   sync = null,
+  syncPrice = true,
+  onAssetClick,
   onPointer,
   onLastPrice,
   indicators = NO_INDICATORS,
@@ -100,7 +108,10 @@ export default function SyncedChart({
     onPointerRef.current?.(indexRef.current, value);
   }, []);
 
-  const applyLines = useCallback((key, options) => {
+  const applyLines = useCallback((baseKey, options, hideHorz = false) => {
+    // La clave incluye si la línea horizontal está oculta (syncPrice=false en
+    // destino) para no reutilizar opciones cacheadas obsoletas.
+    const key = hideHorz ? `${baseKey}:time` : baseKey;
     if (linesKeyRef.current === key) return;
     linesKeyRef.current = key;
     chartRef.current?.applyOptions(options);
@@ -344,15 +355,28 @@ export default function SyncedChart({
     setResolution(res);
 
     if (res.status === 'exact' || res.status === 'near') {
-      applyLines(res.status, crosshairLines(SYNC_COLORS[res.status], LineStyle.Dashed));
-      chart.setCrosshairPosition(sync.price, res.candleTimeSec, series);
+      const hideHorz = !syncPrice;
+      applyLines(
+        res.status,
+        crosshairLines(SYNC_COLORS[res.status], LineStyle.Dashed, SYNC_COLORS[res.status], !hideHorz),
+        hideHorz,
+      );
+      // Solo tiempo: el precio es el cierre de la vela resuelta en este activo.
+      const price = hideHorz
+        ? (findCandle(candles, res.candleTimeSec)?.close ?? sync.price)
+        : sync.price;
+      chart.setCrosshairPosition(price, res.candleTimeSec, series);
       appliedRef.current = 'target';
     } else {
       chart.clearCrosshairPosition();
-      applyLines('out', crosshairLines(SYNC_COLORS.out, LineStyle.Dashed));
+      applyLines(
+        'out',
+        crosshairLines(SYNC_COLORS.out, LineStyle.Dashed, SYNC_COLORS.out, syncPrice),
+        !syncPrice,
+      );
       appliedRef.current = 'target';
     }
-  }, [sync, syncEnabled, candles, index, timeframe, applyLines]);
+  }, [sync, syncEnabled, syncPrice, candles, index, timeframe, applyLines]);
 
   const handleLeave = useCallback(() => emitPointer(null), [emitPointer]);
 
@@ -380,6 +404,21 @@ export default function SyncedChart({
       onTouchCancel={handleLeave}
     >
       <header className={styles.header}>
+        {onAssetClick && (
+          <button
+            type="button"
+            className={styles.assetBtn}
+            data-testid={`asset-btn-${index}`}
+            aria-label={`Cambiar activo (actual: ${asset?.symbol || ''})`}
+            onClick={() => onAssetClick(index)}
+          >
+            <span className={styles.assetSymbol}>{asset?.symbol}</span>
+            {!compact && asset?.datasource && (
+              <span className={styles.assetSource}>{asset.datasource}</span>
+            )}
+            <ChevronDownIcon size={14} />
+          </button>
+        )}
         <label className={styles.tfLabel} htmlFor={selectId}>
           <span className={styles.srOnly}>Temporalidad</span>
           <select
