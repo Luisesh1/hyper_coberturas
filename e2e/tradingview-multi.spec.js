@@ -37,6 +37,8 @@ async function mockApi(page) {
       id: 1, userId: 1, username: 'admin', name: 'Administrador', role: 'superuser',
     }));
     localStorage.removeItem('tv_multi_prefs_v1');
+    localStorage.removeItem('tv_split_prefs_v1');
+    localStorage.removeItem('tv_multi_mode_v1');
   });
 
   await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
@@ -169,5 +171,70 @@ test.describe('TradingView multi-temporalidad (móvil 390px)', () => {
     }
     await touch('touchEnd', x0 + 72);
     await expect(page.locator('[data-testid^="sync-chip-"]')).toHaveCount(0);
+  });
+});
+
+// Pantalla dividida: hasta 4 activos independientes; el puntero compartido
+// (apagado por defecto) sincroniza solo el tiempo.
+test.describe('TradingView multi-activo (escritorio)', () => {
+  test('Multi‑activo: 4 activos independientes y sincronización opcional', async ({ page }) => {
+    const errores = [];
+    page.on('pageerror', (e) => errores.push(e.message));
+    await mockApi(page);
+    await page.goto('/trading-view/multi?mode=assets');
+
+    await expect(page.getByRole('button', { name: /^Multi‑activo$/ })).toHaveAttribute('aria-pressed', 'true');
+    const expected = ['BTC', 'ETH', 'SOL', 'HYPE'];
+    for (const [i, sym] of expected.entries()) {
+      await expect(page.getByTestId(`synced-chart-${i}`)).toBeVisible();
+      await expect(page.getByTestId(`asset-btn-${i}`)).toContainText(sym);
+    }
+    await expect(page.locator('[data-testid="synced-chart-0"] canvas').first()).toBeVisible();
+    await expect(page.locator('[data-testid="synced-chart-1"] canvas').first()).toBeVisible();
+
+    const sw = page.getByRole('switch', { name: /Puntero sincronizado/ });
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
+    await sw.click();
+    await expect(sw).toHaveAttribute('aria-checked', 'true');
+
+    const box = await page.getByTestId('synced-chart-0').boundingBox();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.35);
+    await expect(page.getByTestId('sync-chip-0')).toHaveAttribute('data-status', 'source');
+    await expect(page.getByTestId('sync-chip-1')).toHaveAttribute('data-status', /^(exact|near|out)$/);
+    await expect(page.getByText(/^Puntero: .+ · BTC 15m$/)).toBeVisible();
+    await page.screenshot({ path: 'test-results/tv-split-desktop.png' });
+    expect(errores).toEqual([]);
+  });
+});
+
+test.describe('TradingView multi-activo (móvil 390px)', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('Multi‑activo móvil: dos gráficos apilados sin scroll horizontal', async ({ page }) => {
+    const errores = [];
+    page.on('pageerror', (e) => errores.push(e.message));
+    await mockApi(page);
+    await page.goto('/trading-view/multi?mode=assets');
+
+    for (const i of [0, 1]) await expect(page.getByTestId(`synced-chart-${i}`)).toBeVisible();
+    await expect(page.getByTestId('synced-chart-2')).toHaveCount(0);
+    await expect(page.getByTestId('asset-btn-0')).toContainText('BTC');
+    await expect(page.getByTestId('asset-btn-1')).toContainText('ETH');
+    const a = await page.getByTestId('synced-chart-0').boundingBox();
+    const b = await page.getByTestId('synced-chart-1').boundingBox();
+    expect(b.y).toBeGreaterThan(a.y + a.height - 2);
+    expect(a.height).toBeGreaterThan(200);
+
+    // Táctil: selector de modo y botones de activo de al menos 44 px.
+    for (const name of [/^Multi‑TF$/, /^Multi‑activo$/]) {
+      const m = await page.getByRole('button', { name }).boundingBox();
+      expect(m.height).toBeGreaterThanOrEqual(44);
+    }
+    const assetBtn = await page.getByTestId('asset-btn-0').boundingBox();
+    expect(assetBtn.height).toBeGreaterThanOrEqual(44);
+    await expect(page.getByTestId('multi-price')).toHaveCount(0);
+    expect(await horizontalOverflow(page)).toBe(0);
+    await page.screenshot({ path: 'test-results/tv-split-mobile.png' });
+    expect(errores).toEqual([]);
   });
 });

@@ -3,6 +3,8 @@ import {
   SYNC_COLORS, MULTI_PREFS_KEY, DEFAULT_SYNC,
   resolveSyncedTime, formatOffset, formatSyncTime, statusLabel, compactStatusLabel,
   loadMultiPrefs, saveMultiPrefs,
+  SPLIT_PREFS_KEY, MULTI_MODE_KEY, DEFAULT_SPLIT,
+  loadSplitPrefs, saveSplitPrefs, loadMultiMode, saveMultiMode,
 } from './crosshairSync.js';
 
 const T0 = Date.UTC(2026, 9, 19, 0, 0) / 1000;
@@ -143,5 +145,85 @@ describe('prefs', () => {
   it('setItem que lanza no propaga', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('x'); });
     expect(() => saveMultiPrefs(DEFAULTS)).not.toThrow();
+  });
+});
+
+describe('prefs multi-activo', () => {
+  const hl = (symbol) => ({ symbol, datasource: 'hyperliquid', timeframe: '15m' });
+  const DEFAULTS = {
+    layout: '2x2',
+    panels: [hl('BTC'), hl('ETH'), hl('SOL'), hl('HYPE')],
+    mobilePanels: [hl('BTC'), hl('ETH')],
+    sync: false,
+  };
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it('claves y defaults', () => {
+    expect(SPLIT_PREFS_KEY).toBe('tv_split_prefs_v1');
+    expect(MULTI_MODE_KEY).toBe('tv_multi_mode_v1');
+    expect(DEFAULT_SPLIT).toEqual(DEFAULTS);
+    expect(loadSplitPrefs()).toEqual(DEFAULTS);
+  });
+  it('los defaults devueltos son copias (mutarlos no afecta a DEFAULT_SPLIT)', () => {
+    const p = loadSplitPrefs();
+    p.panels[0].symbol = 'X';
+    expect(DEFAULT_SPLIT.panels[0].symbol).toBe('BTC');
+  });
+  it('JSON corrupto → defaults', () => {
+    localStorage.setItem(SPLIT_PREFS_KEY, '{nope');
+    expect(loadSplitPrefs()).toEqual(DEFAULTS);
+    localStorage.setItem(SPLIT_PREFS_KEY, '42');
+    expect(loadSplitPrefs()).toEqual(DEFAULTS);
+  });
+  it('panel inválido (sin symbol, tf desconocido) → default de esa posición', () => {
+    localStorage.setItem(SPLIT_PREFS_KEY, JSON.stringify({
+      layout: '1x3',
+      panels: [
+        { symbol: 'DOGE', datasource: 'binance', timeframe: '1h' },
+        { datasource: 'binance', timeframe: '1h' },
+        { symbol: 'XRP', datasource: 'binance', timeframe: '7m' },
+        null,
+      ],
+      mobilePanels: [{ symbol: 'AVAX', datasource: 'hyperliquid', timeframe: '4h' }, { symbol: '', datasource: 'x', timeframe: '1h' }],
+      sync: true,
+    }));
+    expect(loadSplitPrefs()).toEqual({
+      layout: '1x3',
+      panels: [{ symbol: 'DOGE', datasource: 'binance', timeframe: '1h' }, hl('ETH'), hl('SOL'), hl('HYPE')],
+      mobilePanels: [{ symbol: 'AVAX', datasource: 'hyperliquid', timeframe: '4h' }, hl('ETH')],
+      sync: true,
+    });
+  });
+  it('campos no válidos de nivel superior → defaults', () => {
+    localStorage.setItem(SPLIT_PREFS_KEY, JSON.stringify({ layout: '9x9', panels: 'x', mobilePanels: null, sync: 'si' }));
+    expect(loadSplitPrefs()).toEqual(DEFAULTS);
+  });
+  it('ida y vuelta', () => {
+    const p = {
+      layout: '1x2',
+      panels: [hl('DOGE'), { symbol: 'AAPL', datasource: 'yahoo', timeframe: '1d' }, hl('SOL'), hl('HYPE')],
+      mobilePanels: [hl('SOL'), { symbol: 'BTC', datasource: 'binance', timeframe: '1w' }],
+      sync: true,
+    };
+    saveSplitPrefs(p);
+    expect(loadSplitPrefs()).toEqual(p);
+  });
+  it('storage que lanza', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('x'); });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('x'); });
+    expect(loadSplitPrefs()).toEqual(DEFAULTS);
+    expect(loadMultiMode()).toBe('tf');
+    expect(() => saveSplitPrefs(DEFAULTS)).not.toThrow();
+    expect(() => saveMultiMode('assets')).not.toThrow();
+  });
+  it('modo: default tf, ida y vuelta, valor raro → tf', () => {
+    expect(loadMultiMode()).toBe('tf');
+    saveMultiMode('assets');
+    expect(localStorage.getItem(MULTI_MODE_KEY)).toBe('assets');
+    expect(loadMultiMode()).toBe('assets');
+    saveMultiMode('tf');
+    expect(loadMultiMode()).toBe('tf');
+    localStorage.setItem(MULTI_MODE_KEY, 'raro');
+    expect(loadMultiMode()).toBe('tf');
   });
 });

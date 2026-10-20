@@ -131,3 +131,79 @@ export function saveMultiPrefs(prefs) {
     localStorage.setItem(MULTI_PREFS_KEY, JSON.stringify(prefs));
   } catch { /* noop */ }
 }
+
+// ── Modo Multi‑activo (pantalla dividida) ─────────────────────
+export const SPLIT_PREFS_KEY = 'tv_split_prefs_v1';
+export const MULTI_MODE_KEY = 'tv_multi_mode_v1';
+export const MULTI_MODES = ['tf', 'assets'];
+const hlPanel = (symbol) => ({ symbol, datasource: 'hyperliquid', timeframe: '15m' });
+export const DEFAULT_SPLIT = {
+  layout: '2x2',
+  panels: [hlPanel('BTC'), hlPanel('ETH'), hlPanel('SOL'), hlPanel('HYPE')],
+  mobilePanels: [hlPanel('BTC'), hlPanel('ETH')],
+  sync: false,
+};
+
+const isNonEmptyString = (v) => typeof v === 'string' && v.trim() !== '';
+
+function validPanel(p, fallback) {
+  if (!p || typeof p !== 'object') return { ...fallback };
+  if (!isNonEmptyString(p.symbol) || !isNonEmptyString(p.datasource)) return { ...fallback };
+  if (!MULTI_TIMEFRAMES.includes(p.timeframe)) return { ...fallback };
+  return { symbol: p.symbol, datasource: p.datasource, timeframe: p.timeframe };
+}
+
+// Cada posición se valida por separado: un panel roto vuelve al default de
+// su posición sin arrastrar a los demás.
+function validPanelList(value, fallback) {
+  const list = Array.isArray(value) ? value : [];
+  return fallback.map((def, i) => validPanel(list[i], def));
+}
+
+function defaultSplit() {
+  return {
+    layout: DEFAULT_SPLIT.layout,
+    panels: DEFAULT_SPLIT.panels.map((p) => ({ ...p })),
+    mobilePanels: DEFAULT_SPLIT.mobilePanels.map((p) => ({ ...p })),
+    sync: DEFAULT_SPLIT.sync,
+  };
+}
+
+export function loadSplitPrefs() {
+  try {
+    const raw = localStorage.getItem(SPLIT_PREFS_KEY);
+    if (!raw) return defaultSplit();
+    const p = JSON.parse(raw);
+    if (!p || typeof p !== 'object') return defaultSplit();
+    const def = defaultSplit();
+    return {
+      layout: LAYOUTS.some((l) => l.id === p.layout) ? p.layout : def.layout,
+      panels: validPanelList(p.panels, def.panels),
+      mobilePanels: validPanelList(p.mobilePanels, def.mobilePanels),
+      sync: typeof p.sync === 'boolean' ? p.sync : def.sync,
+    };
+  } catch {
+    return defaultSplit();
+  }
+}
+
+export function saveSplitPrefs(prefs) {
+  try {
+    localStorage.setItem(SPLIT_PREFS_KEY, JSON.stringify(prefs));
+  } catch { /* noop */ }
+}
+
+export function loadMultiMode() {
+  try {
+    const raw = localStorage.getItem(MULTI_MODE_KEY);
+    return MULTI_MODES.includes(raw) ? raw : 'tf';
+  } catch {
+    return 'tf';
+  }
+}
+
+export function saveMultiMode(mode) {
+  try {
+    localStorage.setItem(MULTI_MODE_KEY, mode);
+  } catch { /* noop */ }
+}

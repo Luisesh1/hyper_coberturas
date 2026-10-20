@@ -59,6 +59,34 @@
   color: #f1f5f9;
 }
 
+/* Selector de modo (Multi‑TF / Multi‑activo) */
+.modeGroup {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid rgba(120, 130, 145, 0.3);
+  border-radius: 8px;
+  background: #15181d;
+}
+.modeBtn {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #9aa3b0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.modeBtn:hover { color: #f1f5f9; }
+.modeBtnActive,
+.modeBtnActive:hover {
+  background: rgba(74, 158, 255, 0.18);
+  color: #4a9eff;
+}
+
 .layoutGroup {
   display: inline-flex;
   border: 1px solid rgba(120, 130, 145, 0.3);
@@ -227,6 +255,63 @@
   flex-shrink: 0;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Multi‑activo: título en lugar del botón de par global. */
+.mTitle {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 6px;
+}
+.mTitleMain {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mTitleSub {
+  font-size: 0.72rem;
+  color: #9aa3b0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Fila del selector de modo bajo la cabecera: a todo el ancho, 44 px. */
+.mModeRow {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(120, 130, 145, 0.25);
+}
+.mModeGroup {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(120, 130, 145, 0.3);
+  border-radius: 10px;
+  background: #15181d;
+}
+.mModeBtn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9aa3b0;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mModeBtn:active { background: rgba(120, 130, 145, 0.14); }
 
 .mStack {
   flex: 1 1 auto;

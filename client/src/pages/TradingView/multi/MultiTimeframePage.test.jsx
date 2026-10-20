@@ -13,7 +13,13 @@ vi.mock('./SyncedChart', () => ({
       data-symbol={props.asset.symbol}
       data-datasource={props.asset.datasource}
       data-indicators={JSON.stringify(props.indicators ?? null)}
+      data-sync-price={String(props.syncPrice ?? true)}
     >
+      {props.onAssetClick && (
+        <button type="button" data-testid={`asset-btn-${props.index}`} onClick={() => props.onAssetClick(props.index)}>
+          {props.asset.symbol}
+        </button>
+      )}
       <button
         type="button"
         data-testid={`pointer-${props.index}`}
@@ -26,7 +32,7 @@ vi.mock('./SyncedChart', () => ({
   ),
 }));
 
-const api = vi.hoisted(() => ({ getChartIndicators: null }));
+const api = vi.hoisted(() => ({ getChartIndicators: null, pick: null }));
 vi.mock('../../../services/api', () => ({
   settingsApi: { getChartIndicators: (...a) => api.getChartIndicators(...a) },
 }));
@@ -36,8 +42,15 @@ vi.mock('../../../context/TradingContext', () => ({
 }));
 
 vi.mock('../components/AssetPickerModal', () => ({
-  default: ({ open, onSelect }) => (open
-    ? <button type="button" data-testid="picker-pick" onClick={() => onSelect({ symbol: 'ETH', datasource: 'binance', name: 'Ether' })} />
+  default: ({ open, onSelect, currentAsset }) => (open
+    ? (
+      <button
+        type="button"
+        data-testid="picker-pick"
+        data-current={currentAsset?.symbol}
+        onClick={() => onSelect(api.pick || { symbol: 'ETH', datasource: 'binance', name: 'Ether' })}
+      />
+    )
     : null),
 }));
 
@@ -68,6 +81,7 @@ describe('MultiTimeframePage', () => {
   beforeEach(() => {
     localStorage.clear();
     api.getChartIndicators = vi.fn().mockResolvedValue({ indicators: [] });
+    api.pick = null;
     vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { cb(0); return 1; }));
     vi.stubGlobal('cancelAnimationFrame', () => {});
     setMobile(false);
@@ -241,5 +255,194 @@ describe('MultiTimeframePage', () => {
     renderPage();
     await waitFor(() => expect(indicatorsOf(2)).toEqual(getDefaultChartIndicators().indicators));
     expect(tfs()).toEqual(['5m', '15m', '1h', '4h']);
+  });
+
+  describe('modo Multi‑activo', () => {
+    const symbols = () => screen.getAllByTestId(/^synced-chart-\d+$/).map((el) => el.dataset.symbol);
+    const modeBtn = (name) => screen.getByRole('button', { name: new RegExp(`^${name}$`) });
+    const splitPrefs = () => JSON.parse(localStorage.getItem('tv_split_prefs_v1'));
+
+    it('selector de modo con Multi‑TF / Multi‑activo (aria-pressed); por defecto Multi‑TF', () => {
+      renderPage();
+      expect(modeBtn('Multi‑TF').getAttribute('aria-pressed')).toBe('true');
+      expect(modeBtn('Multi‑activo').getAttribute('aria-pressed')).toBe('false');
+      expect(tfs()).toEqual(['5m', '15m', '1h', '4h']);
+    });
+
+    it('?mode=assets abre Multi‑activo', () => {
+      renderPage('/trading-view/multi?mode=assets');
+      expect(modeBtn('Multi‑activo').getAttribute('aria-pressed')).toBe('true');
+      expect(symbols()).toEqual(['BTC', 'ETH', 'SOL', 'HYPE']);
+    });
+
+    it('?mode=tf manda sobre el modo guardado', () => {
+      localStorage.setItem('tv_multi_mode_v1', 'assets');
+      renderPage('/trading-view/multi?mode=tf');
+      expect(modeBtn('Multi‑TF').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('sin parámetro usa el modo guardado', () => {
+      localStorage.setItem('tv_multi_mode_v1', 'assets');
+      renderPage();
+      expect(modeBtn('Multi‑activo').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('escritorio sin prefs: 4 paneles BTC,ETH,SOL,HYPE 15m sin sincronizar y sin precio', () => {
+      renderPage('/trading-view/multi?mode=assets');
+      const els = screen.getAllByTestId(/^synced-chart-\d+$/);
+      expect(symbols()).toEqual(['BTC', 'ETH', 'SOL', 'HYPE']);
+      for (const el of els) {
+        expect(el.dataset.tf).toBe('15m');
+        expect(el.dataset.datasource).toBe('hyperliquid');
+        expect(el.dataset.syncEnabled).toBe('false');
+        expect(el.dataset.syncPrice).toBe('false');
+        expect(el.dataset.compact).toBe('false');
+      }
+      for (let i = 0; i < 4; i += 1) expect(screen.getByTestId(`asset-btn-${i}`)).toBeTruthy();
+      expect(screen.getByRole('button', { name: '2×2' }).getAttribute('aria-pressed')).toBe('true');
+      expect(screen.queryByRole('button', { name: /Cambiar par/i })).toBeNull();
+      expect(screen.getByRole('switch', { name: /Puntero sincronizado/i }).getAttribute('aria-checked')).toBe('false');
+      fireEvent.click(screen.getByTestId('price-0'));
+      expect(screen.queryByTestId('multi-price')).toBeNull();
+    });
+
+    it('Multi‑TF no pasa onAssetClick ni desactiva syncPrice', () => {
+      renderPage();
+      expect(screen.queryByTestId('asset-btn-0')).toBeNull();
+      expect(screen.getByTestId('synced-chart-0').dataset.syncPrice).toBe('true');
+    });
+
+    it('onAssetClick(2) abre el selector y elegir DOGE solo cambia el panel 2', () => {
+      api.pick = { symbol: 'DOGE', datasource: 'binance', name: 'Dogecoin' };
+      renderPage('/trading-view/multi?mode=assets');
+      expect(screen.queryByTestId('picker-pick')).toBeNull();
+      fireEvent.click(screen.getByTestId('asset-btn-2'));
+      expect(screen.getByTestId('picker-pick').dataset.current).toBe('SOL');
+      fireEvent.click(screen.getByTestId('picker-pick'));
+      expect(screen.queryByTestId('picker-pick')).toBeNull();
+      expect(symbols()).toEqual(['BTC', 'ETH', 'DOGE', 'HYPE']);
+      expect(screen.getByTestId('synced-chart-2').dataset.datasource).toBe('binance');
+      expect(screen.getByTestId('synced-chart-2').dataset.tf).toBe('15m');
+      expect(splitPrefs().panels[2]).toEqual({ symbol: 'DOGE', datasource: 'binance', timeframe: '15m' });
+      // No toca el par de Multi‑TF.
+      expect(localStorage.getItem('tv_selected_asset_v1')).toBeNull();
+    });
+
+    it('la temporalidad es por panel y se guarda', () => {
+      renderPage('/trading-view/multi?mode=assets');
+      fireEvent.click(screen.getByTestId('tf-3'));
+      expect(tfs()).toEqual(['15m', '15m', '15m', '1m']);
+      expect(splitPrefs().panels[3].timeframe).toBe('1m');
+    });
+
+    it('interruptor: activa la sincronización (solo en las prefs de Multi‑activo)', () => {
+      renderPage('/trading-view/multi?mode=assets');
+      fireEvent.click(screen.getByRole('switch', { name: /Puntero sincronizado/i }));
+      expect(screen.getByTestId('synced-chart-0').dataset.syncEnabled).toBe('true');
+      expect(splitPrefs().sync).toBe(true);
+      expect(localStorage.getItem('tv_multi_prefs_v1')).toBeNull();
+    });
+
+    it('con sync apagado onPointer no hace nada', () => {
+      renderPage('/trading-view/multi?mode=assets');
+      requestAnimationFrame.mockClear();
+      fireEvent.click(screen.getByTestId('pointer-0'));
+      expect(requestAnimationFrame).not.toHaveBeenCalled();
+      expect(screen.getByText('Puntero: —')).toBeTruthy();
+    });
+
+    it('barra "Puntero: … · BTC 15m" con sync', () => {
+      renderPage('/trading-view/multi?mode=assets');
+      fireEvent.click(screen.getByRole('switch', { name: /Puntero sincronizado/i }));
+      fireEvent.click(screen.getByTestId('pointer-0'));
+      expect(screen.getByText('Puntero: 19 oct 20:45 · BTC 15m')).toBeTruthy();
+      for (let i = 0; i < 4; i += 1) {
+        expect(JSON.parse(screen.getByTestId(`synced-chart-${i}`).dataset.sync).sourceIndex).toBe(0);
+      }
+    });
+
+    it('cambiar el activo del panel origen limpia el puntero; otro panel no', () => {
+      api.pick = { symbol: 'DOGE', datasource: 'binance', name: 'Dogecoin' };
+      renderPage('/trading-view/multi?mode=assets');
+      fireEvent.click(screen.getByRole('switch', { name: /Puntero sincronizado/i }));
+      fireEvent.click(screen.getByTestId('pointer-2'));
+      fireEvent.click(screen.getByTestId('asset-btn-1'));
+      fireEvent.click(screen.getByTestId('picker-pick'));
+      expect(JSON.parse(screen.getByTestId('synced-chart-0').dataset.sync).sourceIndex).toBe(2);
+      fireEvent.click(screen.getByTestId('asset-btn-2'));
+      fireEvent.click(screen.getByTestId('picker-pick'));
+      expect(screen.getByTestId('synced-chart-0').dataset.sync).toBe('null');
+    });
+
+    it('si el origen desaparece al cambiar de distribución, sync pasa a null', () => {
+      renderPage('/trading-view/multi?mode=assets');
+      fireEvent.click(screen.getByRole('switch', { name: /Puntero sincronizado/i }));
+      fireEvent.click(screen.getByTestId('pointer-3'));
+      fireEvent.click(screen.getByRole('button', { name: '1×3' }));
+      expect(symbols()).toEqual(['BTC', 'ETH', 'SOL']);
+      expect(screen.getByTestId('synced-chart-0').dataset.sync).toBe('null');
+      expect(splitPrefs().layout).toBe('1x3');
+    });
+
+    it('cada modo conserva su distribución y paneles; el modo se guarda', () => {
+      renderPage();
+      fireEvent.click(screen.getByRole('button', { name: '1×3' }));
+      fireEvent.click(modeBtn('Multi‑activo'));
+      expect(localStorage.getItem('tv_multi_mode_v1')).toBe('assets');
+      expect(symbols()).toEqual(['BTC', 'ETH', 'SOL', 'HYPE']);
+      fireEvent.click(screen.getByRole('button', { name: '1×2' }));
+      expect(symbols()).toEqual(['BTC', 'ETH']);
+      fireEvent.click(modeBtn('Multi‑TF'));
+      expect(localStorage.getItem('tv_multi_mode_v1')).toBe('tf');
+      expect(tfs()).toEqual(['5m', '15m', '1h']);
+      expect(screen.getByRole('button', { name: '1×3' }).getAttribute('aria-pressed')).toBe('true');
+      fireEvent.click(modeBtn('Multi‑activo'));
+      expect(symbols()).toEqual(['BTC', 'ETH']);
+      expect(screen.getByRole('button', { name: '1×2' }).getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('volver a Multi‑TF desde ?mode=assets no se queda bloqueado por la URL', () => {
+      renderPage('/trading-view/multi?mode=assets&symbol=XRP&datasource=binance');
+      fireEvent.click(modeBtn('Multi‑TF'));
+      expect(modeBtn('Multi‑TF').getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByTestId('synced-chart-0').dataset.symbol).toBe('XRP');
+    });
+
+    it('móvil: 2 paneles compactos BTC, ETH sin precio global y selector de modo ≥44 px', () => {
+      setMobile(true);
+      renderPage('/trading-view/multi?mode=assets');
+      expect(symbols()).toEqual(['BTC', 'ETH']);
+      for (const el of screen.getAllByTestId(/^synced-chart-\d+$/)) {
+        expect(el.dataset.compact).toBe('true');
+        expect(el.dataset.syncPrice).toBe('false');
+      }
+      fireEvent.click(screen.getByTestId('price-0'));
+      expect(screen.queryByTestId('multi-price')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Cambiar par/i })).toBeNull();
+      for (const name of ['Multi‑TF', 'Multi‑activo']) {
+        expect(parseFloat(getComputedStyle(modeBtn(name)).minHeight)).toBeGreaterThanOrEqual(44);
+      }
+      expect(screen.getByRole('link', { name: /gráfico único/i }).getAttribute('href')).toBe('/trading-view');
+      expect(screen.getByText('Mantén pulsado y arrastra sobre un gráfico')).toBeTruthy();
+    });
+
+    it('móvil: cambiar un activo solo toca la lista móvil', () => {
+      setMobile(true);
+      api.pick = { symbol: 'DOGE', datasource: 'binance', name: 'Dogecoin' };
+      renderPage('/trading-view/multi?mode=assets');
+      fireEvent.click(screen.getByTestId('asset-btn-1'));
+      fireEvent.click(screen.getByTestId('picker-pick'));
+      expect(symbols()).toEqual(['BTC', 'DOGE']);
+      expect(splitPrefs().mobilePanels[1].symbol).toBe('DOGE');
+      expect(splitPrefs().panels[1].symbol).toBe('ETH');
+    });
+
+    it('móvil Multi‑TF también muestra el selector de modo', () => {
+      setMobile(true);
+      renderPage();
+      expect(modeBtn('Multi‑TF').getAttribute('aria-pressed')).toBe('true');
+      fireEvent.click(modeBtn('Multi‑activo'));
+      expect(symbols()).toEqual(['BTC', 'ETH']);
+    });
   });
 });
