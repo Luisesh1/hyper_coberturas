@@ -50,7 +50,9 @@ async function mockApi(page) {
       if (url.searchParams.get('endTime')) return json([]);
       const tf = url.searchParams.get('timeframe') || '15m';
       const limit = Number(url.searchParams.get('limit') || 300);
-      return json(buildCandles(tf, Math.min(limit, 500)));
+      // Serie completa y estable: el polling (limit=2) recibe las mismas
+      // últimas velas que la carga inicial.
+      return json(buildCandles(tf, 500).slice(-Math.min(limit, 500)));
     }
     if (url.pathname === '/api/settings/chart-indicators') return json({ indicators: [] });
     return json([]);
@@ -80,10 +82,11 @@ test.describe('TradingView multi-temporalidad (escritorio)', () => {
     // apertura de 5m) y el 1h (panel 2) debe verse "exact" en las velas en
     // punto y "near" en :15/:30/:45.
     const box = await page.getByTestId('synced-chart-1').boundingBox();
-    const y = box.y + box.height * 0.5;
+    const y = box.y + box.height * 0.35; // panel de precio, sobre el sub-panel del oscilador
     const seen1h = new Set();
     for (let k = 0; k < 24 && seen1h.size < 2; k++) {
-      await page.mouse.move(box.x + box.width * 0.86 - k * 9, y);
+      // Arranca a la izquierda del margen derecho vacío (rightOffset).
+      await page.mouse.move(box.x + box.width * 0.6 - k * 9, y);
       await page.waitForTimeout(60);
       await expect(page.getByTestId('sync-chip-1')).toHaveAttribute('data-status', 'source');
       const s0 = await page.getByTestId('sync-chip-0').getAttribute('data-status');
