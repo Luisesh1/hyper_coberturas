@@ -68,6 +68,13 @@ test('reports a specific safe blocker for an ineligible ETH alert', () => {
   assert.equal(expiryWindowAllowed({...alert,option_expiry_min_days:13,option_expiry_max_days:12}),false);
   assert.equal(explainAlertFailure([alert,{...alert,id:41}]),'alert_ambiguous');
 });
+test('reports a specific safe blocker for an ineligible ETH alert', () => {
+  assert.equal(explainAlertFailure([]),'alert_unavailable');
+  assert.equal(explainAlertFailure([{...alert,is_active:false}]),'alert_inactive');
+  assert.equal(explainAlertFailure([{...alert,rules_json:'[]'}]),'alert_rules_missing');
+  assert.equal(explainAlertFailure([{...alert,option_expiry_min_days:8}]),'alert_expiry_incompatible');
+  assert.equal(explainAlertFailure([alert,{...alert,id:41}]),'alert_ambiguous');
+});
 test('binds only alertIds while retaining a paused bot and original risk limits',async()=>{
   const {db,calls}=mockDb();
   const result=await apply({db,env,now:()=>7777});
