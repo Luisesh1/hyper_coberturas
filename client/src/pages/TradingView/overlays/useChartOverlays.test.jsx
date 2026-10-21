@@ -324,4 +324,38 @@ describe('useChartOverlays', () => {
     expect(marketApi.getCandles).toHaveBeenCalledTimes(1);
     expect(marketApi.getCandles.mock.calls[0][0]).toMatchObject({ startTime: OLD[0].time, endTime: OLD[4].time + HOUR });
   });
+  it('replace con el próximo principal mantiene el foco en el hueco intercambiado', async () => {
+    const btc = 'asset:binance:BTCUSDT';
+    const eth = 'asset:binance:ETHUSDT';
+    const { hook, props } = setup();
+    act(() => { hook.result.current.add(BTC); hook.result.current.add(SOL); });
+    expect(hook.result.current.state.focusedId).toBe(btc);
+    act(() => { hook.result.current.replace(btc, { kind: 'asset', asset: ETH }, BTC.asset); });
+    expect(hook.result.current.state.focusedId).toBe(eth);
+    hook.rerender({ ...props, mainAsset: BTC.asset });
+    await waitFor(() => expect(hook.result.current.status[eth]).toBe('loading'));
+    expect(hook.result.current.state.focusedId).toBe(eth);
+  });
+
+  it('una opción vencida con la caché cubriendo el vencimiento no se vuelve a pedir', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(MAIN[4].time + 10 * HOUR);
+    try {
+      const expired = { kind: 'option', option: { ...OPT.option, instrument: 'ETH-19OCT26-4000-C', expiryMs: MAIN[2].time } };
+      const { hook } = setup();
+      act(() => { hook.result.current.add(expired); });
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      expect(marketApi.getOptionCandles).toHaveBeenCalledTimes(1);
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      expect(marketApi.getOptionCandles).toHaveBeenCalledTimes(1);
+      // una vigente sí refresca la cola
+      act(() => { hook.result.current.add(OPT); });
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      const live = marketApi.getOptionCandles.mock.calls.filter(([a]) => a.instrument === OPT.option.instrument);
+      expect(live.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

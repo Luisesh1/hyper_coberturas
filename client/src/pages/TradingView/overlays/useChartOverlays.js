@@ -223,7 +223,11 @@ export function useChartOverlays({
     } else {
       if (start < cache.from) ranges.push([start, cache.from]);
       const tailFrom = Math.max(cache.from, cache.to - tfMs);
-      if (end > tailFrom) ranges.push([tailFrom, Math.max(end, cache.to)]);
+      // Una opción vencida no cambia: si la caché ya cubre el vencimiento,
+      // no se refresca la cola.
+      const expiry = overlay.kind === 'option' ? overlay.option?.expiryMs : null;
+      const frozen = Number.isFinite(expiry) && expiry < Date.now() && cache.loaded && cache.to > expiry;
+      if (end > tailFrom && !frozen) ranges.push([tailFrom, Math.max(end, cache.to)]);
     }
     if (cache.from !== null) realign(id);
     if (!ranges.length) return;
@@ -394,7 +398,7 @@ export function useChartOverlays({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = useCallback(
-    (fn) => setState((s) => ensureFocus(fn(s), propsRef.current.mainAsset)),
+    (fn, main) => setState((s) => ensureFocus(fn(s), main ?? propsRef.current.mainAsset)),
     [],
   );
   // Al cambiar el principal, el foco no puede quedarse en la que ahora lo es.
@@ -416,8 +420,10 @@ export function useChartOverlays({
     update((s) => removeOverlay(s, id));
     forget(id);
   }, [update]); // eslint-disable-line react-hooks/exhaustive-deps
-  const replace = useCallback((id, spec) => {
-    update((s) => replaceModel(s, id, spec));
+  // `nextMain`: el principal que habrá tras un intercambio (aún no está en
+  // props); sin él, el foco saltaría fuera del hueco intercambiado.
+  const replace = useCallback((id, spec, nextMain) => {
+    update((s) => replaceModel(s, id, spec), nextMain);
     forget(id);
   }, [update]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggleHidden = useCallback((id) => update((s) => toggleHiddenModel(s, id)), [update]);

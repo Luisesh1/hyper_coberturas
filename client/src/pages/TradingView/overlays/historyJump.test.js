@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DAY_MS, jumpTarget, forwardWindow, logicalRangeFor } from './historyJump';
+import { DAY_MS, jumpTarget, forwardWindow, logicalRangeFor, mergeCandles } from './historyJump';
 
 const EXP = Date.UTC(2026, 0, 30, 8);
 const opt = (expiryMs) => ({ kind: 'option', option: { instrument: 'ETH-30JAN26-3000-C', expiryMs } });
@@ -36,5 +36,23 @@ describe('logicalRangeFor', () => {
   it('rango que se sale por la derecha termina en la última vela; sin velas, null', () => {
     expect(logicalRangeFor(candles, { from: 8 * H, to: 20 * H })).toEqual({ from: 8, to: 9 });
     expect(logicalRangeFor([], { from: 0, to: 1 })).toBeNull();
+  });
+});
+
+describe('mergeCandles', () => {
+  it('une por tiempo sin duplicados y ordenado; las nuevas pisan a las existentes', () => {
+    const cur = [{ time: 3, close: 1 }, { time: 4, close: 1 }];
+    const merged = mergeCandles(cur, [{ time: 1 }, { time: 2 }, { time: 4, close: 9 }, { time: 5 }]);
+    expect(merged.map((c) => c.time)).toEqual([1, 2, 3, 4, 5]);
+    expect(merged[3].close).toBe(9);
+  });
+  it('dos cargas de bordes que terminan en cualquier orden conservan ambas páginas', () => {
+    const base = [{ time: 10 }, { time: 11 }];
+    const older = [{ time: 8 }, { time: 9 }];
+    const newer = [{ time: 12 }, { time: 13 }];
+    const a = mergeCandles(mergeCandles(base, older), newer);
+    const b = mergeCandles(mergeCandles(base, newer), older);
+    expect(a.map((c) => c.time)).toEqual([8, 9, 10, 11, 12, 13]);
+    expect(b).toEqual(a);
   });
 });

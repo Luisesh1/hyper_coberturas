@@ -28,3 +28,13 @@ export function logicalRangeFor(candles, range) {
   while (to < last && candles[to + 1].time <= range.to) to++;
   return { from, to };
 }
+
+// Une velas por `time` (las de `incoming` pisan a las existentes) y ordena.
+// Las cargas por ambos bordes leen candlesRef tras su await y fusionan con
+// esto, así ninguna pisa la página que añadió la otra.
+export function mergeCandles(current, incoming) {
+  const byTime = new Map();
+  for (const c of current || []) byTime.set(c.time, c);
+  for (const c of incoming || []) if (c && Number.isFinite(c.time)) byTime.set(c.time, c);
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
+}

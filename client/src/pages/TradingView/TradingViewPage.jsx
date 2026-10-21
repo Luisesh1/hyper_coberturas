@@ -29,7 +29,7 @@ import { TOOLS } from './drawings/catalog';
 import { getInitialChartViewport } from './chartViewport';
 import { useChartOverlays } from './overlays/useChartOverlays';
 import { MAX_OVERLAYS, shortLabel } from './overlays/overlayModel';
-import { forwardWindow, jumpTarget, logicalRangeFor } from './overlays/historyJump';
+import { forwardWindow, jumpTarget, logicalRangeFor, mergeCandles } from './overlays/historyJump';
 import OverlayChips from './overlays/OverlayChips';
 import OverlayTooltip from './overlays/OverlayTooltip';
 import styles from './TradingViewPage.module.css';
@@ -487,6 +487,8 @@ export default function TradingViewPage() {
   const loadData = useCallback(async ({ endTime, range } = {}) => {
     if (!asset?.symbol) return;
     const seq = ++loadSeqRef.current;
+    // Un encuadre pendiente de una carga anterior queda invalidado.
+    framingRef.current = false;
     setLoading(true);
     setError(null);
     // Al cambiar de par o timeframe reseteamos el estado de paginación.
@@ -706,13 +708,15 @@ export default function TradingViewPage() {
         reachedHistoryEndRef.current = true;
         return;
       }
-      const seen = new Set(current.map((c) => c.time));
+      // Se relee candlesRef: una carga hacia delante pudo terminar mientras tanto.
+      const latest = candlesRef.current;
+      const seen = new Set(latest.map((c) => c.time));
       const newBars = older.filter((c) => !seen.has(c.time));
       if (newBars.length === 0) {
         reachedHistoryEndRef.current = true;
         return;
       }
-      const merged = [...newBars, ...current].sort((a, b) => a.time - b.time);
+      const merged = mergeCandles(latest, newBars);
       candlesRef.current = merged;
       const nextPrecision = getPricePrecisionFromCandles(merged);
       candleSeriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
@@ -766,13 +770,15 @@ export default function TradingViewPage() {
           endTime: win.endTime,
         });
         if (snapshotKey !== assetKeyRef.current || seq !== loadSeqRef.current || !historicalViewRef.current) return;
-        const lastTime = current[current.length - 1].time;
+        const latest = candlesRef.current;
+        const lastTime = latest[latest.length - 1].time;
         newBars = (Array.isArray(newer) ? newer : []).filter((c) => c.time > lastTime);
         reachedNow = win.reachesNow;
         cursor = win.endTime;
       }
       if (newBars.length > 0) {
-        const merged = [...current, ...newBars];
+        // Se relee candlesRef: una carga de histórico pudo terminar mientras tanto.
+        const merged = mergeCandles(candlesRef.current, newBars);
         candlesRef.current = merged;
         const nextPrecision = getPricePrecisionFromCandles(merged);
         candleSeriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
@@ -842,9 +848,10 @@ export default function TradingViewPage() {
   const { add: addOverlaySpec, replace: replaceOverlay } = overlays;
   const addOverlay = useCallback((spec) => {
     addOverlaySpec(spec);
+    if (replayActive) return; // en Replay no se salta (las superposiciones están ocultas)
     const target = jumpTarget(spec, candlesRef.current[0]?.time);
     if (target) void loadData(target);
-  }, [addOverlaySpec, loadData]);
+  }, [addOverlaySpec, loadData, replayActive]);
 
   // "Intercambiar con el principal" (sólo activos): el activo pasa a ser el
   // principal y el principal ocupa su hueco con su color.
@@ -854,7 +861,7 @@ export default function TradingViewPage() {
     replaceOverlay(id, {
       kind: 'asset',
       asset: { symbol: asset.symbol, datasource: asset.datasource, name: asset.name ?? asset.symbol },
-    });
+    }, o.asset);
     handleSelectAsset(o.asset);
   }, [overlays.state.items, replaceOverlay, asset, handleSelectAsset]);
   const mainLabel = shortLabel({ kind: 'asset', asset });
