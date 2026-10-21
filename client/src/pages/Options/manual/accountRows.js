@@ -43,6 +43,11 @@ export function orderView(o) {
 }
 
 export function tradeView(t, i) {
+  const price = Number(t.price);
+  const qty = Math.abs(Number(t.quantity ?? t.qty));
+  // Prima total de la ejecución (precio × contratos): pagada en compras, cobrada en ventas.
+  const premiumTotal = t.price != null && t.price !== '' && Number.isFinite(price) && Number.isFinite(qty)
+    ? price * qty : null;
   return {
     key: t.id ?? t.tradeId ?? `${t.symbol}-${t.time}-${i}`,
     symbol: t.symbol,
@@ -50,6 +55,7 @@ export function tradeView(t, i) {
     price: t.price,
     qty: t.quantity ?? t.qty,
     fee: t.fee,
+    premiumTotal,
     pnl: t.realizedProfit ?? t.realizedPnl,
     time: t.time ?? t.tradeTime,
   };

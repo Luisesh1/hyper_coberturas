@@ -56,6 +56,7 @@ export default function MobilePositionsSheet({
 }) {
   const swipe = useSwipeToReveal({ revealWidth: REVEAL_WIDTH, enabled: open });
   const [editingSymbol, setEditingSymbol] = useState(null);
+  const [expandedTrade, setExpandedTrade] = useState(null);
   const g = account?.greeks || {};
   const counts = { positions: positions.length, orders: openOrders.length, history: null };
 
@@ -205,13 +206,36 @@ export default function MobilePositionsSheet({
               <div className={styles.cardList}>
                 {trades.map((raw, i) => {
                   const t = tradeView(raw, i);
+                  const expanded = expandedTrade === t.key;
                   return (
-                    <div key={t.key} className={`${styles.posCard} ${styles.swipeTrack}`}>
-                      <span className={styles.posText}>
-                        <span className={`${styles.mono} ${styles.posSymbol}`}>{t.symbol}</span>
-                        <span className={styles.posMeta}>{sideLabel(t.side)} {fmtNum(t.qty, 2)} a {fmtPrice(t.price)} · {fmtDateTime(t.time)}</span>
-                      </span>
-                      <span className={`${styles.mono} ${styles.posPnl} ${styles[toneOf(t.pnl)]}`}>{fmtSigned(t.pnl, 2)}</span>
+                    <div key={t.key} className={`${styles.swipeTrack} ${styles.tradeCard}`}>
+                      <button
+                        type="button"
+                        className={`${styles.posCard} ${styles.tradeToggle}`}
+                        aria-expanded={expanded}
+                        aria-controls={`trade-detail-${i}`}
+                        onClick={() => setExpandedTrade(expanded ? null : t.key)}
+                      >
+                        <span className={styles.posText}>
+                          <span className={`${styles.mono} ${styles.posSymbol}`}>{t.symbol}</span>
+                          <span className={styles.posMeta}>{sideLabel(t.side)} {fmtNum(t.qty, 2)} a {fmtPrice(t.price)} · {fmtDateTime(t.time)}</span>
+                        </span>
+                        <span className={styles.posRight}>
+                          <span className={`${styles.mono} ${styles.posPnl} ${styles[toneOf(t.pnl)]}`}>{fmtSigned(t.pnl, 2)}</span>
+                          <span className={`${styles.tradeChevron} ${expanded ? styles.tradeChevronOpen : ''}`} aria-hidden="true">▾</span>
+                        </span>
+                      </button>
+                      {expanded && (
+                        <dl id={`trade-detail-${i}`} className={styles.tradeDetail}>
+                          <dt>Fecha</dt><dd className={styles.mono}>{fmtDateTime(t.time)}</dd>
+                          <dt>Lado</dt><dd className={t.side === 'BUY' ? styles.up : styles.down}>{t.side === 'BUY' ? 'Compra' : 'Venta'}</dd>
+                          <dt>Precio</dt><dd className={styles.mono}>{fmtPrice(t.price)} USDT</dd>
+                          <dt>Cantidad</dt><dd className={styles.mono}>{fmtNum(t.qty, 2)}</dd>
+                          <dt>{t.side === 'BUY' ? 'Prima pagada' : 'Prima cobrada'}</dt><dd className={styles.mono}>{t.premiumTotal == null ? '—' : `${fmtNum(t.premiumTotal, 2)} USDT`}</dd>
+                          <dt>Comisión</dt><dd className={styles.mono}>{fmtNum(t.fee, 4)}</dd>
+                          <dt>P&amp;L realizado</dt><dd className={`${styles.mono} ${styles[toneOf(t.pnl)]}`}>{fmtSigned(t.pnl, 2)}</dd>
+                        </dl>
+                      )}
                     </div>
                   );
                 })}

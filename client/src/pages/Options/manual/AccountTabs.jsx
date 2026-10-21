@@ -163,7 +163,7 @@ function HistoryTable({ trades, loading }) {
     <div className={styles.tableScroll}>
       <table className={styles.tbl}>
         <thead>
-          <tr><th>Fecha</th><th>Contrato</th><th>Lado</th><th>Precio</th><th>Cant.</th><th>Comisión</th><th>P&amp;L realizado</th></tr>
+          <tr><th>Fecha</th><th>Contrato</th><th>Lado</th><th>Precio</th><th>Cant.</th><th>Prima total</th><th>Comisión</th><th>P&amp;L realizado</th></tr>
         </thead>
         <tbody>
           {trades.map((raw, i) => {
@@ -175,6 +175,9 @@ function HistoryTable({ trades, loading }) {
                 <td className={t.side === 'BUY' ? styles.up : styles.down}>{t.side === 'BUY' ? 'Compra' : 'Venta'}</td>
                 <td className={styles.mono}>{fmtPrice(t.price)}</td>
                 <td className={styles.mono}>{fmtNum(t.qty, 2)}</td>
+                <td className={styles.mono} title={t.side === 'BUY' ? 'Prima pagada' : 'Prima cobrada'}>
+                  {t.premiumTotal == null ? '—' : `${fmtNum(t.premiumTotal, 2)} USDT`}
+                </td>
                 <td className={styles.mono}>{fmtNum(t.fee, 4)}</td>
                 <td className={`${styles.mono} ${styles[toneOf(t.pnl)]}`}>{fmtSigned(t.pnl, 2)}</td>
               </tr>

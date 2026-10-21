@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { positionView } from './accountRows';
+import { positionView, tradeView } from './accountRows';
 import { parseClosePrice } from './CloseAtPriceForm';
 
 describe('valores de posiciones de opciones', () => {
@@ -33,5 +33,15 @@ describe('valores de posiciones de opciones', () => {
     expect(parseClosePrice('-12')).toBeNull();
     expect(parseClosePrice('0')).toBeNull();
     expect(parseClosePrice('abc')).toBeNull();
+  });
+});
+
+describe('prima total de las ejecuciones', () => {
+  it('es precio × contratos', () => {
+    expect(tradeView({ symbol: 'X', side: 'BUY', price: '55', quantity: '0.7' }, 0).premiumTotal).toBeCloseTo(38.5);
+  });
+
+  it('sin precio no inventa un cero', () => {
+    expect(tradeView({ symbol: 'X', side: 'BUY', quantity: 1 }, 0).premiumTotal).toBeNull();
   });
 });
