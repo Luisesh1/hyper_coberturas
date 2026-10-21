@@ -278,7 +278,7 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
   - Con 8 entradas, carga 6. Con un id duplicado, se queda con uno.
   - `alignToMain`: un principal de 1h con 72 velas desde el viernes 20:00 UTC y un superpuesto sin velas el sábado y el domingo da puntos sin `value` en el fin de semana.
   - Una vela de Yahoo a las 13:30 cae en la del principal de 13:00.
-  - `splitTraded` con `[T, T, U, U, T]` deja en `untraded` los segmentos 1→2, 2→3 y 3→4.
+  - `splitTraded` con `[T, T, U, U, T]` deja en `untraded` los segmentos 1→2 y 2→3; el 3→4 va a `traded` (un segmento es `untraded` si y solo si su punto final no está negociado).
   - `isSameAsMain({kind:'asset', asset:{symbol:'BTC', datasource:'binance'}}, {symbol:'BTC', datasource:'binance'}) === true`
 - [ ] **Step 2:** `cd client && npx vitest run src/pages/TradingView/overlays/overlayModel.test.js` → FAIL
 - [ ] **Step 3:** Implement.
