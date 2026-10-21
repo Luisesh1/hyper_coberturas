@@ -14,7 +14,7 @@ import MobileDrawingBar, { MobileDrawingBanner } from './components/MobileDrawin
 import MobileSettingsSheet from './components/MobileSettingsSheet';
 import {
   ChevronDownIcon, CollapseIcon, ExpandIcon, EyeIcon, EyeOffIcon,
-  GridIcon, IndicatorsIcon, MoreIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
+  GridIcon, IndicatorsIcon, MoreIcon, PlusIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
 } from './components/icons';
 import BottomSheet from './components/BottomSheet';
 import mobileStyles from './components/MobileChrome.module.css';
@@ -27,6 +27,13 @@ import { useReplayController } from './replay/useReplayController';
 import { useDrawings } from './drawings/use-drawings';
 import { TOOLS } from './drawings/catalog';
 import { getInitialChartViewport } from './chartViewport';
+import { useChartOverlays, OVERLAY_TF_MS } from './overlays/useChartOverlays';
+import { MAX_OVERLAYS, shortLabel } from './overlays/overlayModel';
+import { forwardWindow, jumpTarget, logicalRangeFor, mergeCandles } from './overlays/historyJump';
+import OverlayChips from './overlays/OverlayChips';
+import OverlayTooltip from './overlays/OverlayTooltip';
+import OverlayLegend, { optionLegendColor } from './overlays/OverlayLegend';
+import OverlayPicker from './overlays/OverlayPicker';
 import styles from './TradingViewPage.module.css';
 
 const ASSET_STORAGE_KEY = 'tv_selected_asset_v1';
@@ -295,12 +302,18 @@ export default function TradingViewPage() {
   const [replayPanelOpen, setReplayPanelOpen] = useState(false);
   const [hoveredOhlc, setHoveredOhlc] = useState(null);
   const [overlaysHidden, setOverlaysHidden] = useState(loadStoredOverlaysHidden);
+  // Superposiciones: el selector (Task 9) se abre con este flag; la vista
+  // histórica es el "salto a la vida" de una opción vencida.
+  const [overlayPickerOpen, setOverlayPickerOpen] = useState(false);
+  const [historicalView, setHistoricalView] = useState(false);
   const isMobile = useMediaQuery(MOBILE_QUERY);
   // Móvil: modo dibujo explícito (la barra de pestañas pasa a ser la de
   // herramientas), hoja de ajustes y leyenda OHLC plegable.
   const [drawMode, setDrawMode] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
   const [ohlcExpanded, setOhlcExpanded] = useState(false);
+  // Móvil: lectura inferior de las superposiciones (plegable).
+  const [overlayReadoutCollapsed, setOverlayReadoutCollapsed] = useState(false);
   // Móvil: la fila de temporalidades sólo muestra las favoritas; el resto
   // (y la edición de favoritas) vive en una hoja inferior.
   const [tfFavorites, setTfFavorites] = useState(() => loadFavorites(TIMEFRAME_VALUES));
@@ -323,6 +336,12 @@ export default function TradingViewPage() {
   const assetKeyRef = useRef('');
   const drawingsCanvasRef = useRef(null);
   const widgetContainerRef = useRef(null);
+  const syncOverlaysRef = useRef(null); // overlays.syncMain (el hook va después de replay)
+  const loadSeqRef = useRef(0);
+  const historicalViewRef = useRef(false);
+  historicalViewRef.current = historicalView;
+  const fetchingFutureRef = useRef(false);
+  const framingRef = useRef(false); // encuadre del salto pendiente (siguiente frame)
 
   // Mantener ref al día para efectos que leen indicadores sin re-crear.
   useEffect(() => { indicatorsRef.current = indicators; }, [indicators]);
@@ -467,8 +486,13 @@ export default function TradingViewPage() {
   }, [settingsVisible]);
 
   // --- 3) Carga candles ---
-  const loadData = useCallback(async () => {
+  // `endTime` carga las 500 velas que terminan ahí (vista histórica) y `range`
+  // ({ from, to } en ms) encuadra la vista; sin argumentos, vuelve al presente.
+  const loadData = useCallback(async ({ endTime, range } = {}) => {
     if (!asset?.symbol) return;
+    const seq = ++loadSeqRef.current;
+    // Un encuadre pendiente de una carga anterior queda invalidado.
+    framingRef.current = false;
     setLoading(true);
     setError(null);
     // Al cambiar de par o timeframe reseteamos el estado de paginación.
@@ -481,7 +505,9 @@ export default function TradingViewPage() {
         datasource: asset.datasource || 'hyperliquid',
         timeframe,
         limit: CANDLE_LIMIT,
+        endTime,
       });
+      if (seq !== loadSeqRef.current) return;
       if (!Array.isArray(candles) || candles.length === 0) {
         setError('No se recibieron candles del servidor.');
         setLoading(false);
@@ -498,6 +524,8 @@ export default function TradingViewPage() {
       candleSeriesRef.current?.setData(candleData);
 
       indicatorsControllerRef.current?.render(indicatorsRef.current, candles);
+      syncOverlaysRef.current?.(candles);
+      setHistoricalView(endTime != null);
 
       // El encuadre inicial se adapta al ancho real: menos velas en móvil y
       // más contexto en escritorio, sin comprimir las 500 velas cargadas.
@@ -506,14 +534,31 @@ export default function TradingViewPage() {
         candleData.length,
       );
       chartRef.current?.timeScale().applyOptions({ barSpacing, rightOffset });
-      chartRef.current?.timeScale().scrollToRealTime();
+      // Al entrar o salir de la vista histórica el chart reubica la vista en
+      // el siguiente frame (cambia todo el eje de tiempo): el encuadre va
+      // después y, mientras tanto, no se cargan velas por los bordes.
+      // historicalViewRef aún refleja la vista anterior a esta carga.
+      const logical = range ? logicalRangeFor(candles, range) : null;
+      if (!logical) chartRef.current?.timeScale().scrollToRealTime();
+      if (logical || historicalViewRef.current) {
+        framingRef.current = true;
+        requestAnimationFrame(() => {
+          if (seq !== loadSeqRef.current) return;
+          framingRef.current = false;
+          if (logical) chartRef.current?.timeScale().setVisibleLogicalRange(logical);
+          // Sin animación: scrollToRealTime animado dispararía la carga de
+          // histórico a mitad de camino.
+          else chartRef.current?.timeScale().scrollToPosition(rightOffset, false);
+        });
+      }
       setCandleCount(candles.length);
       setLastPrice(candles[candles.length - 1]?.close ?? null);
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;
       console.error('[TradingView] loadData error:', err);
       setError(err.message || 'Error cargando datos de mercado.');
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, [asset, timeframe]);
 
@@ -541,6 +586,17 @@ export default function TradingViewPage() {
   });
   const replayActive = replay.active;
 
+  // --- Superposiciones (activos y opciones) en el mismo chart ---
+  const overlays = useChartOverlays({
+    chartRef,
+    candleSeriesRef,
+    mainAsset: asset,
+    timeframe,
+    enabled: !replayActive,
+    candleColors: THEME,
+  });
+  syncOverlaysRef.current = overlays.syncMain;
+
   // --- 4) Polling en tiempo real del último candle ---
   // Si el modo replay está activo, suspendemos el polling para no pisar la
   // vela HTF en formación con datos vivos.
@@ -551,13 +607,15 @@ export default function TradingViewPage() {
     }
     setLiveActive(false);
 
-    if (replayActive) return undefined;
+    if (replayActive || historicalView) return undefined;
 
     const intervalMs = LIVE_POLL_MS[timeframe] || 15_000;
     let cancelled = false;
 
     async function tick() {
       if (cancelled || document.hidden) return;
+      // Una recarga (p. ej. el salto a una vista histórica) invalida este tick.
+      const seq = loadSeqRef.current;
       try {
         const recent = await marketApi.getCandles({
           asset: asset.symbol,
@@ -565,7 +623,8 @@ export default function TradingViewPage() {
           timeframe,
           limit: 3,
         });
-        if (cancelled || !Array.isArray(recent) || recent.length === 0) return;
+        if (cancelled || seq !== loadSeqRef.current || historicalViewRef.current) return;
+        if (!Array.isArray(recent) || recent.length === 0) return;
         const current = candlesRef.current;
         if (current.length === 0) return;
 
@@ -596,6 +655,7 @@ export default function TradingViewPage() {
 
         // Re-render indicadores (ligero: mismo dataset, último valor actualizado)
         indicatorsControllerRef.current?.render(indicatorsRef.current, current);
+        syncOverlaysRef.current?.(current);
         setLastPrice(latest.close);
         setLiveActive(true);
       } catch (err) {
@@ -615,7 +675,7 @@ export default function TradingViewPage() {
         liveTimerRef.current = null;
       }
     };
-  }, [asset, timeframe, replayActive, pricePrecision]);
+  }, [asset, timeframe, replayActive, historicalView, pricePrecision]);
 
   // --- 5) Re-render cuando cambian los indicadores (sin recargar candles) ---
   useEffect(() => {
@@ -637,6 +697,7 @@ export default function TradingViewPage() {
 
     fetchingHistoryRef.current = true;
     setLoadingHistory(true);
+    const seq = loadSeqRef.current; // un salto de vista invalida la respuesta
     try {
       const oldestTime = current[0].time;
       const older = await marketApi.getCandles({
@@ -646,18 +707,20 @@ export default function TradingViewPage() {
         limit: 500,
         endTime: oldestTime - 1,
       });
-      if (snapshotKey !== assetKeyRef.current) return;
+      if (snapshotKey !== assetKeyRef.current || seq !== loadSeqRef.current) return;
       if (!Array.isArray(older) || older.length === 0) {
         reachedHistoryEndRef.current = true;
         return;
       }
-      const seen = new Set(current.map((c) => c.time));
+      // Se relee candlesRef: una carga hacia delante pudo terminar mientras tanto.
+      const latest = candlesRef.current;
+      const seen = new Set(latest.map((c) => c.time));
       const newBars = older.filter((c) => !seen.has(c.time));
       if (newBars.length === 0) {
         reachedHistoryEndRef.current = true;
         return;
       }
-      const merged = [...newBars, ...current].sort((a, b) => a.time - b.time);
+      const merged = mergeCandles(latest, newBars);
       candlesRef.current = merged;
       const nextPrecision = getPricePrecisionFromCandles(merged);
       candleSeriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
@@ -673,11 +736,73 @@ export default function TradingViewPage() {
       if (prevRange) chartRef.current?.timeScale().setVisibleRange(prevRange);
 
       indicatorsControllerRef.current?.render(indicatorsRef.current, merged);
+      syncOverlaysRef.current?.(merged);
       setCandleCount(merged.length);
     } catch (err) {
       console.warn('[TradingView] fetchMoreHistory error:', err.message);
     } finally {
       fetchingHistoryRef.current = false;
+      setLoadingHistory(false);
+    }
+  }, [asset, timeframe, replayActive]);
+
+  // Vista histórica: al llegar al borde derecho se cargan velas hacia delante
+  // hasta el presente; al alcanzarlo, la vista vuelve a ser "en vivo".
+  const fetchMoreFuture = useCallback(async () => {
+    if (replayActive || !historicalViewRef.current || fetchingFutureRef.current) return;
+    const current = candlesRef.current;
+    if (current.length === 0) return;
+    const snapshotKey = `${asset.datasource}:${asset.symbol}:${timeframe}`;
+    if (snapshotKey !== assetKeyRef.current) return;
+    const tfMs = (TIMEFRAME_SECONDS[timeframe] || 60) * 1000;
+    fetchingFutureRef.current = true;
+    setLoadingHistory(true);
+    const seq = loadSeqRef.current;
+    try {
+      let cursor = current[current.length - 1].time;
+      let newBars = [];
+      let reachedNow = false;
+      // Unos pocos tramos seguidos por si hay huecos sin velas.
+      for (let i = 0; i < 5 && newBars.length === 0 && !reachedNow; i++) {
+        const win = forwardWindow(cursor, tfMs);
+        const newer = await marketApi.getCandles({
+          asset: asset.symbol,
+          datasource: asset.datasource || 'hyperliquid',
+          timeframe,
+          limit: CANDLE_LIMIT,
+          startTime: win.startTime,
+          endTime: win.endTime,
+        });
+        if (snapshotKey !== assetKeyRef.current || seq !== loadSeqRef.current || !historicalViewRef.current) return;
+        const latest = candlesRef.current;
+        const lastTime = latest[latest.length - 1].time;
+        newBars = (Array.isArray(newer) ? newer : []).filter((c) => c.time > lastTime);
+        reachedNow = win.reachesNow;
+        cursor = win.endTime;
+      }
+      if (newBars.length > 0) {
+        // Se relee candlesRef: una carga de histórico pudo terminar mientras tanto.
+        const merged = mergeCandles(candlesRef.current, newBars);
+        candlesRef.current = merged;
+        const nextPrecision = getPricePrecisionFromCandles(merged);
+        candleSeriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
+        setPricePrecision(nextPrecision);
+        const prevRange = chartRef.current?.timeScale().getVisibleRange();
+        candleSeriesRef.current?.setData(merged.map((c) => ({
+          time: Math.floor(c.time / 1000),
+          open: c.open, high: c.high, low: c.low, close: c.close,
+        })));
+        if (prevRange) chartRef.current?.timeScale().setVisibleRange(prevRange);
+        indicatorsControllerRef.current?.render(indicatorsRef.current, merged);
+        syncOverlaysRef.current?.(merged);
+        setCandleCount(merged.length);
+        setLastPrice(merged[merged.length - 1].close);
+      }
+      if (reachedNow) setHistoricalView(false);
+    } catch (err) {
+      console.warn('[TradingView] fetchMoreFuture error:', err.message);
+    } finally {
+      fetchingFutureRef.current = false;
       setLoadingHistory(false);
     }
   }, [asset, timeframe, replayActive]);
@@ -691,13 +816,17 @@ export default function TradingViewPage() {
       // `range.from` es el índice lógico del primer bar visible.
       // Cuando se acerca a 0 (o se vuelve negativo) el usuario está
       // pidiendo más historia hacia atrás.
+      if (framingRef.current) return;
       if (range.from < 10) {
         fetchMoreHistory();
+      }
+      if (historicalViewRef.current && range.to > candlesRef.current.length - 10) {
+        fetchMoreFuture();
       }
     };
     timeScale.subscribeVisibleLogicalRangeChange(onRange);
     return () => timeScale.unsubscribeVisibleLogicalRangeChange(onRange);
-  }, [fetchMoreHistory]);
+  }, [fetchMoreHistory, fetchMoreFuture]);
 
   // --- 5) Guardar config ---
   const handleSaveIndicators = useCallback(async (next) => {
@@ -717,6 +846,31 @@ export default function TradingViewPage() {
     storeAsset(next);
     setAssetPickerOpen(false);
   }, []);
+
+  // API de superposiciones para el selector (Task 9) y móvil (Task 10):
+  // añadir una opción que venció antes de la primera vela salta a su vida.
+  const { add: addOverlaySpec, replace: replaceOverlay } = overlays;
+  const addOverlay = useCallback((spec) => {
+    addOverlaySpec(spec);
+    if (replayActive) return; // en Replay no se salta (las superposiciones están ocultas)
+    const target = jumpTarget(spec, candlesRef.current[0]?.time, OVERLAY_TF_MS[timeframe]);
+    if (target) void loadData(target);
+  }, [addOverlaySpec, loadData, replayActive, timeframe]);
+
+  const closeOverlayPicker = useCallback(() => setOverlayPickerOpen(false), []);
+
+  // "Intercambiar con el principal" (sólo activos): el activo pasa a ser el
+  // principal y el principal ocupa su hueco con su color.
+  const swapOverlay = useCallback((id) => {
+    const o = overlays.state.items.find((x) => x.id === id);
+    if (o?.kind !== 'asset') return;
+    replaceOverlay(id, {
+      kind: 'asset',
+      asset: { symbol: asset.symbol, datasource: asset.datasource, name: asset.name ?? asset.symbol },
+    }, o.asset);
+    handleSelectAsset(o.asset);
+  }, [overlays.state.items, replaceOverlay, asset, handleSelectAsset]);
+  const mainLabel = shortLabel({ kind: 'asset', asset });
 
   // --- Drawings overlay ---
   const drawings = useDrawings({
@@ -797,6 +951,25 @@ export default function TradingViewPage() {
     ['L', displayedOhlc.low],
     ['C', displayedOhlc.close],
   ] : [];
+
+  // Superposiciones: valores en la vela mostrada (chips) y bajo el puntero (tooltip).
+  const overlayCount = overlays.state.items.length;
+  const overlayTime = displayedOhlc ? Math.floor(displayedOhlc.time / 1000) : null;
+  const overlayValues = overlayCount > 0 && overlayTime != null ? overlays.valuesAt(overlayTime) : [];
+  // Móvil: lectura inferior (en el flujo, entre el gráfico y las pestañas)
+  // mientras haya superposiciones dibujadas. Sigue al puntero y, sin él,
+  // muestra la última vela: así su espacio no aparece ni desaparece con el
+  // crosshair y el gráfico no salta. Desplegada, es el único sitio con el
+  // valor del principal (la leyenda OHLC de arriba lo omite).
+  const mobileReadout = isMobile && !overlaysHidden && !replayActive && overlayValues.length > 0;
+  // Leyenda de la prima: sólo mientras haya alguna opción dibujada.
+  const legendColor = overlaysHidden || replayActive
+    ? null
+    : optionLegendColor(overlays.state.items, overlays.status, overlays.state.focusedId);
+  const mainInReadout = mobileReadout && !overlayReadoutCollapsed;
+  const mOhlcItems = mainInReadout
+    ? (ohlcExpanded ? ohlcValues.slice(0, 3) : [])
+    : (ohlcExpanded ? ohlcValues : ohlcValues.slice(3));
 
   const timeframeButtons = (btnClass, activeClass, items = TIMEFRAMES) => items.map((t) => (
     <button
@@ -889,7 +1062,7 @@ export default function TradingViewPage() {
         <button
           type="button"
           className={styles.refreshBtn}
-          onClick={loadData}
+          onClick={() => loadData()}
           disabled={loading}
           title="Refrescar datos"
         >
@@ -904,6 +1077,19 @@ export default function TradingViewPage() {
         >
           <span className={styles.btnIcon}><IndicatorsIcon size={14} /></span>
           <span>Indicadores ({visibleIndicatorsCount})</span>
+        </button>
+        <button
+          type="button"
+          className={`${styles.refreshBtn} ${styles.overlayBtn}`}
+          onClick={() => setOverlayPickerOpen(true)}
+          title={overlayCount >= MAX_OVERLAYS
+            ? `Máximo ${MAX_OVERLAYS} superposiciones`
+            : 'Superponer otro activo u opción sobre el gráfico'}
+          aria-haspopup="dialog"
+        >
+          <span className={styles.btnIcon}><PlusIcon size={14} /></span>
+          <span>Superponer</span>
+          {overlayCount > 0 && <span className={styles.overlayCount}>{overlayCount}/{MAX_OVERLAYS}</span>}
         </button>
         <button
           type="button"
@@ -1040,6 +1226,24 @@ export default function TradingViewPage() {
     >
       {isMobile ? mobileHeader : desktopToolbar}
 
+      {!replayActive && overlayCount > 0 && (
+        <OverlayChips
+          mobile={isMobile}
+          overlays={overlays.state.items}
+          focusedId={overlays.state.focusedId}
+          status={overlays.status}
+          values={overlayValues}
+          mainLabel={mainLabel}
+          onFocus={overlays.focus}
+          onToggleHidden={overlays.toggleHidden}
+          onRemove={overlays.remove}
+          onSwap={swapOverlay}
+          onColor={overlays.setColor}
+          onAdd={() => setOverlayPickerOpen(true)}
+          onRetry={overlays.retry}
+        />
+      )}
+
       <div ref={widgetContainerRef} className={styles.widgetContainer}>
         {error && <div className={styles.error}>{error}</div>}
         <div
@@ -1079,8 +1283,8 @@ export default function TradingViewPage() {
             type="button"
             className={`${styles.overlaysToggle} ${overlaysHidden ? styles.overlaysToggleHidden : ''}`}
             onClick={() => setOverlaysHidden((v) => !v)}
-            title={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
-            aria-label={overlaysHidden ? 'Mostrar overlays' : 'Ocultar overlays'}
+            title={overlaysHidden ? 'Mostrar etiquetas' : 'Ocultar etiquetas'}
+            aria-label={overlaysHidden ? 'Mostrar etiquetas' : 'Ocultar etiquetas'}
             aria-pressed={overlaysHidden}
           >
             {overlaysHidden ? <EyeOffIcon size={16} /> : <EyeIcon size={16} />}
@@ -1094,6 +1298,27 @@ export default function TradingViewPage() {
           >
             {futureTimeLabel.text}
           </div>
+        )}
+
+        {!isMobile && !overlaysHidden && hoveredOhlc && overlayValues.length > 0 && (
+          <OverlayTooltip
+            variant="desktop"
+            time={overlayTime}
+            timeframe={timeframe}
+            main={{ label: mainLabel, value: hoveredOhlc.close, changePct: ohlcInfo?.interPct ?? null }}
+            rows={overlayValues}
+          />
+        )}
+
+        {historicalView && !replayActive && (
+          <button
+            type="button"
+            className={styles.backToNow}
+            onClick={() => loadData()}
+            disabled={loading}
+          >
+            Volver a ahora
+          </button>
         )}
 
         {!isMobile && !overlaysHidden && ohlcInfo && (
@@ -1173,15 +1398,18 @@ export default function TradingViewPage() {
               aria-expanded={ohlcExpanded}
               aria-label={ohlcExpanded ? 'Ocultar valores OHLC' : 'Ver valores OHLC'}
             >
-              {(ohlcExpanded ? ohlcValues : ohlcValues.slice(3)).map(([label, value]) => (
+              {mainInReadout && !ohlcExpanded && <span className={styles.ohlcLabel}>OHLC</span>}
+              {mOhlcItems.map(([label, value]) => (
                 <span key={label} className={styles.ohlcGroup}>
                   <span className={styles.ohlcLabel}>{label}</span>
                   <span className={styles.ohlcVal}>{formatPrice(value, pricePrecision)}</span>
                 </span>
               ))}
-              <span className={ohlcInfo.intra >= 0 ? styles.ohlcUp : styles.ohlcDown}>
-                {formatPercent(ohlcInfo.intraPct)}
-              </span>
+              {!mainInReadout && (
+                <span className={ohlcInfo.intra >= 0 ? styles.ohlcUp : styles.ohlcDown}>
+                  {formatPercent(ohlcInfo.intraPct)}
+                </span>
+              )}
               <span className={`${styles.mChevron} ${ohlcExpanded ? styles.mChevronOpen : ''}`}>
                 <ChevronDownIcon size={12} />
               </span>
@@ -1216,6 +1444,30 @@ export default function TradingViewPage() {
         />
       </div>
 
+      {!isMobile && <OverlayLegend color={legendColor} />}
+
+      {mobileReadout && (
+        <OverlayTooltip
+          variant="mobile"
+          time={overlayTime}
+          timeframe={timeframe}
+          collapsed={overlayReadoutCollapsed}
+          action={(
+            <button
+              type="button"
+              className={styles.mReadoutToggle}
+              onClick={() => setOverlayReadoutCollapsed((v) => !v)}
+              aria-expanded={!overlayReadoutCollapsed}
+            >
+              {overlayReadoutCollapsed ? `Desplegar · ${overlayValues.length + 1} series` : 'Contraer'}
+            </button>
+          )}
+          main={{ label: mainLabel, value: displayedOhlc.close, changePct: ohlcInfo?.interPct ?? null }}
+          rows={overlayValues}
+          footer={<OverlayLegend color={legendColor} compact />}
+        />
+      )}
+
       {isMobile && (drawMode ? (
         <MobileDrawingBar
           activeTool={activeTool}
@@ -1230,6 +1482,8 @@ export default function TradingViewPage() {
           replayOpen={replayPanelOpen}
           onIndicators={() => setModalOpen(true)}
           onDraw={() => { setReplayPanelOpen(false); setDrawMode(true); }}
+          overlaysCount={overlayCount}
+          onOverlays={() => setOverlayPickerOpen(true)}
           onReplay={() => setReplayPanelOpen((v) => !v)}
           onSettings={() => setSettingsSheetOpen(true)}
         />
@@ -1288,7 +1542,7 @@ export default function TradingViewPage() {
           onPriceScaleMode={setPriceScaleMode}
           overlaysHidden={overlaysHidden}
           onToggleOverlays={() => setOverlaysHidden((v) => !v)}
-          onRefresh={loadData}
+          onRefresh={() => loadData()}
           loading={loading}
           candleCount={candleCount}
           hasDrawings={drawings.drawings.length > 0}
@@ -1301,6 +1555,17 @@ export default function TradingViewPage() {
         initialIndicators={indicators}
         onSave={handleSaveIndicators}
         onCancel={() => setModalOpen(false)}
+      />
+
+      <OverlayPicker
+        open={overlayPickerOpen}
+        mobile={isMobile}
+        state={overlays.state}
+        mainAsset={asset}
+        timeframeLabel={TIMEFRAMES.find((t) => t.value === timeframe)?.label}
+        onAdd={addOverlay}
+        onRemove={overlays.remove}
+        onClose={closeOverlayPicker}
       />
 
       <AssetPickerModal

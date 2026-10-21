@@ -1,0 +1,101 @@
+/* Tooltip del puntero con superposiciones (escritorio): arriba a la derecha
+   del gráfico, junto a la escala de precios. */
+.tooltip {
+  position: absolute;
+  top: 8px;
+  right: 72px;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 250px;
+  max-width: min(340px, calc(100% - 160px));
+  padding: 10px 12px;
+  background: rgba(19, 22, 30, 0.96);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: var(--radius-md, 8px);
+  font-size: 12px;
+  color: var(--text-muted, #cbd5e1);
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.time { color: var(--text-secondary, #94a3b8); }
+
+/* Móvil: barra de lectura inferior, en el flujo entre el gráfico y las
+   pestañas (el gráfico se encoge; autoSize de lightweight-charts). */
+.mobile {
+  position: static;
+  flex-shrink: 0;
+  z-index: auto;
+  min-width: 0;
+  max-width: none;
+  gap: 4px;
+  padding: 0 14px 8px;
+  border: 0;
+  border-top: 1px solid var(--border, #2a2d35);
+  border-radius: 0;
+  background: #13161e;
+  box-shadow: none;
+  font-size: 13px;
+  line-height: 18px;
+  pointer-events: auto;
+}
+.mobile .note { line-height: 14px; }
+.mobile .time { font-size: 12px; }
+.mobile .row { gap: 12px; }
+.mobile .name { gap: 8px; }
+
+.block { display: flex; flex-direction: column; gap: 2px; }
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--c, #cbd5e1) 45%, #ffffff);
+}
+
+.dot,
+.mainSwatch {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.mainSwatch { border-radius: 2px; background: #26a69a; }
+
+.value {
+  flex-shrink: 0;
+  color: var(--text-bright, #f8fafc);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.stale { color: #a8a29e; }
+
+.note {
+  padding-left: 14px;
+  color: #a8a29e;
+  font-size: 11px;
+}
+
+.up { color: var(--green-light, #4ade80); }
+.down { color: var(--red-light, #f87171); }

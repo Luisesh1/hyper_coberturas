@@ -1062,3 +1062,56 @@
   color: var(--text-muted, #8690a0);
   background: rgba(20, 22, 28, 0.62);
 }
+
+/* Superposiciones: contador en el botón "Superponer" de la barra. */
+.overlayBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.overlayCount {
+  color: var(--text-tertiary, #64748b);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Vista histórica (salto a la vida de una opción): vuelve al presente.
+   Flotante abajo al centro, como el resto de botones sobre el gráfico. */
+.backToNow {
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(99, 102, 241, 0.55);
+  background: rgba(20, 22, 28, 0.9);
+  color: var(--text-bright, #f8fafc);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(4px);
+}
+.backToNow:hover:not(:disabled) { background: rgba(28, 32, 40, 0.96); border-color: rgba(99, 102, 241, 0.85); }
+.backToNow:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.4); }
+.backToNow:disabled { opacity: 0.6; cursor: wait; }
+
+/* Móvil: botón plegar/desplegar de la lectura inferior de superposiciones.
+   Texto pequeño, pero con zona táctil de 44 px. */
+.mReadoutToggle {
+  min-height: 44px;
+  margin: 0 -8px;
+  padding: 0 8px;
+  background: transparent;
+  border: 0;
+  color: #93c5fd;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mReadoutToggle:focus-visible { outline: 2px solid rgba(99, 102, 241, 0.75); outline-offset: -4px; border-radius: 6px; }
