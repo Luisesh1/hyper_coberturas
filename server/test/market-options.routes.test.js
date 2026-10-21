@@ -93,3 +93,11 @@ test('subyacente invalido o instrumento invalido dan 400', async () => {
     assert.equal(calls.length, 0);
   });
 });
+
+test('candles con startTime > endTime da 400 sin llamar al servicio', async () => {
+  await withFakeService(async (call, calls) => {
+    const r = await call('GET', '/market/options/candles?instrument=ETH-31OCT25-4000-C&timeframe=1h&startTime=5000&endTime=1000');
+    assert.equal(r.status, 400);
+    assert.equal(calls.length, 0);
+  });
+});

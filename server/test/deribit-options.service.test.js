@@ -4,7 +4,7 @@ const { createDeribitOptionsService } = require('../src/services/deribit/deribit
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 9, 21, 12); // 2026-10-21
-const EXP = Date.UTC(2026, 9, 3, 8); // viernes 3 OCT 2026
+const EXP = Date.UTC(2026, 9, 2, 8); // viernes 2 OCT 2026
 
 function fakes({ existing = [], failOn = null, live = [] } = {}) {
   const calls = { getInstrument: [], getInstruments: 0, getChartData: [] };
@@ -50,18 +50,18 @@ async function settle(svc, u, code) {
 
 test('strikes de un vencido: sondea la rejilla y conserva los existentes', async () => {
   const { client, marketData } = fakes({
-    existing: ['ETH-3OCT26-2400-C', 'ETH-3OCT26-2450-P'],
+    existing: ['ETH-2OCT26-2400-C', 'ETH-2OCT26-2450-P'],
   });
   const svc = createDeribitOptionsService({ client, marketData, now: () => NOW });
-  const first = svc.getStrikesJob('ETH', '3OCT26');
+  const first = svc.getStrikesJob('ETH', '2OCT26');
   assert.equal(first.status, 'running');
-  const job = await settle(svc, 'ETH', '3OCT26');
+  const job = await settle(svc, 'ETH', '2OCT26');
   assert.equal(job.status, 'done');
   assert.equal(job.spotRef, 2418);
   assert.deepEqual(job.strikes.map((s) => s.strike), [2400, 2450]);
-  assert.equal(job.strikes[0].call, 'ETH-3OCT26-2400-C');
+  assert.equal(job.strikes[0].call, 'ETH-2OCT26-2400-C');
   assert.equal(job.strikes[0].put, null);
-  assert.equal(job.strikes[1].put, 'ETH-3OCT26-2450-P');
+  assert.equal(job.strikes[1].put, 'ETH-2OCT26-2450-P');
   assert.ok(Math.abs(job.strikes[0].distancePct - -0.744) < 0.01);
   assert.equal(job.probed, job.total);
   assert.ok(job.total > 20);
@@ -69,21 +69,21 @@ test('strikes de un vencido: sondea la rejilla y conserva los existentes', async
 
 test('error a mitad de sondeo: status error y conserva lo hallado', async () => {
   const { client, marketData } = fakes({
-    existing: ['ETH-3OCT26-1750-C'],
-    failOn: 'ETH-3OCT26-2800-C',
+    existing: ['ETH-2OCT26-1750-C'],
+    failOn: 'ETH-2OCT26-2800-C',
   });
   const svc = createDeribitOptionsService({ client, marketData, now: () => NOW });
-  svc.getStrikesJob('ETH', '3OCT26');
-  const job = await settle(svc, 'ETH', '3OCT26');
+  svc.getStrikesJob('ETH', '2OCT26');
+  const job = await settle(svc, 'ETH', '2OCT26');
   assert.equal(job.status, 'error');
   assert.match(job.error, /red caida/);
   assert.deepEqual(job.strikes.map((s) => s.strike), [1750]);
   // con retry se reintenta
   client.getInstrument = async () => null;
-  assert.equal(svc.getStrikesJob('ETH', '3OCT26').status, 'error'); // sondear no reinicia
-  const again = svc.getStrikesJob('ETH', '3OCT26', { retry: true });
+  assert.equal(svc.getStrikesJob('ETH', '2OCT26').status, 'error'); // sondear no reinicia
+  const again = svc.getStrikesJob('ETH', '2OCT26', { retry: true });
   assert.equal(again.status, 'running');
-  await settle(svc, 'ETH', '3OCT26');
+  await settle(svc, 'ETH', '2OCT26');
 });
 
 test('vencimiento vigente: no llama a getInstrument', async () => {
@@ -162,14 +162,14 @@ test('job vigente terminado se relanza pasados 10 s; no es permanente', async ()
 });
 
 test('job de un vigente se relanza con sondeo al vencer', async () => {
-  const f = fakes({ live: ['ETH-31OCT26-3000-C'] });
+  const f = fakes({ live: ['ETH-30OCT26-3000-C'] });
   let now = NOW;
   const svc = createDeribitOptionsService({ client: f.client, marketData: f.marketData, now: () => now });
-  svc.getStrikesJob('ETH', '31OCT26');
-  await settle(svc, 'ETH', '31OCT26');
-  now = Date.UTC(2026, 10, 1);
-  assert.equal(svc.getStrikesJob('ETH', '31OCT26').status, 'running');
-  await settle(svc, 'ETH', '31OCT26');
+  svc.getStrikesJob('ETH', '30OCT26');
+  await settle(svc, 'ETH', '30OCT26');
+  now = Date.UTC(2026, 10, 1); // 30OCT26 es viernes: vencido aceptado
+  assert.equal(svc.getStrikesJob('ETH', '30OCT26').status, 'running');
+  await settle(svc, 'ETH', '30OCT26');
   assert.ok(f.calls.getInstrument.length > 0);
 });
 
@@ -229,4 +229,80 @@ test('listExpiries: una sola serie de Binance, llamadas simultaneas compartidas 
   assert.equal(f.calls.getInstruments, 1);
   await svc.listExpiries('ETH');
   assert.equal(f.calls.getInstruments, 1); // dentro de los 10 s
+});
+
+// I1: el cache se indexa por dia; la ventana exacta debe recortarse al leer.
+test('getCandles 1m: dos ventanas del mismo dia devuelven cada una su tramo', async () => {
+  const f = fakes();
+  const day = Date.UTC(2026, 9, 2);
+  f.client.getChartData = async (a) => {
+    f.calls.getChartData.push(a);
+    const ticks = [];
+    for (let t = day; t < day + DAY; t += 3_600_000) ticks.push(t); // una vela por hora
+    const v = ticks.map(() => 0.01);
+    return { ticks, open: v, high: v, low: v, close: v, volume: v.map(() => 1) };
+  };
+  const svc = createDeribitOptionsService({ client: f.client, marketData: f.marketData, now: () => NOW });
+  const H = 3_600_000;
+  const late = await svc.getCandles({ instrument: 'ETH-2OCT26-2400-C', timeframe: '1m', startMs: day + 15 * H, endMs: day + 23 * H });
+  const early = await svc.getCandles({ instrument: 'ETH-2OCT26-2400-C', timeframe: '1m', startMs: day + 7 * H, endMs: day + 15 * H });
+  assert.equal(f.calls.getChartData.length, 2); // la segunda ventana sale del cache (opcion + perpetuo)
+  assert.equal(late[0].time, day + 15 * H);
+  assert.equal(late[late.length - 1].time, day + 23 * H);
+  assert.equal(early[0].time, day + 7 * H);
+  assert.equal(early[early.length - 1].time, day + 15 * H);
+});
+
+// I4: un viernes que falla no tumba la lista.
+test('listExpiries: un viernes que falla se omite y el resto se devuelve', async () => {
+  const f = fakes({
+    live: ['ETH-31OCT26-3000-C'],
+    existing: ['ETH-9OCT26-2400-C', 'ETH-2OCT26-2400-C'],
+  });
+  const md = {
+    async getCandles(asset, tf, opts) {
+      if (opts.limit > 5) throw new Error('binance caido'); // sin prefetch: dia por dia
+      if (opts.startTime <= Date.UTC(2026, 8, 25) && opts.endTime >= Date.UTC(2026, 8, 25)) {
+        throw new Error('sin vela diaria'); // spot del viernes 2 OCT (-7 d)
+      }
+      return f.marketData.getCandles(asset, tf, opts);
+    },
+  };
+  const svc = createDeribitOptionsService({ client: f.client, marketData: md, now: () => NOW });
+  const list = await svc.listExpiries('ETH');
+  assert.deepEqual(list.filter((e) => e.live).map((e) => e.code), ['31OCT26']);
+  assert.deepEqual(list.filter((e) => !e.live).map((e) => e.code), ['9OCT26']);
+  // el veredicto no se cacheo: al recuperarse Binance aparece
+  const svc2md = f.marketData;
+  md.getCandles = (...a) => svc2md.getCandles(...a);
+  const again = await svc.listExpiries('ETH');
+  assert.deepEqual(again.filter((e) => !e.live).map((e) => e.code), ['9OCT26', '2OCT26']);
+});
+
+// I5: solo vencidos que listExpiries puede ofrecer.
+test('getStrikesJob: rechaza vencidos que no son viernes del ultimo anio', () => {
+  const { client, marketData } = fakes();
+  const svc = createDeribitOptionsService({ client, marketData, now: () => NOW });
+  assert.throws(() => svc.getStrikesJob('ETH', '6JAN23'), { name: 'ValidationError' });
+  assert.throws(() => svc.getStrikesJob('ETH', '3OCT26'), { name: 'ValidationError' }); // sabado
+  assert.throws(() => svc.getStrikesJob('ETH', '17OCT25'), { name: 'ValidationError' }); // > 366 d
+  assert.equal(svc.getStrikesJob('ETH', '24OCT25').status, 'running'); // viernes dentro del anio
+  assert.equal(svc.getStrikesJob('ETH', '28OCT26').status, 'running'); // vigente (miercoles)
+});
+
+test('getStrikesJob: el mapa de trabajos se acota a 200 terminados', async () => {
+  const { client, marketData } = fakes();
+  const svc = createDeribitOptionsService({ client, marketData, now: () => NOW });
+  // 250 codigos vigentes distintos (cada dia desde manana)
+  const codes = [];
+  const { formatExpiryCode } = require('../src/services/deribit/deribit-instruments');
+  for (let i = 1; i <= 250; i++) codes.push(formatExpiryCode(Date.UTC(2026, 9, 21, 8) + i * DAY));
+  for (const c of codes) {
+    svc.getStrikesJob('ETH', c);
+    await settle(svc, 'ETH', c);
+  }
+  // el primero fue expulsado: consultarlo relanza el trabajo (running) en vez de devolver 'done'
+  assert.equal(svc.getStrikesJob('ETH', codes[0]).status, 'running');
+  // el ultimo sigue en el mapa
+  assert.equal(svc.getStrikesJob('ETH', codes[codes.length - 1]).status, 'done');
 });

@@ -88,6 +88,7 @@ router.get('/options/candles', asyncHandler(async (req, res) => {
   try { resolutionFor(timeframe); } catch { throw new ValidationError(`Temporalidad no soportada: ${timeframe}`); }
   const endMs = parsePositiveTs(req.query.endTime) ?? Date.now();
   const startMs = parsePositiveTs(req.query.startTime) ?? endMs - 30 * DAY_MS;
+  if (startMs > endMs) throw new ValidationError('startTime no puede ser posterior a endTime');
   const data = await deribitOptionsModule.deribitOptionsService.getCandles({ instrument, timeframe, startMs, endMs });
   res.json({ success: true, data });
 }));

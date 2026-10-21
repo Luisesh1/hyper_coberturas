@@ -18,6 +18,8 @@ const PROBE_CHUNK = 6; // strikes sondeados a la vez
 const CANDLE_CACHE_MAX = 300; // entradas maximas (FIFO)
 const MAX_RANGE_DAYS = 400; // rango maximo aceptado por getCandles
 const YEAR_DAYS = 365;
+const EXPIRED_WINDOW_DAYS = 366; // vencidos aceptados por /strikes (los que ofrece listExpiries)
+const JOBS_MAX = 200; // trabajos de strikes conservados (se expulsan los terminados mas viejos)
 
 const dayFloor = (ms) => Math.floor(ms / DAY_MS) * DAY_MS;
 const decimalsOf = (step) => (String(step).split('.')[1] || '').length;
@@ -162,7 +164,8 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
     const dead = [];
     for (let i = 0; i < fridays.length; i += PROBE_CHUNK) {
       const chunk = fridays.slice(i, i + PROBE_CHUNK);
-      const flags = await Promise.all(chunk.map((ms) => fridayExists(underlying, ms)));
+      // Un viernes cuyo sondeo falla se omite (sin cachear veredicto); el resto sigue.
+      const flags = await Promise.all(chunk.map((ms) => fridayExists(underlying, ms).catch(() => false)));
       chunk.forEach((ms, k) => {
         if (flags[k]) dead.push({ code: formatExpiryCode(ms), expiryMs: ms, live: false });
       });
@@ -239,6 +242,14 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
     }
   }
 
+  // Mantiene el mapa acotado: expulsa los trabajos terminados mas antiguos.
+  function pruneJobs() {
+    for (const [k, j] of jobs) {
+      if (jobs.size <= JOBS_MAX) break;
+      if (j.status !== 'running') jobs.delete(k);
+    }
+  }
+
   // Lanza el trabajo la primera vez; luego devuelve su estado. Un trabajo en error solo se
   // relanza con { retry: true } (el sondeo periodico de la UI no debe borrar el error).
   function getStrikesJob(underlying, expiryCode, { retry = false } = {}) {
@@ -249,6 +260,13 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
       if (!Number.isFinite(expiryMs) || formatExpiryCode(expiryMs) !== expiryCode) throw new Error('fecha');
     } catch {
       throw new ValidationError(`Vencimiento invalido: ${expiryCode}`);
+    }
+    // Vencidos: solo viernes del ultimo anio (el mismo conjunto que ofrece listExpiries).
+    if (expiryMs < now()) {
+      const friday = new Date(expiryMs).getUTCDay() === 5;
+      if (!friday || expiryMs < now() - EXPIRED_WINDOW_DAYS * DAY_MS) {
+        throw new ValidationError(`Vencimiento fuera de rango: ${expiryCode}`);
+      }
     }
     const key = `${underlying}|${expiryCode}`;
     let job = jobs.get(key);
@@ -261,7 +279,9 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
     }
 
     job = { status: 'running', probed: 0, total: 0, spotRef: null, strikes: [], error: null, finishedAt: 0, live: false };
+    jobs.delete(key); // reinsertar al final: el orden del Map es el de antiguedad
     jobs.set(key, job);
+    pruneJobs();
     const run = expiryMs < now() ? runExpired : runLive;
     run(job, underlying, expiryMs).then(
       () => {
@@ -288,8 +308,10 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
     const endDay = dayFloor(endMs);
     const key = `${instrument}|${rule.resolution}|${timeframe}|${startDay}|${endDay}`;
 
+    // El cache guarda el rango de dias completo; la ventana exacta se recorta al leer.
+    const inWindow = (list) => list.filter((c) => bucketBounds(c.time, rule)[1] > startMs && c.time <= endMs);
     const hit = candleCache.get(key);
-    if (hit && hit.expiresAt > now()) return hit.value;
+    if (hit && hit.expiresAt > now()) return inWindow(hit.value);
     if (hit) candleCache.delete(key);
 
     const range = { resolution: rule.resolution, startMs: startDay, endMs: endDay + DAY_MS - 1 };
@@ -307,14 +329,12 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
       const perp = aggregateCandles(chartDataToCandles(perpData), timeframe);
       underlyingCloseByTime = new Map(perp.map((c) => [c.time, c.close]));
     }
-    const value = toUsdCandles(candles, { inverse: parsed.inverse, underlyingCloseByTime }).filter(
-      (c) => bucketBounds(c.time, rule)[1] > startMs && c.time <= endMs,
-    );
+    const value = toUsdCandles(candles, { inverse: parsed.inverse, underlyingCloseByTime });
 
     const permanent = parsed.expiryMs < now();
     while (candleCache.size >= CANDLE_CACHE_MAX) candleCache.delete(candleCache.keys().next().value);
     candleCache.set(key, { value, expiresAt: permanent ? Infinity : now() + LIVE_TTL_MS });
-    return value;
+    return inWindow(value);
   }
 
   return { listExpiries, getStrikesJob, getCandles };
