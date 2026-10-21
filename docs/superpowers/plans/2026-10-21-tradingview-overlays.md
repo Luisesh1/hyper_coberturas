@@ -2,10 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Superponer hasta 6 series (activos del catálogo u opciones de Deribit, vigentes o vencidas en el último año) sobre el gráfico de `/trading-view`, cada una con su propia escala. Una enfocada usa el eje izquierdo. Las opciones llevan barras y detalle de la prima pagada por operación. Escritorio y móvil.
+**Goal:** Superponer hasta 6 series (activos del catálogo u opciones de Deribit, vigentes o vencidas en el último año) sobre el gráfico de `/trading-view`, cada una con su propia escala. Una enfocada usa el eje izquierdo.  Escritorio y móvil.
 
 **Architecture:**
-- **Servidor:** un módulo `services/deribit/` en capas. Helpers puros de nombres, cliente HTTP con cola, transformaciones puras de velas y operaciones, y un servicio con cachés. Se expone en cuatro rutas nuevas bajo `/api/market/options/*`.
+- **Servidor:** un módulo `services/deribit/` en capas. Helpers puros de nombres, cliente HTTP con cola, transformaciones puras de velas, y un servicio con cachés. Se expone en tres rutas nuevas bajo `/api/market/options/*`.
 - **Cliente:** un modelo puro de superposiciones (estado, persistencia y alineación), un hook que gestiona las series de lightweight-charts dentro del chart existente, y componentes de UI (chips, tooltip, selector y piezas móviles). `TradingViewPage.jsx` solo los cablea.
 
 **Tech Stack:**
@@ -29,7 +29,6 @@
 - **Persistencia:** clave `localStorage` `tv_overlays_v1`, una lista global (no por activo).
 - **Deribit:**
   - API: `https://www.deribit.com/api/v2/public`.
-  - Operaciones: `https://history.deribit.com/api/v2/public/get_last_trades_by_instrument_and_time`.
   - Concurrencia 6 y reintento ante 429.
 - **Nombres de contrato:**
   - Formato `ETH-31OCT25-4000-C`: día sin cero, mes en mayúsculas de 3 letras, año en 2 dígitos, decimal escrito con `d` (`XRP_USDC-5DEC25-2d2-C`).
@@ -39,8 +38,8 @@
   - USDC: SOL, XRP, AVAX, TRX y HYPE (prefijo `<X>_USDC`).
   - Sin Deribit: BNB y DOGE.
 - **Prima en USD:**
-  - Inversas: `price × contracts × index_price` por operación, y `close × cierre del perpetuo` por vela.
-  - USDC: `price × amount`, y `close` tal cual.
+  - Inversas: `close × cierre del perpetuo` por vela.
+  - USDC: `close` tal cual.
 - **Correspondencia de temporalidades (de la app a la resolución de Deribit):** 1m→`1`, 5m→`5`, 15m→`15`, 1h→`60`, 4h→`60` agregado, 1d→`1D`, 1w→`1D` agregado, 1M→`1D` agregado.
   - 4h se alinea en múltiplos de 4 h UTC.
   - 1w empieza el lunes a las 00:00 UTC.
@@ -53,11 +52,11 @@
   - "Superponer", "Añadir", "Añadida" / "Añadido", "En el gráfico".
   - "Vigentes", "Vencidos · último año", "Buscando strikes · {n} de {total}", "Sin operaciones".
   - "Usar el eje izquierdo", "Intercambiar con {principal}", "Quitar superposición", "Volver a ahora", "eje izq.".
-  - "Prima pagada: ${total} · {n} operaciones ({b} compras, {s} ventas)", "Σ ${x} en vista".
   - "BNB y DOGE no cotizan en Deribit", "Ocultar etiquetas" / "Mostrar etiquetas" (el renombre del ojo existente).
 - **Móvil:**
   - `MOBILE_QUERY` de `useMediaQuery.js`: diseño propio, toques ≥44 px, selector en `BottomSheet` y opción en 3 pasos.
   - Tocar un chip lo enfoca. Tocar el enfocado abre la hoja de acciones.
+- **Sin prima por operación:** nada de operaciones individuales, barras de prima pagada ni "Σ en vista" (ese pedido era para el módulo de Opciones).
 - **Solo vista principal:** nada en `/trading-view/multi`. Una opción nunca pasa a ser el principal.
 - **Replay activo:** las superposiciones se ocultan (las series se eliminan y se restauran al salir).
 - **E2E:** contra Docker en `http://localhost:5174`, con la API simulada con `page.route` como en `e2e/tradingview-multi.spec.js`.
@@ -77,9 +76,9 @@
 **Servidor (nuevo):**
 - `server/src/services/deribit/deribit-instruments.js`: nombres, subyacentes, pasos y códigos de vencimiento (puro).
 - `server/src/services/deribit/deribit.client.js`: HTTP con cola y reintentos.
-- `server/src/services/deribit/option-series.js`: resolución, agregación, prima en USD, `traded` y buckets de operaciones (puro).
+- `server/src/services/deribit/option-series.js`: resolución, agregación, prima en USD y `traded` (puro).
 - `server/src/services/deribit/deribit-options.service.js`: vencimientos, trabajos de strikes, velas y operaciones, con cachés.
-- **Modifica** `server/src/routes/market.routes.js`: 4 rutas.
+- **Modifica** `server/src/routes/market.routes.js`: 3 rutas.
 - **Tests:** `server/test/deribit-instruments.test.js`, `deribit-client.test.js`, `option-series.test.js`, `deribit-options.service.test.js` y `market-options.routes.test.js`.
 
 **Cliente (nuevo):**
@@ -89,7 +88,7 @@
 - `client/src/pages/TradingView/overlays/OverlayTooltip.jsx`: tooltip de escritorio y lectura móvil (`variant`).
 - `client/src/pages/TradingView/overlays/OverlayPicker.jsx` + `.module.css`: modal (escritorio) y hoja (móvil), con las pestañas Activo y Opción.
 - `client/src/pages/TradingView/overlays/OptionBrowser.jsx`: pestaña Opción (pastillas, vencimientos y strikes; 3 pasos en móvil).
-- **Modifica** `client/src/services/api.js`: `marketApi.getOptionExpiries/getOptionStrikes/getOptionCandles/getOptionTrades`.
+- **Modifica** `client/src/services/api.js`: `marketApi.getOptionExpiries/getOptionStrikes/getOptionCandles`.
 - **Modifica** `client/src/pages/TradingView/TradingViewPage.jsx`: cableado, botón, salto a la vida de la opción, Replay y renombre del ojo.
 - **Modifica** `client/src/pages/TradingView/components/MobileTabBar.jsx`: pestaña "Superponer".
 - **Tests:** un `*.test.js(x)` junto a cada archivo nuevo. E2E en `e2e/tradingview-overlays.spec.js`.
@@ -142,20 +141,18 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
   - `getInstrument(name) => Promise<object|null>`: `null` cuando el error trae `data.reason === 'instrument not found'`.
   - `getInstruments({ currency, expired = false }) => Promise<object[]>`
   - `getChartData({ instrument, resolution, startMs, endMs }) => Promise<{ ticks:number[], open, high, low, close, volume }>`
-  - `getTrades({ instrument, startMs, endMs }) => Promise<object[]>`: usa el host de historial, pagina con `has_more` (`count=1000`, `sorting='asc'`, avanza `start_timestamp` al último `timestamp + 1`) y corta en 50 páginas.
 - Exporta también un `deribitClient` por defecto (singleton).
 
 - [ ] **Step 1: Write failing tests** with a fake `http.get` that records calls:
   - `getInstrument` devuelve `null` ante `{ error: { data: { reason: 'instrument not found' } } }` (la respuesta 400 llega como `err.response.data`).
   - Un 429 y después un 200: reintenta y devuelve el resultado (con `sleep` falso).
-  - `getTrades` encadena dos páginas (`has_more: true` y después `false`) y la segunda petición usa `start_timestamp = último.timestamp + 1`.
   - Concurrencia: con 10 llamadas simultáneas y `concurrency: 2`, el máximo en vuelo es 2.
 - [ ] **Step 2:** `cd server && node --test test/deribit-client.test.js` → FAIL
 - [ ] **Step 3:** Implement. Una cola simple (contador y FIFO de resolvers) y backoff `250ms × 2^intento`.
 - [ ] **Step 4:** → PASS
 - [ ] **Step 5:** `git commit -m "feat(deribit): rate-limited public client"`
 
-### Task 3: Transformaciones de velas y operaciones de opciones
+### Task 3: Transformaciones de velas de opciones
 
 **Files:**
 - Create: `server/src/services/deribit/option-series.js`
@@ -167,7 +164,6 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
   - `chartDataToCandles(chartData) => Candle[]`, con `Candle = { time, open, high, low, close, volume, traded }` (`traded = volume > 0`).
   - `aggregateCandles(candles, timeframe) => Candle[]`: 4h, 1w o 1M. `traded` es verdadero si alguna vela está negociada. OHLC estándar.
   - `toUsdCandles(candles, { inverse, underlyingCloseByTime: Map<number, number> }) => Candle[]`: añade `premiumCoin` en las inversas. Una vela sin cierre del subyacente se descarta.
-  - `bucketTrades(trades, timeframe, { inverse }) => Bucket[]`, con `Bucket = { time, premiumUsd, trades, buys, sells, top: Array<{ ts, side:'buy'|'sell', contracts, price, premiumUsd }> }`. `top` son las 3 de mayor `premiumUsd`, ordenadas de mayor a menor.
 
 - [ ] **Step 1: Write failing tests**
   - `resolutionFor('4h')` → `{ resolution: '60', aggregateMs: 14_400_000, calendar: null }`.
@@ -176,12 +172,11 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
   - **Alineación:** una vela de 1h a las 03:00 cae en la de 00:00.
   - **Semana:** una vela 1D del miércoles 2026-10-14 se agrupa en el lunes `Date.UTC(2026,9,12)`.
   - `toUsdCandles([{ time:t, close:0.0002, … }], { inverse:true, underlyingCloseByTime:new Map([[t,3829.09]]) })[0].close ≈ 0.765818`.
-  - `bucketTrades` con dos operaciones (`buy`: 8 contratos a 0.0002 con índice 3829.09; `sell`: 1 contrato a 0.0002 con índice 3822.5) en la misma hora: `premiumUsd ≈ 6.8909`, `trades = 2`, `buys = 1`, `sells = 1` y `top[0].side === 'buy'`.
-  - En USDC, la prima es `price × amount`.
+  - En USDC (`inverse:false`), `toUsdCandles` deja `close` tal cual y no añade `premiumCoin`.
 - [ ] **Step 2:** `cd server && node --test test/option-series.test.js` → FAIL
 - [ ] **Step 3:** Implement. Funciones puras, sin I/O.
 - [ ] **Step 4:** → PASS
-- [ ] **Step 5:** `git commit -m "feat(deribit): option candle aggregation and premium buckets"`
+- [ ] **Step 5:** `git commit -m "feat(deribit): option candle aggregation"`
 
 ### Task 4: Servicio de opciones de Deribit
 
@@ -203,7 +198,6 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
     - `distancePct = (strike / spotRef - 1) × 100`.
     - Un error de red detiene el trabajo con `status: 'error'` y conserva lo encontrado.
   - `getCandles({ instrument, timeframe, startMs, endMs }) => Promise<Candle[]>`: en USD, agregadas y recortadas a `[startMs, endMs]`.
-  - `getTradeBuckets({ instrument, timeframe, startMs, endMs }) => Promise<Bucket[]>`
 - Cachés en memoria con clave por `instrument|resolution|rango redondeado al día`: permanente si `expiryMs < now`, 10 s si no.
 - Exporta también un `deribitOptionsService` por defecto.
 
@@ -216,7 +210,7 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
 - [ ] **Step 2:** `cd server && node --test test/deribit-options.service.test.js` → FAIL
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** → PASS
-- [ ] **Step 5:** `git commit -m "feat(deribit): options service (expiries, strike probing, candles, trades)"`
+- [ ] **Step 5:** `git commit -m "feat(deribit): options service (expiries, strike probing, candles)"`
 
 ### Task 5: Rutas y cliente de la API
 
@@ -230,12 +224,11 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
   - `GET /api/market/options/expiries?underlying=ETH` → `listExpiries`
   - `GET /api/market/options/strikes?underlying=ETH&expiry=10OCT26` → `getStrikesJob`
   - `GET /api/market/options/candles?instrument=…&timeframe=1h&startTime&endTime` → `getCandles`
-  - `GET /api/market/options/trades?instrument=…&timeframe=1h&startTime&endTime` → `{ buckets }`
   - Validación: un `underlying` fuera de `UNDERLYINGS` o un `instrument` que `parseInstrumentName` no entiende → 400 `ValidationError`.
-  - Cliente: `marketApi.getOptionExpiries(underlying)`, `getOptionStrikes(underlying, expiry)`, `getOptionCandles({ instrument, timeframe, startTime, endTime })` y `getOptionTrades({ … })`, que devuelve `data.buckets`.
+  - Cliente: `marketApi.getOptionExpiries(underlying)`, `getOptionStrikes(underlying, expiry)`, y `getOptionCandles({ instrument, timeframe, startTime, endTime })`.
 
 - [ ] **Step 1: Failing route tests:**
-  - Las 4 rutas devuelven lo que dé el servicio sustituido.
+  - Las 3 rutas devuelven lo que dé el servicio sustituido.
   - `underlying=BNB` → 400.
   - `instrument=foo` → 400.
 - [ ] **Step 2:** `cd server && node --test test/market-options.routes.test.js` → FAIL
@@ -292,18 +285,16 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
 - Test: `client/src/pages/TradingView/overlays/useChartOverlays.test.jsx` (chart falso con `addSeries`, `removeSeries`, `priceScale(id).applyOptions` y series con `setData`/`applyOptions` que registran llamadas, como `multi/SyncedChart.test.jsx`)
 
 **Interfaces:**
-- Consumes: Task 6 y `marketApi` (`getCandles`, `getOptionCandles`, `getOptionTrades`).
+- Consumes: Task 6 y `marketApi` (`getCandles`, `getOptionCandles`).
 - Produces: `useChartOverlays({ chartRef, candleSeriesRef, mainAsset, timeframe, enabled /* !replayActive */ })`, que devuelve:
   - `state: OverlayState`, `add(spec)`, `remove(id)`, `toggleHidden(id)`, `focus(id)`, `setColor(id, c)`
   - `syncMain(mainCandles)`: hay que llamarla después de `loadData`, de cargar historial y de cada tick de polling. Pide a cada superposición solo el tramo nuevo y vuelve a alinear.
-  - `valuesAt(timeSec) => Array<{ id, label, color, value, changePct, traded, lastTradeAgoH, bucket: Bucket|null }>`: solo las visibles que no sean el principal.
-  - `visiblePremiumSum => number|null` (la opción enfocada en el rango visible)
+  - `valuesAt(timeSec) => Array<{ id, label, color, value, changePct, traded, lastTradeAgoH }>`: solo las visibles que no sean el principal.
   - `status: Record<id, 'loading'|'ready'|'empty'|'error'|'isMain'>`
 - **Series de cada superposición:**
   - Activo: un `LineSeries`.
   - Opción: dos `LineSeries`, una negociada (sólida) y otra sin operaciones (`#a8a29e`, `lineStyle: LineStyle.Dashed`).
   - Escala: `priceScaleId` = `'left'` si es la enfocada; si no, `'ov-<id>'`, con `chart.priceScale('ov-<id>').applyOptions({ visible:false, scaleMargins:{ top:0.12, bottom:0.12 } })`.
-- **Barras de prima pagada:** un `HistogramSeries` en `priceScaleId 'ov-trades'` con `scaleMargins { top: 0.85, bottom: 0 }`, solo si la enfocada es una opción. Dos series apiladas: compras al 75 % de opacidad del color y ventas (total) al 32 %, dibujadas detrás.
 - **Escala izquierda:** `chart.applyOptions({ leftPriceScale: { visible: hayVisibles, borderColor } })`, con las etiquetas en el color de la enfocada (`textColor`).
 - **Atenuación:** `candleSeriesRef.current.applyOptions` con los colores de velas en `rgba(..., 0.55)` si hay alguna visible; si no, los de `THEME`.
 - Persiste con `saveOverlays(localStorage)` en cada cambio y restaura con `loadOverlays` al montar.
@@ -311,7 +302,6 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
 
 - [ ] **Step 1: Failing tests:**
   - Al añadir un activo se crea un `LineSeries` con `priceScaleId 'left'`. El segundo va a `'ov-<id>'` y `focus(id2)` intercambia los dos `priceScaleId`.
-  - Una opción enfocada crea un `HistogramSeries`; enfocar un activo lo elimina.
   - `isMain`: si el principal es el mismo activo, no hay serie y `status = 'isMain'`.
   - `setData` recibe los huecos de `alignToMain` (puntos sin `value`).
   - Con `enabled=false` no quedan series.
@@ -319,7 +309,7 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
 - [ ] **Step 2:** `cd client && npx vitest run src/pages/TradingView/overlays/useChartOverlays.test.jsx` → FAIL
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** → PASS
-- [ ] **Step 5:** `git commit -m "feat(tradingview): chart overlays hook (N series, focus, premium histogram)"`
+- [ ] **Step 5:** `git commit -m "feat(tradingview): chart overlays hook (N series, focus)"`
 
 ### Task 8: Chips, tooltip e integración en escritorio
 
@@ -331,7 +321,7 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
 **Interfaces:**
 - Consumes: Task 7.
 - Produces:
-  - `<OverlayChips overlays focusedId status values premiumSum mainLabel onFocus onToggleHidden onRemove onSwap onColor onAdd max={6} />`
+  - `<OverlayChips overlays focusedId status values mainLabel onFocus onToggleHidden onRemove onSwap onColor onAdd max={6} />`
   - `<OverlayTooltip variant="desktop"|"mobile" time main={{ label, value, changePct }} rows={valuesAt(t)} />`
 - **Comportamiento de los chips (artboard 1):**
   - El enfocado lleva borde y fondo en su color, y "eje izq.".
@@ -344,7 +334,6 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
   - La fila hace scroll horizontal.
 - **Tooltip:**
   - Una fila por serie.
-  - En la fila de una opción, el bloque "Prima pagada: … · N operaciones (b compras, s ventas)" con las 3 mayores (`HH:MM compra 120 × 0.0068 ETH = $1,979`).
   - "Última operación hace N h" cuando la vela no está negociada.
 - **Cambios en la página:**
   - Botón "Superponer {n}/6" en `toolbarDesktop`.
@@ -366,7 +355,7 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
     - El menú de una opción no muestra "Intercambiar".
     - Con 6 superposiciones, "Añadir" queda desactivado con el `title` "Máximo 6 superposiciones".
     - Un chip `isMain` muestra "es el principal".
-  - **Tooltip:** con un bucket `{ premiumUsd: 3591, trades: 7, buys: 4, sells: 3, top:[…] }` se ve "Prima pagada: $3,591 · 7 operaciones (4 compras, 3 ventas)".
+  - **Tooltip:** una fila de opción no negociada con `lastTradeAgoH: 3` muestra "Última operación hace 3 h"; las ocultas no aparecen.
 - [ ] **Step 2:** `cd client && npx vitest run src/pages/TradingView/overlays` → FAIL
 - [ ] **Step 3:** Implement components and page wiring.
 - [ ] **Step 4:** `cd client && npx vitest run` → 0 failing
@@ -420,7 +409,7 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
   - Pastillas de 40 px de alto (zona táctil ≥44 px con padding): punto de color y `shortLabel`, más un "+" redondo.
   - Tocar uno no enfocado → `onFocus`.
   - Tocar el enfocado → abre una `BottomSheet` "Acciones" con "Ocultar", "Quitar superposición" y, solo en activos, "Ver en grande" (= intercambiar).
-- `OverlayTooltip variant="mobile"`: se muestra en la barra de lectura inferior existente, con una línea por serie. El bloque de prima pagada es una fila plegable ("Prima pagada $3,591 · 7 ops (4 C / 3 V)") que se despliega con las 3 mayores.
+- `OverlayTooltip variant="mobile"`: se muestra en la barra de lectura inferior existente, con una línea por serie.
 
 - [ ] **Step 1: Failing tests:**
   - **Chips móviles:** tocar el enfocado abre la hoja con "Ver en grande" si es un activo y sin ella si es una opción.
@@ -438,7 +427,7 @@ assert.deepEqual(fridaysBetween(Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 21)), [D
 - [ ] **Step 1: Write specs:**
   1. **Superponer BTC y SOL sobre ETH:** aparecen 2 chips y la primera tiene "eje izq.". Un clic en el chip de SOL mueve "eje izq." a SOL.
   2. **Ocultar BTC:** el chip queda tachado. Tras recargar la página, siguen las 2 superposiciones y BTC sigue oculta.
-  3. **Superponer `ETH-31OCT25-4000-C`** (vencida; mocks de expiries, strikes `done` y candles/trades): la vista salta y aparece "Volver a ahora". En el tooltip, al pasar el puntero sobre una vela negociada, se ve "Prima pagada". "Volver a ahora" hace desaparecer el botón.
+  3. **Superponer `ETH-31OCT25-4000-C`** (vencida; mocks de expiries, strikes `done` y candles): la vista salta y aparece "Volver a ahora". "Volver a ahora" hace desaparecer el botón.
   4. **Tope:** con 6 añadidas, "Añadir" queda desactivado.
   5. **Móvil** (viewport 390×844): se abre "Superponer" desde la barra de pestañas, se añade BTC, y al tocar el chip enfocado aparece la hoja de acciones con "Ver en grande".
   6. **Replay:** al activarlo, los chips desaparecen o se desactivan y vuelven al salir.

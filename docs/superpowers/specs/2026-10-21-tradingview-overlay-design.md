@@ -1,7 +1,7 @@
 # TradingView · superposición de N gráficos (activos y opciones de Deribit)
 
 Fecha: 2026-10-21
-Diseño visual (lienzo; el usuario eligió el modo de escala **A**; maquetas 1–4 de N superposiciones y prima pagada): https://claude.ai/artifact/BiYrv6H1iw7KF3izAPKBBK
+Diseño visual (lienzo; el usuario eligió el modo de escala **A**; maquetas 1–4 de N superposiciones; la prima por operación de las maquetas 1 y 3 quedó fuera de alcance): https://claude.ai/artifact/BiYrv6H1iw7KF3izAPKBBK
 
 ## Intención
 
@@ -141,41 +141,9 @@ Deribit sí sirve. Verificado el 2026-10-21 con 248 vencimientos (52 viernes y
     principal en superposición. Solo para activos, no para opciones. *(Mi
     decisión: es una acción natural al comparar.)*
 
-## Prima pagada por operación (pedido del usuario, 2026-10-21)
-
-Se muestra en escritorio y en móvil. *(Interpretación mía de "ambas vistas".)*
-
-- **Fuente:** `https://history.deribit.com/api/v2/public/get_last_trades_by_instrument_and_time?instrument_name&start_timestamp&end_timestamp&count&sorting`.
-  Verificado el 2026-10-21: devuelve operaciones de contratos vencidos (la API
-  normal de `www.deribit.com` responde vacío para vencidos). Cada operación
-  trae `timestamp, price, contracts, amount, direction (buy|sell),
-  index_price, mark_price, iv, trade_id`. Pagina con `has_more`.
-- **Prima pagada por operación en USD:**
-  - Inversas (BTC, ETH): `price × contracts × index_price`.
-  - `*_USDC`: `price × amount`.
-- **Por vela** (en la temporalidad del principal): total de prima pagada en
-  USD, número de operaciones, número de compras y de ventas (según
-  `direction`, la del agresor), y la lista de operaciones de la vela.
-- **En el gráfico:** barras de "prima negociada" por vela al pie del panel de
-  precio, como un histograma de volumen, en escala propia (overlay, unos 15 %
-  de alto). Solo para la **opción enfocada**, en su color: compras en el color
-  sólido y ventas en el mismo color al 45 %, apiladas. Si la enfocada es un
-  activo, no hay barras.
-- **Tooltip (escritorio) y lectura inferior (móvil):** bajo la fila de la
-  opción, "Prima pagada en la vela: $1,240 · 6 operaciones (4 compras, 2
-  ventas)" y las 3 operaciones más grandes:
-  `03:12 compra 8 × 0.0002 ETH = $6.13`. En móvil esa sección se pliega y se
-  despliega con un toque.
-- **En el chip** de la opción, junto al valor: "Σ $48.2k en vista" (prima total
-  pagada dentro del rango visible). *(Mi decisión.)*
-- Las operaciones de un contrato vencido no cambian: se cachean de forma
-  permanente. En los vigentes, caché de 10 s y solo el tramo nuevo.
-- Endpoint propuesto:
-  `GET /api/market/options/trades?instrument&timeframe&startTime&endTime` →
-  `{ buckets: [{ time, premiumUsd, trades, buys, sells, top: [ {ts, side,
-  contracts, price, premiumUsd} ] }] }`.
-
 ## No-objetivos
+
+- Prima pagada por operación y barras de volumen de prima. *(Ese pedido del 2026-10-21 era para el módulo de Opciones, no para esta feature.)*
 
 - La superposición en la vista multi-pantalla (`/trading-view/multi`). *(Mi
   decisión: el usuario no respondió; queda para después.)*
