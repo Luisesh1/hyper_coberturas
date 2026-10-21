@@ -7,12 +7,12 @@
 /* ── Barra de pestañas ─────────────────────────────────────────── */
 .tabBar {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
-  padding: 6px 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  padding: 6px 6px;
   padding-bottom: max(6px, env(safe-area-inset-bottom, 0));
-  padding-left: max(8px, env(safe-area-inset-left, 0));
-  padding-right: max(8px, env(safe-area-inset-right, 0));
+  padding-left: max(6px, env(safe-area-inset-left, 0));
+  padding-right: max(6px, env(safe-area-inset-right, 0));
   border-top: 1px solid rgba(120, 130, 145, 0.22);
   background: #13161a;
   flex-shrink: 0;
@@ -34,6 +34,8 @@
   color: #c9ced6;
   font-family: inherit;
   font-size: 0.7rem;
+  white-space: nowrap;
+  min-width: 0;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }

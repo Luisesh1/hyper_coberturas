@@ -8,12 +8,20 @@ function Pct({ value }) {
 }
 
 // Lectura del puntero: el principal y una fila por superposición dibujada.
-export default function OverlayTooltip({ variant = 'desktop', time, timeframe, main, rows = [] }) {
-  const visible = rows.filter((r) => !r.hidden);
+// En móvil (`variant="mobile"`) es la barra inferior: admite una acción en la
+// cabecera (plegar/desplegar) y, plegada, solo deja la cabecera.
+export default function OverlayTooltip({
+  variant = 'desktop', time, timeframe, main, rows = [], action = null, collapsed = false,
+}) {
+  const visible = collapsed ? [] : rows.filter((r) => !r.hidden);
+  const mobile = variant === 'mobile';
   return (
-    <div className={`${styles.tooltip} ${variant === 'mobile' ? styles.mobile : ''}`} aria-label="Valores bajo el puntero">
-      <div className={styles.time}>{formatCandleTime(time, timeframe)}</div>
-      {main && (
+    <div className={`${styles.tooltip} ${mobile ? styles.mobile : ''}`} aria-label="Valores bajo el puntero">
+      <div className={styles.head}>
+        <span className={styles.time}>{formatCandleTime(time, timeframe)}</span>
+        {action}
+      </div>
+      {main && !collapsed && (
         <div className={styles.row}>
           <span className={styles.name}>
             <span className={styles.mainSwatch} aria-hidden="true" />

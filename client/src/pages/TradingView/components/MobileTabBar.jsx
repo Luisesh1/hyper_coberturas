@@ -1,13 +1,15 @@
-import { IndicatorsIcon, PencilIcon, ReplayIcon, SlidersIcon } from './icons';
+import { IndicatorsIcon, OverlayIcon, PencilIcon, ReplayIcon, SlidersIcon } from './icons';
 import styles from './MobileChrome.module.css';
 
-// Barra de pestañas inferior (móvil): cuatro destinos en la zona del pulgar.
+// Barra de pestañas inferior (móvil): cinco destinos en la zona del pulgar.
 export default function MobileTabBar({
   indicatorsCount,
+  overlaysCount = 0,
   replayActive,
   replayOpen,
   onIndicators,
   onDraw,
+  onOverlays,
   onReplay,
   onSettings,
 }) {
@@ -21,6 +23,11 @@ export default function MobileTabBar({
       <button type="button" className={styles.tab} onClick={onDraw}>
         <PencilIcon size={22} />
         Dibujar
+      </button>
+      <button type="button" className={styles.tab} onClick={onOverlays} aria-haspopup="dialog">
+        <OverlayIcon size={22} />
+        Superponer
+        {overlaysCount > 0 && <span className={styles.tabBadge}>{overlaysCount}</span>}
       </button>
       <button
         type="button"

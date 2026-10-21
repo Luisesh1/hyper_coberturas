@@ -41,3 +41,39 @@ describe('OverlayTooltip', () => {
     expect(screen.getByText('—')).toBeTruthy();
   });
 });
+
+describe('OverlayTooltip (móvil)', () => {
+  it('una línea por serie y acción en la cabecera', () => {
+    render(
+      <OverlayTooltip
+        variant="mobile"
+        time={T}
+        timeframe="1h"
+        action={<button type="button">Contraer</button>}
+        main={{ label: 'ETH/USDT', value: 2426.4, changePct: 0.6 }}
+        rows={[
+          { id: 'option:ETH-31OCT26-2500-C', label: 'ETH 31 oct · C 2500', color: '#f59e0b', value: 17.42, changePct: 9.2, traded: false, lastTradeAgoH: 5 },
+          { id: 'asset:binance:BTCUSDT', label: 'BTC/USDT', color: '#22d3ee', value: 110954, changePct: 0.2, traded: true },
+        ]}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Contraer' })).toBeTruthy();
+    expect(screen.getByText('ETH/USDT')).toBeTruthy();
+    expect(screen.getByText('BTC/USDT')).toBeTruthy();
+    expect(screen.getByText('Última operación hace 5 h')).toBeTruthy();
+  });
+
+  it('plegado solo deja la cabecera', () => {
+    render(
+      <OverlayTooltip
+        variant="mobile"
+        collapsed
+        time={T}
+        main={{ label: 'ETH/USDT', value: 2426.4, changePct: 0.6 }}
+        rows={[{ id: 'asset:binance:BTCUSDT', label: 'BTC/USDT', color: '#22d3ee', value: 110954, changePct: 0.2, traded: true }]}
+      />,
+    );
+    expect(screen.queryByText('BTC/USDT')).toBeNull();
+    expect(screen.queryByText('ETH/USDT')).toBeNull();
+  });
+});

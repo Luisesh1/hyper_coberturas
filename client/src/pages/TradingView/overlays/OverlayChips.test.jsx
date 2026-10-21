@@ -114,3 +114,66 @@ describe('OverlayChips', () => {
     expect(screen.getByLabelText('Cargando')).toBeTruthy();
   });
 });
+
+describe('OverlayChips (móvil)', () => {
+  it('pastillas con nombre corto; el enfocado lleva "izq." y tocar otro lo enfoca', () => {
+    const h = renderChips({ mobile: true });
+    const focused = screen.getByRole('button', { name: /BTC\/USDT/ });
+    expect(within(focused).getByText('izq.')).toBeTruthy();
+    expect(screen.getAllByText('izq.')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: /SOL\/USDT/ }));
+    expect(h.onFocus).toHaveBeenCalledWith(sol.id);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Sin ojo ni "⋯" en móvil
+    expect(screen.queryByRole('button', { name: /Más acciones/ })).toBeNull();
+  });
+
+  it('tocar el enfocado (activo) abre "Acciones" con "Ver en grande"', () => {
+    const h = renderChips({ mobile: true });
+    fireEvent.click(screen.getByRole('button', { name: /BTC\/USDT/ }));
+    expect(h.onFocus).not.toHaveBeenCalled();
+    const sheet = screen.getByRole('dialog', { name: 'Acciones' });
+    expect(within(sheet).getByRole('button', { name: /Ocultar/ })).toBeTruthy();
+    expect(within(sheet).getByRole('button', { name: /Quitar superposición/ })).toBeTruthy();
+    fireEvent.click(within(sheet).getByRole('button', { name: /Ver en grande/ }));
+    expect(h.onSwap).toHaveBeenCalledWith(btc.id);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('tocar el enfocado (opción) abre "Acciones" sin "Ver en grande"', () => {
+    const h = renderChips({ mobile: true, focusedId: opt.id });
+    fireEvent.click(screen.getByRole('button', { name: /ETH 31 oct · C 2500/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Acciones' });
+    expect(within(sheet).queryByRole('button', { name: /Ver en grande/ })).toBeNull();
+    fireEvent.click(within(sheet).getByRole('button', { name: /Ocultar/ }));
+    expect(h.onToggleHidden).toHaveBeenCalledWith(opt.id);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('una oculta se ve tachada y al tocarla ofrece "Mostrar"; quitar llama a onRemove', () => {
+    const h = renderChips({
+      mobile: true,
+      overlays: [btc, { ...sol, hidden: true }, opt],
+      status: { [btc.id]: 'ready', [sol.id]: 'hidden', [opt.id]: 'ready' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /SOL\/USDT/ }));
+    expect(h.onFocus).not.toHaveBeenCalled();
+    const sheet = screen.getByRole('dialog', { name: 'Acciones' });
+    expect(within(sheet).getByRole('button', { name: /Mostrar/ })).toBeTruthy();
+    fireEvent.click(within(sheet).getByRole('button', { name: /Quitar superposición/ }));
+    expect(h.onRemove).toHaveBeenCalledWith(sol.id);
+  });
+
+  it('el "+" redondo abre el selector', () => {
+    const h = renderChips({ mobile: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Añadir superposición' }));
+    expect(h.onAdd).toHaveBeenCalled();
+  });
+
+  it('con 6 superposiciones el "+" queda desactivado y explica el límite', () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({ ...btc, id: `asset:binance:X${i}USDT`, asset: { ...btc.asset, symbol: `X${i}USDT` } }));
+    renderChips({ mobile: true, overlays: many });
+    const add = screen.getByRole('button', { name: 'Máximo 6 superposiciones' });
+    expect(add.disabled).toBe(true);
+  });
+});

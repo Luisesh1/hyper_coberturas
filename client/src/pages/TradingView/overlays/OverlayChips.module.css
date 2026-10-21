@@ -241,3 +241,112 @@
   margin: 4px 0;
   background: var(--border, #2a2d35);
 }
+
+/* ── Móvil ─────────────────────────────────────────────────────────
+   Pastillas de 40 px dentro de un botón de 44 px (zona táctil), con
+   scroll horizontal entre la cabecera y el gráfico. */
+.mWrap { flex-shrink: 0; }
+
+.mRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  border-bottom: 1px solid rgba(120, 130, 145, 0.12);
+}
+.mRow::-webkit-scrollbar { display: none; }
+
+.pill,
+.mAdd {
+  --c: #94a3b8;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 2px 2px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pill:focus-visible .pillInner,
+.mAdd:focus-visible .mAddInner {
+  outline: 2px solid rgba(99, 102, 241, 0.75);
+  outline-offset: 1px;
+}
+.pill:focus-visible,
+.mAdd:focus-visible { outline: none; }
+
+.pillInner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  background: var(--bg-surface, #13161e);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 999px;
+  color: #e2e8f0;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.pill:active .pillInner { background: #1a1e26; }
+
+.pillFocused .pillInner {
+  background: color-mix(in srgb, var(--c) 12%, transparent);
+  border: 1.5px solid var(--c);
+  color: var(--text-bright, #f8fafc);
+  font-weight: 600;
+}
+.pillFocused .badge { font-size: 10px; padding: 1px 5px; }
+
+.pillHidden .pillInner {
+  background: transparent;
+  border-style: dashed;
+  color: var(--text-tertiary, #64748b);
+}
+.pillHidden .pillName { text-decoration: line-through; }
+
+.pillMain .pillInner { border-style: dashed; }
+.pillMain .dot { opacity: 0.5; }
+
+.dotHollow { background: transparent; border: 2px solid var(--c); }
+
+.pillName { white-space: nowrap; }
+
+.mAddInner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  box-sizing: border-box;
+  border: 1px dashed var(--border-strong, #3a3d45);
+  border-radius: 999px;
+  color: var(--text-secondary, #94a3b8);
+}
+.mAdd:disabled { cursor: not-allowed; opacity: 0.45; }
+
+/* Hoja de acciones */
+.mSheetHead {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+.mSheetName { color: var(--text-bright, #f8fafc); font-weight: 600; font-size: 0.95rem; }
+.mSheetSub {
+  grid-column: 2;
+  color: #9aa3b0;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.mDanger { color: var(--red-light, #f87171); }

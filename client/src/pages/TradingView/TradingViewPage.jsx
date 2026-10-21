@@ -311,6 +311,8 @@ export default function TradingViewPage() {
   const [drawMode, setDrawMode] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
   const [ohlcExpanded, setOhlcExpanded] = useState(false);
+  // Móvil: lectura inferior de las superposiciones (plegable).
+  const [overlayReadoutCollapsed, setOverlayReadoutCollapsed] = useState(false);
   // Móvil: la fila de temporalidades sólo muestra las favoritas; el resto
   // (y la edición de favoritas) vive en una hoja inferior.
   const [tfFavorites, setTfFavorites] = useState(() => loadFavorites(TIMEFRAME_VALUES));
@@ -1209,8 +1211,9 @@ export default function TradingViewPage() {
     >
       {isMobile ? mobileHeader : desktopToolbar}
 
-      {!isMobile && !replayActive && overlayCount > 0 && (
+      {!replayActive && overlayCount > 0 && (
         <OverlayChips
+          mobile={isMobile}
           overlays={overlays.state.items}
           focusedId={overlays.state.focusedId}
           status={overlays.status}
@@ -1287,6 +1290,30 @@ export default function TradingViewPage() {
             variant="desktop"
             time={overlayTime}
             timeframe={timeframe}
+            main={{ label: mainLabel, value: hoveredOhlc.close, changePct: ohlcInfo?.interPct ?? null }}
+            rows={overlayValues}
+          />
+        )}
+
+        {/* Móvil: lectura inferior del puntero con superposiciones, una línea
+            por serie (el principal y cada superposición dibujada). La
+            leyenda OHLC compacta de arriba sigue igual. */}
+        {isMobile && !drawMode && !overlaysHidden && !replayActive && hoveredOhlc && overlayValues.length > 0 && (
+          <OverlayTooltip
+            variant="mobile"
+            time={overlayTime}
+            timeframe={timeframe}
+            collapsed={overlayReadoutCollapsed}
+            action={(
+              <button
+                type="button"
+                className={styles.mReadoutToggle}
+                onClick={() => setOverlayReadoutCollapsed((v) => !v)}
+                aria-expanded={!overlayReadoutCollapsed}
+              >
+                {overlayReadoutCollapsed ? `Desplegar · ${overlayValues.length + 1} series` : 'Contraer'}
+              </button>
+            )}
             main={{ label: mainLabel, value: hoveredOhlc.close, changePct: ohlcInfo?.interPct ?? null }}
             rows={overlayValues}
           />
@@ -1437,6 +1464,8 @@ export default function TradingViewPage() {
           replayOpen={replayPanelOpen}
           onIndicators={() => setModalOpen(true)}
           onDraw={() => { setReplayPanelOpen(false); setDrawMode(true); }}
+          overlaysCount={overlayCount}
+          onOverlays={() => setOverlayPickerOpen(true)}
           onReplay={() => setReplayPanelOpen((v) => !v)}
           onSettings={() => setSettingsSheetOpen(true)}
         />

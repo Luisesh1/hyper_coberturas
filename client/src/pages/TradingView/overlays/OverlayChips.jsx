@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AxisLeftIcon, CloseIcon, EyeIcon, EyeOffIcon, MoreIcon, PaletteIcon, PlusIcon, SwapIcon,
 } from '../components/icons';
+import BottomSheet from '../components/BottomSheet';
 import { MAX_OVERLAYS, OVERLAY_PALETTE, shortLabel } from './overlayModel';
 import { formatOverlayPct, formatOverlayValue } from './overlayFormat';
 import styles from './OverlayChips.module.css';
+import sheetStyles from '../components/MobileChrome.module.css';
 
 const MENU_WIDTH = 268;
 
@@ -81,10 +83,124 @@ function ChipMenu({ overlay, overlays, status, focused, mainLabel, position, men
   );
 }
 
-// Fila de chips de superposición (escritorio). Un chip por superposición:
+// Hoja "Acciones" de un chip en móvil: ocultar/mostrar, quitar y, solo en
+// activos, "Ver en grande" (lo intercambia con el principal).
+function MobileActions({ overlay, status, onClose, onToggleHidden, onRemove, onSwap }) {
+  const act = (fn) => () => { onClose(); fn(overlay.id); };
+  return (
+    <BottomSheet open title="Acciones" onClose={onClose}>
+      <div className={styles.mSheetHead} style={{ '--c': overlay.color }}>
+        <span className={`${styles.dot} ${overlay.hidden ? styles.dotHollow : ''}`} aria-hidden="true" />
+        <span className={styles.mSheetName}>{shortLabel(overlay)}</span>
+        <span className={styles.mSheetSub}>{fullName(overlay)}</span>
+      </div>
+      <div className={sheetStyles.field}>
+        <button type="button" className={sheetStyles.rowBtn} onClick={act((id) => onToggleHidden?.(id))}>
+          {overlay.hidden ? <EyeIcon /> : <EyeOffIcon />}
+          <span className={sheetStyles.rowBtnText}>{overlay.hidden ? 'Mostrar' : 'Ocultar'}</span>
+        </button>
+        {overlay.kind === 'asset' && status !== 'isMain' && (
+          <button type="button" className={sheetStyles.rowBtn} onClick={act((id) => onSwap?.(id))}>
+            <SwapIcon />
+            <span className={sheetStyles.rowBtnText}>Ver en grande</span>
+          </button>
+        )}
+        <button type="button" className={`${sheetStyles.rowBtn} ${styles.mDanger}`} onClick={act((id) => onRemove?.(id))}>
+          <CloseIcon />
+          <span className={sheetStyles.rowBtnText}>Quitar superposición</span>
+        </button>
+      </div>
+    </BottomSheet>
+  );
+}
+
+// Fila de chips en móvil: pastillas con punto de color y nombre corto, con
+// scroll horizontal, y un "+" redondo. Tocar una no enfocada la enfoca; tocar
+// la enfocada (o una que no se dibuja: oculta o igual al principal) abre la
+// hoja de acciones.
+function MobileOverlayChips({
+  overlays, focusedId, status, max, onFocus, onToggleHidden, onRemove, onSwap, onAdd,
+}) {
+  const [actionsId, setActionsId] = useState(null);
+  const full = overlays.length >= max;
+  const actionsOverlay = actionsId && overlays.find((o) => o.id === actionsId);
+
+  return (
+    <div className={styles.mWrap}>
+      <div className={styles.mRow} role="toolbar" aria-label="Superposiciones">
+        {overlays.map((o) => {
+          const st = status[o.id];
+          const hiddenLook = o.hidden || st === 'hidden';
+          const drawable = st !== 'isMain' && !hiddenLook;
+          const focused = o.id === focusedId && drawable;
+          const label = shortLabel(o);
+          const cls = [
+            styles.pill,
+            focused ? styles.pillFocused : '',
+            hiddenLook ? styles.pillHidden : '',
+            st === 'isMain' ? styles.pillMain : '',
+          ].join(' ');
+          return (
+            <button
+              key={o.id}
+              type="button"
+              className={cls}
+              style={{ '--c': o.color }}
+              aria-pressed={focused}
+              aria-label={`${label}${hiddenLook ? ' (oculta)' : ''}${focused ? ' · eje izquierdo' : ''}`}
+              onClick={() => {
+                if (drawable && !focused) onFocus?.(o.id);
+                else setActionsId(o.id);
+              }}
+            >
+              <span className={styles.pillInner}>
+                <span className={`${styles.dot} ${hiddenLook ? styles.dotHollow : ''}`} aria-hidden="true" />
+                <span className={styles.pillName}>{label}</span>
+                {st === 'loading' && <span className={styles.spinner} aria-hidden="true">↻</span>}
+                {st === 'error' && <span className={styles.error} aria-hidden="true">!</span>}
+                {focused && <span className={styles.badge}>izq.</span>}
+              </span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className={styles.mAdd}
+          onClick={onAdd}
+          disabled={full}
+          aria-label={full ? `Máximo ${max} superposiciones` : 'Añadir superposición'}
+          title={full ? `Máximo ${max} superposiciones` : 'Añadir superposición'}
+        >
+          <span className={styles.mAddInner}><PlusIcon size={16} /></span>
+        </button>
+      </div>
+      {actionsOverlay && (
+        <MobileActions
+          overlay={actionsOverlay}
+          status={status[actionsOverlay.id]}
+          onClose={() => setActionsId(null)}
+          onToggleHidden={onToggleHidden}
+          onRemove={onRemove}
+          onSwap={onSwap}
+        />
+      )}
+    </div>
+  );
+}
+
+// Fila de chips de superposición. Escritorio: un chip por superposición;
 // clic en el cuerpo la enfoca (eje izquierdo); ojo para ocultar; "⋯" abre
-// el menú. Al final, "Añadir". La fila hace scroll horizontal.
-export default function OverlayChips({
+// el menú. Al final, "Añadir". La fila hace scroll horizontal. Con `mobile`
+// se usa la variante táctil (MobileOverlayChips).
+export default function OverlayChips(props) {
+  if (props.mobile) {
+    const { overlays = [], status = {}, max = MAX_OVERLAYS } = props;
+    return <MobileOverlayChips {...props} overlays={overlays} status={status} max={max} />;
+  }
+  return <DesktopOverlayChips {...props} />;
+}
+
+function DesktopOverlayChips({
   overlays = [], focusedId, status = {}, values = [], mainLabel,
   onFocus, onToggleHidden, onRemove, onSwap, onColor, onAdd, onRetry, max = MAX_OVERLAYS,
 }) {

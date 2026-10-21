@@ -20,6 +20,7 @@ function Svg({ size = 20, children, fill = 'none', strokeWidth = 1.8 }) {
 }
 
 export const IndicatorsIcon = (p) => <Svg {...p}><path d="M3 17l5-6 4 4 8-9" /><path d="M15 6h5v5" /></Svg>;
+export const OverlayIcon = (p) => <Svg {...p}><path d="M3 17l6-6 4 4 8-8" /><path d="M3 12l6-4 4 3 8-6" /></Svg>;
 export const PencilIcon = (p) => <Svg {...p}><path d="M4 20l4-1 11-11-3-3L5 16l-1 4z" /><path d="M14 7l3 3" /></Svg>;
 export const ReplayIcon = (p) => <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M10 8.5v7l6-3.5z" /></Svg>;
 export const SlidersIcon = (p) => <Svg {...p}><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></Svg>;
