@@ -185,8 +185,8 @@
 }
 /* In the money: sombreado neutro (como Binance), visible en ambos temas. */
 .chain, .mRow { --itm-bg: color-mix(in srgb, var(--text-bright) 7%, transparent); }
-.chain tr.itmCall td:nth-child(-n + 4) { background: var(--itm-bg); }
-.chain tr.itmPut td:nth-child(n + 6) { background: var(--itm-bg); }
+.chain tr.itmCall td:nth-child(-n + 5) { background: var(--itm-bg); }
+.chain tr.itmPut td:nth-child(n + 7) { background: var(--itm-bg); }
 .chain tr.rowSelected td { background: var(--indigo-dark-bg); }
 
 .strikeCell {
@@ -197,6 +197,40 @@
   padding: 8px 14px !important;
   white-space: nowrap;
 }
+.strikeInner { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 6px; }
+.strikeSide { display: flex; min-width: 0; }
+.strikeSide:first-child { justify-content: flex-end; }
+.strikeSide:last-child { justify-content: flex-start; }
+
+/* Distintivos: ★ posición (relleno ámbar), ▲/▼ orden (contorno). */
+.root, .mobileRoot { --mark-ord: color-mix(in srgb, var(--indigo) 70%, var(--text-bright)); }
+.badgeGroup { display: inline-flex; align-items: center; gap: 3px; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: default;
+}
+.badgeIcon { width: 11px; height: 11px; flex-shrink: 0; }
+.badgePos { background: var(--amber); color: #1a1300; }
+.badgeBuy { color: var(--green-light); box-shadow: inset 0 0 0 1.5px var(--green-light); }
+.badgeSell { color: var(--red-light); box-shadow: inset 0 0 0 1.5px var(--red-light); }
+.badgeOrd { color: var(--mark-ord); box-shadow: inset 0 0 0 1.5px var(--mark-ord); }
+.typeBtn .badgeOrd { color: inherit; box-shadow: inset 0 0 0 1.5px currentColor; }
+.quoteRingPos { box-shadow: inset 0 0 0 1.5px var(--amber); border-radius: 8px; background: var(--amber-bg); }
+.quoteRingOrd { box-shadow: inset 0 0 0 1.5px var(--indigo); border-radius: 8px; background: var(--indigo-dark-bg); }
+
 .chain tr.spotRow td { border-bottom: 0; }
 .chain tr.spotRow .spotDivider { padding: 6px 10px; }
 .chain tr.spotRow .spotDividerLabel { font-size: 12px; white-space: nowrap; }
@@ -526,9 +560,14 @@
   padding: 3px;
   background: var(--bg-input);
   border-radius: 10px;
-  width: 168px;
+  min-width: 168px;
 }
 .typeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
   min-height: 40px;
   border: 0;
   border-radius: var(--radius-md);
@@ -578,6 +617,13 @@
 .mStrike { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mStrikeVal { font-weight: 600; color: var(--text-bright); font-size: 14px; }
 .mIv { font-size: 11px; color: var(--text-tertiary); }
+.mStrikeLine { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.mStrikeLine .badge { min-width: 16px; height: 16px; padding: 0 3px; }
+.mMarkLine { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mMarkPos { color: var(--amber); }
+.mMarkOrd { color: var(--mark-ord); }
+.mRowPos { box-shadow: inset 3px 0 0 var(--amber); }
+.mRowOrd { box-shadow: inset 3px 0 0 var(--mark-ord); }
 .mNum { text-align: right; font-size: 14px; }
 .mQuoteHead { text-align: center !important; letter-spacing: 0; white-space: nowrap; }
 .mQuoteCell {

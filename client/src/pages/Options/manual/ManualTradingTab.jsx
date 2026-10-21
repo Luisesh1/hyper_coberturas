@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ConfirmDialog } from '../../../components/shared/ConfirmDialog';
 import { fmtNum, fmtSigned, toneOf } from '../format';
@@ -8,6 +8,7 @@ import { useOrderActions } from './hooks/useOrderActions';
 import { findLeg, useTicket } from './hooks/useTicket';
 import { quoteFor } from './ticketMath';
 import AccountTabs from './AccountTabs';
+import { buildChainMarks } from './chainMarks';
 import ExpiryPills from './ExpiryPills';
 import GreeksStrip from './GreeksStrip';
 import MobileChain from './MobileChain';
@@ -39,6 +40,12 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
   const acct = useOptionsAccount({ enabled: !!configured, withTrades: historyVisible });
 
   const ticket = useTicket(chain);
+
+  // ★ posiciones y ▲▼ órdenes abiertas sobre la cadena y los vencimientos.
+  const marks = useMemo(
+    () => (configured ? buildChainMarks(acct.positions, acct.openOrders) : null),
+    [configured, acct.positions, acct.openOrders],
+  );
 
   const quoteForSymbol = useCallback((symbol, side) => {
     const found = findLeg(chain, symbol);
@@ -101,7 +108,7 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
         {notConfigured}
         {errorBanner}
         {staleNotice}
-        <ExpiryPills expiries={chain?.expiries} value={activeExpiry} onChange={setExpiry} scroller />
+        <ExpiryPills expiries={chain?.expiries} value={activeExpiry} onChange={setExpiry} scroller marks={marks?.byExpiry} />
         {configured && acct.account && (
           <div className={styles.mobileFunds} role="status">
             <span>Fondos de opciones</span>
@@ -120,6 +127,7 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
           onType={setType}
           selectedSymbol={sheet === 'ticket' ? ticket.symbol : null}
           onPickRow={pickMobileRow}
+          marks={marks}
         />
 
         <div className={styles.bottomBar}>
@@ -186,6 +194,7 @@ export default function ManualTradingTab({ underlying, configured, isMobile }) {
           onExpiry={setExpiry}
           selection={ticket.symbol ? { symbol: ticket.symbol, side: ticket.side } : null}
           onPick={ticket.pick}
+          marks={marks}
         />
         <OrderTicket
           ticket={ticket}

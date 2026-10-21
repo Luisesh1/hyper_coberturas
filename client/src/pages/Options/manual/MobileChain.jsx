@@ -1,6 +1,8 @@
 import { fmtIv, fmtNum, fmtPrice, fmtSpot, fmtStrike } from '../format';
 import styles from './ManualTrading.module.css';
 import { quoteMid, optionPremiumLeverage } from './mobileChainMetrics';
+import ChainBadges, { MarkIcon } from './ChainBadges';
+import { markAria, markShort } from './chainMarks';
 
 // Índice de la primera fila por encima del spot: ahí va el separador.
 export function spotDividerIndex(rows, spot) {
@@ -19,8 +21,32 @@ export function isItm(type, strike, spot) {
 
 // Cadena móvil: un solo lado (calls o puts), filas de 52 px que abren el
 // ticket, con el spot marcado entre strikes.
-export default function MobileChain({ chain, loading, error, type, onType, selectedSymbol, onPickRow }) {
+// Cuántas patas del lado dado tienen posición u orden en este vencimiento.
+function sideCounts(rows, key, marks) {
+  const c = { positions: 0, orders: 0 };
+  if (!marks?.bySymbol.size) return c;
+  for (const r of rows) {
+    const m = r[key]?.symbol ? marks.bySymbol.get(r[key].symbol) : null;
+    if (m?.position) c.positions += 1;
+    if (m?.orders.length) c.orders += 1;
+  }
+  return c;
+}
+
+function TypeCounts({ counts }) {
+  if (!counts.positions && !counts.orders) return null;
+  return (
+    <span className={styles.badgeGroup} aria-hidden="true" title={`${counts.positions} con posición, ${counts.orders} con órdenes`}>
+      {counts.positions > 0 && <span className={`${styles.badge} ${styles.badgePos}`} aria-hidden="true"><MarkIcon kind="star" />{counts.positions}</span>}
+      {counts.orders > 0 && <span className={`${styles.badge} ${styles.badgeOrd}`} aria-hidden="true"><MarkIcon kind="up" /><MarkIcon kind="down" />{counts.orders}</span>}
+    </span>
+  );
+}
+
+export default function MobileChain({ chain, loading, error, type, onType, selectedSymbol, onPickRow, marks = null }) {
   const rows = chain?.rows || [];
+  const callCounts = sideCounts(rows, 'call', marks);
+  const putCounts = sideCounts(rows, 'put', marks);
   const divider = spotDividerIndex(rows, chain?.spot);
   const key = type === 'C' ? 'call' : 'put';
 
@@ -35,6 +61,7 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
             onClick={() => onType('C')}
           >
             Calls
+            <TypeCounts counts={callCounts} />
           </button>
           <button
             type="button"
@@ -43,6 +70,7 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
             onClick={() => onType('P')}
           >
             Puts
+            <TypeCounts counts={putCounts} />
           </button>
         </div>
         <span className={`${styles.typeHint} ${styles.itmLegend}`}>
@@ -67,6 +95,9 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
             const itm = isItm(type, r.strike, chain?.spot);
             const mid = quoteMid(leg.bid, leg.ask);
             const leverage = optionPremiumLeverage(chain?.spot, leg.ask);
+            const mark = marks?.bySymbol.get(leg.symbol);
+            const summary = markShort(mark);
+            const markCls = mark?.position ? styles.mRowPos : mark?.orders.length ? styles.mRowOrd : '';
             return (
               <div key={r.strike}>
                 {i === divider && (
@@ -76,13 +107,20 @@ export default function MobileChain({ chain, loading, error, type, onType, selec
                 )}
                 <button
                   type="button"
-                  className={`${styles.mRow} ${styles.mGrid} ${itm ? styles.mRowItm : ''} ${on ? styles.mRowOn : ''}`}
-                  aria-label={`${type === 'C' ? 'Call' : 'Put'} ${fmtStrike(r.strike)}${itm ? ', dentro del dinero' : ''}, bid ${fmtPrice(leg.bid)}, promedio ${fmtPrice(mid)}, ask ${fmtPrice(leg.ask)}, apalancamiento por prima ${leverage == null ? 'no disponible' : fmtNum(leverage, 1) + ' veces'}`}
+                  className={`${styles.mRow} ${styles.mGrid} ${itm ? styles.mRowItm : ''} ${on ? styles.mRowOn : ''} ${markCls}`}
+                  aria-label={`${type === 'C' ? 'Call' : 'Put'} ${fmtStrike(r.strike)}${itm ? ', dentro del dinero' : ''}, bid ${fmtPrice(leg.bid)}, promedio ${fmtPrice(mid)}, ask ${fmtPrice(leg.ask)}, apalancamiento por prima ${leverage == null ? 'no disponible' : fmtNum(leverage, 1) + ' veces'}${markAria(mark)}`}
                   onClick={() => onPickRow({ leg, strike: r.strike, type })}
                 >
                   <span className={styles.mStrike}>
                     <span className={`${styles.mono} ${styles.mStrikeVal}`}>{fmtStrike(r.strike)}</span>
-                    <span className={`${styles.mono} ${styles.mIv}`}>IV {fmtIv(leg.iv)}</span>
+                    {summary
+                      ? (
+                        <span className={styles.mStrikeLine} aria-hidden="true">
+                          <ChainBadges mark={mark} />
+                          <span className={`${styles.mono} ${styles.mMarkLine} ${mark.position ? styles.mMarkPos : styles.mMarkOrd}`}>{summary}</span>
+                        </span>
+                      )
+                      : <span className={`${styles.mono} ${styles.mIv}`}>IV {fmtIv(leg.iv)}</span>}
                   </span>
                   <span className={`${styles.mono} ${styles.mQuoteCell}`}>
                     <span className={`${styles.mQuoteSide} ${styles.down}`}>{fmtPrice(leg.bid)}</span>

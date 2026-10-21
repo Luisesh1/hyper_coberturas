@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useVisibleInterval } from '../strategies/common/useVisibleInterval';
+import { ExpiryBadges } from './ChainBadges';
 import styles from './ManualTrading.module.css';
 
 // Timestamp exacto publicado por Binance en exchangeInfo; el día visible
@@ -48,7 +49,7 @@ export function formatCountdown(expiryMs, now) {
 
 // Selector de vencimiento: cada botón muestra la cuenta regresiva en vivo;
 // la hora exacta (local) solo aparece en el contrato seleccionado.
-export default function ExpiryPills({ expiries = [], value, onChange, scroller = false }) {
+export default function ExpiryPills({ expiries = [], value, onChange, scroller = false, marks = null }) {
   const [now, setNow] = useState(() => Date.now());
   const ticking = expiries.some((e) => validMs(e.expiryMs) != null);
   useVisibleInterval(() => setNow(Date.now()), 1000, ticking);
@@ -77,6 +78,7 @@ export default function ExpiryPills({ expiries = [], value, onChange, scroller =
               ? <span className={`${styles.pillMeta} ${styles.pillCountdown}`}>{countdown}</span>
               : e.dte != null && <span className={styles.pillMeta}>{e.dte}d</span>}
             {on && time && <span className={styles.pillMeta}>{time}</span>}
+            <ExpiryBadges counts={marks?.get(e.code)} />
           </button>
         );
       })}
