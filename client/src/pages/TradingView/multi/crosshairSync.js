@@ -150,7 +150,10 @@ function validPanel(p, fallback) {
   if (!p || typeof p !== 'object') return { ...fallback };
   if (!isNonEmptyString(p.symbol) || !isNonEmptyString(p.datasource)) return { ...fallback };
   if (!MULTI_TIMEFRAMES.includes(p.timeframe)) return { ...fallback };
-  return { symbol: p.symbol, datasource: p.datasource, timeframe: p.timeframe };
+  const panel = { symbol: p.symbol, datasource: p.datasource, timeframe: p.timeframe };
+  // Nombre completo opcional (p. ej. «Dogecoin»), solo para mostrarlo.
+  if (isNonEmptyString(p.name)) panel.name = p.name;
+  return panel;
 }
 
 // Cada posición se valida por separado: un panel roto vuelve al default de

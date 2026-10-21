@@ -12,6 +12,7 @@ vi.mock('./SyncedChart', () => ({
       data-compact={String(!!props.compact)}
       data-symbol={props.asset.symbol}
       data-datasource={props.asset.datasource}
+      data-name={props.asset.name}
       data-indicators={JSON.stringify(props.indicators ?? null)}
       data-sync-price={String(props.syncPrice ?? true)}
     >
@@ -323,7 +324,9 @@ describe('MultiTimeframePage', () => {
       expect(symbols()).toEqual(['BTC', 'ETH', 'DOGE', 'HYPE']);
       expect(screen.getByTestId('synced-chart-2').dataset.datasource).toBe('binance');
       expect(screen.getByTestId('synced-chart-2').dataset.tf).toBe('15m');
-      expect(splitPrefs().panels[2]).toEqual({ symbol: 'DOGE', datasource: 'binance', timeframe: '15m' });
+      expect(splitPrefs().panels[2]).toEqual({ symbol: 'DOGE', datasource: 'binance', timeframe: '15m', name: 'Dogecoin' });
+      // El nombre completo llega al panel (y al selector al reabrirlo).
+      expect(screen.getByTestId('synced-chart-2').dataset.name).toBe('Dogecoin');
       // No toca el par de Multi‑TF.
       expect(localStorage.getItem('tv_selected_asset_v1')).toBeNull();
     });

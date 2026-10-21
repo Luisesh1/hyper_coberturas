@@ -91,6 +91,9 @@ export default function SyncedChart({
   const appliedRef = useRef('none'); // 'none' | 'source' | 'target'
   const linesKeyRef = useRef('default');
   const onPointerRef = useRef(onPointer);
+  // El chart se crea una vez; el modo compacto se lee al crearlo (la página
+  // monta otro árbol al cruzar el breakpoint, así que no cambia en vida).
+  const compactRef = useRef(compact);
   const onLastPriceRef = useRef(onLastPrice);
   const indexRef = useRef(index);
   onPointerRef.current = onPointer;
@@ -155,7 +158,7 @@ export default function SyncedChart({
     seriesRef.current = series;
     // Indicadores guardados del usuario (overlays en el panel de precio y
     // osciladores en sub-paneles), mismo controlador que /trading-view.
-    indicatorsCtrlRef.current = createIndicatorsController(chart);
+    indicatorsCtrlRef.current = createIndicatorsController(chart, { compact: compactRef.current });
 
     // Solo los movimientos reales del usuario traen `sourceEvent`; los
     // eventos sintéticos (actualización de datos, salida del ratón) se ignoran
@@ -410,6 +413,7 @@ export default function SyncedChart({
             className={styles.assetBtn}
             data-testid={`asset-btn-${index}`}
             aria-label={`Cambiar activo (actual: ${asset?.symbol || ''})`}
+            title={[asset?.name || asset?.symbol, asset?.datasource].filter(Boolean).join(' · ')}
             onClick={() => onAssetClick(index)}
           >
             <span className={styles.assetSymbol}>{asset?.symbol}</span>

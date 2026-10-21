@@ -194,6 +194,14 @@ describe('prefs multi-activo', () => {
       sync: true,
     });
   });
+  it('conserva el nombre del activo si es texto y descarta uno inválido', () => {
+    localStorage.setItem(SPLIT_PREFS_KEY, JSON.stringify({
+      panels: [{ ...hl('DOGE'), name: 'Dogecoin' }, { ...hl('ETH'), name: 42 }, hl('SOL'), hl('HYPE')],
+    }));
+    const p = loadSplitPrefs();
+    expect(p.panels[0]).toEqual({ ...hl('DOGE'), name: 'Dogecoin' });
+    expect(p.panels[1]).toEqual(hl('ETH'));
+  });
   it('campos no válidos de nivel superior → defaults', () => {
     localStorage.setItem(SPLIT_PREFS_KEY, JSON.stringify({ layout: '9x9', panels: 'x', mobilePanels: null, sync: 'si' }));
     expect(loadSplitPrefs()).toEqual(DEFAULTS);

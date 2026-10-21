@@ -246,9 +246,18 @@ function applyDataToSeries(mountEntry, computed, entry) {
 // Controlador: gestiona el ciclo de vida de los indicadores activos.
 // ------------------------------------------------------------------
 
-export function createIndicatorsController(chart) {
+// `compact`: paneles chicos (móvil). Los indicadores van sin títulos ni
+// etiqueta de último valor en la escala (se encimaban) y el panel de precio
+// se queda con más alto.
+const STRETCH = {
+  normal: { price: 0.65, subpanes: 0.35 },
+  compact: { price: 0.78, subpanes: 0.22 },
+};
+
+export function createIndicatorsController(chart, { compact = false } = {}) {
   // Map<uid, { entry, mount: { series[], paneIndex } }>
   const mounted = new Map();
+  const stretch = compact ? STRETCH.compact : STRETCH.normal;
 
   function removeUid(uid) {
     const m = mounted.get(uid);
@@ -277,9 +286,9 @@ export function createIndicatorsController(chart) {
       const panes = chart.panes();
       if (!panes?.length) return;
       // Pane 0 más grande, sub-panes comparten el resto.
-      panes[0]?.setStretchFactor?.(subpanesCount > 0 ? 0.65 : 1);
+      panes[0]?.setStretchFactor?.(subpanesCount > 0 ? stretch.price : 1);
       for (let i = 1; i <= subpanesCount; i += 1) {
-        panes[i]?.setStretchFactor?.(0.35 / subpanesCount);
+        panes[i]?.setStretchFactor?.(stretch.subpanes / subpanesCount);
       }
     } catch { /* API opcional */ }
   }
@@ -336,6 +345,11 @@ export function createIndicatorsController(chart) {
       if (!m) {
         const mount = createIndicatorSeries(chart, entry, paneIndex);
         if (!mount) continue;
+        if (compact) {
+          for (const series of mount.series) {
+            try { series.applyOptions({ title: '', lastValueVisible: false }); } catch { /* noop */ }
+          }
+        }
         mount.roleMap = buildRoleMap(entry.type, mount.roles);
         mounted.set(entry.uid, { entry, mount, computed: null });
       } else {

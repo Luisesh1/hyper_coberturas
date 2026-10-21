@@ -339,10 +339,16 @@ describe('SyncedChart', () => {
 });
 
 describe('SyncedChart · indicadores', () => {
+  it('en modo compacto (móvil) crea el controlador compacto', async () => {
+    renderChart({ indicators: INDICATORS, compact: true });
+    await waitForData();
+    expect(createIndicatorsController).toHaveBeenCalledWith(lw.state.chart, { compact: true });
+  });
+
   it('crea el controlador con el chart y dibuja los indicadores con las velas en ms', async () => {
     renderChart({ indicators: INDICATORS });
     await waitForData();
-    expect(createIndicatorsController).toHaveBeenCalledWith(lw.state.chart);
+    expect(createIndicatorsController).toHaveBeenCalledWith(lw.state.chart, { compact: false });
     await waitFor(() => expect(ind.controller.render).toHaveBeenCalledWith(
       INDICATORS,
       expect.arrayContaining([expect.objectContaining({ time: BASE_MS, close: 2505 })]),
@@ -491,6 +497,12 @@ describe('SyncedChart · syncPrice y onAssetClick', () => {
     expect(btn.getAttribute('aria-label')).toBe('Cambiar activo (actual: BTC)');
     fireEvent.click(btn);
     expect(onAssetClick).toHaveBeenCalledWith(0);
+    await waitForData();
+  });
+
+  it('el botón del activo muestra el nombre completo al pasar el puntero', async () => {
+    renderChart({ onAssetClick: vi.fn(), asset: { symbol: 'DOGE', datasource: 'binance', name: 'Dogecoin' } });
+    expect(screen.getByTestId('asset-btn-0').getAttribute('title')).toBe('Dogecoin · binance');
     await waitForData();
   });
 

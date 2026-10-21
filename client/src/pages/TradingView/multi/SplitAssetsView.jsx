@@ -11,7 +11,7 @@ import { Legend, SyncSwitch, TOUCH_HINT } from './MultiControls';
 import usePointerSync from './usePointerSync';
 import styles from './MultiTimeframePage.module.css';
 
-const toAsset = (p) => ({ symbol: p.symbol, datasource: p.datasource, name: p.symbol });
+const toAsset = (p) => ({ symbol: p.symbol, datasource: p.datasource, name: p.name || p.symbol });
 
 export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
   const [prefs, setPrefs] = useState(loadSplitPrefs);
@@ -59,7 +59,11 @@ export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
     const i = pickerIndex;
     setPickerIndex(null);
     if (i == null || i < 0 || i >= visible.length) return;
-    updatePanel(i, { symbol: next.symbol, datasource: next.datasource });
+    updatePanel(i, {
+      symbol: next.symbol,
+      datasource: next.datasource,
+      name: next.name && next.name !== next.symbol ? next.name : undefined,
+    });
     // El origen pasa a otro activo: su instante ya no vale para los demás.
     if (sync?.sourceIndex === i) setSync(null);
   };
