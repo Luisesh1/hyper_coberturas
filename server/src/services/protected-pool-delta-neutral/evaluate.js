@@ -92,6 +92,23 @@ const evaluateMethods = {
         useFullScan: true,
       }).catch(() => null);
       activeProtection = refreshed?.protection || current;
+      // Migrada a un tokenId nuevo sin su foto: lo que hay en la fila es el LP
+      // viejo y valida como `ready`. Operar con eso dimensiona el hedge contra
+      // una posicion que ya no existe, asi que se espera a la relectura.
+      if (current.snapshotStatus === 'refresh_pending' && !refreshed?.refreshed) {
+        await this._persistDecision(current, {
+          decision: 'refresh_snapshot',
+          reason: 'snapshot_refresh_pending',
+          strategyStatus: strategyState.status,
+          spotSource: 'snapshot',
+          snapshotStatus: current.snapshotStatus,
+          executionSkippedBecause: 'snapshot_refresh_pending',
+          finalStrategyStatus: strategyState.status,
+          riskGateTriggered: false,
+          createdAt: Date.now(),
+        });
+        return null;
+      }
     }
 
     let snapshotMeta = this._normalizeSnapshot(activeProtection, activeProtection.poolSnapshot);

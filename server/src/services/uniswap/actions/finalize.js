@@ -306,6 +306,10 @@ async function updateProtectionRecords({
         lastOnchainAction: action,
         lastTxHash: txHashes[txHashes.length - 1] || null,
         lastTxAt: Date.now(),
+        // Sin foto del LP nuevo, la fila hereda la del viejo bajo el tokenId
+        // nuevo, y nada en el snapshot delata la diferencia. Se marca para que
+        // el motor la relea antes de dimensionar el hedge.
+        snapshotStatus: refreshedSnapshot ? null : 'refresh_pending',
       });
       continue;
     }
@@ -563,4 +567,6 @@ module.exports = {
   collectFinalizeReceipts,
   finalizePositionActionAfterReceipts,
   buildIncreaseLiquidityFundingPlanFromPosition,
+  // Expuesto para los tests de la migracion de identidad.
+  updateProtectionRecords,
 };

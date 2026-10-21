@@ -1048,13 +1048,12 @@ class LpOrchestratorService {
     // su liquidez Y de su rango, y esperar al siguiente tick dejaría la
     // cobertura dimensionada contra el LP anterior.
     //
-    // El cambio de rango tiene que forzar igual que el de liquidez. Durante el
-    // re-range la posición vieja queda con liquidez 0, la política legacy
-    // cierra el short (`reduce_near_zero`, sin temporizador) y al volver con
-    // el rango nuevo el precio está en el centro: sin cruce de borde, sin
-    // movimiento de banda y con el temporizador recién reiniciado por ese
-    // cierre, nada la reabría hasta que venciera el timer o la zona muerta del
-    // centro la soltara. El LP quedaba descubierto.
+    // El cambio de rango tiene que forzar igual que el de liquidez. Mientras
+    // se firma, la posición vieja lee liquidez 0 y el snapshot no valida, así
+    // que el hedge se congela con el tamaño del LP viejo. Al migrar, el precio
+    // cae en el centro del rango nuevo: sin cruce de borde ni movimiento de
+    // banda, la política legacy no lo reajustaba hasta que venciera el timer
+    // o la zona muerta del centro lo soltara, con el delta nuevo ya distinto.
     const isRangeAction = action === 'modify-range' || action === 'rebalance';
     const shouldRefreshProtection = isRangeAction || [
       'increase-liquidity',

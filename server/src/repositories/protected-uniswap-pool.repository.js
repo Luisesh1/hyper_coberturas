@@ -971,6 +971,10 @@ async function migratePositionIdentity(userId, id, {
   lastOnchainAction,
   lastTxHash,
   lastTxAt = Date.now(),
+  // `refresh_pending` cuando se migra sin snapshot del LP nuevo: la fila queda
+  // con el tokenId nuevo y la foto del viejo, y el motor no debe operar con
+  // ella hasta releerla (ver `_evaluateProtectionUnlocked`).
+  snapshotStatus = null,
 }, executor) {
   const updatedAt = lastTxAt || Date.now();
   const { rows } = await exec(executor).query(
@@ -992,6 +996,7 @@ async function migratePositionIdentity(userId, id, {
             last_tx_hash = COALESCE($17, last_tx_hash),
             last_tx_at = COALESCE($18, last_tx_at),
             replaced_by_position_identifier = NULL,
+            snapshot_status = COALESCE($20, snapshot_status),
             updated_at = $19
       WHERE user_id = $1 AND id = $2
       RETURNING id`,
@@ -1015,6 +1020,7 @@ async function migratePositionIdentity(userId, id, {
       lastTxHash ?? null,
       lastTxAt ?? null,
       updatedAt,
+      snapshotStatus ?? null,
     ]
   );
 
