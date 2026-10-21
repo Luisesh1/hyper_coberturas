@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { parseNumberInput, stepNumber } from '../../../TradingView/components/stepperMath';
-import { computeTicket, parseSymbol, priceStep, qtyStep, quoteFor, QTY_MIN } from '../ticketMath';
+import {
+  computeTicket, hasTick, parseSymbol, priceStep, qtyStep, quoteFor, snapToTick, stepOnTick, tickError, QTY_MIN,
+} from '../ticketMath';
 
 const EMPTY = {
   symbol: null,
@@ -28,6 +30,13 @@ export function findLeg(chain, symbol) {
   return null;
 }
 
+// Precio inicial del ticket: bid/ask ya están en la rejilla; el mark de
+// respaldo no siempre, así que se ajusta al tick del contrato.
+function initialPrice(leg, side) {
+  const quote = quoteFor(leg, side);
+  return quote != null ? snapToTick(quote, leg) : null;
+}
+
 export function useTicket(chain) {
   const [t, setT] = useState(EMPTY);
 
@@ -35,7 +44,7 @@ export function useTicket(chain) {
   const leg = found?.leg || null;
 
   const pick = useCallback(({ leg: pickedLeg, strike, type, side }) => {
-    const price = quoteFor(pickedLeg, side);
+    const price = initialPrice(pickedLeg, side);
     setT((prev) => ({
       ...prev,
       symbol: pickedLeg.symbol,
@@ -50,7 +59,7 @@ export function useTicket(chain) {
   const setSide = useCallback((side) => {
     setT((prev) => {
       if (prev.side === side) return prev;
-      const price = quoteFor(leg, side);
+      const price = initialPrice(leg, side);
       return { ...prev, side, priceText: price != null ? trimNumber(price) : prev.priceText };
     });
   }, [leg]);
@@ -65,6 +74,10 @@ export function useTicket(chain) {
   const stepPrice = useCallback((direction) => {
     setT((p) => {
       const current = parseNumberInput(p.priceText) ?? 0;
+      if (hasTick(leg)) {
+        const from = current || initialPrice(leg, p.side) || 0;
+        return { ...p, priceText: trimNumber(stepOnTick(from, leg, direction)) };
+      }
       const step = priceStep(current || quoteFor(leg, p.side) || 1);
       const next = stepNumber(current, direction, { step, min: step });
       return { ...p, priceText: trimNumber(next) };
@@ -93,7 +106,9 @@ export function useTicket(chain) {
     leg: leg || {},
   });
 
-  const order = t.symbol && summary.valid
+  const priceError = summary.valid ? tickError(price, leg) : null;
+
+  const order = t.symbol && summary.valid && !priceError
     ? {
         symbol: t.symbol,
         side: t.side,
@@ -112,6 +127,7 @@ export function useTicket(chain) {
     price,
     qty,
     summary,
+    priceError,
     order,
     pick,
     setSide,

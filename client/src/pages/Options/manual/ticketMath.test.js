@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeTicket, parseSymbol, priceStep, qtyStep, quoteFor } from './ticketMath';
+import { computeTicket, parseSymbol, priceStep, qtyStep, quoteFor, snapToTick, stepOnTick, tickError } from './ticketMath';
 import { fmtIv, fmtNum, fmtPrice, fmtSigned } from '../format';
 
 describe('ticketMath', () => {
@@ -53,6 +53,35 @@ describe('ticketMath', () => {
   it('parseSymbol', () => {
     expect(parseSymbol('ETH-261128-2200-P')).toEqual({ underlying: 'ETH', expiry: '261128', strike: 2200, type: 'P' });
     expect(parseSymbol('nope')).toBeNull();
+  });
+});
+
+describe('rejilla de precios (PRICE_FILTER)', () => {
+  const btc = { tickSize: 5, minPrice: 115, maxPrice: 990 };
+  const eth = { tickSize: 0.1, minPrice: 0.2 };
+
+  it('ajusta al tick anclado en minPrice', () => {
+    expect(snapToTick(548, btc)).toBe(550);
+    expect(snapToTick(548, btc, 'down')).toBe(545);
+    expect(snapToTick(546, btc, 'up')).toBe(550);
+    expect(snapToTick(12.34, eth)).toBe(12.3);
+    expect(snapToTick(548, {})).toBe(548);
+  });
+
+  it('el stepper avanza por ticks desde precios fuera de rejilla', () => {
+    expect(stepOnTick(548, btc, 1)).toBe(550);
+    expect(stepOnTick(548, btc, -1)).toBe(545);
+    expect(stepOnTick(545, btc, 1)).toBe(550);
+    expect(stepOnTick(115, btc, -1)).toBe(115);
+    expect(stepOnTick(0.3, eth, 1)).toBe(0.4);
+  });
+
+  it('explica el error con los precios válidos más cercanos', () => {
+    expect(tickError(548, btc)).toBe('Múltiplos de 5 USDT: prueba 545 o 550.');
+    expect(tickError(545, btc)).toBeNull();
+    expect(tickError(100, btc)).toMatch(/mínimo/);
+    expect(tickError(1000, btc)).toMatch(/máximo/);
+    expect(tickError(548, {})).toBeNull();
   });
 });
 

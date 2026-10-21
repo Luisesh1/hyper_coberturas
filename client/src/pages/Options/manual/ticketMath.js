@@ -18,6 +18,62 @@ export function priceStep(price) {
   return Math.max(0.0001, Number(step.toPrecision(1)));
 }
 
+// Rejilla de precios del contrato según su PRICE_FILTER de Binance:
+// precio válido = minPrice + k·tickSize. Se opera en enteros escalados para
+// no arrastrar errores de coma flotante (548 con tick 5 → 545/550).
+function decimalsOf(n) {
+  const text = String(n);
+  const dot = text.indexOf('.');
+  return dot < 0 ? 0 : text.length - dot - 1;
+}
+
+function priceGrid(leg) {
+  const tick = Number(leg?.tickSize);
+  if (!Number.isFinite(tick) || tick <= 0) return null;
+  const minRaw = Number(leg?.minPrice);
+  const min = Number.isFinite(minRaw) && minRaw > 0 ? minRaw : 0;
+  const maxRaw = Number(leg?.maxPrice);
+  const scale = 10 ** Math.max(decimalsOf(tick), decimalsOf(min));
+  return {
+    tick, min, max: Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : null, scale,
+    t: Math.round(tick * scale), m: Math.round(min * scale),
+  };
+}
+
+// Ajusta el precio a la rejilla del contrato: 'nearest', 'down' o 'up'.
+// Sin tickSize conocido devuelve el precio tal cual.
+export function snapToTick(price, leg, mode = 'nearest') {
+  const grid = priceGrid(leg);
+  const p = Number(price);
+  if (!grid || !Number.isFinite(p)) return p;
+  const round = mode === 'down' ? Math.floor : mode === 'up' ? Math.ceil : Math.round;
+  const k = round((Math.round(p * grid.scale) - grid.m) / grid.t);
+  return (grid.m + k * grid.t) / grid.scale;
+}
+
+// Un paso del stepper sobre la rejilla, sin bajar del mínimo del contrato.
+export function stepOnTick(price, leg, direction) {
+  const grid = priceGrid(leg);
+  const base = snapToTick(price, leg, direction > 0 ? 'down' : 'up');
+  const next = Number(((base * grid.scale + direction * grid.t) / grid.scale).toFixed(10));
+  return Math.max(next, grid.min || grid.tick);
+}
+
+// Mensaje si el precio no cumple el PRICE_FILTER del contrato; null si vale.
+export function tickError(price, leg) {
+  const grid = priceGrid(leg);
+  const p = Number(price);
+  if (!grid || !Number.isFinite(p) || p <= 0) return null;
+  if (grid.min > 0 && p < grid.min) return `Precio mínimo del contrato: ${grid.min} USDT.`;
+  if (grid.max != null && p > grid.max) return `Precio máximo del contrato: ${grid.max} USDT.`;
+  if (snapToTick(p, leg) === p) return null;
+  return `Múltiplos de ${grid.tick} USDT: prueba ${snapToTick(p, leg, 'down')} o ${snapToTick(p, leg, 'up')}.`;
+}
+
+export function hasTick(leg) {
+  return priceGrid(leg) != null;
+}
+
 // Paso de cantidad del stepper: décimas a partir de 0,1 contratos y
 // centésimas por debajo (el mínimo de Binance es 0,01).
 export const QTY_COARSE_STEP = 0.1;

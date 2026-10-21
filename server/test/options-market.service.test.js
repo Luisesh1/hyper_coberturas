@@ -112,6 +112,9 @@ test('getChain con vencimiento devuelve filas por strike con griegas y bid/ask',
     minQty: 0.01,
     maxQty: 10,
     stepSize: 0.01,
+    tickSize: 0.01,
+    minPrice: 0.02,
+    maxPrice: null,
   });
   // bid a cero → null (sin liquidez)
   assert.equal(atm.put.bid, null);

@@ -48,6 +48,7 @@ export default function MobileTicketSheet({ open, onClose, ticket, configured, p
         downLabel="Bajar precio"
         upLabel="Subir precio"
       />
+      {ticket.priceError && <p className={styles.ticketError} role="alert">{ticket.priceError}</p>}
       <Stepper
         id="opt-ticket-qty"
         label="Contratos"

@@ -23,6 +23,34 @@ function matchesStep(value, min, step) {
   return (scaled(a) - scaled(m)) % scaled(s) === 0n;
 }
 
+// "5.000" → "5", "0.0500" → "0.05".
+function trimDecimal(text) {
+  return String(text).includes('.') ? String(text).replace(/\.?0+$/, '') : String(text);
+}
+
+// Explica en español por qué un precio límite viola el PRICE_FILTER, con los
+// dos precios válidos más cercanos. null si el precio es válido.
+function describePriceFilterViolation(price, filter) {
+  const p = decimal(price);
+  const m = decimal(filter?.minPrice ?? '0');
+  const s = decimal(filter?.tickSize);
+  if (!p || !m || !s || s.integer <= 0n) return 'Precio límite con un formato no válido.';
+  const min = Number(filter.minPrice ?? 0);
+  const max = Number(filter.maxPrice ?? 0);
+  if (min > 0 && Number(price) < min) return `El precio mínimo de este contrato es ${trimDecimal(filter.minPrice)} USDT.`;
+  if (max > 0 && Number(price) > max) return `El precio máximo de este contrato es ${trimDecimal(filter.maxPrice)} USDT.`;
+  const places = Math.max(p.places, m.places, s.places);
+  const scaled = (x) => x.integer * 10n ** BigInt(places - x.places);
+  const offset = (scaled(p) - scaled(m)) % scaled(s);
+  if (offset === 0n) return null;
+  const toText = (v) => {
+    const digits = v.toString().padStart(places + 1, '0');
+    return trimDecimal(places ? `${digits.slice(0, -places)}.${digits.slice(-places)}` : digits);
+  };
+  const below = scaled(p) - offset;
+  return `El precio debe ir en múltiplos de ${trimDecimal(filter.tickSize)} USDT en este contrato: prueba ${toText(below)} o ${toText(below + scaled(s))}.`;
+}
+
 function numberPositive(v) {
   const n = Number(v);
   return v != null && v !== '' && Number.isFinite(n) && n > 0 ? n : null;
@@ -72,4 +100,4 @@ function validateBinanceOrderBatch(exchange, legs, nowMs, deadlineAt) {
   return true;
 }
 
-module.exports = { decimal, matchesStep, requireOrderFilters, validateBinanceOrderBatch };
+module.exports = { decimal, matchesStep, describePriceFilterViolation, requireOrderFilters, validateBinanceOrderBatch };

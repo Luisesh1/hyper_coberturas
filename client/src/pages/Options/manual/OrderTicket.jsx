@@ -71,7 +71,7 @@ export default function OrderTicket({ ticket, configured, pending, onSubmit }) {
                 inputMode="decimal"
                 value={ticket.priceText}
                 onChange={(e) => ticket.setPriceText(e.target.value)}
-                aria-invalid={ticket.price == null}
+                aria-invalid={ticket.price == null || !!ticket.priceError}
               />
             </label>
             <label className={styles.field}>
@@ -85,6 +85,7 @@ export default function OrderTicket({ ticket, configured, pending, onSubmit }) {
               />
             </label>
           </div>
+          {ticket.priceError && <p className={styles.ticketError} role="alert">{ticket.priceError}</p>}
 
           <OrderFlags ticket={ticket} />
 

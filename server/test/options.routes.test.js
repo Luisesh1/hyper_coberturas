@@ -89,6 +89,7 @@ test('GET /options/chain valida underlying y delega en el servicio de mercado', 
 
 test('POST /options/orders valida el cuerpo antes de llamar a Binance', async () => {
   const client = fakeClient();
+  const restoreMarket = stub(optionsMarket, { getPriceFilter: async () => null });
   const restore = stub(optionsCredentials, { getClientForUser: async () => client });
   const valid = { symbol: 'BTC-261031-68000-C', side: 'BUY', quantity: 0.1, price: 1250 };
   try {
@@ -117,7 +118,29 @@ test('POST /options/orders valida el cuerpo antes de llamar a Binance', async ()
         symbol: 'BTC-261031-68000-C', side: 'SELL', quantity: 0.1, price: 1250, postOnly: false, reduceOnly: true, clientOrderId: undefined,
       }]);
     });
-  } finally { restore(); }
+  } finally { restore(); restoreMarket(); }
+});
+
+test('POST /options/orders rechaza precios fuera del tickSize con los válidos más cercanos', async () => {
+  const client = fakeClient();
+  const restoreMarket = stub(optionsMarket, {
+    getPriceFilter: async () => ({ tickSize: '5.000', minPrice: '115.000', maxPrice: '990.000' }),
+  });
+  const restore = stub(optionsCredentials, { getClientForUser: async () => client });
+  const body = { symbol: 'BTC-261023-84500-P', side: 'BUY', quantity: 0.1 };
+  try {
+    await withServer(async (call) => {
+      const bad = await call('POST', '/options/orders', { ...body, price: 548 });
+      assert.equal(bad.status, 400);
+      assert.equal(bad.json.code, 'VALIDATION_ERROR');
+      assert.match(bad.json.error || bad.json.message, /múltiplos de 5 USDT.*545 o 550/);
+      assert.equal((await call('POST', '/options/orders', { ...body, price: 100 })).status, 400);
+      assert.equal(client.calls.length, 0);
+
+      assert.equal((await call('POST', '/options/orders', { ...body, price: 545 })).status, 201);
+      assert.equal(client.calls.length, 1);
+    });
+  } finally { restore(); restoreMarket(); }
 });
 
 test('POST /options/orders sin credenciales devuelve 400 BINANCE_OPTIONS_NOT_CONFIGURED', async () => {

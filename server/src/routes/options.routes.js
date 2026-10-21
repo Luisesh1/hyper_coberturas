@@ -22,6 +22,7 @@ const optionsMarket = require('../services/options/options-market.service');
 const optionsCredentials = require('../services/options/options-credentials.service');
 const optionsAccount = require('../services/options/options-account.service');
 const accountStream = require('../services/options/options-account-stream.service');
+const { describePriceFilterViolation } = require('../services/options/options-order-filters');
 
 const { normalizeOrder } = optionsAccount;
 
@@ -195,6 +196,11 @@ router.post('/orders', asyncHandler(async (req, res) => {
   }
 
   const client = await optionsCredentials.getClientForUser(req.user.userId);
+  // Binance rechaza con un "Tick size precision is invalid" poco claro: se
+  // valida antes con su PRICE_FILTER. Sin exchangeInfo, decide Binance.
+  const priceFilter = await optionsMarket.getPriceFilter(symbol).catch(() => null);
+  const priceProblem = priceFilter && describePriceFilterViolation(String(price), priceFilter);
+  if (priceProblem) throw new ValidationError(priceProblem);
   const order = await client.placeOrder({ symbol, side, quantity, price, postOnly, reduceOnly, clientOrderId });
   logger.info('options_manual_order_placed', {
     userId: req.user.userId, symbol, side, quantity, price, orderId: order?.orderId != null ? String(order.orderId) : null,

@@ -103,6 +103,9 @@ function buildLeg(symbol, { mark, ticker, openInterest, contract }) {
     minQty: contract?.minQty ?? null,
     maxQty: contract?.maxQty ?? null,
     stepSize: contract?.stepSize ?? null,
+    tickSize: contract?.tickSize ?? null,
+    minPrice: contract?.minPrice ?? null,
+    maxPrice: contract?.maxPrice ?? null,
   };
 }
 
@@ -176,6 +179,9 @@ function createOptionsMarketService({
         minQty: positiveOrNull(lotFilter.minQty ?? item.minQty),
         maxQty: positiveOrNull(lotFilter.maxQty ?? item.maxQty),
         stepSize: positiveOrNull(lotFilter.stepSize),
+        tickSize: positiveOrNull(priceFilter.tickSize),
+        minPrice: positiveOrNull(priceFilter.minPrice),
+        maxPrice: positiveOrNull(priceFilter.maxPrice),
       });
     }
     return out;
@@ -327,11 +333,22 @@ function createOptionsMarketService({
     return { atrHourly, tickSize, minPrice };
   }
 
+  // PRICE_FILTER crudo (cadenas decimales) para validar órdenes manuales con
+  // exactitud antes de enviarlas. null si el contrato no está listado.
+  async function getPriceFilter(rawSymbol) {
+    const info = await getExchangeInfo();
+    const item = (info?.optionSymbols || []).find((s) => s.symbol === rawSymbol);
+    const filter = (item?.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
+    if (!filter || positiveOrNull(filter.tickSize) == null) return null;
+    return { tickSize: String(filter.tickSize), minPrice: String(filter.minPrice ?? '0'),
+      maxPrice: String(filter.maxPrice ?? '0') };
+  }
+
   function clearCache() {
     cache.clear();
   }
 
-  return { listUnderlyings, getChain, getQuote, getMarks, getVolatilityInputs, clearCache };
+  return { listUnderlyings, getChain, getQuote, getMarks, getVolatilityInputs, getPriceFilter, clearCache };
 }
 
 // Instancia por defecto (cliente público sin credenciales).
@@ -347,5 +364,6 @@ module.exports = {
   getQuote: (...args) => defaultService.getQuote(...args),
   getMarks: (...args) => defaultService.getMarks(...args),
   getVolatilityInputs: (...args) => defaultService.getVolatilityInputs(...args),
+  getPriceFilter: (...args) => defaultService.getPriceFilter(...args),
   clearCache: () => defaultService.clearCache(),
 };

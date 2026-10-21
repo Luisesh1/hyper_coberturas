@@ -412,6 +412,13 @@
 }
 .footnote a { color: #a5b4fc; }
 
+.ticketError {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--red-light);
+}
+
 /* ── Posiciones / órdenes / historial (escritorio) ───────── */
 .tabs {
   display: flex;
