@@ -40,4 +40,12 @@ describe('sombreado de opciones dentro del dinero', () => {
     expect(high.className).toMatch(/itmPut/);
     expect(high.className).not.toMatch(/itmCall/);
   });
+
+  it('escritorio muestra el apalancamiento por prima de calls y puts, como en móvil', () => {
+    render(<OptionChain chain={chain} expiry="261030" onExpiry={() => {}} onPick={() => {}} />);
+    expect(screen.getAllByRole('columnheader', { name: 'Apal.' })).toHaveLength(2);
+    const [low] = screen.getAllByRole('row').slice(2);
+    // spot 1000 / ask 12 = 83,3x en ambos lados
+    expect(low.textContent.match(/83,3x/g)).toHaveLength(2);
+  });
 });

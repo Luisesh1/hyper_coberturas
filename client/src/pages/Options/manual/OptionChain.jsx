@@ -2,8 +2,14 @@ import { Fragment } from 'react';
 import { fmtIv, fmtNum, fmtPrice, fmtSpot, fmtStrike } from '../format';
 import ExpiryPills from './ExpiryPills';
 import { spotDividerIndex } from './MobileChain';
-import { quoteMid } from './mobileChainMetrics';
+import { optionPremiumLeverage, quoteMid } from './mobileChainMetrics';
 import styles from './ManualTrading.module.css';
+
+// Mismo cálculo que la columna «Apal.» de móvil: nocional del subyacente / prima al ask.
+function LeverageCell({ spot, leg }) {
+  const leverage = optionPremiumLeverage(spot, leg?.ask);
+  return <span className={styles.plain}>{leverage == null ? '—' : `${fmtNum(leverage, 1)}x`}</span>;
+}
 
 function QuoteButton({ leg, kind, strike, type, onPick, picked }) {
   const value = kind === 'bid' ? leg?.bid : leg?.ask;
@@ -64,14 +70,14 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
           <table className={styles.chain}>
             <thead>
               <tr>
-                <th colSpan={4} className={styles.sideCalls}>Calls</th>
+                <th colSpan={5} className={styles.sideCalls}>Calls</th>
                 <th className={styles.center} aria-hidden="true" />
-                <th colSpan={4} className={styles.sidePuts}>Puts</th>
+                <th colSpan={5} className={styles.sidePuts}>Puts</th>
               </tr>
               <tr>
-                <th>Δ</th><th>IV</th><th className={styles.quoteHead}>Bid · Prom · Ask</th><th>Interés</th>
+                <th>Δ</th><th title="Nocional del subyacente / prima al ask (no es apalancamiento delta)">Apal.</th><th>IV</th><th className={styles.quoteHead}>Bid · Prom · Ask</th><th>Interés</th>
                 <th className={styles.center}>Strike</th>
-                <th className={styles.quoteHead}>Bid · Prom · Ask</th><th>IV</th><th>Δ</th><th>Interés</th>
+                <th className={styles.quoteHead}>Bid · Prom · Ask</th><th>IV</th><th>Δ</th><th title="Nocional del subyacente / prima al ask (no es apalancamiento delta)">Apal.</th><th>Interés</th>
               </tr>
             </thead>
             <tbody>
@@ -86,7 +92,7 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
                   <Fragment key={r.strike}>
                     {i === divider && (
                       <tr className={styles.spotRow}>
-                        <td colSpan={9}>
+                        <td colSpan={11}>
                           <div className={styles.spotDivider}>
                             <span className={`${styles.mono} ${styles.spotDividerLabel}`}>Spot {fmtSpot(chain.spot)}</span>
                           </div>
@@ -95,6 +101,7 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
                     )}
                     <tr className={cls}>
                       <td><span className={styles.plain}>{fmtNum(r.call?.delta, 2)}</span></td>
+                      <td><LeverageCell spot={chain?.spot} leg={r.call} /></td>
                       <td><span className={styles.plain}>{fmtIv(r.call?.iv)}</span></td>
                       <td><QuoteCell leg={r.call} strike={r.strike} type="C" onPick={onPick} isPicked={isPicked} /></td>
                       <td><span className={styles.plain}>{fmtNum(r.call?.openInterest, 0)}</span></td>
@@ -102,6 +109,7 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
                       <td><QuoteCell leg={r.put} strike={r.strike} type="P" onPick={onPick} isPicked={isPicked} /></td>
                       <td><span className={styles.plain}>{fmtIv(r.put?.iv)}</span></td>
                       <td><span className={styles.plain}>{fmtNum(r.put?.delta, 2)}</span></td>
+                      <td><LeverageCell spot={chain?.spot} leg={r.put} /></td>
                       <td><span className={styles.plain}>{fmtNum(r.put?.openInterest, 0)}</span></td>
                     </tr>
                   </Fragment>
