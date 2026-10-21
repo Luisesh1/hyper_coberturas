@@ -14,21 +14,21 @@ describe('MobileTabBar', () => {
   it('cinco pestañas: "Superponer" va entre Dibujar y Replay', () => {
     renderBar();
     const nav = screen.getByRole('navigation', { name: 'Herramientas del gráfico' });
-    const labels = within(nav).getAllByRole('button').map((b) => b.textContent.trim());
+    const labels = within(nav).getAllByRole('button').map((b) => b.textContent.replace(/\d+$/, '').trim());
     expect(labels).toEqual(['Indicadores', 'Dibujar', 'Superponer', 'Replay', 'Ajustes']);
   });
 
   it('la pestaña "Superponer" muestra la insignia con el número y abre el selector', () => {
     const h = renderBar({ overlaysCount: 3 });
-    const tab = screen.getByRole('button', { name: /Superponer/ });
-    expect(within(tab).getByText('3')).toBeTruthy();
+    const tab = screen.getByRole('button', { name: 'Superponer, 3 superposiciones' });
+    expect(within(tab).getByText('3').getAttribute('aria-hidden')).toBe('true');
     fireEvent.click(tab);
     expect(h.onOverlays).toHaveBeenCalled();
   });
 
   it('sin superposiciones no hay insignia', () => {
     renderBar({ overlaysCount: 0 });
-    const tab = screen.getByRole('button', { name: /Superponer/ });
+    const tab = screen.getByRole('button', { name: 'Superponer' });
     expect(tab.textContent.trim()).toBe('Superponer');
   });
 });

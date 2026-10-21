@@ -29,26 +29,26 @@
 
 .time { color: var(--text-secondary, #94a3b8); }
 
-/* Móvil: barra de lectura inferior, a todo el ancho, sobre el eje de tiempo. */
+/* Móvil: barra de lectura inferior, en el flujo entre el gráfico y las
+   pestañas (el gráfico se encoge; autoSize de lightweight-charts). */
 .mobile {
-  position: absolute;
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 20;
+  position: static;
+  flex-shrink: 0;
+  z-index: auto;
   min-width: 0;
   max-width: none;
-  gap: 6px;
-  padding: 2px 14px 10px;
+  gap: 4px;
+  padding: 0 14px 8px;
   border: 0;
   border-top: 1px solid var(--border, #2a2d35);
   border-radius: 0;
   background: #13161e;
-  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.3);
+  box-shadow: none;
   font-size: 13px;
+  line-height: 18px;
   pointer-events: auto;
 }
+.mobile .note { line-height: 14px; }
 .mobile .time { font-size: 12px; }
 .mobile .row { gap: 12px; }
 .mobile .name { gap: 8px; }

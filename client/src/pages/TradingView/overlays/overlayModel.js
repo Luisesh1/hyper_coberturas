@@ -166,6 +166,19 @@ export function splitTraded(points) {
   return { traded, untraded };
 }
 
+// Etiqueta de las pastillas móviles (más compacta): "BTC" para activos (sin la
+// cotización USDT/USDC) y "C 2500 · 31 oct" para opciones.
+export function mobileLabel(overlay) {
+  if (overlay.kind === 'option') {
+    const o = overlay.option;
+    const d = new Date(o.expiryMs);
+    return `${o.type} ${o.strike} · ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+  }
+  const s = overlay.asset.symbol ?? overlay.asset.name ?? '';
+  const m = /^(.+)(USDT|USDC)$/.exec(s);
+  return m ? m[1] : s;
+}
+
 export function shortLabel(overlay) {
   if (overlay.kind === 'option') {
     const o = overlay.option;

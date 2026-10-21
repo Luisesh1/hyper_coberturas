@@ -47,10 +47,13 @@ export default function OverlayTooltip({
               </span>
             </div>
             {untraded && (
-              <div className={styles.note}>
+              <div className={styles.note} data-note="">
                 {r.lastTradeAgoH != null ? `Última operación hace ${formatAgo(r.lastTradeAgoH)}` : 'Sin operaciones'}
               </div>
             )}
+            {/* Móvil: la línea de la nota se reserva en las opciones para que la
+                barra no cambie de alto (ni el gráfico salte) al recorrer velas. */}
+            {mobile && option && !untraded && <div className={styles.note} data-note="" aria-hidden="true">{'\u00a0'}</div>}
           </div>
         );
       })}

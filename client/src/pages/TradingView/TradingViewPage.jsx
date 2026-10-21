@@ -955,6 +955,16 @@ export default function TradingViewPage() {
   const overlayCount = overlays.state.items.length;
   const overlayTime = displayedOhlc ? Math.floor(displayedOhlc.time / 1000) : null;
   const overlayValues = overlayCount > 0 && overlayTime != null ? overlays.valuesAt(overlayTime) : [];
+  // Móvil: lectura inferior (en el flujo, entre el gráfico y las pestañas)
+  // mientras haya superposiciones dibujadas. Sigue al puntero y, sin él,
+  // muestra la última vela: así su espacio no aparece ni desaparece con el
+  // crosshair y el gráfico no salta. Desplegada, es el único sitio con el
+  // valor del principal (la leyenda OHLC de arriba lo omite).
+  const mobileReadout = isMobile && !overlaysHidden && !replayActive && overlayValues.length > 0;
+  const mainInReadout = mobileReadout && !overlayReadoutCollapsed;
+  const mOhlcItems = mainInReadout
+    ? (ohlcExpanded ? ohlcValues.slice(0, 3) : [])
+    : (ohlcExpanded ? ohlcValues : ohlcValues.slice(3));
 
   const timeframeButtons = (btnClass, activeClass, items = TIMEFRAMES) => items.map((t) => (
     <button
@@ -1295,30 +1305,6 @@ export default function TradingViewPage() {
           />
         )}
 
-        {/* Móvil: lectura inferior del puntero con superposiciones, una línea
-            por serie (el principal y cada superposición dibujada). La
-            leyenda OHLC compacta de arriba sigue igual. */}
-        {isMobile && !drawMode && !overlaysHidden && !replayActive && hoveredOhlc && overlayValues.length > 0 && (
-          <OverlayTooltip
-            variant="mobile"
-            time={overlayTime}
-            timeframe={timeframe}
-            collapsed={overlayReadoutCollapsed}
-            action={(
-              <button
-                type="button"
-                className={styles.mReadoutToggle}
-                onClick={() => setOverlayReadoutCollapsed((v) => !v)}
-                aria-expanded={!overlayReadoutCollapsed}
-              >
-                {overlayReadoutCollapsed ? `Desplegar · ${overlayValues.length + 1} series` : 'Contraer'}
-              </button>
-            )}
-            main={{ label: mainLabel, value: hoveredOhlc.close, changePct: ohlcInfo?.interPct ?? null }}
-            rows={overlayValues}
-          />
-        )}
-
         {historicalView && !replayActive && (
           <button
             type="button"
@@ -1407,15 +1393,18 @@ export default function TradingViewPage() {
               aria-expanded={ohlcExpanded}
               aria-label={ohlcExpanded ? 'Ocultar valores OHLC' : 'Ver valores OHLC'}
             >
-              {(ohlcExpanded ? ohlcValues : ohlcValues.slice(3)).map(([label, value]) => (
+              {mainInReadout && !ohlcExpanded && <span className={styles.ohlcLabel}>OHLC</span>}
+              {mOhlcItems.map(([label, value]) => (
                 <span key={label} className={styles.ohlcGroup}>
                   <span className={styles.ohlcLabel}>{label}</span>
                   <span className={styles.ohlcVal}>{formatPrice(value, pricePrecision)}</span>
                 </span>
               ))}
-              <span className={ohlcInfo.intra >= 0 ? styles.ohlcUp : styles.ohlcDown}>
-                {formatPercent(ohlcInfo.intraPct)}
-              </span>
+              {!mainInReadout && (
+                <span className={ohlcInfo.intra >= 0 ? styles.ohlcUp : styles.ohlcDown}>
+                  {formatPercent(ohlcInfo.intraPct)}
+                </span>
+              )}
               <span className={`${styles.mChevron} ${ohlcExpanded ? styles.mChevronOpen : ''}`}>
                 <ChevronDownIcon size={12} />
               </span>
@@ -1449,6 +1438,27 @@ export default function TradingViewPage() {
           controller={replay}
         />
       </div>
+
+      {mobileReadout && (
+        <OverlayTooltip
+          variant="mobile"
+          time={overlayTime}
+          timeframe={timeframe}
+          collapsed={overlayReadoutCollapsed}
+          action={(
+            <button
+              type="button"
+              className={styles.mReadoutToggle}
+              onClick={() => setOverlayReadoutCollapsed((v) => !v)}
+              aria-expanded={!overlayReadoutCollapsed}
+            >
+              {overlayReadoutCollapsed ? `Desplegar · ${overlayValues.length + 1} series` : 'Contraer'}
+            </button>
+          )}
+          main={{ label: mainLabel, value: displayedOhlc.close, changePct: ohlcInfo?.interPct ?? null }}
+          rows={overlayValues}
+        />
+      )}
 
       {isMobile && (drawMode ? (
         <MobileDrawingBar

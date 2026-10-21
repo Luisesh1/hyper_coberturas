@@ -24,10 +24,16 @@ export default function MobileTabBar({
         <PencilIcon size={22} />
         Dibujar
       </button>
-      <button type="button" className={styles.tab} onClick={onOverlays} aria-haspopup="dialog">
+      <button
+        type="button"
+        className={styles.tab}
+        onClick={onOverlays}
+        aria-haspopup="dialog"
+        aria-label={overlaysCount > 0 ? `Superponer, ${overlaysCount} superposiciones` : 'Superponer'}
+      >
         <OverlayIcon size={22} />
         Superponer
-        {overlaysCount > 0 && <span className={styles.tabBadge}>{overlaysCount}</span>}
+        {overlaysCount > 0 && <span className={styles.tabBadge} aria-hidden="true">{overlaysCount}</span>}
       </button>
       <button
         type="button"

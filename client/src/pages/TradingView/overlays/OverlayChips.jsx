@@ -3,7 +3,7 @@ import {
   AxisLeftIcon, CloseIcon, EyeIcon, EyeOffIcon, MoreIcon, PaletteIcon, PlusIcon, SwapIcon,
 } from '../components/icons';
 import BottomSheet from '../components/BottomSheet';
-import { MAX_OVERLAYS, OVERLAY_PALETTE, shortLabel } from './overlayModel';
+import { MAX_OVERLAYS, OVERLAY_PALETTE, mobileLabel, shortLabel } from './overlayModel';
 import { formatOverlayPct, formatOverlayValue } from './overlayFormat';
 import styles from './OverlayChips.module.css';
 import sheetStyles from '../components/MobileChrome.module.css';
@@ -127,13 +127,20 @@ function MobileOverlayChips({
 
   return (
     <div className={styles.mWrap}>
-      <div className={styles.mRow} role="toolbar" aria-label="Superposiciones">
+      <div className={styles.mRow} role="group" aria-label="Superposiciones">
         {overlays.map((o) => {
           const st = status[o.id];
           const hiddenLook = o.hidden || st === 'hidden';
           const drawable = st !== 'isMain' && !hiddenLook;
           const focused = o.id === focusedId && drawable;
           const label = shortLabel(o);
+          const opensSheet = focused || !drawable;
+          const extra = [
+            hiddenLook ? 'oculta' : '',
+            focused ? 'eje izquierdo' : '',
+            st === 'loading' ? 'cargando' : '',
+            st === 'error' ? 'error' : '',
+          ].filter(Boolean).map((t) => ` · ${t}`).join('');
           const cls = [
             styles.pill,
             focused ? styles.pillFocused : '',
@@ -147,7 +154,8 @@ function MobileOverlayChips({
               className={cls}
               style={{ '--c': o.color }}
               aria-pressed={focused}
-              aria-label={`${label}${hiddenLook ? ' (oculta)' : ''}${focused ? ' · eje izquierdo' : ''}`}
+              aria-label={`${label}${extra}`}
+              aria-haspopup={opensSheet ? 'dialog' : undefined}
               onClick={() => {
                 if (drawable && !focused) onFocus?.(o.id);
                 else setActionsId(o.id);
@@ -155,7 +163,7 @@ function MobileOverlayChips({
             >
               <span className={styles.pillInner}>
                 <span className={`${styles.dot} ${hiddenLook ? styles.dotHollow : ''}`} aria-hidden="true" />
-                <span className={styles.pillName}>{label}</span>
+                <span className={styles.pillName}>{mobileLabel(o)}</span>
                 {st === 'loading' && <span className={styles.spinner} aria-hidden="true">↻</span>}
                 {st === 'error' && <span className={styles.error} aria-hidden="true">!</span>}
                 {focused && <span className={styles.badge}>izq.</span>}

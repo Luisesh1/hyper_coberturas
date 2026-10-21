@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   OVERLAY_PALETTE, MAX_OVERLAYS, OVERLAYS_STORAGE_KEY, overlayId, addOverlay,
   removeOverlay, toggleHidden, focusOverlay, setColor, loadOverlays, saveOverlays,
-  isSameAsMain, alignToMain, splitTraded, shortLabel, replaceOverlay,
+  isSameAsMain, alignToMain, splitTraded, shortLabel, mobileLabel, replaceOverlay,
 } from './overlayModel.js';
 
 const EMPTY = { items: [], focusedId: null };
@@ -160,6 +160,18 @@ describe('splitTraded', () => {
     const { traded, untraded } = splitTraded([p(0, true), { time: 1 }, p(2, false)]);
     expect(vals(traded)).toEqual([0, null, null]);
     expect(vals(untraded)).toEqual([null, null, 2]);
+  });
+});
+
+describe('mobileLabel', () => {
+  it('activos: el símbolo base sin la cotización', () => {
+    expect(mobileLabel({ kind: 'asset', asset: { symbol: 'BTCUSDT', name: 'Bitcoin' } })).toBe('BTC');
+    expect(mobileLabel({ kind: 'asset', asset: { symbol: 'SOLUSDC' } })).toBe('SOL');
+    expect(mobileLabel({ kind: 'asset', asset: { symbol: '^GSPC' } })).toBe('^GSPC');
+  });
+  it('opciones: tipo, strike y vencimiento', () => {
+    expect(mobileLabel({ kind: 'option', option: { underlying: 'ETH', expiryMs: Date.UTC(2025, 9, 31, 8), type: 'C', strike: 2500 } })).toBe('C 2500 · 31 oct');
+    expect(mobileLabel({ kind: 'option', option: { underlying: 'XRP', expiryMs: Date.UTC(2025, 11, 5, 8), type: 'P', strike: 2.2 } })).toBe('P 2.2 · 5 dic');
   });
 });
 

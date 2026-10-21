@@ -77,3 +77,18 @@ describe('OverlayTooltip (móvil)', () => {
     expect(screen.queryByText('ETH/USDT')).toBeNull();
   });
 });
+
+describe('OverlayTooltip (móvil, altura estable)', () => {
+  it('una opción con operaciones reserva la línea de la nota (sin texto)', () => {
+    const { container } = render(
+      <OverlayTooltip
+        variant="mobile"
+        time={T}
+        main={{ label: 'ETH/USDT', value: 2426.4, changePct: 0.6 }}
+        rows={[{ id: 'option:ETH-31OCT26-2500-C', label: 'ETH 31 oct · C 2500', color: '#f59e0b', value: 17.42, changePct: 9.2, traded: true, lastTradeAgoH: null }]}
+      />,
+    );
+    expect(container.querySelectorAll('[data-note]')).toHaveLength(1);
+    expect(screen.queryByText(/Última operación/)).toBeNull();
+  });
+});

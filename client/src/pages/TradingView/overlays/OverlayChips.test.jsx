@@ -128,6 +128,19 @@ describe('OverlayChips (móvil)', () => {
     expect(screen.queryByRole('button', { name: /Más acciones/ })).toBeNull();
   });
 
+  it('el texto visible usa la etiqueta corta móvil; el nombre accesible, la completa', () => {
+    renderChips({ mobile: true, status: { [btc.id]: 'ready', [sol.id]: 'loading', [opt.id]: 'error' } });
+    const group = screen.getByRole('group', { name: 'Superposiciones' });
+    const b = within(group).getByRole('button', { name: 'BTC/USDT · eje izquierdo' });
+    expect(within(b).getByText('BTC')).toBeTruthy();
+    expect(b.getAttribute('aria-haspopup')).toBe('dialog');
+    const s = within(group).getByRole('button', { name: 'SOL/USDT · cargando' });
+    expect(within(s).getByText('SOL')).toBeTruthy();
+    expect(s.getAttribute('aria-haspopup')).toBeNull();
+    const o = within(group).getByRole('button', { name: 'ETH 31 oct · C 2500 · error' });
+    expect(within(o).getByText('C 2500 · 31 oct')).toBeTruthy();
+  });
+
   it('tocar el enfocado (activo) abre "Acciones" con "Ver en grande"', () => {
     const h = renderChips({ mobile: true });
     fireEvent.click(screen.getByRole('button', { name: /BTC\/USDT/ }));
