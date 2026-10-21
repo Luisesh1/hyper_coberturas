@@ -139,10 +139,11 @@ describe('MultiTimeframePage', () => {
     }
   });
 
-  it('móvil: 3 paneles compactos 5m,1h,4h, volver y pista táctil', () => {
+  it('móvil: solo 1×2 — 2 paneles compactos 5m,1h, volver y pista táctil', () => {
     setMobile(true);
     renderPage();
-    expect(tfs()).toEqual(['5m', '1h', '4h']);
+    expect(tfs()).toEqual(['5m', '1h']);
+    expect(screen.queryByRole('group', { name: 'Distribución' })).toBeNull();
     for (const el of screen.getAllByTestId(/^synced-chart-\d+$/)) {
       expect(el.dataset.compact).toBe('true');
     }
@@ -460,6 +461,40 @@ describe('MultiTimeframePage', () => {
       expect(symbols()).toEqual(['BTC', 'ETH']);
       expect(splitPrefs()?.mobilePanels?.length ?? 2).toBe(2);
     });
+
+    it('móvil: la distribución 2×2 de escritorio no aplica, siguen 2 paneles', () => {
+      localStorage.setItem('tv_multi_prefs_v1', JSON.stringify({
+        layout: '2x2', timeframes: ['5m', '15m', '1h', '4h'], mobileTimeframes: ['15m', '1h', '1d'], sync: true,
+      }));
+      setMobile(true);
+      renderPage();
+      expect(tfs()).toEqual(['15m', '1h']);
+      fireEvent.click(modeBtn('Multi‑activo'));
+      expect(symbols()).toHaveLength(2);
+      expect(screen.queryByRole('group', { name: 'Distribución' })).toBeNull();
+    });
+
+    for (const mobile of [false, true]) {
+      it(`${mobile ? 'móvil' : 'escritorio'}: pantalla completa en ambos modos y Esc la cierra`, () => {
+        setMobile(mobile);
+        const { container } = renderPage();
+        const shell = container.firstChild;
+        const fsBtn = () => screen.getByRole('button', { name: /pantalla completa/i });
+        expect(fsBtn().getAttribute('aria-pressed')).toBe('false');
+        fireEvent.click(fsBtn());
+        expect(fsBtn().getAttribute('aria-pressed')).toBe('true');
+        expect(shell.className).toMatch(/shellFullscreen/);
+        expect(document.body.classList.contains('tv-fullscreen-active')).toBe(true);
+        // Cambiar de modo mantiene la pantalla completa (mismo contenedor).
+        fireEvent.click(modeBtn('Multi‑activo'));
+        expect(container.firstChild).toBe(shell);
+        expect(shell.className).toMatch(/shellFullscreen/);
+        expect(fsBtn().getAttribute('aria-pressed')).toBe('true');
+        fireEvent.keyDown(window, { key: 'Escape' });
+        expect(shell.className).not.toMatch(/shellFullscreen/);
+        expect(document.body.classList.contains('tv-fullscreen-active')).toBe(false);
+      });
+    }
 
     it('móvil Multi‑TF también muestra el selector de modo', () => {
       setMobile(true);

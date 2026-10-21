@@ -1,5 +1,6 @@
 // Controles compartidos por los dos modos de la pantalla multi
 // (Multi‑TF y Multi‑activo).
+import { CollapseIcon, ExpandIcon } from '../components/icons';
 import { SYNC_COLORS } from './crosshairSync';
 import styles from './MultiTimeframePage.module.css';
 
@@ -63,5 +64,24 @@ export function ModeSwitch({ mode, onChange, mobile = false }) {
         </button>
       ))}
     </div>
+  );
+}
+
+// Botón de pantalla completa. En móvil es un icono de 44 px junto al
+// selector de modo; en escritorio, botón con texto al final de la barra.
+export function FullscreenButton({ active, onToggle, mobile = false }) {
+  const label = active ? 'Salir de pantalla completa' : 'Pantalla completa';
+  return (
+    <button
+      type="button"
+      className={mobile ? styles.mIconBtn : `${styles.btn} ${styles.fsBtn}`}
+      onClick={onToggle}
+      aria-label={label}
+      aria-pressed={active}
+      title={active ? `${label} (Esc)` : label}
+    >
+      {active ? <CollapseIcon size={mobile ? 20 : 14} /> : <ExpandIcon size={mobile ? 20 : 14} />}
+      {!mobile && <span>{active ? 'Salir' : 'Pantalla completa'}</span>}
+    </button>
   );
 }

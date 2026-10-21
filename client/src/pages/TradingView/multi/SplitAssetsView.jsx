@@ -1,4 +1,5 @@
 // Modo Multi‑activo: pantalla dividida con hasta 4 activos independientes
+// (2 en móvil, solo distribución 1×2)
 // (cada panel con su activo y su temporalidad) y puntero compartido opcional
 // que sincroniza solo el tiempo.
 import { useCallback, useEffect, useState } from 'react';
@@ -13,7 +14,7 @@ import styles from './MultiTimeframePage.module.css';
 
 const toAsset = (p) => ({ symbol: p.symbol, datasource: p.datasource, name: p.name || p.symbol });
 
-export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
+export default function SplitAssetsView({ isMobile, indicators, modeSwitch, fullscreenButton }) {
   const [prefs, setPrefs] = useState(loadSplitPrefs);
   // Índice del panel cuyo activo se está eligiendo (null = cerrado).
   const [pickerIndex, setPickerIndex] = useState(null);
@@ -113,7 +114,10 @@ export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
           </div>
           <SyncSwitch checked={syncEnabled} onToggle={toggleSync} label="Sync" className={styles.mSync} />
         </header>
-        <div className={styles.mModeRow}>{modeSwitch(true)}</div>
+        <div className={styles.mModeRow}>
+          {modeSwitch(true)}
+          {fullscreenButton(true)}
+        </div>
         <div className={styles.mStack}>{panels}</div>
         <footer className={styles.mBar}>
           <div className={styles.mPointer} aria-live="off">{pointerLabel}</div>
@@ -149,6 +153,7 @@ export default function SplitAssetsView({ isMobile, indicators, modeSwitch }) {
         <SyncSwitch checked={syncEnabled} onToggle={toggleSync} label="Puntero sincronizado (tiempo)" />
         <span className={styles.pointer}>{pointerLabel}</span>
         {syncEnabled && <Legend />}
+        {fullscreenButton(false)}
       </div>
       <div
         className={styles.grid}

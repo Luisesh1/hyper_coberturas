@@ -113,14 +113,15 @@ test.describe('TradingView multi-temporalidad (escritorio)', () => {
 test.describe('TradingView multi-temporalidad (móvil 390px)', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
-  test('tres gráficos apilados sin scroll horizontal', async ({ page }) => {
+  test('solo 1×2: dos gráficos apilados sin scroll horizontal', async ({ page }) => {
     const errores = [];
     page.on('pageerror', (e) => errores.push(e.message));
     await mockApi(page);
     await page.goto('/trading-view/multi?symbol=ETH&datasource=hyperliquid');
 
-    for (const i of [0, 1, 2]) await expect(page.getByTestId(`synced-chart-${i}`)).toBeVisible();
-    await expect(page.getByTestId('synced-chart-3')).toHaveCount(0);
+    for (const i of [0, 1]) await expect(page.getByTestId(`synced-chart-${i}`)).toBeVisible();
+    await expect(page.getByTestId('synced-chart-2')).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'Distribución' })).toHaveCount(0);
     const a = await page.getByTestId('synced-chart-0').boundingBox();
     const b = await page.getByTestId('synced-chart-1').boundingBox();
     expect(b.y).toBeGreaterThan(a.y + a.height - 2);
@@ -129,6 +130,19 @@ test.describe('TradingView multi-temporalidad (móvil 390px)', () => {
     expect(await horizontalOverflow(page)).toBe(0);
     await page.screenshot({ path: 'test-results/tv-multi-mobile.png' });
     expect(errores).toEqual([]);
+  });
+
+  test('pantalla completa cubre la ventana y oculta la cabecera global', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/trading-view/multi?symbol=ETH&datasource=hyperliquid');
+    await expect(page.getByTestId('synced-chart-1')).toBeVisible();
+    await page.getByRole('button', { name: 'Pantalla completa' }).click();
+    const exit = page.getByRole('button', { name: 'Salir de pantalla completa' });
+    await expect(exit).toBeVisible();
+    const box = await page.getByTestId('synced-chart-1').boundingBox();
+    expect(box.y + box.height).toBeGreaterThan(600);
+    await exit.click();
+    await expect(page.getByRole('button', { name: 'Pantalla completa' })).toBeVisible();
   });
 
   test('táctil: tras mantener pulsado y soltar, el siguiente arrastre desplaza (no deja puntero)', async ({ page }) => {

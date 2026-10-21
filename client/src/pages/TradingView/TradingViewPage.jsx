@@ -22,6 +22,7 @@ import { computePriceChange } from './priceChange';
 import { loadFavorites, rowItems, saveFavorites, toggleFavorite } from './timeframeFavorites';
 import { formatIndicatorLabel } from './indicators/formatLabel';
 import { MOBILE_QUERY, useMediaQuery } from './useMediaQuery';
+import { useFullscreen } from './useFullscreen';
 import { useReplayController } from './replay/useReplayController';
 import { useDrawings } from './drawings/use-drawings';
 import { TOOLS } from './drawings/catalog';
@@ -290,7 +291,6 @@ export default function TradingViewPage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [activeTool, setActiveTool] = useState(null);
   const [futureTimeLabel, setFutureTimeLabel] = useState(null);
-  const [fullscreen, setFullscreen] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(loadStoredSettingsVisible);
   const [replayPanelOpen, setReplayPanelOpen] = useState(false);
   const [hoveredOhlc, setHoveredOhlc] = useState(null);
@@ -458,45 +458,8 @@ export default function TradingViewPage() {
     try { localStorage.setItem(PRICE_SCALE_STORAGE_KEY, String(priceScaleMode)); } catch { /* noop */ }
   }, [priceScaleMode]);
 
-  // Pantalla completa: intenta la Fullscreen API nativa (desktop/Android) y
-  // cae a "pseudo-fullscreen" vía CSS (iOS Safari, que no soporta la API en divs).
-  const toggleFullscreen = useCallback(() => {
-    const next = !fullscreen;
-    setFullscreen(next);
-    try {
-      if (next) {
-        const el = pageRef.current;
-        if (el?.requestFullscreen) el.requestFullscreen().catch(() => { /* noop */ });
-      } else if (document.fullscreenElement && document.exitFullscreen) {
-        document.exitFullscreen().catch(() => { /* noop */ });
-      }
-    } catch { /* noop */ }
-  }, [fullscreen]);
-
-  // Sincroniza cuando el usuario sale de fullscreen con Esc o con el botón del navegador.
-  useEffect(() => {
-    const onFsChange = () => {
-      if (!document.fullscreenElement) setFullscreen(false);
-    };
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
-  }, []);
-
-  // En iOS (o cuando la API nativa no disparó), Esc también debe cerrar el pseudo-fullscreen.
-  useEffect(() => {
-    if (!fullscreen) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [fullscreen]);
-
-  // Marca <body> con una clase mientras estamos en fullscreen para que el
-  // header global (App) pueda ocultarse en mobile y aprovechar todo el alto.
-  useEffect(() => {
-    if (!fullscreen) return undefined;
-    document.body.classList.add('tv-fullscreen-active');
-    return () => document.body.classList.remove('tv-fullscreen-active');
-  }, [fullscreen]);
+  // Pantalla completa (API nativa o pseudo-fullscreen en iOS).
+  const { fullscreen, toggleFullscreen } = useFullscreen(pageRef);
 
   // Persiste la preferencia de visibilidad de los ajustes secundarios.
   useEffect(() => {

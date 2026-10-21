@@ -6,9 +6,10 @@ import { getDefaultChartIndicators } from '../indicators/defaults';
 import AssetPickerModal from '../components/AssetPickerModal';
 import { ChevronDownIcon, ChevronLeftIcon } from '../components/icons';
 import { MOBILE_QUERY, useMediaQuery } from '../useMediaQuery';
+import { useFullscreen } from '../useFullscreen';
 import SyncedChart from './SyncedChart';
 import SplitAssetsView from './SplitAssetsView';
-import { Legend, ModeSwitch, SyncSwitch, TOUCH_HINT } from './MultiControls';
+import { FullscreenButton, Legend, ModeSwitch, SyncSwitch, TOUCH_HINT } from './MultiControls';
 import usePointerSync from './usePointerSync';
 import { formatPrice } from './chartTheme';
 import {
@@ -23,7 +24,8 @@ import {
 import styles from './MultiTimeframePage.module.css';
 
 const ASSET_STORAGE_KEY = 'tv_selected_asset_v1';
-const MOBILE_COUNT = 3;
+// En móvil solo cabe la distribución 1×2: dos gráficos apilados.
+const MOBILE_COUNT = 2;
 
 function loadStoredAsset() {
   try {
@@ -67,6 +69,8 @@ export default function MultiTimeframePage() {
     };
   });
   const [pickerOpen, setPickerOpen] = useState(false);
+  const shellRef = useRef(null);
+  const { fullscreen, toggleFullscreen } = useFullscreen(shellRef);
   // Indicadores guardados en /trading-view (se editan allí). null = cargando.
   const [indicators, setIndicators] = useState(null);
 
@@ -158,9 +162,25 @@ export default function MultiTimeframePage() {
     }
   };
   const modeSwitch = (mobile) => <ModeSwitch mode={mode} onChange={changeMode} mobile={mobile} />;
+  const fullscreenButton = (mobile) => (
+    <FullscreenButton active={fullscreen} onToggle={toggleFullscreen} mobile={mobile} />
+  );
+  // Contenedor común a los dos modos: cambiar de modo no saca de pantalla completa.
+  const shell = (content) => (
+    <div ref={shellRef} className={`${styles.shell} ${fullscreen ? styles.shellFullscreen : ''}`}>
+      {content}
+    </div>
+  );
 
   if (mode === 'assets') {
-    return <SplitAssetsView isMobile={isMobile} indicators={indicators} modeSwitch={modeSwitch} />;
+    return shell(
+      <SplitAssetsView
+        isMobile={isMobile}
+        indicators={indicators}
+        modeSwitch={modeSwitch}
+        fullscreenButton={fullscreenButton}
+      />,
+    );
   }
 
   const pointerLabel = activeSync
@@ -212,7 +232,7 @@ export default function MultiTimeframePage() {
   );
 
   if (isMobile) {
-    return (
+    return shell(
       <div className={styles.page}>
         <header className={styles.mHeader}>
           <Link to="/trading-view" className={styles.mBack} aria-label="Volver al gráfico único">
@@ -237,7 +257,10 @@ export default function MultiTimeframePage() {
           )}
           <SyncSwitch checked={syncEnabled} onToggle={toggleSync} label="Sync" className={styles.mSync} />
         </header>
-        <div className={styles.mModeRow}>{modeSwitch(true)}</div>
+        <div className={styles.mModeRow}>
+          {modeSwitch(true)}
+          {fullscreenButton(true)}
+        </div>
         <div className={styles.mStack}>{panels}</div>
         <footer className={styles.mBar}>
           <div className={styles.mPointer} aria-live="off">{pointerLabel}</div>
@@ -245,11 +268,11 @@ export default function MultiTimeframePage() {
           <div className={styles.mHint}>{TOUCH_HINT}</div>
         </footer>
         {picker}
-      </div>
+      </div>,
     );
   }
 
-  return (
+  return shell(
     <div className={styles.page}>
       <div className={styles.toolbar}>
         {modeSwitch(false)}
@@ -289,6 +312,7 @@ export default function MultiTimeframePage() {
         <SyncSwitch checked={syncEnabled} onToggle={toggleSync} label="Puntero sincronizado" />
         <span className={styles.pointer}>{pointerLabel}</span>
         <Legend />
+        {fullscreenButton(false)}
       </div>
       <div
         className={styles.grid}
@@ -300,6 +324,6 @@ export default function MultiTimeframePage() {
         {panels}
       </div>
       {picker}
-    </div>
+    </div>,
   );
 }
