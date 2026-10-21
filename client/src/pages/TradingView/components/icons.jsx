@@ -72,3 +72,8 @@ export const DRAWING_TOOL_ICONS = {
 
 // Stepper numérico del formulario de indicadores (pareja de PlusIcon).
 export const MinusIcon = (p) => <Svg {...p}><path d="M5 12h14" /></Svg>;
+
+// Superposiciones
+export const AxisLeftIcon = (p) => <Svg {...p}><path d="M4 4v16M8 8h12M8 16h8" /></Svg>;
+export const SwapIcon = (p) => <Svg {...p}><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7" /></Svg>;
+export const PaletteIcon = (p) => <Svg {...p}><circle cx="12" cy="12" r="9" /><circle cx="8" cy="10" r="1.5" /><circle cx="12" cy="7.5" r="1.5" /><circle cx="16" cy="10" r="1.5" /></Svg>;

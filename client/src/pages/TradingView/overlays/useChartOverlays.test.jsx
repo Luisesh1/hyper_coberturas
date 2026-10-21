@@ -260,4 +260,68 @@ describe('useChartOverlays', () => {
     await act(async () => { hook.result.current.syncMain(MAIN); });
     await waitFor(() => expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('error'));
   });
+  it("status 'hidden' para ocultas y con el hook desactivado (nunca 'loading' eterno)", async () => {
+    const { hook, props } = setup();
+    act(() => { hook.result.current.add(BTC); hook.result.current.add(SOL); });
+    act(() => { hook.result.current.toggleHidden('asset:binance:BTCUSDT'); });
+    expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('hidden');
+    hook.rerender({ ...props, enabled: false });
+    expect(hook.result.current.status['asset:binance:SOLUSDT']).toBe('hidden');
+    hook.rerender({ ...props, enabled: true });
+    expect(hook.result.current.status['asset:binance:SOLUSDT']).toBe('loading');
+  });
+
+  it('el foco sale de una superposición que pasa a ser el principal', async () => {
+    const btc = 'asset:binance:BTCUSDT';
+    const sol = 'asset:binance:SOLUSDT';
+    const { hook, props } = setup();
+    act(() => { hook.result.current.add(BTC); hook.result.current.add(SOL); });
+    expect(hook.result.current.state.focusedId).toBe(btc);
+    hook.rerender({ ...props, mainAsset: BTC.asset });
+    await waitFor(() => expect(hook.result.current.state.focusedId).toBe(sol));
+    // no se puede enfocar la que es el principal
+    act(() => { hook.result.current.focus(btc); });
+    expect(hook.result.current.state.focusedId).toBe(sol);
+  });
+
+  it('al montar no enfoca una superposición que es el principal', () => {
+    const storage = memStorage({
+      items: [
+        { id: 'asset:binance:ETHUSDT', kind: 'asset', color: '#f59e0b', hidden: false, asset: ETH },
+        { id: 'asset:binance:BTCUSDT', kind: 'asset', color: '#22d3ee', hidden: false, asset: BTC.asset },
+      ],
+      focusedId: 'asset:binance:ETHUSDT',
+    });
+    const { hook } = setup({ storage });
+    expect(hook.result.current.state.focusedId).toBe('asset:binance:BTCUSDT');
+  });
+
+  it('replace sustituye conservando el color y recrea la serie', async () => {
+    const { chart, hook } = setup();
+    act(() => { hook.result.current.add(BTC); });
+    act(() => { hook.result.current.setColor('asset:binance:BTCUSDT', '#93c5fd'); });
+    act(() => { hook.result.current.replace('asset:binance:BTCUSDT', SOL); });
+    const { items, focusedId } = hook.result.current.state;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 'asset:binance:SOLUSDT', color: '#93c5fd' });
+    expect(focusedId).toBe('asset:binance:SOLUSDT');
+    const ls = lineSeries(chart);
+    expect(ls).toHaveLength(1);
+    expect(ls[0].opts.color).toBe('#93c5fd');
+  });
+  it('si el principal salta a un tramo que no toca la caché, pide sólo el tramo nuevo (no el hueco)', async () => {
+    const { chart, hook } = setup();
+    act(() => { hook.result.current.add(BTC); });
+    await act(async () => { hook.result.current.syncMain(MAIN); });
+    marketApi.getCandles.mockClear();
+    const s = lineSeries(chart)[0];
+    s.setData.mockClear();
+    const OLD = MAIN.map((c) => ({ ...c, time: c.time - 365 * 24 * HOUR }));
+    await act(async () => { hook.result.current.syncMain(OLD); });
+    // la serie se vacía al momento: datos con tiempos del tramo viejo
+    // ensancharían el eje de tiempo y moverían la vista
+    expect(s.setData.mock.calls[0][0]).toEqual([]);
+    expect(marketApi.getCandles).toHaveBeenCalledTimes(1);
+    expect(marketApi.getCandles.mock.calls[0][0]).toMatchObject({ startTime: OLD[0].time, endTime: OLD[4].time + HOUR });
+  });
 });

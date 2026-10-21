@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   OVERLAY_PALETTE, MAX_OVERLAYS, OVERLAYS_STORAGE_KEY, overlayId, addOverlay,
   removeOverlay, toggleHidden, focusOverlay, setColor, loadOverlays, saveOverlays,
-  isSameAsMain, alignToMain, splitTraded, shortLabel,
+  isSameAsMain, alignToMain, splitTraded, shortLabel, replaceOverlay,
 } from './overlayModel.js';
 
 const EMPTY = { items: [], focusedId: null };
@@ -172,5 +172,28 @@ describe('shortLabel', () => {
   it('opciones', () => {
     expect(shortLabel({ kind: 'option', option: { underlying: 'ETH', expiryMs: Date.UTC(2025, 9, 31, 8), type: 'C', strike: 2500 } })).toBe('ETH 31 oct · C 2500');
     expect(shortLabel({ kind: 'option', option: { underlying: 'XRP', expiryMs: Date.UTC(2025, 11, 5, 8), type: 'P', strike: 2.2 } })).toBe('XRP 5 dic · P 2.2');
+  });
+});
+
+describe('replaceOverlay', () => {
+  it('sustituye en el mismo hueco, conserva color y pasa el foco', () => {
+    let s = addOverlay(addOverlay(EMPTY, asset('BTCUSDT')), asset('SOLUSDT'));
+    s = setColor(s, 'asset:binance:BTCUSDT', '#a3e635');
+    s = toggleHidden(s, 'asset:binance:BTCUSDT');
+    s = { ...s, focusedId: 'asset:binance:BTCUSDT' };
+    const next = replaceOverlay(s, 'asset:binance:BTCUSDT', asset('ETHUSDT'));
+    expect(next.items.map((o) => o.id)).toEqual(['asset:binance:ETHUSDT', 'asset:binance:SOLUSDT']);
+    expect(next.items[0]).toMatchObject({ kind: 'asset', color: '#a3e635', hidden: false, asset: { symbol: 'ETHUSDT' } });
+    expect(next.focusedId).toBe('asset:binance:ETHUSDT');
+  });
+  it('si el reemplazo ya estaba en la lista, quita el duplicado', () => {
+    const s = addOverlay(addOverlay(EMPTY, asset('BTCUSDT')), asset('ETHUSDT'));
+    const next = replaceOverlay(s, 'asset:binance:BTCUSDT', asset('ETHUSDT'));
+    expect(next.items.map((o) => o.id)).toEqual(['asset:binance:ETHUSDT']);
+    expect(next.items[0].color).toBe('#f59e0b');
+  });
+  it('id inexistente: sin cambios', () => {
+    const s = addOverlay(EMPTY, asset('BTCUSDT'));
+    expect(replaceOverlay(s, 'nope', asset('ETHUSDT'))).toBe(s);
   });
 });

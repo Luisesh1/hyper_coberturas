@@ -38,6 +38,22 @@ export function removeOverlay(state, id) {
   return { items, focusedId };
 }
 
+// Sustituye una superposición por otra en el mismo hueco y con el mismo color
+// (intercambio con el principal). Si la nueva ya estaba en la lista, se quita
+// esa entrada para no duplicarla. El foco sigue al hueco.
+export function replaceOverlay(state, id, spec) {
+  const old = state.items.find((o) => o.id === id);
+  if (!old) return state;
+  const newId = overlayId(spec);
+  const item = { id: newId, kind: spec.kind, color: old.color, hidden: false };
+  if (spec.kind === 'option') item.option = spec.option; else item.asset = spec.asset;
+  const items = state.items
+    .filter((o) => o.id === id || o.id !== newId)
+    .map((o) => (o.id === id ? item : o));
+  const focusedId = state.focusedId === id || state.focusedId === newId ? newId : state.focusedId;
+  return { items, focusedId };
+}
+
 function mapItem(state, id, fn) {
   if (!state.items.some((o) => o.id === id)) return state;
   return { ...state, items: state.items.map((o) => (o.id === id ? fn(o) : o)) };

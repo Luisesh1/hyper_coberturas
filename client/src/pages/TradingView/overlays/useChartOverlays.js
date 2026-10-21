@@ -4,6 +4,7 @@ import { marketApi } from '../../../services/api';
 import {
   addOverlay,
   removeOverlay,
+  replaceOverlay as replaceModel,
   toggleHidden as toggleHiddenModel,
   setColor as setColorModel,
   focusOverlay,
@@ -66,14 +67,15 @@ function candleOptions(colors, dim) {
   };
 }
 
-// Si no hay enfocada (o la enfocada está oculta) y hay alguna visible, enfoca la primera visible.
-function ensureFocus(state) {
+// El foco sólo puede estar en una superposición dibujable (visible y distinta
+// del principal). Si no lo está, pasa a la primera dibujable; si no hay
+// ninguna, queda sin foco.
+function ensureFocus(state, mainAsset) {
+  const drawable = (o) => !o.hidden && !isSameAsMain(o, mainAsset);
   const focused = state.items.find((o) => o.id === state.focusedId);
-  if (focused && !focused.hidden) return state;
-  const firstVisible = state.items.find((o) => !o.hidden);
-  if (firstVisible) return { ...state, focusedId: firstVisible.id };
-  if (!focused && state.focusedId !== null) return { ...state, focusedId: null };
-  return state;
+  if (focused && drawable(focused)) return state;
+  const next = state.items.find(drawable)?.id ?? null;
+  return next === state.focusedId ? state : { ...state, focusedId: next };
 }
 
 // Precisión según la magnitud de los valores (XRP, TRX o primas pequeñas).
@@ -110,7 +112,7 @@ export function useChartOverlays({
   candleColors,
   storage = globalThis.localStorage,
 }) {
-  const [state, setState] = useState(() => ensureFocus(loadOverlays(storage)));
+  const [state, setState] = useState(() => ensureFocus(loadOverlays(storage), mainAsset));
   const [loadStatus, setLoadStatus] = useState({});
 
   // Refs con lo último para que syncMain/reconcile no dependan del render.
@@ -201,6 +203,16 @@ export function useChartOverlays({
     const end = main[main.length - 1].time + tfMs;
     const { id } = overlay;
     let cache = cacheRef.current.get(id);
+    // Un tramo que no toca lo cacheado (salto a la vida de una opción o vuelta
+    // al presente) empieza caché nueva: pedir el hueco entero no sirve.
+    if (cache && cache.from !== null && (end < cache.from || start > cache.to)) {
+      alignedRef.current.delete(id);
+      cache = null;
+      // Fuera los tiempos del tramo viejo: ensancharían el eje y moverían la vista.
+      const entry = seriesRef.current.get(id);
+      entry?.main.setData([]);
+      entry?.untraded?.setData([]);
+    }
     if (!cache) {
       cache = { candles: new Map(), from: null, to: null, loaded: false };
       cacheRef.current.set(id, cache);
@@ -381,10 +393,15 @@ export function useChartOverlays({
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const update = useCallback((fn) => setState((s) => ensureFocus(fn(s))), []);
-  const add = useCallback((spec) => update((s) => addOverlay(s, spec)), [update]);
-  const remove = useCallback((id) => {
-    update((s) => removeOverlay(s, id));
+  const update = useCallback(
+    (fn) => setState((s) => ensureFocus(fn(s), propsRef.current.mainAsset)),
+    [],
+  );
+  // Al cambiar el principal, el foco no puede quedarse en la que ahora lo es.
+  const mainKey = mainAsset ? `${mainAsset.datasource}:${mainAsset.symbol}` : '';
+  useEffect(() => { update((s) => s); }, [mainKey, update]);
+
+  const forget = (id) => {
     cacheRef.current.delete(id);
     alignedRef.current.delete(id);
     setLoadStatus((prev) => {
@@ -393,7 +410,16 @@ export function useChartOverlays({
       delete next[id];
       return next;
     });
-  }, [update]);
+  };
+  const add = useCallback((spec) => update((s) => addOverlay(s, spec)), [update]);
+  const remove = useCallback((id) => {
+    update((s) => removeOverlay(s, id));
+    forget(id);
+  }, [update]); // eslint-disable-line react-hooks/exhaustive-deps
+  const replace = useCallback((id, spec) => {
+    update((s) => replaceModel(s, id, spec));
+    forget(id);
+  }, [update]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggleHidden = useCallback((id) => update((s) => toggleHiddenModel(s, id)), [update]);
   const focus = useCallback((id) => update((s) => focusOverlay(s, id)), [update]);
   const setColor = useCallback((id, c) => update((s) => setColorModel(s, id, c)), [update]);
@@ -401,12 +427,14 @@ export function useChartOverlays({
   const status = useMemo(() => {
     const out = {};
     for (const o of state.items) {
-      out[o.id] = isSameAsMain(o, mainAsset) ? 'isMain' : (loadStatus[o.id] ?? 'loading');
+      if (isSameAsMain(o, mainAsset)) out[o.id] = 'isMain';
+      else if (o.hidden || !enabled) out[o.id] = 'hidden';
+      else out[o.id] = loadStatus[o.id] ?? 'loading';
     }
     return out;
-  }, [state.items, mainAsset, loadStatus]);
+  }, [state.items, mainAsset, enabled, loadStatus]);
 
-  return { state, add, remove, toggleHidden, focus, setColor, syncMain, valuesAt, status };
+  return { state, add, remove, replace, toggleHidden, focus, setColor, syncMain, valuesAt, status };
 }
 
 export default useChartOverlays;
