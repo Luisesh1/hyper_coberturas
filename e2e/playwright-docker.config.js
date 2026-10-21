@@ -4,7 +4,7 @@ module.exports = defineConfig({
   testDir: '.',
   timeout: 60_000,
   use: {
-    baseURL: 'http://localhost:5174',
+    baseURL: process.env.E2E_BASE_URL || 'http://localhost:5174',
     headless: false,
     viewport: { width: 1400, height: 900 },
     screenshot: 'only-on-failure',
