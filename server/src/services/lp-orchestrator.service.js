@@ -1044,12 +1044,19 @@ class LpOrchestratorService {
     });
 
     // Si cambió el rango o el capital del LP, refrescar el snapshot de la
-    // protección. En un cambio de liquidez además forzamos la evaluación del
-    // hedge: el delta del LP depende directamente de su liquidez y esperar al
-    // siguiente tick dejaría temporalmente una cobertura desfasada.
-    const shouldRefreshProtection = [
-      'modify-range',
-      'rebalance',
+    // protección y forzar la evaluación del hedge: el delta del LP depende de
+    // su liquidez Y de su rango, y esperar al siguiente tick dejaría la
+    // cobertura dimensionada contra el LP anterior.
+    //
+    // El cambio de rango tiene que forzar igual que el de liquidez. Durante el
+    // re-range la posición vieja queda con liquidez 0, la política legacy
+    // cierra el short (`reduce_near_zero`, sin temporizador) y al volver con
+    // el rango nuevo el precio está en el centro: sin cruce de borde, sin
+    // movimiento de banda y con el temporizador recién reiniciado por ese
+    // cierre, nada la reabría hasta que venciera el timer o la zona muerta del
+    // centro la soltara. El LP quedaba descubierto.
+    const isRangeAction = action === 'modify-range' || action === 'rebalance';
+    const shouldRefreshProtection = isRangeAction || [
       'increase-liquidity',
       'decrease-liquidity',
     ].includes(action);
@@ -1059,11 +1066,11 @@ class LpOrchestratorService {
           userId,
           orch.activeProtectedPoolId
         );
-        if (isCapitalAction
+        if ((isCapitalAction || isRangeAction)
             && refreshedProtection?.status === 'active'
             && typeof this.protectedPoolDeltaNeutralService?.evaluateProtection === 'function') {
           await this.protectedPoolDeltaNeutralService.evaluateProtection(refreshedProtection, {
-            forceReason: 'lp_liquidity_changed',
+            forceReason: isRangeAction ? 'lp_range_changed' : 'lp_liquidity_changed',
             forceRebalance: true,
           });
         }

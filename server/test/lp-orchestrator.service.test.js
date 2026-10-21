@@ -552,6 +552,48 @@ test('recordTxFinalized éxito en modify-range con protección refresca el hedge
   assert.equal(refreshCalls[0].protectedPoolId, 42);
 });
 
+test('recordTxFinalized en cambios de rango fuerza el re-hedge contra el LP nuevo', async () => {
+  // Sin el forzado, tras un re-range con la cobertura cerrada (la posicion
+  // vieja quedo en liquidez 0) el precio cae en el centro del rango nuevo y
+  // ningun gate legacy la reabre: el LP queda descubierto hasta el timer.
+  for (const action of ['modify-range', 'rebalance']) {
+    const repo = makeFakeRepo();
+    const id = await bootstrapOrchestrator(repo, { activeProtectedPoolId: 42 });
+    const evaluationCalls = [];
+    const service = new LpOrchestratorService({
+      lpOrchestratorRepository: repo,
+      protectedPoolRefreshService: {
+        refreshProtection: async (_userId, protectedPoolId) => ({ id: protectedPoolId, status: 'active' }),
+      },
+      protectedPoolDeltaNeutralService: {
+        evaluateProtection: async (protection, options) => {
+          evaluationCalls.push({ protection, options });
+        },
+      },
+      notifier: makeFakeNotifier(),
+      logger: { warn: () => {}, info: () => {}, error: () => {} },
+    });
+
+    await service.recordTxFinalized({
+      userId: 1,
+      orchestratorId: id,
+      action,
+      finalizeResult: {
+        txHashes: [`0x-${action}`],
+        refreshedSnapshot: { rangeLowerPrice: 92, rangeUpperPrice: 108, liquidity: '1000000' },
+      },
+      expected: { rangeLowerPrice: 92, rangeUpperPrice: 108, gasCostUsd: 1, slippageCostUsd: 0 },
+    });
+
+    assert.equal(evaluationCalls.length, 1, action);
+    assert.equal(evaluationCalls[0].protection.id, 42);
+    assert.deepEqual(evaluationCalls[0].options, {
+      forceReason: 'lp_range_changed',
+      forceRebalance: true,
+    });
+  }
+});
+
 test('recordTxFinalized en cambios de liquidez refresca y reevalúa la protección delta-neutral', async () => {
   for (const action of ['increase-liquidity', 'decrease-liquidity']) {
     const repo = makeFakeRepo();

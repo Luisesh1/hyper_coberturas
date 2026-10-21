@@ -662,8 +662,20 @@ async function reactivate(userId, id, record, executor) {
   return rows[0]?.id || null;
 }
 
+/**
+ * `record.expectedPositionIdentifier` ata la escritura a la posicion de la que
+ * salio el snapshot. Quien lee on-chain lo hace contra el `positionIdentifier`
+ * que tenia al EMPEZAR; si entre medio un modify-range migro la proteccion al
+ * tokenId nuevo, escribir igual pisaba el rango y la liquidez del LP nuevo con
+ * los del viejo (liquidez 0, o el rango anterior fuera de precio) y el hedge se
+ * redimensionaba contra un LP que ya no existe. Con el identificador, la fila
+ * migrada no se toca y la funcion devuelve null.
+ */
 async function updateSnapshot(userId, id, record, executor) {
   const updatedAt = record.updatedAt || Date.now();
+  const expectedPositionIdentifier = record.expectedPositionIdentifier != null
+    ? String(record.expectedPositionIdentifier)
+    : null;
   const { rows } = await exec(executor).query(
     `UPDATE protected_uniswap_pools
         SET pool_address = $3,
@@ -689,6 +701,7 @@ async function updateSnapshot(userId, id, record, executor) {
             range_computed_at = COALESCE($22, range_computed_at),
             range_frozen_at = COALESCE($23, range_frozen_at)
       WHERE user_id = $1 AND id = $2
+        AND ($24::text IS NULL OR position_identifier = $24::text)
       RETURNING id`,
     [
       userId,
@@ -714,6 +727,7 @@ async function updateSnapshot(userId, id, record, executor) {
       record.rangeLastStateAt ?? null,
       record.rangeComputedAt ?? null,
       record.rangeFrozenAt ?? null,
+      expectedPositionIdentifier,
     ]
   );
 

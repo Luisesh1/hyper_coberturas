@@ -197,7 +197,8 @@ class ProtectedPoolRefreshService {
           livePolicy: resolveProtectionLivePolicy(protection),
         });
 
-        await this.repo.updateSnapshot(protection.userId, protection.id, {
+        const written = await this.repo.updateSnapshot(protection.userId, protection.id, {
+          expectedPositionIdentifier: protection.positionIdentifier,
           poolAddress: freshPool.poolAddress || null,
           token0Symbol: freshPool.token0?.symbol || protection.token0Symbol,
           token1Symbol: freshPool.token1?.symbol || protection.token1Symbol,
@@ -214,6 +215,15 @@ class ProtectedPoolRefreshService {
           isCurrentlyInRange: freshPool.inRange === true,
           ...(rangeMetrics || {}),
         });
+        if (!written) {
+          // La lista de activos se leyo antes del escaneo; si en ese lapso un
+          // modify-range migro la proteccion, este snapshot es del LP viejo.
+          this.logger.warn('protected_pool_refresh_stale_identity_skipped', {
+            protectionId: protection.id,
+            userId: protection.userId,
+            positionIdentifier: protection.positionIdentifier,
+          });
+        }
       } catch (err) {
         this.logger.warn('protected_pool_snapshot_update_failed', {
           protectionId: protection.id,

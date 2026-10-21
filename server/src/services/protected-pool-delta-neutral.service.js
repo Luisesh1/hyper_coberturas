@@ -36,6 +36,15 @@ const POSITION_MISSING_GRACE_MS = 15 * 60_000;
 const DEACTIVATION_RESIDUAL_DUST_USD = 1;
 const DEACTIVATION_RESIDUAL_PCT = 0.01;
 const DELTA_NEUTRAL_LOCK_NAMESPACE = 0x444e;
+
+// El snapshot leido es de una posicion que la proteccion ya no sigue: un
+// modify-range la migro al tokenId nuevo mientras se leia el viejo.
+class StaleProtectionIdentityError extends Error {
+  constructor(protection) {
+    super(`La proteccion ${protection?.id} ya no sigue la posicion ${protection?.positionIdentifier}`);
+    this.name = 'StaleProtectionIdentityError';
+  }
+}
 const {
   DEFAULT_BAND_MODE,
   DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT,
@@ -604,7 +613,8 @@ class ProtectedPoolDeltaNeutralService {
       : freshPool;
     const snapshotMeta = this._normalizeSnapshot(protection, poolSnapshot);
 
-    await this.repo.updateSnapshot(protection.userId, protection.id, {
+    const written = await this.repo.updateSnapshot(protection.userId, protection.id, {
+      expectedPositionIdentifier: protection.positionIdentifier,
       poolAddress: freshPool.poolAddress || protection.poolAddress,
       token0Symbol: freshPool.token0?.symbol || protection.token0Symbol,
       token1Symbol: freshPool.token1?.symbol || protection.token1Symbol,
@@ -621,6 +631,11 @@ class ProtectedPoolDeltaNeutralService {
       isCurrentlyInRange: freshPool.inRange === true,
       ...(rangeMetrics || {}),
     });
+    if (!written) {
+      // Ver `_refreshProtectionTruth`: la proteccion migro de posicion
+      // mientras se escaneaba. El snapshot escaneado es del LP viejo.
+      throw new StaleProtectionIdentityError(protection);
+    }
 
     return this.repo.getById(protection.userId, protection.id);
   }
@@ -738,7 +753,8 @@ class ProtectedPoolDeltaNeutralService {
         : freshPool;
       const snapshotMeta = this._normalizeSnapshot(protection, poolSnapshot);
 
-      await this.repo.updateSnapshot(protection.userId, protection.id, {
+      const written = await this.repo.updateSnapshot(protection.userId, protection.id, {
+        expectedPositionIdentifier: protection.positionIdentifier,
         poolAddress: freshPool.poolAddress || protection.poolAddress,
         token0Symbol: freshPool.token0?.symbol || protection.token0Symbol,
         token1Symbol: freshPool.token1?.symbol || protection.token1Symbol,
@@ -755,6 +771,7 @@ class ProtectedPoolDeltaNeutralService {
         isCurrentlyInRange: freshPool.inRange === true,
         ...(rangeMetrics || {}),
       });
+      if (!written) throw new StaleProtectionIdentityError(protection);
 
       const refreshedProtection = await this.repo.getById(protection.userId, protection.id);
       return {
@@ -763,6 +780,25 @@ class ProtectedPoolDeltaNeutralService {
         source: 'direct_inspect',
       };
     } catch (err) {
+      if (err instanceof StaleProtectionIdentityError) {
+        // No es un fallo de la verdad on-chain: la protección ya apunta al LP
+        // nuevo (modify-range / rebalance) y lo leído es del viejo. Se
+        // devuelve la fila vigente para que la evaluación en curso decida
+        // sobre el LP nuevo, y no se toca el estado: escribirlo aquí, con el
+        // `strategyState` leído antes de la migración, pisaría el de la fila.
+        this.logger.warn('protected_pool_truth_stale_identity', {
+          protectionId: protection.id,
+          reason,
+          staleIdentifier: protection.positionIdentifier,
+        });
+        const current = await this.repo.getById(protection.userId, protection.id);
+        return {
+          protection: current || protection,
+          refreshed: false,
+          staleIdentity: true,
+          source: useFullScan ? 'full_scan' : 'direct_inspect',
+        };
+      }
       const nextFailures = Number(strategyState.consecutiveTruthFailures || 0) + 1;
       await this.repo.updateStrategyState(protection.userId, protection.id, {
         strategyState: {
@@ -1268,7 +1304,13 @@ class ProtectedPoolDeltaNeutralService {
     const protectionId = Number(protection?.id);
     if (!Number.isInteger(protectionId) || protectionId <= 0) return null;
     const existing = this.evaluationLocks.get(protectionId);
-    if (existing) return existing;
+    if (existing) {
+      // Un forzado no se puede absorber en la evaluacion en curso: esa empezo
+      // sin pedirlo y, tras un modify-range, con la foto del LP anterior. Se
+      // encola detras para que corra sobre la fila ya migrada.
+      if (!options.forceRebalance) return existing;
+      return existing.catch(() => null).then(() => this.evaluateProtection(protection, options));
+    }
 
     const evaluation = this._withProtectionEvaluationLock(protection, options)
       .finally(() => this.evaluationLocks.delete(protectionId));
