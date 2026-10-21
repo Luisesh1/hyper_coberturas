@@ -42,6 +42,7 @@ function buildRoleMap(type, mountRoles) {
     case 'stoch': return { k: 0, d: 1 };
     case 'bollinger':
     case 'keltner': return { upper: 0, middle: 1, lower: 2 };
+    case 'atrbands': return { upper: 0, lower: 1 };
     case 'volume': return { volume: 0 };
     case 'rsi': return { line: 0, highLevel: 1, lowLevel: 2 };
     case 'adx': {
@@ -71,7 +72,7 @@ function roleLabel(type, role) {
     if (role === 'k') return '%K';
     if (role === 'd') return '%D';
   }
-  if (type === 'bollinger' || type === 'keltner') {
+  if (type === 'bollinger' || type === 'keltner' || type === 'atrbands') {
     if (role === 'upper') return 'Up';
     if (role === 'middle') return 'Mid';
     if (role === 'lower') return 'Lo';
@@ -152,6 +153,13 @@ function createIndicatorSeries(chart, entry, paneIndex) {
       series.push(chart.addSeries(LineSeries, lineOpts({ color: entry.style?.color || '#a855f7', lineWidth: 1, lineStyle: entry.style?.lineStyle || 'solid' }, { title: `${meta.label} Lo` }), paneIndex));
       break;
 
+    case 'atrbands': {
+      const bandStyle = { color: entry.style?.color || meta.defaultStyle.color, lineWidth: entry.style?.lineWidth || 1, lineStyle: entry.style?.lineStyle || 'solid' };
+      series.push(chart.addSeries(LineSeries, lineOpts(bandStyle, { title: `${meta.label} Up` }), paneIndex));
+      series.push(chart.addSeries(LineSeries, lineOpts(bandStyle, { title: `${meta.label} Lo` }), paneIndex));
+      break;
+    }
+
     case 'volume':
       series.push(chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false, title: 'Vol' }, paneIndex));
       break;
@@ -227,6 +235,12 @@ function applyDataToSeries(mountEntry, computed, entry) {
     s0?.setData(data.find((d) => d.role === 'upper')?.data || []);
     s1?.setData(data.find((d) => d.role === 'middle')?.data || []);
     s2?.setData(data.find((d) => d.role === 'lower')?.data || []);
+    return;
+  }
+
+  if (entry.type === 'atrbands') {
+    s0?.setData(data.find((d) => d.role === 'upper')?.data || []);
+    s1?.setData(data.find((d) => d.role === 'lower')?.data || []);
     return;
   }
 
@@ -353,17 +367,19 @@ export function createIndicatorsController(chart, { compact = false } = {}) {
         mount.roleMap = buildRoleMap(entry.type, mount.roles);
         mounted.set(entry.uid, { entry, mount, computed: null });
       } else {
-        // Actualizar estilo si cambió (color, lineWidth)
-        // Para simplicidad, aplicamos options solo a la primera línea.
+        // Actualizar estilo si cambió (color, lineWidth). En las bandas
+        // (Bollinger, Keltner, ATR Bands) va a todas sus líneas, no solo a la
+        // superior.
         const meta = INDICATORS[entry.type];
         if (meta.pane === 'overlay' && entry.style) {
-          try {
-            m.mount.series[0]?.applyOptions({
-              color: entry.style.color || m.entry.style?.color,
-              lineWidth: entry.style.lineWidth || m.entry.style?.lineWidth,
-              lineStyle: DASH_STYLE[entry.style.lineStyle] ?? DASH_STYLE[m.entry.style?.lineStyle] ?? 0,
-            });
-          } catch { /* noop */ }
+          const opts = {
+            color: entry.style.color || m.entry.style?.color,
+            lineWidth: entry.style.lineWidth || m.entry.style?.lineWidth,
+            lineStyle: DASH_STYLE[entry.style.lineStyle] ?? DASH_STYLE[m.entry.style?.lineStyle] ?? 0,
+          };
+          for (const s of m.mount.series) {
+            try { s?.applyOptions(opts); } catch { /* noop */ }
+          }
         }
         m.entry = entry;
       }

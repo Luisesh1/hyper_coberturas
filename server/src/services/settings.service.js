@@ -20,7 +20,7 @@ const NOTIFICATION_CATEGORIES = ['hedge', 'trade', 'runtime', 'deltaNeutralBlock
 
 const CHART_INDICATORS_KEY = 'chart_indicators';
 const CHART_INDICATOR_TYPES = new Set([
-  'sma', 'ema', 'wma', 'bollinger', 'keltner', 'vwap',
+  'sma', 'ema', 'wma', 'bollinger', 'keltner', 'atrbands', 'vwap',
   'rsi', 'macd', 'stoch', 'atr', 'adx', 'volume', 'sqzmom',
 ]);
 const MAX_CHART_INDICATORS = 20;

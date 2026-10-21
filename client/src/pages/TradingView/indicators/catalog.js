@@ -76,6 +76,20 @@ export const INDICATORS = {
     ],
     defaultStyle: { color: '#06b6d4', lineWidth: 1, lineStyle: 'dashed' },
   },
+  // Id en minúsculas: el servidor normaliza el tipo con toLowerCase().
+  atrbands: {
+    id: 'atrbands',
+    label: 'ATR Bands',
+    fullName: 'ATR Bands',
+    category: 'volatility',
+    pane: 'overlay',
+    defaultParams: { length: 14, multiplier: 2 },
+    paramSchema: [
+      { key: 'length', type: 'number', label: 'ATR periodo', min: 1, max: 500, step: 1 },
+      { key: 'multiplier', type: 'number', label: 'Multiplicador', min: 0.1, max: 10, step: 0.1 },
+    ],
+    defaultStyle: { color: '#fb923c', lineWidth: 1, lineStyle: 'solid' },
+  },
   vwap: {
     id: 'vwap',
     label: 'VWAP',

@@ -92,6 +92,33 @@ describe('computeAdapter', () => {
     }
   });
 
+  it('ATR Bands: cierre ± multiplicador × ATR, alineadas con el ATR', () => {
+    const closes = Array.from({ length: 30 }, (_, i) => 100 + Math.sin(i) * 5);
+    const candles = makeCandles(closes);
+    const out = computeIndicator('atrbands', candles, { length: 14, multiplier: 2 });
+    expect(out.series.map((s) => s.role)).toEqual(['upper', 'lower']);
+    const atr = computeIndicator('atr', candles, { length: 14 }).series[0].data;
+    const [upper, lower] = out.series.map((s) => s.data);
+    expect(upper).toHaveLength(atr.length);
+    expect(lower).toHaveLength(atr.length);
+    const offset = candles.length - atr.length;
+    atr.forEach((p, i) => {
+      const close = closes[offset + i];
+      expect(upper[i].time).toBe(p.time);
+      expect(upper[i].value).toBeCloseTo(close + 2 * p.value);
+      expect(lower[i].value).toBeCloseTo(close - 2 * p.value);
+    });
+  });
+
+  it('ATR Bands usa periodo 14 y multiplicador 2 por defecto', () => {
+    const closes = Array.from({ length: 30 }, (_, i) => 100 + i);
+    const candles = makeCandles(closes);
+    const out = computeIndicator('atrbands', candles, {});
+    const atr = computeIndicator('atr', candles, { length: 14 }).series[0].data;
+    expect(out.series[0].data).toHaveLength(atr.length);
+    expect(out.series[0].data.at(-1).value).toBeCloseTo(closes.at(-1) + 2 * atr.at(-1).value);
+  });
+
   it('ATR es siempre positivo', () => {
     const closes = Array.from({ length: 30 }, (_, i) => 100 + Math.sin(i) * 5);
     const out = computeIndicator('atr', makeCandles(closes), { length: 14 });

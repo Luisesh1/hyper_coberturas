@@ -18,6 +18,8 @@ describe('formatIndicatorLabel', () => {
   it('mantiene los formatos existentes', () => {
     expect(formatIndicatorLabel('bollinger', { length: 30, stdDev: 2.5 }, 'BB')).toBe('BB 30/2.5');
     expect(formatIndicatorLabel('keltner', { length: 20, atrLength: 14 }, 'KC')).toBe('KC 20/14');
+    expect(formatIndicatorLabel('atrbands', { length: 14, multiplier: 1.5 }, 'ATR Bands')).toBe('ATR Bands 14/1.5');
+    expect(formatIndicatorLabel('atrbands', {}, 'ATR Bands')).toBe('ATR Bands 14/2');
     expect(formatIndicatorLabel('ema', { length: 50 }, 'EMA')).toBe('EMA 50');
     expect(formatIndicatorLabel('volume', {}, 'Volume')).toBe('Vol');
     expect(formatIndicatorLabel('vwap', {}, 'VWAP')).toBe('VWAP');

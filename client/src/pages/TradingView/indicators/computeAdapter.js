@@ -91,6 +91,23 @@ function computeKeltner(candles, { length = 20, atrLength = 10, multiplier = 1.5
   return { middle, upper, lower };
 }
 
+function computeAtrBands(candles, { length = 14, multiplier = 2 } = {}) {
+  // Upper/Lower = cierre ± mult * ATR(length): banda de volatilidad pegada al
+  // precio (sin media), util para colocar stops y objetivos.
+  const closes = mapCloses(candles);
+  const atrArr = ATR.calculate({ period: length, high: mapHighs(candles), low: mapLows(candles), close: closes });
+  const offset = candles.length - atrArr.length;
+  const upper = [];
+  const lower = [];
+  atrArr.forEach((atr, i) => {
+    const t = toSec(candles[offset + i]);
+    const close = closes[offset + i];
+    upper.push({ time: t, value: close + multiplier * atr });
+    lower.push({ time: t, value: close - multiplier * atr });
+  });
+  return { upper, lower };
+}
+
 // ------------------------------------------------------------------
 // Dispatcher principal
 // ------------------------------------------------------------------
@@ -197,6 +214,18 @@ export function computeIndicator(type, candles, params = {}) {
         series: [
           { role: 'upper', data: upper },
           { role: 'middle', data: middle },
+          { role: 'lower', data: lower },
+        ],
+      };
+    }
+    case 'atrbands': {
+      const { upper, lower } = computeAtrBands(candles, {
+        length: params.length || 14,
+        multiplier: params.multiplier ?? 2,
+      });
+      return {
+        series: [
+          { role: 'upper', data: upper },
           { role: 'lower', data: lower },
         ],
       };

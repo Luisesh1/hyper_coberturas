@@ -61,3 +61,28 @@ describe('createIndicatorsController — modo compacto (paneles chicos en móvil
     expect(chart.panes()[1].setStretchFactor).toHaveBeenLastCalledWith(0.22);
   });
 });
+
+describe('createIndicatorsController — ATR Bands', () => {
+  it('pinta dos líneas sobre el precio (panel 0), superior e inferior', () => {
+    const chart = fakeChart();
+    createIndicatorsController(chart).render([
+      { uid: 'ab', type: 'atrbands', visible: true, style: {}, params: { length: 14, multiplier: 2 } },
+    ], candles);
+    expect(chart.series).toHaveLength(2);
+    expect(chart.series.every((s) => s.paneIndex === 0)).toBe(true);
+    expect(chart.series.map((s) => s.opts.title)).toEqual(['ATR Bands Up', 'ATR Bands Lo']);
+    for (const s of chart.series) {
+      const data = s.setData.mock.calls.at(-1)[0];
+      expect(data.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('cambiar el color recolorea las dos bandas', () => {
+    const chart = fakeChart();
+    const ctrl = createIndicatorsController(chart);
+    const entry = { uid: 'ab', type: 'atrbands', visible: true, style: {}, params: { length: 14, multiplier: 2 } };
+    ctrl.render([entry], candles);
+    ctrl.render([{ ...entry, style: { color: '#123456' } }], candles);
+    expect(chart.series.map((s) => s.opts.color)).toEqual(['#123456', '#123456']);
+  });
+});

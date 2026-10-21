@@ -54,6 +54,15 @@ test('normalizeChartIndicators preserva entradas válidas y descarta tipos desco
   assert.equal(out.indicators[0].style.color, '#ff0000');
 });
 
+test('normalizeChartIndicators acepta ATR Bands', () => {
+  const out = normalizeChartIndicators({
+    indicators: [{ uid: 'ab', type: 'atrbands', params: { length: 14, multiplier: 2 } }],
+  });
+  assert.equal(out.indicators.length, 1);
+  assert.equal(out.indicators[0].type, 'atrbands');
+  assert.deepEqual(out.indicators[0].params, { length: 14, multiplier: 2 });
+});
+
 test('normalizeChartIndicators rechaza params no numéricos/booleanos', () => {
   const out = normalizeChartIndicators({
     indicators: [{ uid: 'x', type: 'ema', params: { length: 20, junk: { nested: true }, useTrueRange: true } }],
