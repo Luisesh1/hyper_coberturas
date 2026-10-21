@@ -1254,9 +1254,17 @@ async function buildRecordsFromTransaction(provider, networkConfig, version, txH
   return parsedEntries.map((entry) => buildBaseRecord(networkConfig, version, normalizedTx, entry));
 }
 
-async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
+/**
+ * `lightweight`: lectura para valorar (metricas por wallet). Omite el historial
+ * NFT de Etherscan, la valoracion historica y las anotaciones por usuario, y
+ * reporta en `failedIdentifiers` las posiciones que no se pudieron leer en vez
+ * de omitirlas en silencio: quien valora necesita saber que el total esta
+ * incompleto.
+ */
+async function scanV3PositionsByWallet({ userId, wallet, networkConfig, lightweight = false }) {
   const provider = getProvider(networkConfig);
   const warnings = [];
+  const failedIdentifiers = [];
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v3.positionManager);
   const factoryAddress = normalizeAddress(networkConfig.deployments.v3.eventSource);
   const positionManager = getContract(networkConfig, positionManagerAddress, V3_POSITION_MANAGER_ABI);
@@ -1268,7 +1276,9 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
     tokenIds.push(String(await positionManager.tokenOfOwnerByIndex(wallet, i)));
   }
 
-  const apiKey = await getUserApiKey(userId).catch((err) => { logger.warn('getUserApiKey failed', { userId, error: err.message }); return null; });
+  const apiKey = lightweight
+    ? null
+    : await getUserApiKey(userId).catch((err) => { logger.warn('getUserApiKey failed', { userId, error: err.message }); return null; });
   let firstInbound = new Map();
   if (apiKey) {
     try {
@@ -1324,12 +1334,24 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig }) {
 
   const enriched = await mapConcurrent(records, 4, async (record) => {
     try {
-      return await enrichV3Record(provider, networkConfig, record, apiKey);
+      return await enrichV3Record(provider, networkConfig, record, apiKey, { lightweight });
     } catch (err) {
       warnings.push(`No se pudo enriquecer posición v3 ${record.identifier}: ${err.message}`);
+      failedIdentifiers.push(record.identifier);
       return null;
     }
   });
+
+  if (lightweight) {
+    return {
+      wallet,
+      version: 'v3',
+      network: networkConfig.id,
+      pools: enriched.filter(Boolean).filter(isRelevantRecord),
+      failedIdentifiers,
+      warnings: buildWarningsWithDedup(warnings),
+    };
+  }
 
   const pools = await annotatePoolsForUser({
     userId,
@@ -1366,15 +1388,16 @@ function computeV4PoolId(poolKey) {
   return ethers.keccak256(encoded);
 }
 
-async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
+async function scanV4PositionsByWallet({ userId, wallet, networkConfig, lightweight = false, knownTokenIds = null }) {
   const provider = getProvider(networkConfig);
   const warnings = [];
+  const failedIdentifiers = [];
   const apiKey = await getUserApiKey(userId).catch((err) => { logger.warn('getUserApiKey failed', { userId, error: err.message }); return null; });
   const positionManagerAddress = normalizeAddress(networkConfig.deployments.v4.positionManager);
   const positionManager = getContract(networkConfig, positionManagerAddress, V4_POSITION_MANAGER_ABI);
 
   let nftRowCount = 0;
-  const discovery = await discoverV4TokenIds({
+  const discover = () => discoverV4TokenIds({
     etherscanLookup: apiKey
       ? async () => {
         const { rows, truncated } = await fetchWalletNftTransfers(apiKey, networkConfig, wallet, positionManagerAddress);
@@ -1389,6 +1412,22 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
       http: httpClient,
     }),
   });
+  let discovery;
+  try {
+    discovery = await discover();
+  } catch (err) {
+    // v4 no es enumerable on-chain: sin indexador (Etherscan/Alchemy NFT) para
+    // esta red, la lectura ligera se queda con los tokenIds que la app conoce
+    // y comprueba con ownerOf que sigan siendo de la wallet.
+    if (!lightweight || !Array.isArray(knownTokenIds)) throw err;
+    discovery = {
+      tokenIds: knownTokenIds.map(String),
+      firstInbound: new Map(),
+      truncated: false,
+      source: 'known_ids',
+      warning: `Sin indexador para ${networkConfig.id} (${err.message}); solo posiciones conocidas por la app`,
+    };
+  }
   const { tokenIds, firstInbound, truncated } = discovery;
   if (discovery.warning) {
     logger.warn('v4_scan_etherscan_fallback', { network: networkConfig.id, wallet, warning: discovery.warning });
@@ -1399,7 +1438,12 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
   }
 
   const records = await mapConcurrent(tokenIds, 3, async (tokenId) => {
-    const owner = normalizeAddress(await positionManager.ownerOf(tokenId).catch((err) => { logger.warn('ownerOf failed', { tokenId, error: err.message }); return null; }));
+    const owner = normalizeAddress(await positionManager.ownerOf(tokenId).catch((err) => {
+      logger.warn('ownerOf failed', { tokenId, error: err.message });
+      // Un ownerOf fallido no prueba que la posicion ya no sea de la wallet.
+      if (lightweight) failedIdentifiers.push(String(tokenId));
+      return null;
+    }));
     if (lower(owner) !== lower(wallet)) return null;
 
     const [poolKey, positionInfo] = await positionManager.getPoolAndPositionInfo(tokenId);
@@ -1439,12 +1483,25 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
 
   const enriched = await mapConcurrent(records.filter(Boolean), 3, async (record) => {
     try {
-      return enrichV4Record(provider, networkConfig, record, apiKey);
+      return await enrichV4Record(provider, networkConfig, record, apiKey, { lightweight });
     } catch (err) {
       warnings.push(`No se pudo enriquecer posición v4 ${record.identifier}: ${err.message}`);
+      failedIdentifiers.push(record.identifier);
       return null;
     }
   });
+
+  if (lightweight) {
+    return {
+      wallet,
+      version: 'v4',
+      network: networkConfig.id,
+      pools: enriched.filter(Boolean).filter(isRelevantRecord),
+      failedIdentifiers,
+      discoverySource: discovery.source,
+      warnings: buildWarningsWithDedup(warnings),
+    };
+  }
 
   const pools = await annotatePoolsForUser({
     userId,
@@ -1473,7 +1530,7 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig }) {
   };
 }
 
-async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
+async function scanPoolsCreatedByWallet({ userId, wallet, network, version, lightweight = false, knownTokenIds = null }) {
   if (!userId) {
     throw new ValidationError('userId es requerido');
   }
@@ -1481,11 +1538,11 @@ async function scanPoolsCreatedByWallet({ userId, wallet, network, version }) {
   const { wallet: normalizedWallet, networkConfig: globalNetworkConfig } = validateRequest({ wallet, network, version });
   const networkConfig = await resolveScanNetworkConfig(userId, globalNetworkConfig);
   if (version === 'v3') {
-    return scanV3PositionsByWallet({ wallet: normalizedWallet, networkConfig, userId });
+    return scanV3PositionsByWallet({ wallet: normalizedWallet, networkConfig, userId, lightweight });
   }
 
   if (version === 'v4') {
-    return scanV4PositionsByWallet({ wallet: normalizedWallet, networkConfig, userId });
+    return scanV4PositionsByWallet({ wallet: normalizedWallet, networkConfig, userId, lightweight, knownTokenIds });
   }
 
   const apiKey = await getUserApiKey(userId);

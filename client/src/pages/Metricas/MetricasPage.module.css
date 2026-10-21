@@ -195,24 +195,10 @@
   color: var(--uni-text-3, #7d93a9);
 }
 
-/* Un stat con margen justo se tiñe entero, etiqueta y nota incluidas: el
-   color es la alarma, no un adorno del numero. */
-.toneWarn { color: var(--uni-amber, #ffbf5f); }
-.toneWarn .statLabel,
-.toneWarn .statValue,
-.toneWarn .portfolioNote { color: inherit; }
-.toneWarn.portfolioStat { background: rgba(255, 191, 95, 0.07); }
-
-.toneDanger { color: var(--uni-red, #ff7d7d); }
-.toneDanger .statLabel,
-.toneDanger .statValue,
-.toneDanger .portfolioNote { color: inherit; }
-.toneDanger.portfolioStat { background: rgba(255, 125, 125, 0.08); }
-
-/* ── Tabla de orquestadores ──────────────────────────────────────────── */
+/* ── Tabla de wallets ───────────────────────────────────────────────── */
 .table {
   /* Cabecera y filas comparten rejilla: si cambia una, cambian las dos. */
-  --metrics-grid: minmax(0, 1fr) 108px 96px 118px 84px;
+  --metrics-grid: minmax(0, 1fr) 150px 120px 140px;
   display: flex;
   flex-direction: column;
   background: var(--uni-surface-1, #131722);
@@ -230,27 +216,6 @@
   border-bottom: 1px solid var(--uni-border, rgba(255,255,255,0.08));
   background: rgba(0, 0, 0, 0.16);
 }
-
-.sortBtn {
-  appearance: none;
-  background: transparent;
-  border: none;
-  padding: 2px 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  font: inherit;
-  font-size: 0.66rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--uni-text-2);
-  cursor: pointer;
-}
-
-.sortBtn:first-child { justify-content: flex-start; }
-.sortBtn:hover { color: var(--uni-text-0); }
-.sortBtnActive { color: var(--uni-cyan); }
 
 .headSpark {
   font-size: 0.66rem;
@@ -408,35 +373,6 @@
   font-size: 0.72rem;
   color: var(--uni-text-2);
 }
-
-.policyPicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 6px;
-  color: var(--uni-text-2);
-  font-size: 0.72rem;
-}
-
-.policyPicker select {
-  border: 1px solid var(--uni-border, rgba(255,255,255,0.12));
-  border-radius: 6px;
-  background: var(--uni-surface-2, #1b2030);
-  color: var(--uni-text-0);
-  padding: 3px 6px;
-  font: inherit;
-}
-
-.policyReal,
-.policySimulated {
-  display: inline-block;
-  margin-left: 8px;
-  font-size: 0.7rem;
-  font-weight: 700;
-}
-
-.policyReal { color: var(--uni-green, #3dd991); }
-.policySimulated { color: var(--uni-orange, #ffbf5f); }
 
 .cardStats {
   display: flex;
@@ -602,4 +538,307 @@
 .tooltipRow strong {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Wallets ────────────────────────────────────────────────────────── */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0;
+}
+
+.portfolioChange {
+  font-size: 0.84rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.portfolioBreakdown {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.headNum {
+  text-align: right;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--uni-text-2);
+}
+
+.tableHead > span:first-child {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--uni-text-2);
+}
+
+/* El boton de copiar vive fuera del boton de la fila (no se anidan botones). */
+.rowHeaderWrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.rowHeaderWrap .rowHeader { padding-right: 40px; }
+
+.copyBtn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--uni-text-3, #7d93a9);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.copyBtn:hover { color: var(--uni-cyan); border-color: var(--uni-border, rgba(255,255,255,0.12)); }
+
+.rowPct {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.rowBadgeOk {
+  color: var(--uni-green, #3dd991);
+  background: rgba(61, 217, 145, 0.1);
+  border-color: rgba(61, 217, 145, 0.22);
+}
+
+.cardActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.secondaryBtn {
+  appearance: none;
+  background: transparent;
+  color: var(--uni-text-1);
+  border: 1px solid var(--uni-border, rgba(255,255,255,0.15));
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.secondaryBtn:hover:not(:disabled) { border-color: var(--uni-text-2); color: var(--uni-text-0); }
+.secondaryBtn:disabled { opacity: 0.5; cursor: wait; }
+
+.staleNotice {
+  font-size: 0.78rem;
+  color: var(--uni-amber, #ffbf5f);
+  background: rgba(255, 191, 95, 0.07);
+  border: 1px solid rgba(255, 191, 95, 0.22);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.staleNotice ul { margin: 4px 0 0; padding-left: 18px; }
+
+.chartBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--uni-border, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  overflow: hidden;
+  margin-right: 6px;
+}
+
+.segmented button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--uni-text-2);
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.segmented .segmentedOn {
+  background: rgba(56, 189, 248, 0.14);
+  color: var(--uni-cyan);
+  font-weight: 600;
+}
+
+.legendStatic {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--uni-text-1);
+}
+
+.tooltipPartial {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--uni-amber, #ffbf5f);
+  font-size: 0.7rem;
+  max-width: 220px;
+}
+
+.holdings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.holdingGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.holdingTitle {
+  margin: 0;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--uni-text-2);
+}
+
+.holdingList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.holdingRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  border-top: 1px solid var(--uni-divider, rgba(255,255,255,0.06));
+  font-size: 0.8rem;
+}
+
+.holdingRow:first-child { border-top: none; }
+
+.holdingName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.holdingName strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.holdingMeta {
+  font-size: 0.7rem;
+  color: var(--uni-text-3, #7d93a9);
+}
+
+.holdingAmount {
+  text-align: right;
+  color: var(--uni-text-2);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.76rem;
+}
+
+.holdingUsd {
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.holdingEmpty,
+.holdingNote {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--uni-text-3, #7d93a9);
+}
+
+.linkBtn {
+  appearance: none;
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  color: var(--uni-cyan);
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.emptyHint { color: var(--uni-text-3, #7d93a9); }
+
+/* ── Telefono ─────────────────────────────────────────────────────────
+   La fila pasa a dos lineas: direccion arriba; tendencia, valor y cambio
+   debajo. La cabecera de columnas sobra cuando las columnas no existen. */
+@media (max-width: 640px) {
+  .filterBar { padding: 10px; }
+  .filterGroup { flex-wrap: wrap; }
+  .searchInput { min-width: 0; width: 100%; font-size: 16px; }
+
+  .portfolioHero { padding: 12px 14px; }
+  .portfolioAmount { font-size: 1.6rem; }
+  .portfolioBreakdown { width: 100%; border-top: 1px solid var(--uni-border, rgba(255,255,255,0.08)); }
+  .portfolioBreakdown .portfolioStat { flex: 1 1 0; min-width: 0; padding: 10px 12px; }
+  .portfolioBreakdown .portfolioStat:first-child { border-left: none; }
+
+  .tableHead { display: none; }
+
+  .rowHeader {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'id id id'
+      'spark value change';
+    row-gap: 8px;
+    padding: 12px 44px 12px 12px;
+    min-height: 44px;
+  }
+  .rowIdentity { grid-area: id; }
+  .rowSpark { grid-area: spark; }
+  .rowHeader > .rowNumber:nth-of-type(3) { grid-area: value; }
+  .rowHeader > .rowNumber:nth-of-type(4) { grid-area: change; }
+  .copyBtn { top: 12px; transform: none; width: 36px; height: 36px; }
+
+  .rowDetail { padding: 0 6px 8px; }
+  .card { padding: 12px; }
+  .cardStats { gap: 10px; width: 100%; }
+  .stat { min-width: 0; flex: 1 1 0; }
+  .statValue { font-size: 0.92rem; }
+  .cardActions { width: 100%; }
+  .cardActions button { flex: 1 1 0; min-height: 40px; }
+  .chartContainer { height: 220px; }
+
+  .holdings { grid-template-columns: 1fr; }
+  .holdingRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'name usd'
+      'name amount';
+    row-gap: 2px;
+  }
+  .holdingName { grid-area: name; }
+  .holdingUsd { grid-area: usd; }
+  .holdingAmount { grid-area: amount; }
 }

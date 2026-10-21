@@ -10,7 +10,7 @@ const deltaNeutralIntegrityService = require('../services/delta-neutral-integrit
 const lpOrchestratorMonitorService = require('../services/lp-orchestrator-monitor.service');
 const crossChainMonitorService = require('../services/cross-chain/cross-chain-monitor.service');
 const config = require('../config');
-const orchestratorMetricsService = require('../services/orchestrator-metrics.service');
+const walletMetricsService = require('../services/wallet-metrics.service');
 const uniswapOperationService = require('../services/uniswap-operation.service');
 const telegramCommandService = require('../services/telegram-command.service');
 const etherscanQueueService = require('../services/etherscan-queue.service');
@@ -78,7 +78,7 @@ async function bootstrapInfra(httpServer) {
   lpOrchestratorMonitorService.start();
   // Los envíos ya firmados se siguen vigilando aunque el modo sea solo lectura.
   if (config.crossChainFunding.mode !== 'off') crossChainMonitorService.start();
-  orchestratorMetricsService.start();
+  walletMetricsService.start();
   uniswapOperationService.start();
   telegramCommandService.start();
   backtestQueueService.start();
@@ -103,7 +103,7 @@ async function bootstrapInfra(httpServer) {
       protectedPoolDeltaNeutralService.stop();
       lpOrchestratorMonitorService.stop();
       crossChainMonitorService.stop();
-      orchestratorMetricsService.stop();
+      walletMetricsService.stop();
       uniswapOperationService.stop();
       telegramCommandService.stop();
       etherscanQueueService.shutdown();

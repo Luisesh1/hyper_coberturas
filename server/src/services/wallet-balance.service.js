@@ -1,9 +1,9 @@
 /**
  * wallet-balance.service.js
  *
- * Lee todos los balances ERC-20 + ETH nativo de una wallet en Arbitrum via
- * Alchemy RPC y los valua en USD. Se usa desde orchestrator-metrics.service
- * para construir el componente "wallet" del snapshot horario.
+ * Lee todos los balances ERC-20 + el nativo de una wallet en una red via
+ * Alchemy RPC y los valua en USD. Se usa desde wallet-metrics (collector)
+ * para el componente "tokens:<red>" de la captura horaria por wallet.
  *
  * Estrategia de pricing:
  *  - stables (USDC, USDT, DAI, ...): $1
@@ -186,10 +186,39 @@ async function processAlchemyQueue() {
   }
 }
 
+/**
+ * Un error JSON-RPC (metodo inexistente, revert...) es una respuesta valida
+ * del nodo; un 401/403/timeout es el endpoint el que falla (p. ej. la app de
+ * Alchemy sin esa red habilitada). Solo en el segundo caso se reintenta una
+ * vez contra el RPC publico de respaldo.
+ */
+// Red cuyo RPC principal rechazo la clave (401/403): se va directo al
+// respaldo un rato en vez de cobrar un 403 por cada llamada.
+const PRIMARY_DENIED_TTL_MS = 10 * 60_000;
+const _primaryDeniedUntil = new Map();
+
 async function executeAlchemyJob(job) {
   const url = config.uniswap.rpcUrls[job.network];
   if (!url) throw new Error(`RPC no configurado para ${job.network}`);
+  const fallback = config.uniswap.fallbackRpcUrls?.[job.network];
+  const hasFallback = Boolean(fallback) && fallback !== url;
+  if (hasFallback && (_primaryDeniedUntil.get(job.network) || 0) > Date.now()) {
+    return executeRpcJob(job, fallback);
+  }
+  try {
+    return await executeRpcJob(job, url);
+  } catch (err) {
+    if (err.rpcError || !hasFallback) throw err;
+    const status = err.response?.status ?? err.status;
+    if (status === 401 || status === 403) {
+      _primaryDeniedUntil.set(job.network, Date.now() + PRIMARY_DENIED_TTL_MS);
+    }
+    logger.warn('alchemy_rpc_fallback_public', { network: job.network, method: job.method, status, error: err.message });
+    return executeRpcJob(job, fallback);
+  }
+}
 
+async function executeRpcJob(job, url) {
   const maxAttempts = Math.max(1, Number(config.services?.alchemy?.retryMaxAttempts) || 4);
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
@@ -199,7 +228,9 @@ async function executeAlchemyJob(job) {
         { timeout: 15_000 }
       );
       if (data.error) {
-        throw new Error(data.error.message || `RPC error: ${job.method}`);
+        const rpcErr = new Error(data.error.message || `RPC error: ${job.method}`);
+        rpcErr.rpcError = true;
+        throw rpcErr;
       }
       return data.result;
     } catch (err) {
@@ -349,22 +380,27 @@ async function scanCuratedTokens(network, walletAddress) {
  *   tokens: Array<{ symbol, address, balance, decimals, priceUsd, valueUsd, priced }>
  * }>}
  */
-async function getAllTokenBalancesUsd(walletAddress, { network = 'arbitrum' } = {}) {
+async function getAllTokenBalancesUsd(walletAddress, { network = 'arbitrum', nativeSymbol = 'ETH' } = {}) {
   if (!walletAddress) {
-    return { totalUsd: 0, pricedUsd: 0, unpricedCount: 0, tokens: [] };
+    return { totalUsd: 0, pricedUsd: 0, unpricedCount: 0, tokens: [], errors: [] };
   }
 
   const mids = await getHyperliquidMids();
   const tokens = [];
+  // Lecturas que fallaron. Quien necesite distinguir "saldo 0" de "no se pudo
+  // leer" (metricas por wallet) lo consulta aqui; el resto lo ignora.
+  const errors = [];
+  // Sin mids, ETH y compania valdrian 0: no es un saldo vacio, es un fallo.
+  if (!mids || Object.keys(mids).length === 0) errors.push('precios: allMids de Hyperliquid no disponible');
 
   // 1) ETH nativo
   try {
     const wei = await alchemyRpc(network, 'eth_getBalance', [walletAddress, 'latest']);
     const balanceEth = Number(BigInt(wei)) / 1e18;
     if (balanceEth > 0) {
-      const priceUsd = priceFromMids(mids, 'ETH') || 0;
+      const priceUsd = priceFromMids(mids, nativeSymbol) || 0;
       tokens.push({
-        symbol: 'ETH',
+        symbol: nativeSymbol,
         address: '0x0000000000000000000000000000000000000000',
         balance: balanceEth,
         decimals: 18,
@@ -374,6 +410,7 @@ async function getAllTokenBalancesUsd(walletAddress, { network = 'arbitrum' } = 
       });
     }
   } catch (err) {
+    errors.push(`nativo: ${err.message}`);
     logger.warn('wallet_balance_eth_fetch_failed', { walletAddress, error: err.message });
   }
 
@@ -411,6 +448,7 @@ async function getAllTokenBalancesUsd(walletAddress, { network = 'arbitrum' } = 
         scanned: tokenBalances.length,
       });
     } else {
+      errors.push(`erc20: ${err.message}`);
       logger.warn('wallet_balance_erc20_scan_failed', { walletAddress, error: err.message });
     }
   }
@@ -492,10 +530,13 @@ async function getAllTokenBalancesUsd(walletAddress, { network = 'arbitrum' } = 
     pricedUsd,
     unpricedCount,
     tokens,
+    errors,
   };
 }
 
 module.exports = {
   getAllTokenBalancesUsd,
-  getHyperliquidMids, // exportado para tests
+  getHyperliquidMids,
+  priceFromMids,
+  fetchDefillamaPrices,
 };

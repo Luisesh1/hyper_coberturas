@@ -1,52 +1,17 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { lpOrchestratorApi } from '../../services/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { walletMetricsApi } from '../../services/api';
 import MetricsFilterBar, { RANGE_OPTIONS } from './components/MetricsFilterBar';
-import OrchestratorRow from './components/OrchestratorRow';
 import PortfolioStrip from './components/PortfolioStrip';
-import useSnapshotSeries from './hooks/useSnapshotSeries';
-import { buildPortfolio, deriveOrchestratorRow } from './lib/portfolio';
+import WalletRow from './components/WalletRow';
+import useWalletSeries from './hooks/useWalletSeries';
+import { aggregateChange, walletChange } from './lib/walletSeries';
 import styles from './MetricasPage.module.css';
 
 const POLL_INTERVAL_MS = 60_000;
-
-const SORT_COLUMNS = [
-  { key: 'name', label: 'Orquestador' },
-  { key: 'capital', label: 'Capital' },
-  { key: 'pnl', label: 'P&L rango' },
-  { key: 'liq', label: 'A liq.' },
-];
-
-function matchesSearch(orch, term) {
-  if (!term) return true;
-  const t = term.toLowerCase();
-  return (
-    orch.name?.toLowerCase().includes(t) ||
-    orch.token0Symbol?.toLowerCase().includes(t) ||
-    orch.token1Symbol?.toLowerCase().includes(t) ||
-    orch.network?.toLowerCase().includes(t)
-  );
-}
-
-const SORT_VALUES = {
-  name: (row) => row.orchestrator.name?.toLowerCase() || '',
-  capital: (row) => row.capitalUsd,
-  pnl: (row) => row.rangePnlUsd,
-  liq: (row) => row.distanceToLiqPct,
-};
-
-/** Los huecos van siempre al final, ordene como ordene el usuario. */
-function compareRows(a, b, key, dir) {
-  const va = SORT_VALUES[key](a);
-  const vb = SORT_VALUES[key](b);
-  if (va == null && vb == null) return 0;
-  if (va == null) return 1;
-  if (vb == null) return -1;
-  const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
-  return dir === 'asc' ? cmp : -cmp;
-}
+const EMPTY = [];
 
 export default function MetricasPage() {
-  const [orchestrators, setOrchestrators] = useState([]);
+  const [wallets, setWallets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -54,7 +19,6 @@ export default function MetricasPage() {
   const [statusFilter, setStatusFilter] = useState('active');
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState(null);
-  const [sort, setSort] = useState({ key: 'pnl', dir: 'desc' });
 
   const range = useMemo(
     () => RANGE_OPTIONS.find((r) => r.id === rangeId) || RANGE_OPTIONS[1],
@@ -65,15 +29,14 @@ export default function MetricasPage() {
     setLoading(true);
     setError(null);
     try {
-      const includeArchived = statusFilter !== 'active';
-      const list = await lpOrchestratorApi.list({ includeArchived });
-      setOrchestrators(Array.isArray(list) ? list : []);
+      const list = await walletMetricsApi.list({ includeArchived: true });
+      setWallets(Array.isArray(list) ? list : []);
     } catch (err) {
-      setError(err?.message || 'Error cargando orquestadores');
+      setError(err?.message || 'Error cargando wallets');
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -82,44 +45,39 @@ export default function MetricasPage() {
   }, [refresh]);
 
   const visible = useMemo(() => {
-    return orchestrators
-      .filter((o) => {
-        if (statusFilter === 'active') return o.status === 'active';
-        if (statusFilter === 'archived') return o.status === 'archived';
-        return true;
-      })
-      .filter((o) => matchesSearch(o, search));
-  }, [orchestrators, statusFilter, search]);
+    const term = search.trim().toLowerCase();
+    return wallets
+      .filter((w) => w.status === statusFilter)
+      .filter((w) => !term || w.address.includes(term) || w.label?.toLowerCase().includes(term));
+  }, [wallets, statusFilter, search]);
 
-  const visibleIds = useMemo(() => visible.map((o) => o.id), [visible]);
-  const series = useSnapshotSeries(visibleIds, range);
+  const visibleIds = useMemo(() => visible.map((w) => w.id), [visible]);
+  // Una captura nueva en cualquier wallet visible recarga la serie.
+  const reloadKey = useMemo(
+    () => visible.map((w) => w.latest?.capturedAt || 0).join(','),
+    [visible]
+  );
+  const series = useWalletSeries(visibleIds, range, reloadKey);
 
-  const rows = useMemo(() => visible.map((orchestrator) => {
-    const entry = series.byId[orchestrator.id];
-    return {
-      ...deriveOrchestratorRow(orchestrator, entry?.snapshots),
-      error: entry?.error || null,
-    };
-  }), [visible, series.byId]);
-
-  const sortedRows = useMemo(
-    () => [...rows].sort((a, b) => compareRows(a, b, sort.key, sort.dir)),
-    [rows, sort]
+  const changes = useMemo(
+    () => Object.fromEntries(visibleIds.map((id) => [id, walletChange(series.byId[id])])),
+    [visibleIds, series.byId]
+  );
+  const aggregate = useMemo(
+    () => aggregateChange(Object.fromEntries(visibleIds.map((id) => [id, series.byId[id] || []]))),
+    [visibleIds, series.byId]
   );
 
-  const portfolio = useMemo(() => buildPortfolio(rows), [rows]);
+  const sorted = useMemo(
+    () => [...visible].sort((a, b) => (b.latest?.totals.totalUsd ?? -1) - (a.latest?.totals.totalUsd ?? -1)),
+    [visible]
+  );
 
-  // Una fila que dejo de estar visible no puede seguir abierta por debajo.
   useEffect(() => {
     if (expandedId != null && !visibleIds.includes(expandedId)) setExpandedId(null);
   }, [visibleIds, expandedId]);
 
-  const toggleSort = (key) => {
-    setSort((prev) => {
-      if (prev.key !== key) return { key, dir: key === 'name' ? 'asc' : 'desc' };
-      return { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
-    });
-  };
+  const archivedCount = wallets.filter((w) => w.status === 'archived').length;
 
   return (
     <div className={styles.page}>
@@ -130,16 +88,17 @@ export default function MetricasPage() {
           <details className={styles.explainer}>
             <summary>Cómo se calculan estas cifras</summary>
             <p className={styles.subtitle}>
-              El <strong>capital</strong> es la suma en USD del valor de la wallet de
-              Arbitrum (todos los tokens), la posicion LP de Uniswap y la cuenta de
-              Hyperliquid vinculada — por cada orquestador. Los snapshots se capturan
-              cada hora en punto.
+              Se sigue cada <strong>wallet</strong> con la que se ha creado un orquestador,
+              aunque ese orquestador ya esté cerrado, hasta que archives la wallet. Cada
+              hora en punto se suma su valor en USD: tokens en todas las redes, todas sus
+              posiciones LP de Uniswap y la cuenta de Hyperliquid de la misma dirección
+              (perps + spot).
             </p>
             <p className={styles.subtitle}>
-              <strong>Δ rango</strong> mide el cambio de ese valor de mercado (incluye
-              depositos y retiros). <strong>PnL total</strong> es la ganancia neta real
-              acumulada: fees del LP + deriva de precio + PnL del hedge + funding − gas −
-              slippage − fees de ejecucion. Pasa el cursor por encima para ver el desglose.
+              Es valor bruto de mercado: depósitos y retiros se ven como saltos. El cambio
+              del total es la suma del cambio de cada wallet en el rango, así que una wallet
+              que empieza a seguirse a mitad de rango no cuenta como ganancia. Si una fuente
+              no responde se usa su último valor y el punto se marca como parcial.
             </p>
           </details>
         </div>
@@ -156,65 +115,46 @@ export default function MetricasPage() {
 
       {error && <div className={styles.empty}>Error: {error}</div>}
 
-      {(rows.length > 0 || series.loading) && (
-        <PortfolioStrip
-          rows={rows}
-          portfolio={portfolio}
-          range={range}
-          loading={series.loading}
-        />
+      {visible.length > 0 && (
+        <PortfolioStrip wallets={visible} aggregate={aggregate} range={range} loading={series.loading} />
       )}
 
-      {loading && !orchestrators.length && (
-        <div className={styles.loading}>Cargando orquestadores…</div>
-      )}
+      {loading && !wallets.length && <div className={styles.loading}>Cargando wallets…</div>}
 
-      {rows.length > 0 && (
-        <section className={styles.table}>
-          <div className={styles.tableHead}>
-            {SORT_COLUMNS.map(({ key, label }) => (
-              <Fragment key={key}>
-                <button
-                  type="button"
-                  className={`${styles.sortBtn} ${sort.key === key ? styles.sortBtnActive : ''}`}
-                  onClick={() => toggleSort(key)}
-                  title={`Ordenar por ${label}`}
-                >
-                  {label}
-                  {sort.key === key && (
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d={sort.dir === 'asc' ? 'm18 15-6-6-6 6' : 'm6 9 6 6 6-6'} />
-                    </svg>
-                  )}
-                  <span className={styles.srOnly}>
-                    {sort.key === key
-                      ? (sort.dir === 'asc' ? ' (orden ascendente)' : ' (orden descendente)')
-                      : ''}
-                  </span>
-                </button>
-                {/* La columna de tendencia no se ordena: va entre el nombre y
-                    el capital para que cabecera y fila compartan la rejilla. */}
-                {key === 'name' && <span className={styles.headSpark}>{range?.label}</span>}
-              </Fragment>
-            ))}
+      {sorted.length > 0 && (
+        <section className={styles.table} aria-label="Wallets">
+          <div className={styles.tableHead} aria-hidden="true">
+            <span>Wallet</span>
+            <span className={styles.headSpark}>{range.label}</span>
+            <span className={styles.headNum}>Valor</span>
+            <span className={styles.headNum}>Cambio</span>
           </div>
-
-          {sortedRows.map((row) => (
-            <OrchestratorRow
-              key={row.id}
-              row={row}
+          {sorted.map((wallet) => (
+            <WalletRow
+              key={wallet.id}
+              wallet={wallet}
+              points={series.byId[wallet.id] || EMPTY}
+              change={changes[wallet.id]}
               range={range}
-              loading={series.loading}
-              expanded={expandedId === row.id}
-              onToggle={() => setExpandedId((prev) => (prev === row.id ? null : row.id))}
+              loading={loading || series.loading}
+              expanded={expandedId === wallet.id}
+              onToggle={() => setExpandedId((prev) => (prev === wallet.id ? null : wallet.id))}
+              onStatusChange={() => { setExpandedId(null); refresh(); }}
             />
           ))}
         </section>
       )}
 
-      {!loading && !rows.length && (
+      {!loading && !error && !visible.length && (
         <div className={styles.empty}>
-          No hay orquestadores que coincidan con los filtros.
+          {statusFilter === 'archived'
+            ? 'No hay wallets archivadas.'
+            : (wallets.length
+              ? 'Ninguna wallet activa coincide con la búsqueda.'
+              : 'Aún no hay wallets: se empiezan a seguir al crear un orquestador.')}
+          {statusFilter === 'active' && archivedCount > 0 && !search && (
+            <span className={styles.emptyHint}> {archivedCount} archivada{archivedCount === 1 ? '' : 's'}.</span>
+          )}
         </div>
       )}
     </div>
