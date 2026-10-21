@@ -33,7 +33,8 @@ describe('sombreado de opciones dentro del dinero', () => {
 
   it('escritorio sombrea el lado call o put ITM de cada fila', () => {
     render(<OptionChain chain={chain} expiry="261030" onExpiry={() => {}} onPick={() => {}} />);
-    const [low, high] = screen.getAllByRole('row').slice(2);
+    const [low, spotRow, high] = screen.getAllByRole('row').slice(2);
+    expect(spotRow.textContent).toMatch(/Spot/);
     expect(low.className).toMatch(/itmCall/);
     expect(low.className).not.toMatch(/itmPut/);
     expect(high.className).toMatch(/itmPut/);

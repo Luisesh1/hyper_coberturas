@@ -197,7 +197,9 @@
   padding: 8px 14px !important;
   white-space: nowrap;
 }
-.strikeAtm { box-shadow: inset 0 0 0 1px var(--indigo); }
+.chain tr.spotRow td { border-bottom: 0; }
+.chain tr.spotRow .spotDivider { padding: 6px 10px; }
+.chain tr.spotRow .spotDividerLabel { font-size: 12px; white-space: nowrap; }
 
 .cellBtn {
   display: block;

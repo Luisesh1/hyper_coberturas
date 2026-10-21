@@ -1,18 +1,9 @@
-import { fmtIv, fmtNum, fmtPrice, fmtStrike } from '../format';
+import { Fragment } from 'react';
+import { fmtIv, fmtNum, fmtPrice, fmtSpot, fmtStrike } from '../format';
 import ExpiryPills from './ExpiryPills';
+import { spotDividerIndex } from './MobileChain';
 import { quoteMid } from './mobileChainMetrics';
 import styles from './ManualTrading.module.css';
-
-// Índice del strike más cercano al spot (el ATM).
-export function atmIndex(rows, spot) {
-  const S = Number(spot);
-  if (!rows?.length || !Number.isFinite(S)) return -1;
-  let best = 0;
-  rows.forEach((r, i) => {
-    if (Math.abs(r.strike - S) < Math.abs(rows[best].strike - S)) best = i;
-  });
-  return best;
-}
 
 function QuoteButton({ leg, kind, strike, type, onPick, picked }) {
   const value = kind === 'bid' ? leg?.bid : leg?.ask;
@@ -47,9 +38,10 @@ function QuoteCell({ leg, strike, type, onPick, isPicked }) {
 
 // Cadena de escritorio: calls | strike | puts. Cada lado agrupa
 // promedio/bid/ask en una celda: clic en Bid = vender, en Ask = comprar.
+// Como en móvil, una línea con el spot en vivo divide la tabla entre strikes.
 export default function OptionChain({ chain, loading, error, expiry, onExpiry, selection, onPick }) {
   const rows = chain?.rows || [];
-  const atm = atmIndex(rows, chain?.spot);
+  const divider = spotDividerIndex(rows, chain?.spot);
   const spot = Number(chain?.spot);
 
   const isPicked = (leg, side) => selection?.symbol && leg?.symbol === selection.symbol && selection.side === side;
@@ -91,17 +83,28 @@ export default function OptionChain({ chain, loading, error, expiry, onExpiry, s
                   Number.isFinite(spot) && r.strike > spot ? styles.itmPut : '',
                 ].join(' ');
                 return (
-                  <tr key={r.strike} className={cls}>
-                    <td><span className={styles.plain}>{fmtNum(r.call?.delta, 2)}</span></td>
-                    <td><span className={styles.plain}>{fmtIv(r.call?.iv)}</span></td>
-                    <td><QuoteCell leg={r.call} strike={r.strike} type="C" onPick={onPick} isPicked={isPicked} /></td>
-                    <td><span className={styles.plain}>{fmtNum(r.call?.openInterest, 0)}</span></td>
-                    <td className={`${styles.strikeCell} ${styles.mono} ${i === atm ? styles.strikeAtm : ''}`}>{fmtStrike(r.strike)}</td>
-                    <td><QuoteCell leg={r.put} strike={r.strike} type="P" onPick={onPick} isPicked={isPicked} /></td>
-                    <td><span className={styles.plain}>{fmtIv(r.put?.iv)}</span></td>
-                    <td><span className={styles.plain}>{fmtNum(r.put?.delta, 2)}</span></td>
-                    <td><span className={styles.plain}>{fmtNum(r.put?.openInterest, 0)}</span></td>
-                  </tr>
+                  <Fragment key={r.strike}>
+                    {i === divider && (
+                      <tr className={styles.spotRow}>
+                        <td colSpan={9}>
+                          <div className={styles.spotDivider}>
+                            <span className={`${styles.mono} ${styles.spotDividerLabel}`}>Spot {fmtSpot(chain.spot)}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    <tr className={cls}>
+                      <td><span className={styles.plain}>{fmtNum(r.call?.delta, 2)}</span></td>
+                      <td><span className={styles.plain}>{fmtIv(r.call?.iv)}</span></td>
+                      <td><QuoteCell leg={r.call} strike={r.strike} type="C" onPick={onPick} isPicked={isPicked} /></td>
+                      <td><span className={styles.plain}>{fmtNum(r.call?.openInterest, 0)}</span></td>
+                      <td className={`${styles.strikeCell} ${styles.mono}`}>{fmtStrike(r.strike)}</td>
+                      <td><QuoteCell leg={r.put} strike={r.strike} type="P" onPick={onPick} isPicked={isPicked} /></td>
+                      <td><span className={styles.plain}>{fmtIv(r.put?.iv)}</span></td>
+                      <td><span className={styles.plain}>{fmtNum(r.put?.delta, 2)}</span></td>
+                      <td><span className={styles.plain}>{fmtNum(r.put?.openInterest, 0)}</span></td>
+                    </tr>
+                  </Fragment>
                 );
               })}
             </tbody>
