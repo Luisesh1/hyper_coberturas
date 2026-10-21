@@ -6,7 +6,12 @@ const timeInRangeService = require('./time-in-range.service');
 const logger = require('./logger.service');
 const onChainManager = require('./onchain-manager.service');
 const httpClient = require('../shared/platform/http/http-client');
-const { buildAlchemyNftBaseUrl, discoverV4TokenIds, fetchTokenIdsFromAlchemy } = require('./uniswap/v4-token-discovery');
+const {
+  buildAlchemyNftBaseUrl,
+  discoverV4TokenIds,
+  fetchTokenIdsFromAlchemy,
+  fetchTokenIdsFromLogs,
+} = require('./uniswap/v4-token-discovery');
 const {
   ValidationError,
 } = require('../errors/app-error');
@@ -1380,6 +1385,19 @@ async function scanV3PositionsByWallet({ userId, wallet, networkConfig, lightwei
   };
 }
 
+// El plan gratuito de Alchemy limita eth_getLogs a 10 bloques: el escaneo de
+// eventos sólo es viable contra un RPC que no sea de Alchemy.
+const logsProviders = new Map();
+function getLogsProvider(networkConfig) {
+  const url = [networkConfig.fallbackRpcUrl, networkConfig.rpcUrl]
+    .find((candidate) => candidate && !buildAlchemyNftBaseUrl(candidate));
+  if (!url) return null;
+  if (!logsProviders.has(url)) {
+    logsProviders.set(url, new ethers.JsonRpcProvider(url, networkConfig.chainId, { staticNetwork: true }));
+  }
+  return logsProviders.get(url);
+}
+
 function computeV4PoolId(poolKey) {
   const encoded = ethers.AbiCoder.defaultAbiCoder().encode(
     ['tuple(address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks)'],
@@ -1397,6 +1415,7 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig, lightwei
   const positionManager = getContract(networkConfig, positionManagerAddress, V4_POSITION_MANAGER_ABI);
 
   let nftRowCount = 0;
+  const logsProvider = getLogsProvider(networkConfig);
   const discover = () => discoverV4TokenIds({
     etherscanLookup: apiKey
       ? async () => {
@@ -1411,6 +1430,11 @@ async function scanV4PositionsByWallet({ userId, wallet, networkConfig, lightwei
       contractAddress: positionManagerAddress,
       http: httpClient,
     }),
+    // Leer eventos cuesta decenas de llamadas: la lectura ligera con IDs
+    // conocidos se queda con ellos (ver catch de abajo).
+    logsLookup: logsProvider && !(lightweight && Array.isArray(knownTokenIds))
+      ? () => fetchTokenIdsFromLogs({ provider: logsProvider, wallet, contractAddress: positionManagerAddress })
+      : null,
   });
   let discovery;
   try {

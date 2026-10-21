@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   buildAlchemyNftBaseUrl,
   fetchTokenIdsFromAlchemy,
+  fetchTokenIdsFromLogs,
   discoverV4TokenIds,
 } = require('../src/services/uniswap/v4-token-discovery');
 
@@ -94,5 +95,81 @@ test('discoverV4TokenIds propaga el error de Etherscan si Alchemy tampoco respon
       alchemyLookup: async () => { throw new Error('alchemy caído'); },
     }),
     /etherscan caído \(respaldo Alchemy: alchemy caído\)/
+  );
+});
+
+const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const pad = (hex) => `0x${hex.replace(/^0x/, '').toLowerCase().padStart(64, '0')}`;
+const OTHER = '0x1111111111111111111111111111111111111111';
+
+function transferLog({ from, to, tokenId, blockNumber, index = 0 }) {
+  return {
+    topics: [TRANSFER, pad(from), pad(to), pad(BigInt(tokenId).toString(16))],
+    blockNumber,
+    index,
+    transactionHash: `0xtx${tokenId}_${blockNumber}`,
+  };
+}
+
+function fakeLogsProvider(logs, { latest = 100, maxSpan = Infinity } = {}) {
+  const calls = [];
+  return {
+    calls,
+    getBlockNumber: async () => latest,
+    getBlock: async (n) => ({ timestamp: 1_000 + n }),
+    getLogs: async ({ topics, fromBlock, toBlock }) => {
+      calls.push({ fromBlock, toBlock });
+      if (toBlock - fromBlock + 1 > maxSpan) throw new Error('query spans too many blocks; narrow the block range');
+      return logs.filter((log) => log.blockNumber >= fromBlock && log.blockNumber <= toBlock
+        && topics.every((topic, i) => topic == null || topic.toLowerCase() === log.topics[i].toLowerCase()));
+    },
+  };
+}
+
+test('fetchTokenIdsFromLogs reconstruye los NFT que aún tiene la wallet', async () => {
+  const provider = fakeLogsProvider([
+    transferLog({ from: '0x0', to: WALLET, tokenId: 5, blockNumber: 10 }),
+    transferLog({ from: '0x0', to: WALLET, tokenId: 6, blockNumber: 20 }),
+    transferLog({ from: WALLET, to: OTHER, tokenId: 6, blockNumber: 30 }),
+    transferLog({ from: OTHER, to: WALLET, tokenId: 7, blockNumber: 40 }),
+    transferLog({ from: '0x0', to: OTHER, tokenId: 8, blockNumber: 50 }),
+  ]);
+  const { tokenIds, firstInbound } = await fetchTokenIdsFromLogs({ provider, wallet: WALLET, contractAddress: PM });
+  assert.deepEqual(tokenIds.sort(), ['5', '7']);
+  assert.deepEqual(firstInbound.get('5'), { txHash: '0xtx5_10', blockNumber: 10, createdAt: 1_010 });
+});
+
+test('fetchTokenIdsFromLogs parte el rango cuando el RPC lo rechaza', async () => {
+  const provider = fakeLogsProvider([
+    transferLog({ from: '0x0', to: WALLET, tokenId: 1, blockNumber: 95_000 }),
+  ], { latest: 120_000, maxSpan: 40_000 });
+  const { tokenIds } = await fetchTokenIdsFromLogs({ provider, wallet: WALLET, contractAddress: PM, maxRange: 100_000 });
+  assert.deepEqual(tokenIds, ['1']);
+  assert.ok(provider.calls.every(({ fromBlock, toBlock }) => toBlock - fromBlock + 1 <= 100_000));
+});
+
+// Regresión: en Robinhood Chain ni Etherscan (plan gratuito) ni la API NFT de
+// Alchemy (red no habilitada) respondían y "Adoptar LP" no listaba nada.
+test('discoverV4TokenIds recurre a los eventos on-chain si fallan Etherscan y Alchemy', async () => {
+  const firstInbound = new Map([['42', { txHash: '0xabc', blockNumber: 1, createdAt: 2 }]]);
+  const result = await discoverV4TokenIds({
+    etherscanLookup: async () => { throw new Error('Free API access is not supported for this chain.'); },
+    alchemyLookup: async () => { throw new Error('Request failed with status code 403'); },
+    logsLookup: async () => ({ tokenIds: ['42'], firstInbound }),
+  });
+  assert.deepEqual(result.tokenIds, ['42']);
+  assert.equal(result.firstInbound, firstInbound);
+  assert.equal(result.source, 'onchain_logs');
+  assert.match(result.warning, /Free API access.*403/);
+});
+
+test('discoverV4TokenIds informa de los tres fallos si tampoco hay eventos', async () => {
+  await assert.rejects(
+    discoverV4TokenIds({
+      etherscanLookup: async () => { throw new Error('etherscan caído'); },
+      alchemyLookup: async () => { throw new Error('alchemy caído'); },
+      logsLookup: async () => { throw new Error('rpc caído'); },
+    }),
+    /etherscan caído \(respaldo Alchemy: alchemy caído; respaldo on-chain: rpc caído\)/
   );
 });
