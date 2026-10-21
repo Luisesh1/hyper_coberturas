@@ -11,6 +11,7 @@ import styles from './OverlayPicker.module.css';
 
 const DS_LABEL = { binance: 'Binance', hyperliquid: 'Hyperliquid', yahoo: 'Yahoo' };
 const FULL_TITLE = 'Máximo 6 superposiciones';
+const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])';
 const TABS = [
   { id: 'asset', label: 'Activo' },
   { id: 'option', label: 'Opción · Deribit' },
@@ -54,7 +55,7 @@ function useCatalog(open) {
   return { catalog, loading, error };
 }
 
-function AssetTab({ open, items, addedIds, full, mainAsset, onAdd, onRemove, mobile, autoFocusSearch }) {
+function AssetTab({ open, items, addedIds, full, mainAsset, onAdd, onRemove, mobile }) {
   const { catalog, loading, error } = useCatalog(open);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('all');
@@ -82,7 +83,6 @@ function AssetTab({ open, items, addedIds, full, mainAsset, onAdd, onRemove, mob
           type="search"
           placeholder="Buscar activo"
           aria-label="Buscar activo"
-          autoFocus={autoFocusSearch}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -233,7 +233,6 @@ function PickerBody({ open, mobile, state, mainAsset, onAdd, onRemove, tab, setT
           onAdd={onAdd}
           onRemove={onRemove}
           mobile={mobile}
-          autoFocusSearch={!mobile}
         />
       </div>
       <div
@@ -277,14 +276,45 @@ export default function OverlayPicker({ open, mobile = false, state, mainAsset, 
     setOptionVisited(false);
   }, [open]);
 
-  // Escritorio: Esc cierra y el foco entra al abrir (BottomSheet gestiona Esc en móvil).
+  // Escritorio: Esc cierra (BottomSheet gestiona Esc en móvil).
   useEffect(() => {
     if (!open || mobile) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
     document.addEventListener('keydown', onKey);
-    if (!dialogRef.current?.contains(document.activeElement)) dialogRef.current?.focus();
     return () => document.removeEventListener('keydown', onKey);
   }, [open, mobile, onClose]);
+
+  // Al abrir, el foco entra (buscador del catálogo o el propio diálogo) y al
+  // cerrar vuelve a quien lo tenía ("Superponer"/"Añadir").
+  useEffect(() => {
+    if (!open) return undefined;
+    const previous = document.activeElement;
+    if (!mobile) {
+      const dialog = dialogRef.current;
+      (dialog?.querySelector('input[type="search"]') ?? dialog)?.focus();
+    }
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [open, mobile]);
+
+  // Trampa de foco del modal: Tab y Mayús+Tab no salen del diálogo.
+  const trapTab = (e) => {
+    if (e.key !== 'Tab') return;
+    const nodes = [...dialogRef.current.querySelectorAll(FOCUSABLE)]
+      .filter((el) => !el.disabled && el.tabIndex >= 0 && !el.closest('[hidden]'));
+    if (nodes.length === 0) { e.preventDefault(); return; }
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === dialogRef.current || !nodes.includes(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !nodes.includes(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   if (!open) return null;
 
@@ -326,6 +356,7 @@ export default function OverlayPicker({ open, mobile = false, state, mainAsset, 
         aria-label={title}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={trapTab}
       >
         <header className={styles.header}>
           <h2 className={styles.title}>{title}</h2>

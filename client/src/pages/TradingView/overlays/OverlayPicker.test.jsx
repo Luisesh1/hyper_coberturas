@@ -117,6 +117,32 @@ describe('OverlayPicker (escritorio)', () => {
     expect(marketApi.getOptionExpiries).toHaveBeenCalledWith('ETH');
   });
 
+  it('trampa de foco: Tab y Mayús+Tab no salen del diálogo', async () => {
+    renderPicker();
+    await screen.findByText('XRP/USDT');
+    const dialog = screen.getByRole('dialog');
+    const done = screen.getByRole('button', { name: 'Listo' });
+    const close = screen.getByRole('button', { name: 'Cerrar' });
+    done.focus();
+    fireEvent.keyDown(done, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(done);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it('al abrir enfoca el buscador y al cerrar devuelve el foco al disparador', async () => {
+    const props = { mobile: false, state: { items: [btc], focusedId: btc.id }, mainAsset, onAdd: vi.fn(), onRemove: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(<><button type="button">Superponer</button><OverlayPicker open={false} {...props} /></>);
+    const trigger = screen.getByRole('button', { name: 'Superponer' });
+    trigger.focus();
+    rerender(<><button type="button">Superponer</button><OverlayPicker open {...props} /></>);
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Buscar activo'));
+    await screen.findByText('XRP/USDT');
+    rerender(<><button type="button">Superponer</button><OverlayPicker open={false} {...props} /></>);
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('cerrado no renderiza nada', () => {
     renderPicker({ open: false });
     expect(screen.queryByRole('dialog')).toBeNull();

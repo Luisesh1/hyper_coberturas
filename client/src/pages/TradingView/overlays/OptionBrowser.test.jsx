@@ -131,6 +131,54 @@ describe('OptionBrowser (escritorio)', () => {
     expect(await screen.findByText('2,450')).toBeTruthy();
   });
 
+  it('si un sondeo posterior falla, se ve el error con "Reintentar" y no un progreso congelado', async () => {
+    marketApi.getOptionStrikes
+      .mockResolvedValueOnce({ status: 'running', probed: 3, total: 10, spotRef: 2418, strikes: [row(2400, -0.7)], error: null })
+      .mockRejectedValueOnce(new Error('HTTP 502'))
+      .mockResolvedValueOnce({ status: 'done', probed: 10, total: 10, spotRef: 2418, strikes: [row(2400, -0.7), row(2450, 1.3)], error: null });
+    renderBrowser();
+    await openExpiry();
+    expect(await screen.findByText('Buscando strikes · 3 de 10')).toBeTruthy();
+    expect(await screen.findByText('HTTP 502', {}, { timeout: 2500 })).toBeTruthy();
+    expect(screen.queryByText(/Buscando strikes/)).toBeNull();
+    expect(screen.getByText(/2,400/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
+    expect(await screen.findByText('2,450')).toBeTruthy();
+    expect(screen.queryByText('HTTP 502')).toBeNull();
+  });
+
+  it('"Reintentar" conserva la tabla parcial mientras relanza', async () => {
+    let resolveRetry;
+    marketApi.getOptionStrikes
+      .mockResolvedValueOnce({ status: 'error', probed: 6, total: 10, spotRef: 2418, strikes: [row(2400, -0.7)], error: 'rate limit' })
+      .mockImplementationOnce(() => new Promise((r) => { resolveRetry = r; }));
+    renderBrowser();
+    await openExpiry();
+    await screen.findByText('No se pudieron revisar todos los strikes');
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }));
+    await waitFor(() => expect(marketApi.getOptionStrikes).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/2,400/)).toBeTruthy();
+    expect(screen.queryByText('Cargando strikes…')).toBeNull();
+    expect(screen.getByText('Reintentando…')).toBeTruthy();
+    await act(async () => {
+      resolveRetry({ status: 'done', probed: 10, total: 10, spotRef: 2418, strikes: [row(2400, -0.7), row(2450, 1.3)], error: null });
+    });
+    expect(await screen.findByText('2,450')).toBeTruthy();
+    expect(screen.queryByText('Reintentando…')).toBeNull();
+  });
+
+  it('cambiar de vencimiento sí vacía la tabla', async () => {
+    marketApi.getOptionStrikes
+      .mockResolvedValueOnce({ status: 'done', probed: 1, total: 1, spotRef: 2418, strikes: [row(2400, -0.7)], error: null })
+      .mockImplementationOnce(() => new Promise(() => {}));
+    renderBrowser();
+    await openExpiry();
+    await screen.findByText(/2,400/);
+    await openExpiry(/23 oct 2026/);
+    expect(screen.getByText('Cargando strikes…')).toBeTruthy();
+    expect(screen.queryByText(/2,400/)).toBeNull();
+  });
+
   it('añadir una CALL llama a onAdd con la especificación de opción', async () => {
     marketApi.getOptionStrikes.mockResolvedValue({ status: 'done', probed: 2, total: 2, spotRef: 2418, strikes: [row(2400, -0.7)], error: null });
     const { onAdd } = renderBrowser();

@@ -46,10 +46,15 @@ function useStrikesJob(underlying, code) {
   // "Reintentar" relanza un trabajo con error: sólo la primera llamada lleva retry.
   const retryRef = useRef(false);
   const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
-    setJob(null);
+    // Un reintento conserva la tabla parcial; cambiar de vencimiento la vacía.
+    const retry = retryRef.current;
+    retryRef.current = false;
+    if (!retry) setJob(null);
     setLoadError(null);
+    setRetrying(retry);
     if (!underlying || !code) return undefined;
     let cancelled = false;
     let timer = null;
@@ -59,19 +64,20 @@ function useStrikesJob(underlying, code) {
         if (cancelled) return;
         setJob(res);
         setLoadError(null);
+        setRetrying(false);
         if (res?.status === 'running') timer = setTimeout(() => poll(false), POLL_MS);
       } catch (err) {
-        if (!cancelled) setLoadError(err?.message || 'No se pudieron cargar los strikes');
+        if (cancelled) return;
+        setLoadError(err?.message || 'No se pudieron cargar los strikes');
+        setRetrying(false);
       }
     };
-    const retry = retryRef.current;
-    retryRef.current = false;
     poll(retry);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [underlying, code, attempt]);
 
   const retry = () => { retryRef.current = true; setAttempt((n) => n + 1); };
-  return { job, loadError, retry };
+  return { job, loadError, retrying, retry };
 }
 
 function useExpiries(underlying) {
@@ -192,7 +198,7 @@ function SideCell({ instrument, type, strike, expiry, underlying, addedIds, full
 }
 
 function StrikePane({ underlying, expiry, addedIds, full, onAdd, mobile }) {
-  const { job, loadError, retry } = useStrikesJob(underlying, expiry?.code);
+  const { job, loadError, retrying, retry } = useStrikesJob(underlying, expiry?.code);
   const strikes = useMemo(
     () => [...(job?.strikes || [])].sort((a, b) => a.strike - b.strike),
     [job],
@@ -210,7 +216,8 @@ function StrikePane({ underlying, expiry, addedIds, full, onAdd, mobile }) {
     return <div className={styles.strikePane}><div className={styles.empty}>Elige un vencimiento</div></div>;
   }
 
-  const running = job?.status === 'running';
+  // Si un sondeo falla, el sondeo se detiene: no se deja el progreso congelado.
+  const running = job?.status === 'running' && !loadError;
   const pct = running && job.total ? Math.round((job.probed / job.total) * 100) : 0;
 
   return (
@@ -224,6 +231,7 @@ function StrikePane({ underlying, expiry, addedIds, full, onAdd, mobile }) {
           </span>
         )}
         <span className={styles.grow} />
+        {retrying && <span className={styles.progress} role="status">Reintentando…</span>}
         {running && (
           <span className={styles.progress} role="status">
             <span className={styles.progressTrack}><span className={styles.progressFill} style={{ width: `${pct}%` }} /></span>
@@ -232,14 +240,14 @@ function StrikePane({ underlying, expiry, addedIds, full, onAdd, mobile }) {
         )}
       </div>
 
-      {job?.status === 'error' && (
+      {job?.status === 'error' && !retrying && (
         <div className={styles.warn} role="alert">
           <span>No se pudieron revisar todos los strikes</span>
           <span aria-hidden="true"> · </span>
           <button type="button" className={styles.linkBtn} onClick={retry}>Reintentar</button>
         </div>
       )}
-      {loadError && !job && (
+      {loadError && (
         <div className={styles.warn} role="alert">
           <span>{loadError}</span>
           <span aria-hidden="true"> · </span>
