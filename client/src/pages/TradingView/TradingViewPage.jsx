@@ -32,6 +32,7 @@ import { MAX_OVERLAYS, shortLabel } from './overlays/overlayModel';
 import { forwardWindow, jumpTarget, logicalRangeFor, mergeCandles } from './overlays/historyJump';
 import OverlayChips from './overlays/OverlayChips';
 import OverlayTooltip from './overlays/OverlayTooltip';
+import OverlayPicker from './overlays/OverlayPicker';
 import styles from './TradingViewPage.module.css';
 
 const ASSET_STORAGE_KEY = 'tv_selected_asset_v1';
@@ -853,6 +854,8 @@ export default function TradingViewPage() {
     if (target) void loadData(target);
   }, [addOverlaySpec, loadData, replayActive]);
 
+  const closeOverlayPicker = useCallback(() => setOverlayPickerOpen(false), []);
+
   // "Intercambiar con el principal" (sólo activos): el activo pasa a ser el
   // principal y el principal ocupa su hueco con su color.
   const swapOverlay = useCallback((id) => {
@@ -1505,6 +1508,17 @@ export default function TradingViewPage() {
         initialIndicators={indicators}
         onSave={handleSaveIndicators}
         onCancel={() => setModalOpen(false)}
+      />
+
+      <OverlayPicker
+        open={overlayPickerOpen}
+        mobile={isMobile}
+        state={overlays.state}
+        mainAsset={asset}
+        timeframeLabel={TIMEFRAMES.find((t) => t.value === timeframe)?.label}
+        onAdd={addOverlay}
+        onRemove={overlays.remove}
+        onClose={closeOverlayPicker}
       />
 
       <AssetPickerModal
