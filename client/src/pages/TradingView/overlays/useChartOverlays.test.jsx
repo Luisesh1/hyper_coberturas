@@ -260,6 +260,60 @@ describe('useChartOverlays', () => {
     await act(async () => { hook.result.current.syncMain(MAIN); });
     await waitFor(() => expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('error'));
   });
+  it('tras un error no repide en cada sondeo (30 s) salvo "Reintentar", y conserva lo cargado', async () => {
+    let now = Date.UTC(2026, 9, 21, 12);
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const { chart, hook } = setup();
+      act(() => { hook.result.current.add(BTC); });
+      await act(async () => { hook.result.current.syncMain(MAIN.slice(0, 3)); });
+      const s = lineSeries(chart)[0];
+      await waitFor(() => expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('ready'));
+      // la cola nueva falla
+      marketApi.getCandles.mockReset();
+      marketApi.getCandles.mockRejectedValue(new Error('binance caido'));
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      await waitFor(() => expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('error'));
+      expect(marketApi.getCandles).toHaveBeenCalledTimes(1);
+      // las velas ya cargadas siguen dibujadas
+      expect(s.setData.mock.calls.at(-1)[0][0]).toEqual({ time: MAIN[0].time / 1000, value: 1000 });
+      // sondeos dentro de la espera: ninguna petición
+      now += 10_000;
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      expect(marketApi.getCandles).toHaveBeenCalledTimes(1);
+      expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('error');
+      // "Reintentar" salta la espera y pide sólo lo que falta (la cobertura previa se conserva)
+      marketApi.getCandles.mockResolvedValue(MAIN.map((c) => ({ ...c, close: c.close * 10 })));
+      await act(async () => { hook.result.current.retry('asset:binance:BTCUSDT'); });
+      expect(marketApi.getCandles).toHaveBeenCalledTimes(2);
+      expect(marketApi.getCandles.mock.calls[1][0].startTime).toBe(MAIN[2].time);
+      await waitFor(() => expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('ready'));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('pasada la espera de 30 s, el sondeo vuelve a pedir', async () => {
+    let now = Date.UTC(2026, 9, 21, 12);
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      marketApi.getCandles.mockRejectedValueOnce(new Error('boom'));
+      const { hook } = setup();
+      act(() => { hook.result.current.add(BTC); });
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      await waitFor(() => expect(hook.result.current.status['asset:binance:BTCUSDT']).toBe('error'));
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      expect(marketApi.getCandles).toHaveBeenCalledTimes(1);
+      now += 31_000;
+      await act(async () => { hook.result.current.syncMain(MAIN); });
+      expect(marketApi.getCandles).toHaveBeenCalledTimes(2);
+      expect(marketApi.getCandles.mock.calls[1][0].startTime).toBe(MAIN[0].time); // tramo entero
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("status 'hidden' para ocultas y con el hook desactivado (nunca 'loading' eterno)", async () => {
     const { hook, props } = setup();
     act(() => { hook.result.current.add(BTC); hook.result.current.add(SOL); });

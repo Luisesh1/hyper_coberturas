@@ -173,7 +173,7 @@ function ExpiryList({ expiries, selected, onSelect, mobile }) {
 function SideCell({ instrument, type, strike, expiry, underlying, addedIds, full, onAdd, mobile }) {
   const side = type === 'C' ? 'CALL' : 'PUT';
   if (!instrument) {
-    return <span className={styles.noTrades}>{mobile ? `${side} · Sin operaciones` : 'Sin operaciones'}</span>;
+    return <span className={styles.noTrades}>{mobile ? `${side} · No listada` : 'No listada'}</span>;
   }
   const spec = { kind: 'option', option: { instrument, underlying, expiryMs: expiry.expiryMs, strike, type } };
   if (addedIds?.has(overlayId(spec))) {

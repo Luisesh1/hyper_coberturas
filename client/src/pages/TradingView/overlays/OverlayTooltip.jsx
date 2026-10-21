@@ -11,7 +11,7 @@ function Pct({ value }) {
 // En móvil (`variant="mobile"`) es la barra inferior: admite una acción en la
 // cabecera (plegar/desplegar) y, plegada, solo deja la cabecera.
 export default function OverlayTooltip({
-  variant = 'desktop', time, timeframe, main, rows = [], action = null, collapsed = false,
+  variant = 'desktop', time, timeframe, main, rows = [], action = null, collapsed = false, footer = null,
 }) {
   const visible = collapsed ? [] : rows.filter((r) => !r.hidden);
   const mobile = variant === 'mobile';
@@ -57,6 +57,7 @@ export default function OverlayTooltip({
           </div>
         );
       })}
+      {!collapsed && footer}
     </div>
   );
 }

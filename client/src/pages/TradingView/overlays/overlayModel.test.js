@@ -133,6 +133,15 @@ describe('alignToMain', () => {
     expect('value' in pts[30]).toBe(false);
     expect(pts[52].value).toBe(12);
   });
+  it('1M: febrero no toma el valor de marzo (ventana hasta la siguiente vela del principal)', () => {
+    const jan = Date.UTC(2026, 0, 1);
+    const feb = Date.UTC(2026, 1, 1);
+    const mar = Date.UTC(2026, 2, 1);
+    const main = [{ time: jan }, { time: feb }, { time: mar }];
+    const ov = [{ time: jan, close: 100 }, { time: feb, close: 200 }, { time: mar, close: 300 }];
+    const pts = alignToMain(main, ov, 2_592_000_000);
+    expect(pts.map((p) => p.value)).toEqual([100, 200, 300]);
+  });
   it('vela de 13:30 cae en la de 13:00', () => {
     const t = Date.UTC(2025, 9, 20, 13);
     const pts = alignToMain([{ time: t }], [{ time: t + 1800000, close: 7 }], H);

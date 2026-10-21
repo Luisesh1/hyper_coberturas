@@ -28,6 +28,7 @@ const OV_SCALE_MARGINS = { top: 0.12, bottom: 0.12 };
 const DEFAULT_BORDER = 'rgba(120,130,145,0.25)';
 const ASSET_LIMIT = 1000;
 const MAX_PAGES = 20;
+export const ERROR_BACKOFF_MS = 30_000; // tras un fallo no se repide hasta pasado esto (salvo "Reintentar")
 
 export const OVERLAY_TF_MS = {
   '1m': 60_000,
@@ -194,7 +195,7 @@ export function useChartOverlays({
   };
 
   // Pide sólo el tramo que falta (más la última vela, que puede seguir viva) y realinea.
-  const loadOverlay = (overlay) => {
+  const loadOverlay = (overlay, { force = false } = {}) => {
     const main = mainRef.current;
     if (!main?.length) return;
     const { timeframe: tf } = propsRef.current;
@@ -214,7 +215,7 @@ export function useChartOverlays({
       entry?.untraded?.setData([]);
     }
     if (!cache) {
-      cache = { candles: new Map(), from: null, to: null, loaded: false };
+      cache = { candles: new Map(), from: null, to: null, loaded: false, errorUntil: 0 };
       cacheRef.current.set(id, cache);
     }
     const ranges = [];
@@ -231,9 +232,18 @@ export function useChartOverlays({
     }
     if (cache.from !== null) realign(id);
     if (!ranges.length) return;
+    // Tras un fallo se espera antes de repedir (cada tick del sondeo lo haría).
+    if (!force && cache.errorUntil > Date.now()) {
+      setStatusFor(id, 'error');
+      return;
+    }
     if (!alignedRef.current.get(id)?.some(hasValue)) setStatusFor(id, 'loading');
+    const prevFrom = cache.from;
+    const prevTo = cache.to;
     cache.from = cache.from === null ? start : Math.min(cache.from, start);
     cache.to = cache.to === null ? end : Math.max(cache.to, end);
+    const nextFrom = cache.from;
+    const nextTo = cache.to;
     const epoch = epochRef.current;
     const isCurrent = () => epochRef.current === epoch && cacheRef.current.get(id) === cache;
     for (const [s, e] of ranges) {
@@ -244,8 +254,13 @@ export function useChartOverlays({
         realign(id);
       }).catch(() => {
         if (!isCurrent()) return;
-        // Se descarta la cobertura para reintentar entera en el próximo syncMain.
-        cacheRef.current.delete(id);
+        // Se conservan las velas ya cargadas; el tramo pedido vuelve a contar
+        // como no cubierto (si nadie lo amplió entretanto) y se espera antes de repedir.
+        if (cache.from === nextFrom && cache.to === nextTo) {
+          cache.from = prevFrom;
+          cache.to = prevTo;
+        }
+        cache.errorUntil = Date.now() + ERROR_BACKOFF_MS;
         setStatusFor(id, 'error');
       });
     }
@@ -373,6 +388,15 @@ export function useChartOverlays({
     for (const o of drawnOverlays()) loadOverlay(o);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // "Reintentar" del chip: salta la espera tras un error.
+  const retry = useCallback((id) => {
+    const o = drawnOverlays().find((x) => x.id === id);
+    if (!o) return;
+    const cache = cacheRef.current.get(id);
+    if (cache) cache.errorUntil = 0;
+    loadOverlay(o, { force: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const valuesAt = useCallback((timeSec) => {
     return drawnOverlays().map((o) => {
       const points = alignedRef.current.get(o.id) || [];
@@ -440,7 +464,7 @@ export function useChartOverlays({
     return out;
   }, [state.items, mainAsset, enabled, loadStatus]);
 
-  return { state, add, remove, replace, toggleHidden, focus, setColor, syncMain, valuesAt, status };
+  return { state, add, remove, replace, toggleHidden, focus, setColor, syncMain, retry, valuesAt, status };
 }
 
 export default useChartOverlays;

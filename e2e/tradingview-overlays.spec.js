@@ -177,12 +177,16 @@ test.describe('TradingView superposiciones (escritorio)', () => {
     await expect(page.getByText('Vencidos · último año')).toBeVisible();
     await page.getByRole('button', { name: /31 oct 2025/ }).click();
     await expect(page.getByRole('table', { name: 'Strikes' })).toBeVisible();
-    await expect(page.getByText('Sin operaciones').first()).toBeVisible();
+    await expect(page.getByText('No listada').first()).toBeVisible();
     await page.getByRole('button', { name: 'Añadir CALL 4000' }).click();
     await expect(page.getByLabel('CALL 4,000 añadida')).toBeVisible();
     await page.getByRole('button', { name: 'Listo' }).click();
 
     await expect(chipBody(page, INSTRUMENT).or(chips(page).getByRole('button', { name: /ETH.*4000/ }).first())).toBeVisible();
+    // Leyenda al pie mientras haya una opción dibujada (objetivo 7 del spec).
+    const legend = page.getByLabel('Leyenda de la prima');
+    await expect(legend).toContainText('Prima negociada');
+    await expect(legend).toContainText('Sin operaciones (último precio arrastrado)');
     const back = page.getByRole('button', { name: 'Volver a ahora' });
     await expect(back).toBeVisible();
     await back.click();

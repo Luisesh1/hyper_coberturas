@@ -127,20 +127,22 @@ export function isSameAsMain(overlay, mainAsset) {
 
 // Una entrada por vela del principal (time en s). Toma la vela del superpuesto
 // cuya apertura cae en [main.time, main.time + tfMs); si hay varias, la última.
+// La ventana nunca pasa de la siguiente vela del principal (meses de 28-31 d en 1M).
 // Sin vela → hueco `{ time }`. Las velas sin `traded` (activos) cuentan como negociadas.
 export function alignToMain(mainCandles, overlayCandles, tfMs) {
   const sorted = [...overlayCandles].sort((a, b) => a.time - b.time);
   const points = [];
   let j = 0;
-  for (const m of mainCandles) {
-    const end = m.time + tfMs;
+  mainCandles.forEach((m, i) => {
+    const next = mainCandles[i + 1];
+    const end = next && next.time > m.time ? Math.min(m.time + tfMs, next.time) : m.time + tfMs;
     while (j < sorted.length && sorted[j].time < m.time) j++;
     let pick = null;
     let k = j;
     while (k < sorted.length && sorted[k].time < end) { pick = sorted[k]; k++; }
     const time = m.time / 1000;
     points.push(pick ? { time, value: pick.close, traded: pick.traded !== false } : { time });
-  }
+  });
   return points;
 }
 

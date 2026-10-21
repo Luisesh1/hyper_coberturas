@@ -104,7 +104,7 @@ describe('OptionBrowser (escritorio)', () => {
     // filas ordenadas por strike
     const strikes = screen.getAllByRole('row').slice(1).map((r) => r.getAttribute('data-strike'));
     expect(strikes).toEqual(['2400', '2500', '2700']);
-    expect(screen.getAllByText('Sin operaciones')).toHaveLength(2);
+    expect(screen.getAllByText('No listada')).toHaveLength(2);
     expect(screen.getByText('ETH a 7 días del vencimiento:')).toBeTruthy();
   });
 

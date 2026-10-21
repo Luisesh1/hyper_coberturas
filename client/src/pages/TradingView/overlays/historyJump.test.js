@@ -11,6 +11,24 @@ describe('jumpTarget', () => {
       range: { from: EXP - 7 * DAY_MS, to: EXP },
     });
   });
+  it('1m y 5m: el tramo de 500 velas termina poco después del vencimiento y encuadra la vida de la opción', () => {
+    const MIN = 60_000;
+    for (const tf of [MIN, 5 * MIN]) {
+      const t = jumpTarget(opt(EXP), EXP + 10 * DAY_MS, tf);
+      expect(t.endTime).toBe(EXP + 50 * tf);
+      // velas que devolvería el servidor: 500 terminando en endTime
+      const candles = Array.from({ length: 500 }, (_, i) => ({ time: t.endTime - (499 - i) * tf }));
+      const before = candles.filter((c) => c.time <= EXP).length;
+      expect(before).toBe(450); // la gran mayoría antes del vencimiento
+      const r = logicalRangeFor(candles, t.range);
+      expect(r.from).toBe(0);
+      expect(candles[r.to].time).toBe(EXP);
+    }
+  });
+  it('temporalidades altas: el margen se queda en 1 d', () => {
+    expect(jumpTarget(opt(EXP), EXP + 10 * DAY_MS, 3_600_000).endTime).toBe(EXP + DAY_MS);
+    expect(jumpTarget(opt(EXP), EXP + 100 * DAY_MS, DAY_MS).endTime).toBe(EXP + DAY_MS);
+  });
   it('sin salto si la opción vence dentro del tramo cargado, para activos o sin velas', () => {
     expect(jumpTarget(opt(EXP), EXP - DAY_MS)).toBeNull();
     expect(jumpTarget({ kind: 'asset', asset: { symbol: 'BTCUSDT' } }, EXP + 10 * DAY_MS)).toBeNull();

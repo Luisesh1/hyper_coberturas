@@ -27,11 +27,12 @@ import { useReplayController } from './replay/useReplayController';
 import { useDrawings } from './drawings/use-drawings';
 import { TOOLS } from './drawings/catalog';
 import { getInitialChartViewport } from './chartViewport';
-import { useChartOverlays } from './overlays/useChartOverlays';
+import { useChartOverlays, OVERLAY_TF_MS } from './overlays/useChartOverlays';
 import { MAX_OVERLAYS, shortLabel } from './overlays/overlayModel';
 import { forwardWindow, jumpTarget, logicalRangeFor, mergeCandles } from './overlays/historyJump';
 import OverlayChips from './overlays/OverlayChips';
 import OverlayTooltip from './overlays/OverlayTooltip';
+import OverlayLegend, { optionLegendColor } from './overlays/OverlayLegend';
 import OverlayPicker from './overlays/OverlayPicker';
 import styles from './TradingViewPage.module.css';
 
@@ -852,9 +853,9 @@ export default function TradingViewPage() {
   const addOverlay = useCallback((spec) => {
     addOverlaySpec(spec);
     if (replayActive) return; // en Replay no se salta (las superposiciones están ocultas)
-    const target = jumpTarget(spec, candlesRef.current[0]?.time);
+    const target = jumpTarget(spec, candlesRef.current[0]?.time, OVERLAY_TF_MS[timeframe]);
     if (target) void loadData(target);
-  }, [addOverlaySpec, loadData, replayActive]);
+  }, [addOverlaySpec, loadData, replayActive, timeframe]);
 
   const closeOverlayPicker = useCallback(() => setOverlayPickerOpen(false), []);
 
@@ -961,6 +962,10 @@ export default function TradingViewPage() {
   // crosshair y el gráfico no salta. Desplegada, es el único sitio con el
   // valor del principal (la leyenda OHLC de arriba lo omite).
   const mobileReadout = isMobile && !overlaysHidden && !replayActive && overlayValues.length > 0;
+  // Leyenda de la prima: sólo mientras haya alguna opción dibujada.
+  const legendColor = overlaysHidden || replayActive
+    ? null
+    : optionLegendColor(overlays.state.items, overlays.status, overlays.state.focusedId);
   const mainInReadout = mobileReadout && !overlayReadoutCollapsed;
   const mOhlcItems = mainInReadout
     ? (ohlcExpanded ? ohlcValues.slice(0, 3) : [])
@@ -1235,7 +1240,7 @@ export default function TradingViewPage() {
           onSwap={swapOverlay}
           onColor={overlays.setColor}
           onAdd={() => setOverlayPickerOpen(true)}
-          onRetry={() => overlays.syncMain(candlesRef.current)}
+          onRetry={overlays.retry}
         />
       )}
 
@@ -1439,6 +1444,8 @@ export default function TradingViewPage() {
         />
       </div>
 
+      {!isMobile && <OverlayLegend color={legendColor} />}
+
       {mobileReadout && (
         <OverlayTooltip
           variant="mobile"
@@ -1457,6 +1464,7 @@ export default function TradingViewPage() {
           )}
           main={{ label: mainLabel, value: displayedOhlc.close, changePct: ohlcInfo?.interPct ?? null }}
           rows={overlayValues}
+          footer={<OverlayLegend color={legendColor} compact />}
         />
       )}
 
