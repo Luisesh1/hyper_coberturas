@@ -278,6 +278,22 @@ test('liquidación al vencimiento: intrínseco contra el índice, con comisión 
   assert.equal(await repo.countOrdersSince(strategy.id, 'shadow', 0), 0);
 });
 
+test('cierre en sombra guarda el motivo de la acción y la liquidación guarda expiry', async () => {
+  const { repo, runner, strategy } = await setup({ mode: 'paused' });
+  const pos = await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261030-58000-P', side: 'SELL', quantity: 0.1, entryPrice: 300, openedAt: FRIDAY_9 - HOUR_MS, feesUsdt: 1 });
+  const leg = { symbol: pos.symbol, side: 'BUY', quantity: 0.1, price: 400, fee: 1, positionId: pos.id };
+  await runner.book(strategy, 'shadow', { type: 'close', reason: 'stop_loss', legs: [leg] }, [leg], { now: FRIDAY_9, positions: [pos] });
+  assert.equal(repo.positions.find((p) => p.id === pos.id).closeReason, 'stop_loss');
+});
+
+test('la liquidación al vencimiento guarda closeReason expiry', async () => {
+  const { repo, runner, market, strategy } = await setup({ mode: 'paused' });
+  await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261016-58000-P', side: 'SELL', quantity: 0.1, entryPrice: 300, openedAt: FRIDAY_9 - 7 * DAY_MS, feesUsdt: 1.8 });
+  market.state.spot = 57000;
+  await runner.tick();
+  assert.equal(repo.positions[0].closeReason, 'expiry');
+});
+
 test('estimateMargin: venta usa prima + máx(15 % spot − OTM, 10 % spot); compra, la prima', () => {
   assert.equal(estimateMargin({ side: 'SELL', type: 'C', strike: 66000, price: 100, quantity: 1, spot: 60000 }), 100 + 6000);
   assert.equal(estimateMargin({ side: 'SELL', type: 'P', strike: 60000, price: 100, quantity: 0.5, spot: 60000 }), 0.5 * (100 + 9000));

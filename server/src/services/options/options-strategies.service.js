@@ -218,6 +218,19 @@ function createOptionsStrategiesService(deps = {}) {
           price: o.limitPrice, quantity: o.quantity, executedQty: o.processedQty,
           status: o.status, cancelRequested: o.cancelRequested,
         })),
+      ...(strategy.template === 'alert_signal' ? { pendingOrders: standingOrders.filter((o) => o.status !== 'final').slice(0, 50).map((o) => ({
+        id: o.id, purpose: o.purpose, action: o.action, symbol: o.symbol, side: o.side,
+        price: o.limitPrice, quantity: o.quantity, executedQty: o.processedQty,
+        status: o.status, cancelRequested: o.cancelRequested,
+        createdAt: o.createdAt, deadlineAt: o.deadlineAt, error: o.error ?? null,
+      })) } : {}),
+      closedPositions: positions.filter((p) => p.closedAt != null)
+        .sort((a, b) => b.closedAt - a.closedAt || b.id - a.id).slice(0, 50).map((p) => ({
+          id: p.id, mode: p.mode, symbol: p.symbol, side: p.side, quantity: p.quantity,
+          entryPrice: p.entryPrice, exitPrice: p.exitPrice, openedAt: p.openedAt,
+          closedAt: p.closedAt, pnlUsdt: p.pnlUsdt, feesUsdt: p.feesUsdt,
+          closeReason: p.closeReason ?? null,
+        })),
       usage: await limitsUsage({ repo, market, strategy, positions, at }),
       events,
     };

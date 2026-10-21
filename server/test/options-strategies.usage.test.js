@@ -85,3 +85,47 @@ test('sin posiciones ni órdenes vivas sí se puede pausar una estrategia real',
   await service.setMode(USER, s.id, { mode: 'paused' });
   assert.equal((await repo.getStrategy(USER, s.id)).mode, 'paused');
 });
+
+test('GET detalle de un bot trae solo las órdenes sin finalizar como pendingOrders', async () => {
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  const orders = [
+    { id: 2, purpose: 'standard', action: 'open', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, limitPrice: 12, processedQty: 0.04, status: 'queued', cancelRequested: false, createdAt: NOW - 1000, deadlineAt: NOW + 1000, error: null },
+    { id: 1, purpose: 'standard', action: 'open', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, limitPrice: 11, processedQty: 0.1, status: 'final' },
+  ];
+  const service = createOptionsStrategiesService({
+    repo, now: () => NOW,
+    credentials: { async getClientForUser() { return {}; }, async getLimits() { return {}; } },
+    liveOrders: { async listByStrategy() { return orders; } },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'live' });
+  const detail = await service.get(USER, s.id);
+  assert.equal(detail.pendingOrders.length, 1);
+  const [o] = detail.pendingOrders;
+  assert.equal(o.id, 2);
+  assert.equal(o.price, 12);
+  assert.equal(o.executedQty, 0.04);
+  assert.equal(o.purpose, 'standard');
+  assert.equal(o.deadlineAt, NOW + 1000);
+  assert.equal(o.limitPrice, undefined);
+});
+
+test('GET detalle: closedPositions ordena por cierre desc con motivo y una plantilla ajena no trae pendingOrders', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });
+  const mk = async (symbol, closedAt, closeReason) => {
+    const p = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol, side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 9e6 });
+    await repo.closePosition(p.id, { exitPrice: 12, closedAt, pnlUsdt: 0.2, feesUsdt: 0.01, closeReason });
+  };
+  await mk('ETH-261031-2500-C', NOW - 5000, 'stop_loss');
+  await mk('ETH-261031-2600-C', NOW - 1000, undefined);
+  const open = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2700-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW });
+  const detail = await service.get(USER, s.id);
+  assert.deepEqual(detail.closedPositions.map((p) => p.symbol), ['ETH-261031-2600-C', 'ETH-261031-2500-C']);
+  assert.equal(detail.closedPositions[1].closeReason, 'stop_loss');
+  assert.equal(detail.closedPositions[0].closeReason, null);
+  assert.ok(!detail.closedPositions.some((p) => p.id === open.id));
+  assert.deepEqual(detail.pendingOrders, []);
+
+  const other = await repo.createStrategy({ userId: USER, name: 'y', template: 'short_strangle', underlying: 'BTC', mode: 'shadow' });
+  assert.equal((await service.get(USER, other.id)).pendingOrders, undefined);
+});

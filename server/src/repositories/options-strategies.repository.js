@@ -48,6 +48,7 @@ function mapPosition(row) {
     closedAt: numberOrNull(row.closed_at),
     pnlUsdt: numberOrNull(row.pnl_usdt),
     feesUsdt: Number(row.fees_usdt || 0),
+    closeReason: row.close_reason || null,
   };
 }
 
@@ -192,13 +193,13 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
   }
 
   /** Cierra una posición abierta. `feesUsdt` es el total (entrada + salida). */
-  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt }) {
+  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
     const { rows } = await db.query(
       `UPDATE options_strategy_positions
-          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5
+          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5, close_reason = $6
         WHERE id = $1 AND closed_at IS NULL
         RETURNING *`,
-      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt]
+      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt, closeReason]
     );
     return rows[0] ? mapPosition(rows[0]) : null;
   }

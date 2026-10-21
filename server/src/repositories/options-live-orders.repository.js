@@ -812,6 +812,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
             position.mode !== 'live') {
           throw new Error('Live close order does not belong to the target position');
         }
+        // Solo se conoce el motivo cuando la orden es el TP; el resto queda NULL.
+        const closeReason = locked.purpose === 'take_profit' ? 'take_profit' : null;
         const held = Number(position.quantity);
         if (quantity > held + 1e-9) throw new Error('Fill larger than open position');
         const allocatedEntryFee = Number(position.fees_usdt) * (quantity / held);
@@ -821,8 +823,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         if (Math.abs(held - quantity) < 1e-9) {
           await tx.query(
             `UPDATE options_strategy_positions
-             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5 WHERE id=$1`,
-            [position.id, trade.price, trade.at, pnl, fees]
+             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5,close_reason=$6 WHERE id=$1`,
+            [position.id, trade.price, trade.at, pnl, fees, closeReason]
           );
         } else {
           await tx.query(
@@ -832,10 +834,10 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           await tx.query(
             `INSERT INTO options_strategy_positions
              (strategy_id,user_id,mode,symbol,side,quantity,entry_price,exit_price,
-              opened_at,closed_at,pnl_usdt,fees_usdt)
-             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+              opened_at,closed_at,pnl_usdt,fees_usdt,close_reason)
+             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
             [position.strategy_id, position.user_id, position.symbol, position.side, quantity,
-              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees]
+              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees, closeReason]
           );
         }
       }
