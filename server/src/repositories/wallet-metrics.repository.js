@@ -118,8 +118,10 @@ async function setStatus(userId, id, status, executor) {
   const now = Date.now();
   const { rows } = await exec(executor).query(
     `UPDATE tracked_wallets
-        SET status = $3,
-            archived_at = CASE WHEN $3 = 'archived' THEN $4::BIGINT ELSE NULL END,
+        SET status = $3::VARCHAR,
+            -- $3 aparece como valor y como comparacion: sin el cast Postgres no
+            -- puede deducir un tipo unico ("inconsistent types deduced").
+            archived_at = CASE WHEN $3::VARCHAR = 'archived' THEN $4::BIGINT ELSE NULL END,
             updated_at = $4
       WHERE user_id = $1 AND id = $2
       RETURNING *`,
