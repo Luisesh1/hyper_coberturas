@@ -21,6 +21,7 @@ import mobileStyles from './components/MobileChrome.module.css';
 import { computePriceChange } from './priceChange';
 import { loadFavorites, rowItems, saveFavorites, toggleFavorite } from './timeframeFavorites';
 import { formatIndicatorLabel } from './indicators/formatLabel';
+import { buildIndicatorLegend, toggleIndicatorVisible } from './indicators/legendModel';
 import { MOBILE_QUERY, useMediaQuery } from './useMediaQuery';
 import { useFullscreen } from './useFullscreen';
 import { useReplayController } from './replay/useReplayController';
@@ -841,6 +842,25 @@ export default function TradingViewPage() {
     }
   }, [addNotification]);
 
+  // Ojo de la leyenda: oculta/muestra al instante y persiste en segundo plano
+  // (sin toast de éxito); si falla el guardado se revierte.
+  const handleToggleIndicatorVisible = useCallback(async (uid) => {
+    const prev = indicatorsRef.current;
+    const next = toggleIndicatorVisible(prev, uid);
+    if (next === prev) return;
+    indicatorsRef.current = next;
+    setIndicators(next);
+    try {
+      await settingsApi.saveChartIndicators({ indicators: next });
+    } catch (err) {
+      if (indicatorsRef.current === next) {
+        indicatorsRef.current = prev;
+        setIndicators(prev);
+      }
+      addNotification?.('error', `No se pudo guardar: ${err.message}`);
+    }
+  }, [addNotification]);
+
   const handleSelectAsset = useCallback((next) => {
     setAsset({ symbol: next.symbol, datasource: next.datasource, name: next.name });
     storeAsset(next);
@@ -926,8 +946,13 @@ export default function TradingViewPage() {
 
   // Legend de indicadores: valores en el timestamp mostrado. Vacío si no
   // hay vela o controlador. lightweight-charts usa segundos.
-  const indicatorLegend = (displayedOhlc && indicatorsControllerRef.current?.getValuesAt)
-    ? indicatorsControllerRef.current.getValuesAt(Math.floor(displayedOhlc.time / 1000))
+  // Incluye los ocultos (atenuados, sin valores) para poder reactivarlos con
+  // el ojo de cada fila.
+  const indicatorLegend = displayedOhlc
+    ? buildIndicatorLegend(
+      indicators,
+      indicatorsControllerRef.current?.getValuesAt?.(Math.floor(displayedOhlc.time / 1000)),
+    )
     : [];
 
   // Datos de la vela mostrada (cambio intra-vela y respecto a la anterior),
@@ -1347,17 +1372,17 @@ export default function TradingViewPage() {
 
         {!isMobile && !overlaysHidden && indicatorLegend.length > 0 && (
           <div className={styles.indicatorLegend} aria-label="Valores de indicadores">
-            {indicatorLegend.map((ind) => (
-              <div key={ind.uid} className={styles.legendRow}>
+            {indicatorLegend.map((ind) => {
+              const name = formatIndicatorLabel(ind.type, ind.params, ind.label);
+              return (
+              <div key={ind.uid} className={`${styles.legendRow} ${ind.hidden ? styles.legendRowHidden : ''}`}>
                 <span
                   className={styles.legendDot}
-                  style={{ background: ind.values[0]?.color || '#94a3b8' }}
+                  style={{ background: ind.hidden ? '#64748b' : (ind.values[0]?.color || '#94a3b8') }}
                   aria-hidden="true"
                 />
-                <span className={styles.legendName}>
-                  {formatIndicatorLabel(ind.type, ind.params, ind.label)}
-                </span>
-                {ind.values.length === 0 ? (
+                <span className={styles.legendName}>{name}</span>
+                {ind.hidden ? null : ind.values.length === 0 ? (
                   <span className={styles.legendNoData}>—</span>
                 ) : (
                   <span className={styles.legendValues}>
@@ -1372,8 +1397,19 @@ export default function TradingViewPage() {
                     ))}
                   </span>
                 )}
+                <button
+                  type="button"
+                  className={styles.legendEye}
+                  onClick={() => handleToggleIndicatorVisible(ind.uid)}
+                  title={ind.hidden ? `Mostrar ${name}` : `Ocultar ${name}`}
+                  aria-label={ind.hidden ? `Mostrar ${name}` : `Ocultar ${name}`}
+                  aria-pressed={ind.hidden}
+                >
+                  {ind.hidden ? <EyeOffIcon size={14} /> : <EyeIcon size={14} />}
+                </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -1416,21 +1452,32 @@ export default function TradingViewPage() {
             </button>
             {indicatorLegend.length > 0 && (
               <div className={styles.mLegendChips}>
-                {indicatorLegend.map((ind) => (
-                  <span key={ind.uid} className={styles.mLegendChip}>
-                    <span
-                      className={styles.legendDot}
-                      style={{ background: ind.values[0]?.color || '#94a3b8' }}
-                      aria-hidden="true"
-                    />
-                    {formatIndicatorLabel(ind.type, ind.params, ind.label)}
-                    {ind.values[0] && (
-                      <span style={{ color: ind.values[0].color }}>
-                        {formatPrice(ind.values[0].value, pricePrecision)}
-                      </span>
-                    )}
-                  </span>
-                ))}
+                {indicatorLegend.map((ind) => {
+                  const name = formatIndicatorLabel(ind.type, ind.params, ind.label);
+                  return (
+                    <button
+                      key={ind.uid}
+                      type="button"
+                      className={`${styles.mLegendChip} ${ind.hidden ? styles.mLegendChipHidden : ''}`}
+                      onClick={() => handleToggleIndicatorVisible(ind.uid)}
+                      aria-label={ind.hidden ? `Mostrar ${name}` : `Ocultar ${name}`}
+                      aria-pressed={ind.hidden}
+                    >
+                      <span
+                        className={styles.legendDot}
+                        style={{ background: ind.hidden ? '#64748b' : (ind.values[0]?.color || '#94a3b8') }}
+                        aria-hidden="true"
+                      />
+                      {name}
+                      {!ind.hidden && ind.values[0] && (
+                        <span style={{ color: ind.values[0].color }}>
+                          {formatPrice(ind.values[0].value, pricePrecision)}
+                        </span>
+                      )}
+                      {ind.hidden ? <EyeOffIcon size={12} /> : <EyeIcon size={12} />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
