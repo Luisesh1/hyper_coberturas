@@ -15,6 +15,11 @@ const marketService = require('../services/market.service');
 const marketDataService = require('../services/market-data.service');
 const { CATEGORIES, listCatalogAssets } = require('../services/marketdata-providers/asset-catalog');
 const topVolumeService = require('../services/market-top-volume.service');
+const { ValidationError } = require('../errors/app-error');
+// Se importa el modulo (no la instancia) para poder sustituir el servicio en tests.
+const deribitOptionsModule = require('../services/deribit/deribit-options.service');
+const { UNDERLYINGS, parseInstrumentName } = require('../services/deribit/deribit-instruments');
+const { resolutionFor } = require('../services/deribit/option-series');
 
 const router = Router();
 
@@ -39,6 +44,52 @@ router.get('/candles', asyncHandler(async (req, res) => {
     },
   );
   res.json({ success: true, data: candles });
+}));
+
+// --- Opciones Deribit (superposiciones del grafico) ---
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function parsePositiveTs(raw) {
+  if (raw == null || raw === '') return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function requireUnderlying(raw) {
+  const underlying = String(raw || '').toUpperCase();
+  if (!Object.prototype.hasOwnProperty.call(UNDERLYINGS, underlying)) {
+    throw new ValidationError(`Subyacente no soportado en Deribit: ${raw}`);
+  }
+  return underlying;
+}
+
+// GET /api/market/options/expiries?underlying=ETH
+router.get('/options/expiries', asyncHandler(async (req, res) => {
+  const underlying = requireUnderlying(req.query.underlying);
+  const data = await deribitOptionsModule.deribitOptionsService.listExpiries(underlying);
+  res.json({ success: true, data });
+}));
+
+// GET /api/market/options/strikes?underlying=ETH&expiry=10OCT26[&retry=1]
+router.get('/options/strikes', asyncHandler(async (req, res) => {
+  const underlying = requireUnderlying(req.query.underlying);
+  const expiry = String(req.query.expiry || '').toUpperCase();
+  if (!expiry) throw new ValidationError('expiry es obligatorio');
+  const retry = req.query.retry === '1';
+  const data = await deribitOptionsModule.deribitOptionsService.getStrikesJob(underlying, expiry, { retry });
+  res.json({ success: true, data });
+}));
+
+// GET /api/market/options/candles?instrument=...&timeframe=1h&startTime&endTime
+router.get('/options/candles', asyncHandler(async (req, res) => {
+  const instrument = String(req.query.instrument || '');
+  if (!parseInstrumentName(instrument)) throw new ValidationError(`Instrumento invalido: ${instrument}`);
+  const timeframe = String(req.query.timeframe || '15m');
+  try { resolutionFor(timeframe); } catch { throw new ValidationError(`Temporalidad no soportada: ${timeframe}`); }
+  const endMs = parsePositiveTs(req.query.endTime) ?? Date.now();
+  const startMs = parsePositiveTs(req.query.startTime) ?? endMs - 30 * DAY_MS;
+  const data = await deribitOptionsModule.deribitOptionsService.getCandles({ instrument, timeframe, startMs, endMs });
+  res.json({ success: true, data });
 }));
 
 // GET /api/market/catalog

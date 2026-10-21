@@ -70,6 +70,12 @@ export const marketApi = {
   getContexts: () => request('GET', '/market/contexts'),
   getCandles: ({ asset, timeframe = '15m', limit = 300, datasource = 'hyperliquid', startTime, endTime } = {}) =>
     request('GET', `/market/candles${buildQueryString({ asset, timeframe, limit, datasource, startTime, endTime })}`),
+  getOptionExpiries: (underlying) =>
+    request('GET', `/market/options/expiries${buildQueryString({ underlying })}`),
+  getOptionStrikes: (underlying, expiry, { retry } = {}) =>
+    request('GET', `/market/options/strikes${buildQueryString({ underlying, expiry, retry: retry ? '1' : null })}`),
+  getOptionCandles: ({ instrument, timeframe, startTime, endTime } = {}) =>
+    request('GET', `/market/options/candles${buildQueryString({ instrument, timeframe, startTime, endTime })}`),
   getCatalog: () => request('GET', '/market/catalog'),
   getTopByVolume: ({ datasource = 'binance', window = '1d', limit = 20 } = {}) =>
     request('GET', `/market/top-volume${buildQueryString({ datasource, window, limit })}`),
