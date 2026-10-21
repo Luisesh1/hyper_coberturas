@@ -31,11 +31,13 @@ const WEIGHTS = Object.freeze({
   orderStatus: 2,
   exchangeStatus: 2,
   spotClearinghouseState: 2,
+  userAbstraction: 2,
   // weight 20 (mas extras)
   openOrders: 20,
   userFills: 20,
   meta: 20,
   metaAndAssetCtxs: 20,
+  spotMetaAndAssetCtxs: 20,
   candleSnapshot: 20,
   // weight 60
   userRole: 60,

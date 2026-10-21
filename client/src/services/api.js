@@ -401,14 +401,18 @@ export const smartContractRegistryApi = {
 };
 
 // ------------------------------------------------------------------
-// Orchestrator Metrics (pagina /metricas)
+// Metricas por wallet (pagina /metricas)
 // ------------------------------------------------------------------
-export const metricsApi = {
-  getSnapshots: (id, { startAt, endAt, limit } = {}) => {
-    const qs = buildQueryString({ startAt, endAt, limit });
-    return request('GET', `/orchestrator-metrics/${id}/snapshots${qs}`);
-  },
-  getCurrent: (id) => request('GET', `/orchestrator-metrics/${id}/current`, null, { timeoutMs: 30_000 }),
+export const walletMetricsApi = {
+  list: ({ includeArchived = false } = {}) =>
+    request('GET', `/wallet-metrics${buildQueryString({ includeArchived: includeArchived ? 1 : undefined })}`),
+  getSnapshots: ({ ids, startAt } = {}) =>
+    request('GET', `/wallet-metrics/snapshots${buildQueryString({ ids: ids?.join(','), startAt })}`),
+  get: (id) => request('GET', `/wallet-metrics/${id}`),
+  // Lee todas las redes al momento: puede tardar.
+  refresh: (id) => request('POST', `/wallet-metrics/${id}/refresh`, null, { timeoutMs: 240_000 }),
+  archive: (id) => request('POST', `/wallet-metrics/${id}/archive`),
+  unarchive: (id) => request('POST', `/wallet-metrics/${id}/unarchive`),
 };
 
 // ------------------------------------------------------------------

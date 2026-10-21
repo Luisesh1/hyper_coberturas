@@ -1,109 +1,78 @@
 import { useMemo } from 'react';
 import Sparkline from './Sparkline';
-import { fmtPct, fmtSignedUsd, fmtUsdCompact } from '../lib/format';
-import { buildAggregateSeries } from '../lib/portfolio';
+import { LAYER_COLORS } from './WalletValueChart';
+import { fmtPct, fmtSignedUsd, fmtUsd, fmtUsdCompact } from '../lib/format';
 import styles from '../MetricasPage.module.css';
 
-// Umbrales de margen. Por debajo de 10% la cobertura esta a un movimiento de
-// quedarse sin colateral; entre 10 y 20 conviene mirarla.
-const LIQ_DANGER_PCT = 10;
-const LIQ_WARN_PCT = 20;
+/**
+ * Total de las wallets visibles y su cambio en el rango (suma de los cambios
+ * de cada wallet). La curva es ese cambio acumulado hora a hora.
+ */
+export default function PortfolioStrip({ wallets, aggregate, range, loading }) {
+  const totals = useMemo(() => wallets.reduce((acc, w) => {
+    const t = w.latest?.totals;
+    if (!t) return acc;
+    acc.total += t.totalUsd;
+    acc.tokens += t.tokensUsd;
+    acc.lp += t.lpUsd;
+    acc.hl += t.hlUsd;
+    acc.counted += 1;
+    return acc;
+  }, { total: 0, tokens: 0, lp: 0, hl: 0, counted: 0 }), [wallets]);
 
-function liqTone(pct) {
-  if (pct == null) return '';
-  if (pct < LIQ_DANGER_PCT) return styles.toneDanger;
-  if (pct < LIQ_WARN_PCT) return styles.toneWarn;
-  return '';
-}
-
-export default function PortfolioStrip({ rows, portfolio, range, loading }) {
-  const curve = useMemo(() => buildAggregateSeries(rows), [rows]);
-  const curveValues = useMemo(() => curve.map((p) => p.value), [curve]);
-
-  const pnl = portfolio.lifetimePnlUsd;
-  const pnlTone = pnl == null ? '' : (pnl >= 0 ? styles.statDeltaPos : styles.statDeltaNeg);
-  const worst = portfolio.worstLiq;
-  const partialCapital = portfolio.capitalFrom > 0 && portfolio.capitalFrom < portfolio.orchestrators;
+  const change = aggregate.changeUsd;
+  const tone = change == null ? '' : (change >= 0 ? styles.statDeltaPos : styles.statDeltaNeg);
+  const curve = aggregate.curve.map((p) => p.value);
 
   return (
-    <section className={styles.portfolio} aria-label="Resumen del portafolio">
+    <section className={styles.portfolio} aria-label="Resumen de las wallets">
       <div className={styles.portfolioStats}>
         <div className={styles.portfolioHero}>
           <span className={styles.statLabel}>
-            P&amp;L neto · {portfolio.orchestrators} orquestador{portfolio.orchestrators === 1 ? '' : 'es'}
+            Valor total · {wallets.length} wallet{wallets.length === 1 ? '' : 's'}
           </span>
           <div className={styles.portfolioHeroValue}>
-            <span className={`${styles.portfolioAmount} ${pnlTone}`}>
-              {pnl == null ? '—' : fmtSignedUsd(pnl)}
+            <span className={styles.portfolioAmount}>
+              {totals.counted ? fmtUsd(totals.total) : '—'}
             </span>
-            {portfolio.lifetimePnlPct != null && (
-              <span className={`${styles.portfolioAmountPct} ${pnlTone}`}>
-                {fmtPct(portfolio.lifetimePnlPct)}
-              </span>
-            )}
           </div>
-          <span className={styles.portfolioNote}>
-            {portfolio.rangePnlUsd != null
-              ? `En ${range?.label || 'el rango'}: ${fmtSignedUsd(portfolio.rangePnlUsd)} · acumulado de la contabilidad real, no del valor de mercado`
-              : 'Acumulado de la contabilidad real, no del valor de mercado'}
+          <span className={`${styles.portfolioChange} ${tone}`}>
+            {change == null
+              ? (loading ? 'Cargando serie…' : `Sin puntos en ${range?.label || 'el rango'}`)
+              : `${fmtSignedUsd(change)}${aggregate.changePct != null ? ` (${fmtPct(aggregate.changePct)})` : ''} en ${range?.label || 'el rango'}`}
           </span>
         </div>
 
-        <div className={styles.portfolioStat}>
-          <span className={styles.statLabel}>Capital</span>
-          <span className={styles.statValue}>{fmtUsdCompact(portfolio.capitalUsd)}</span>
-          <span className={styles.portfolioNote}>
-            {partialCapital
-              ? `valor de mercado · ${portfolio.capitalFrom} de ${portfolio.orchestrators}`
-              : 'valor de mercado'}
-          </span>
-        </div>
-
-        <div className={styles.portfolioStat}>
-          <span className={styles.statLabel}>Funding / día</span>
-          <span
-            className={`${styles.statValue} ${portfolio.fundingPerDayUsd == null ? '' : (portfolio.fundingPerDayUsd >= 0 ? styles.statDeltaPos : styles.statDeltaNeg)}`}
-          >
-            {portfolio.fundingPerDayUsd == null ? '—' : fmtSignedUsd(portfolio.fundingPerDayUsd)}
-          </span>
-          <span className={styles.portfolioNote}>
-            {portfolio.fundingFrom
-              ? `${portfolio.fundingEarning} cobran · ${portfolio.fundingPaying} pagan`
-              : 'sin coberturas activas'}
-          </span>
-        </div>
-
-        <div className={`${styles.portfolioStat} ${liqTone(worst?.distanceToLiqPct)}`}>
-          <span className={styles.statLabel}>Peor a liquidación</span>
-          <span className={styles.statValue}>
-            {worst ? `${worst.distanceToLiqPct.toFixed(1)}%` : '—'}
-          </span>
-          <span className={styles.portfolioNote}>
-            {worst
-              ? `${worst.orchestrator.name} · ${worst.orchestrator.token0Symbol}/${worst.orchestrator.token1Symbol}`
-              : 'sin posiciones apalancadas'}
-          </span>
+        <div className={styles.portfolioBreakdown}>
+          {[
+            { label: 'Tokens', value: totals.tokens, color: LAYER_COLORS.tokens },
+            { label: 'LPs', value: totals.lp, color: LAYER_COLORS.lp },
+            { label: 'Hyperliquid', value: totals.hl, color: LAYER_COLORS.hl },
+          ].map((s) => (
+            <div key={s.label} className={styles.portfolioStat}>
+              <span className={styles.statLabel}>
+                <span className={styles.legendSwatch} style={{ background: s.color }} />
+                {s.label}
+              </span>
+              <span className={styles.statValue}>{totals.counted ? fmtUsdCompact(s.value) : '—'}</span>
+            </div>
+          ))}
         </div>
       </div>
 
-      {curveValues.length > 1 ? (
+      {curve.length >= 2 ? (
         <div className={styles.portfolioCurve}>
           <Sparkline
-            values={curveValues}
-            width={820}
-            height={84}
-            stroke="var(--uni-cyan, #66e1db)"
-            strokeWidth={2}
-            fillId="portfolioCurveFill"
+            values={curve}
+            width={600}
+            height={44}
             stretch
-            ariaLabel={`Valor agregado del portafolio en ${range?.label || 'el rango'}`}
+            stroke={change != null && change < 0 ? '#ef4444' : '#22c55e'}
+            fillId="portfolio-curve"
+            ariaLabel={`Cambio acumulado en ${range?.label || 'el rango'}`}
           />
         </div>
-      ) : (
-        <div className={styles.portfolioCurveEmpty}>
-          {loading ? 'Cargando la serie del portafolio…' : 'Aún no hay serie agregada para este rango.'}
-        </div>
-      )}
+      ) : null}
     </section>
   );
 }
