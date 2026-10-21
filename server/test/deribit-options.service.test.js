@@ -4,7 +4,6 @@ const { createDeribitOptionsService } = require('../src/services/deribit/deribit
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 9, 21, 12); // 2026-10-21
-const EXP = Date.UTC(2026, 9, 2, 8); // viernes 2 OCT 2026
 
 function fakes({ existing = [], failOn = null, live = [] } = {}) {
   const calls = { getInstrument: [], getInstruments: 0, getChartData: [] };
