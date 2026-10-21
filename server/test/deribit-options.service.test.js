@@ -145,3 +145,88 @@ test('cache: vencido permanente, vigente 10 s', async () => {
   await svc.getCandles({ ...args, instrument: 'ETH-31OCT26-3000-C' });
   assert.ok(f.calls.getChartData.length > m);
 });
+
+test('job vigente terminado se relanza pasados 10 s; no es permanente', async () => {
+  const f = fakes({ live: ['ETH-31OCT26-3000-C'] });
+  let now = NOW;
+  const svc = createDeribitOptionsService({ client: f.client, marketData: f.marketData, now: () => now });
+  svc.getStrikesJob('ETH', '31OCT26');
+  await settle(svc, 'ETH', '31OCT26');
+  now += 5_000;
+  assert.equal(svc.getStrikesJob('ETH', '31OCT26').status, 'done');
+  f.client.getInstruments = async () => [{ instrument_name: 'ETH-31OCT26-3000-C' }, { instrument_name: 'ETH-31OCT26-3100-C' }];
+  now += 20_000;
+  assert.equal(svc.getStrikesJob('ETH', '31OCT26').status, 'running');
+  const job = await settle(svc, 'ETH', '31OCT26');
+  assert.equal(job.strikes.length, 2);
+});
+
+test('job de un vigente se relanza con sondeo al vencer', async () => {
+  const f = fakes({ live: ['ETH-31OCT26-3000-C'] });
+  let now = NOW;
+  const svc = createDeribitOptionsService({ client: f.client, marketData: f.marketData, now: () => now });
+  svc.getStrikesJob('ETH', '31OCT26');
+  await settle(svc, 'ETH', '31OCT26');
+  now = Date.UTC(2026, 10, 1);
+  assert.equal(svc.getStrikesJob('ETH', '31OCT26').status, 'running');
+  await settle(svc, 'ETH', '31OCT26');
+  assert.ok(f.calls.getInstrument.length > 0);
+});
+
+test('codigo de vencimiento invalido lanza ValidationError', () => {
+  const { client, marketData } = fakes();
+  const svc = createDeribitOptionsService({ client, marketData, now: () => NOW });
+  assert.throws(() => svc.getStrikesJob('ETH', 'basura'), { name: 'ValidationError' });
+  assert.throws(() => svc.getStrikesJob('ETH', '31FEB26'), { name: 'ValidationError' });
+});
+
+test('getCandles 1w conserva el primer cubo (lunes anterior a startMs)', async () => {
+  const f = fakes();
+  const monday = Date.UTC(2026, 9, 5); // lunes
+  f.client.getChartData = async (a) => {
+    f.calls.getChartData.push(a);
+    const ticks = [monday, monday + DAY, monday + 8 * DAY];
+    const v = ticks.map(() => 0.01);
+    return { ticks, open: v, high: v, low: v, close: v, volume: v.map(() => 1) };
+  };
+  const svc = createDeribitOptionsService({ client: f.client, marketData: f.marketData, now: () => NOW });
+  const out = await svc.getCandles({
+    instrument: 'SOL_USDC-3OCT27-100-C', timeframe: '1w',
+    startMs: monday + 2 * DAY, endMs: monday + 10 * DAY,
+  });
+  assert.equal(f.calls.getChartData[0].startMs, monday);
+  assert.deepEqual(out.map((c) => c.time), [monday, monday + 7 * DAY]);
+});
+
+test('cache de velas: expulsa entradas viejas (tope) y borra las caducadas', async () => {
+  const f = fakes();
+  let now = NOW;
+  const svc = createDeribitOptionsService({ client: f.client, marketData: f.marketData, now: () => now });
+  for (let i = 0; i < 350; i++) {
+    await svc.getCandles({
+      instrument: 'ETH-31OCT26-3000-C', timeframe: '1d',
+      startMs: Date.UTC(2026, 0, 1) + i * DAY, endMs: Date.UTC(2026, 9, 20),
+    });
+  }
+  const n = f.calls.getChartData.length;
+  // la primera entrada fue expulsada: vuelve a pedirse
+  await svc.getCandles({ instrument: 'ETH-31OCT26-3000-C', timeframe: '1d', startMs: Date.UTC(2026, 0, 1), endMs: Date.UTC(2026, 9, 20) });
+  assert.ok(f.calls.getChartData.length > n);
+  // rango enorme: se acota a 400 dias
+  await svc.getCandles({ instrument: 'ETH-31OCT26-3000-C', timeframe: '1d', startMs: 0, endMs: Date.UTC(2026, 9, 20) });
+  const last = f.calls.getChartData[f.calls.getChartData.length - 2];
+  assert.ok(last.endMs - last.startMs <= 401 * DAY);
+});
+
+test('listExpiries: una sola serie de Binance, llamadas simultaneas compartidas y vigentes en cache', async () => {
+  const f = fakes({ live: ['ETH-31OCT26-3000-C'], existing: ['ETH-9OCT26-2400-C'] });
+  let spotCalls = 0;
+  const md = { getCandles: async (...a) => { spotCalls++; return fakes().marketData.getCandles(...a); } };
+  const svc = createDeribitOptionsService({ client: f.client, marketData: md, now: () => NOW });
+  const [a, b] = await Promise.all([svc.listExpiries('ETH'), svc.listExpiries('ETH')]);
+  assert.deepEqual(a, b);
+  assert.equal(spotCalls, 1);
+  assert.equal(f.calls.getInstruments, 1);
+  await svc.listExpiries('ETH');
+  assert.equal(f.calls.getInstruments, 1); // dentro de los 10 s
+});

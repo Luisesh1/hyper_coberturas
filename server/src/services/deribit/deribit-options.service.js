@@ -9,11 +9,15 @@ const {
 } = require('./deribit-instruments');
 const { resolutionFor, chartDataToCandles, aggregateCandles, toUsdCandles } = require('./option-series');
 const { deribitClient } = require('./deribit.client');
+const { ValidationError } = require('../../errors/app-error');
 
 const DAY_MS = 86_400_000;
 const LIVE_TTL_MS = 10_000;
 const GRID_PCT = 0.3; // rejilla de +-30 % sobre el precio de referencia
 const PROBE_CHUNK = 6; // strikes sondeados a la vez
+const CANDLE_CACHE_MAX = 300; // entradas maximas (FIFO)
+const MAX_RANGE_DAYS = 400; // rango maximo aceptado por getCandles
+const YEAR_DAYS = 365;
 
 const dayFloor = (ms) => Math.floor(ms / DAY_MS) * DAY_MS;
 const decimalsOf = (step) => (String(step).split('.')[1] || '').length;
@@ -34,6 +38,24 @@ function strikeGrid(spotRef, step) {
     if (k > 0) out.push(Number((k * step).toFixed(dec)));
   }
   return out;
+}
+
+// Limites [inicio, fin) del cubo al que pertenece una vela, segun la regla de agregacion.
+function bucketBounds(time, rule) {
+  if (rule.aggregateMs) {
+    const start = Math.floor(time / rule.aggregateMs) * rule.aggregateMs;
+    return [start, start + rule.aggregateMs];
+  }
+  const day = dayFloor(time);
+  if (rule.calendar === 'week') {
+    const start = day - ((new Date(day).getUTCDay() + 6) % 7) * DAY_MS;
+    return [start, start + 7 * DAY_MS];
+  }
+  if (rule.calendar === 'month') {
+    const d = new Date(time);
+    return [Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1), Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)];
+  }
+  return [time, time + 1];
 }
 
 function atmStrike(spotRef, step) {
@@ -64,12 +86,41 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
     return best.close;
   }
 
-  async function liveInstruments(underlying) {
+  const liveCache = new Map(); // underlying -> { promise, expiresAt }
+
+  // Vigentes del subyacente, cacheados 10 s y con llamadas simultaneas compartidas.
+  function liveInstruments(underlying) {
+    const hit = liveCache.get(underlying);
+    if (hit && hit.expiresAt > now()) return hit.promise;
     const u = requireUnderlying(underlying);
-    const list = await client.getInstruments({ currency: u.currency, expired: false });
-    return list
-      .map((i) => parseInstrumentName(i.instrument_name))
-      .filter((p) => p && p.underlying === underlying);
+    const promise = client
+      .getInstruments({ currency: u.currency, expired: false })
+      .then((list) =>
+        list.map((i) => parseInstrumentName(i.instrument_name)).filter((p) => p && p.underlying === underlying),
+      );
+    liveCache.set(underlying, { promise, expiresAt: now() + LIVE_TTL_MS });
+    promise.catch(() => {
+      if (liveCache.get(underlying)?.promise === promise) liveCache.delete(underlying);
+    });
+    return promise;
+  }
+
+  // Una sola serie diaria de Binance para todo el anio rellena spotCache.
+  async function prefetchSpots(underlying) {
+    const t = now();
+    try {
+      const candles = await marketData.getCandles(requireUnderlying(underlying).binanceSymbol, '1d', {
+        datasource: 'binance',
+        startTime: dayFloor(t) - (YEAR_DAYS + 10) * DAY_MS,
+        endTime: t,
+        limit: YEAR_DAYS + 40,
+      });
+      for (const c of candles || []) {
+        if (c.close > 0) spotCache.set(`${underlying}|${dayFloor(c.time)}`, c.close);
+      }
+    } catch {
+      // sin la serie, spotAt consulta dia por dia
+    }
   }
 
   async function fridayExists(underlying, expiryMs) {
@@ -89,9 +140,20 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
     return exists;
   }
 
-  async function listExpiries(underlying) {
+  const listInflight = new Map();
+
+  function listExpiries(underlying) {
     requireUnderlying(underlying);
+    const running = listInflight.get(underlying);
+    if (running) return running;
+    const p = computeExpiries(underlying).finally(() => listInflight.delete(underlying));
+    listInflight.set(underlying, p);
+    return p;
+  }
+
+  async function computeExpiries(underlying) {
     const t = now();
+    await prefetchSpots(underlying);
     const liveMs = [...new Set((await liveInstruments(underlying)).map((p) => p.expiryMs))].sort((a, b) => a - b);
     const live = liveMs.map((ms) => ({ code: formatExpiryCode(ms), expiryMs: ms, live: true }));
     const liveSet = new Set(liveMs);
@@ -142,6 +204,7 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
       .sort((a, b) => a - b)
       .map((s) => withDistance(s, job.spotRef, byStrike.get(s).call, byStrike.get(s).put));
     job.total = job.probed = job.strikes.length;
+    job.live = true;
   }
 
   async function runExpired(job, underlying, expiryMs) {
@@ -180,17 +243,30 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
   // relanza con { retry: true } (el sondeo periodico de la UI no debe borrar el error).
   function getStrikesJob(underlying, expiryCode, { retry = false } = {}) {
     requireUnderlying(underlying);
+    let expiryMs;
+    try {
+      expiryMs = parseExpiryCode(expiryCode);
+      if (!Number.isFinite(expiryMs) || formatExpiryCode(expiryMs) !== expiryCode) throw new Error('fecha');
+    } catch {
+      throw new ValidationError(`Vencimiento invalido: ${expiryCode}`);
+    }
     const key = `${underlying}|${expiryCode}`;
     let job = jobs.get(key);
-    if (job && !(job.status === 'error' && retry)) return snapshot(job);
+    if (job) {
+      const t = now();
+      const stale =
+        job.status === 'done' &&
+        ((expiryMs >= t && t - job.finishedAt > LIVE_TTL_MS) || (job.live && expiryMs < t));
+      if (!stale && !(job.status === 'error' && retry)) return snapshot(job);
+    }
 
-    const expiryMs = parseExpiryCode(expiryCode);
-    job = { status: 'running', probed: 0, total: 0, spotRef: null, strikes: [], error: null };
+    job = { status: 'running', probed: 0, total: 0, spotRef: null, strikes: [], error: null, finishedAt: 0, live: false };
     jobs.set(key, job);
     const run = expiryMs < now() ? runExpired : runLive;
     run(job, underlying, expiryMs).then(
       () => {
         job.status = 'done';
+        job.finishedAt = now();
       },
       (err) => {
         job.status = 'error';
@@ -204,12 +280,17 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
     const parsed = parseInstrumentName(instrument);
     if (!parsed) throw new Error(`Instrumento invalido: ${instrument}`);
     const rule = resolutionFor(timeframe);
-    const startDay = dayFloor(startMs);
+    // Limita el rango para que el cache no crezca sin control con zooms extremos.
+    startMs = Math.max(startMs, endMs - MAX_RANGE_DAYS * DAY_MS);
+    // La primera vela agregada empieza antes de startMs: se pide desde el inicio de su cubo.
+    const fetchStart = bucketBounds(dayFloor(startMs), rule)[0];
+    const startDay = dayFloor(fetchStart);
     const endDay = dayFloor(endMs);
     const key = `${instrument}|${rule.resolution}|${timeframe}|${startDay}|${endDay}`;
 
     const hit = candleCache.get(key);
     if (hit && hit.expiresAt > now()) return hit.value;
+    if (hit) candleCache.delete(key);
 
     const range = { resolution: rule.resolution, startMs: startDay, endMs: endDay + DAY_MS - 1 };
     const [optData, perpData] = await Promise.all([
@@ -227,10 +308,11 @@ function createDeribitOptionsService({ client = deribitClient, marketData, now =
       underlyingCloseByTime = new Map(perp.map((c) => [c.time, c.close]));
     }
     const value = toUsdCandles(candles, { inverse: parsed.inverse, underlyingCloseByTime }).filter(
-      (c) => c.time >= startMs && c.time <= endMs,
+      (c) => bucketBounds(c.time, rule)[1] > startMs && c.time <= endMs,
     );
 
     const permanent = parsed.expiryMs < now();
+    while (candleCache.size >= CANDLE_CACHE_MAX) candleCache.delete(candleCache.keys().next().value);
     candleCache.set(key, { value, expiresAt: permanent ? Infinity : now() + LIVE_TTL_MS });
     return value;
   }
