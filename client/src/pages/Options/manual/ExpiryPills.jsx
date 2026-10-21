@@ -9,13 +9,30 @@ function validMs(ms) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function expiryTime(ms) {
+const pad = (n) => String(n).padStart(2, '0');
+const DAY_MS = 86_400_000;
+
+function expiryTimeUtc(ms) {
   if (validMs(ms) == null) return null;
   const d = new Date(Number(ms));
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`;
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 }
 
-const pad = (n) => String(n).padStart(2, '0');
+// Hora en la zona del navegador: Binance vence a las 08:00 UTC, que para
+// el usuario puede caer de madrugada del día siguiente.
+function expiryTimeLocal(ms) {
+  if (validMs(ms) == null) return null;
+  return new Date(Number(ms)).toLocaleTimeString('es', {
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'short',
+  });
+}
+
+// La etiqueta de Binance es la fecha UTC; el contrato que vence dentro de
+// las próximas 24 h es el "de hoy" sin importar la zona del usuario.
+function venceHoy(ms, now) {
+  const n = validMs(ms);
+  return n != null && n > now && n - now < DAY_MS;
+}
 
 // Cuenta regresiva hasta el vencimiento: "12d 04:05:06" o "04:05:06" si
 // queda menos de un día. Devuelve null sin timestamp confirmado.
@@ -30,7 +47,7 @@ export function formatCountdown(expiryMs, now) {
 }
 
 // Selector de vencimiento: cada botón muestra la cuenta regresiva en vivo;
-// la hora exacta UTC solo aparece en el contrato seleccionado.
+// la hora exacta (local) solo aparece en el contrato seleccionado.
 export default function ExpiryPills({ expiries = [], value, onChange, scroller = false }) {
   const [now, setNow] = useState(() => Date.now());
   const ticking = expiries.some((e) => validMs(e.expiryMs) != null);
@@ -40,7 +57,9 @@ export default function ExpiryPills({ expiries = [], value, onChange, scroller =
     <div role="group" aria-label="Vencimiento" className={scroller ? styles.expiryScroller : styles.pills}>
       {expiries.map((e) => {
         const on = e.code === value;
-        const time = expiryTime(e.expiryMs);
+        const time = expiryTimeLocal(e.expiryMs);
+        const utc = expiryTimeUtc(e.expiryMs);
+        const label = venceHoy(e.expiryMs, now) ? 'Hoy' : e.label;
         const countdown = formatCountdown(e.expiryMs, now);
         return (
           <button
@@ -48,10 +67,12 @@ export default function ExpiryPills({ expiries = [], value, onChange, scroller =
             type="button"
             className={`${styles.pill} ${on ? styles.pillOn : ''}`}
             aria-pressed={on}
-            title={time ? `Vence ${e.label} a las ${time}` : `Vence ${e.label}`}
+            title={time
+              ? `Vence ${e.label} a las ${time}${time.endsWith('UTC') ? '' : ` (${utc})`}`
+              : `Vence ${e.label}`}
             onClick={() => onChange(e.code)}
           >
-            {e.label}
+            {label}
             {countdown != null
               ? <span className={`${styles.pillMeta} ${styles.pillCountdown}`}>{countdown}</span>
               : e.dte != null && <span className={styles.pillMeta}>{e.dte}d</span>}
