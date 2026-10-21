@@ -617,3 +617,49 @@ adicionales y resolución supervisada si faltan fills o protección.
 documentación. No cambian las variables de Docker Compose, no activan
 estrategias ni envían órdenes. Los dos flags de trading real deben
 permanecer en `false` hasta superar las verificaciones anteriores.
+
+## Rama experimental: Take Profit sintético FOK (NO-GO, sin activar)
+
+Se evalúa en `experiment/eth-synthetic-fok-tp` como alternativa al
+`LIMIT GTC reduceOnly` residente del piloto mínimo. **No está activada
+en producción** ni constituye autorización para operar.
+
+- OFF por defecto. Para que el código experimental considere esta ruta se
+  requieren **ambos** valores `OPTIONS_ETH_SYNTHETIC_TP_EXPERIMENT=true`
+  y `OPTIONS_ETH_SYNTHETIC_TP_EXPERIMENT_ACK=NO_EXCHANGE_STOP`.
+  No configurar estas variables en VPS ni en workflows productivos.
+- Scope cerrado: usuario #1, estrategia #2, BUY 0.01 ETH, TP fijo 50%,
+  stop 50%, salida 24 h antes del vencimiento y una sola posición.
+  Todas las demás estrategias mantienen el comportamiento anterior.
+- Después del fill real de entrada, **no** se crea orden GTC TP. En
+  cada evaluación de estrategia, al alcanzar el target por bid (no mark),
+  se obtiene una cotización fresca y un libro de 20 niveles, timestamp
+  máximo 10 s, cantidad completa y deslizamiento máximo 10%. Solo se
+  permite `LIMIT FOK reduceOnly` si el **peor nivel necesario** cubre
+  la prima objetivo. FOK expirado sin fill sigue abierto y requiere
+  conciliación antes de reintentar. Cada fill se registra por userTrades.
+- El watchdog existente debe seguir marcando `unprotected`: un TP
+  sintético no está protegido por orden en el exchange. **Una caída,
+  desconexión, latencia, falta de liquidez o proceso pausado puede
+  impedir el cierre**. El runner evalúa por defecto cada ~5 min; puede
+  perder un paso fugaz por el objetivo. Tampoco garantiza stop loss.
+- Experimento aislado en PR propia. Antes de siquiera considerar un
+  piloto con esta modalidad hacen falta: review independiente, prueba
+  de recovery/restart/outages, confirmación de frecuencia y alertas,
+  verificación actual de Binance, supervisión humana y autorización
+  explícita por orden. Sin esto, mantener trading real apagado.
+
+
+### Prueba de reinicio con FOK ya aceptado (simulación)
+
+La suite integrada ahora simula un crash justo después del POST FOK, con
+`exchangeOrderId` aún no registrado y estado durable `sending`.
+Tras reconstruir un ejecutor nuevo sobre el mismo repositorio, el
+reconciliador consulta Binance usando el `clientOrderId` persistido,
+recupera el mismo `orderId` y nunca reenvía esa orden. Después de
+`EXPIRED` sin fill, el ledger cierra la orden con cantidad cero y solo
+entonces se permite un nuevo FOK si el precio y el libro siguen cumpliendo
+las restricciones. **Se trata de una prueba con Binance simulado**: faltan
+pruebas de interrupción real, conexión, 429/5xx, latencia, alertas
+Telegram y recuperación de `getUserTrades` real. No resuelve que el
+precio objetivo pueda desaparecer durante la caída. Mantener NO-GO.

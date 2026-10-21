@@ -8,6 +8,8 @@ const credentialsDefault = require('./options-credentials.service');
 const loggerDefault = require('../logger.service');
 const { validateBinanceOrderBatch, matchesStep } = require('./options-order-filters');
 const { fullSizeFokLimit } = require('./options-fok-depth');
+const { isPilotSyntheticTpEligible, experimentalModeEnabled } =
+  require('./options-synthetic-tp-experiment');
 const { enforcePilotEntry } = require('./options-live-pilot-policy');
 const { parseSymbol } = require('./options-utils');
 const { projectTakeProfit } = require('./options-take-profit');
@@ -144,6 +146,8 @@ class OptionsLiveExecution {
     this.runner = deps.runner || null;
     this.now = deps.now || Date.now;
     this.lastExternalScanAt = null;
+    this.syntheticTpExperimentalEnabled =
+      deps.syntheticTpExperimentalEnabled ?? experimentalModeEnabled();
     this.settlement = deps.settlement || require('./options-live-settlement.service');
     this.notify = deps.notify || (async (userId, message) => {
       const registry = require('../telegram.registry');
@@ -665,10 +669,19 @@ class OptionsLiveExecution {
     if (!this.enabled || typeof this.repo.listMissingTpPositions !== 'function') return { attempted: 0, queued: 0 };
     const positions = await this.repo.listMissingTpPositions(100);
     let queued = 0;
+    let syntheticSkipped = 0;
     const clientByUser = new Map();
     const exchangeByUser = new Map();
     for (const position of positions) {
       try {
+        if (isPilotSyntheticTpEligible({
+          candidate: position, enabled: this.syntheticTpExperimentalEnabled,
+        })) {
+          // Experimental, never claim a standing exchange TP exists.
+          // The unprotected-position watchdog must still alert on outages.
+          syntheticSkipped++;
+          continue;
+        }
         if (!clientByUser.has(position.userId)) {
           clientByUser.set(position.userId, await this.credentials.getClientForUser(position.userId));
         }
@@ -737,7 +750,9 @@ class OptionsLiveExecution {
         }
       }
     }
-    return { attempted: positions.length, queued };
+    return { attempted: positions.length, queued,
+      ...(syntheticSkipped ? { syntheticSkipped } : {}),
+    };
   }
 
   /** El POST de TP es idempotente: CAS queued→sending ANTES de la red.

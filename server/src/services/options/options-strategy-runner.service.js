@@ -27,6 +27,9 @@ const {
 } = require('./options-utils');
 const { intrinsic } = require('./options-pricing');
 const { projectTakeProfit } = require('./options-take-profit');
+const { fullSizeFokLimit } = require('./options-fok-depth');
+const { isPilotSyntheticTpEligible, fixedTargetPrice } =
+  require('./options-synthetic-tp-experiment');
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const RECONCILE_INTERVAL_MS = 60_000;
@@ -584,6 +587,52 @@ class OptionsStrategyRunner {
         type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
       }, ctx);
       return null;
+    }
+    // ONLY the explicit one-contract ETH pilot experiment may replace the
+    // resting GTC TP with a synthetic full-size FOK close.
+    // Both fresh quote AND complete depth must meet the fixed TP target.
+    // An FOK expiry is NOT a protected position or guaranteed stop.
+    const tpLeg = action.type === 'close' && action.legs?.length === 1
+      ? action.legs[0] : null;
+    const tpPosition = tpLeg && (ctx.positions || [])
+      .find((p) => Number(p.id) === Number(tpLeg.positionId));
+    const syntheticTp = !!tpPosition && isPilotSyntheticTpEligible({
+      candidate: {
+        ...tpPosition, params: ctx.params,
+        strategyId: strategy.id, userId: strategy.userId,
+        mode: strategy.mode,
+      },
+      enabled: this.liveExecutor.syntheticTpExperimentalEnabled,
+    }) && ['take_profit', 'take_profit_volatility', 'stop_loss', 'time_exit'].includes(action.reason);
+    if (syntheticTp) {
+      try {
+        const client = await this.liveExecutor.credentials.getClientForUser(strategy.userId);
+        const depth = await client.getDepth(tpLeg.symbol, 20);
+        const fullSizeLimit = fullSizeFokLimit({
+          book: depth, side: tpLeg.side, quantity: tpLeg.quantity, nowMs: this.now(),
+        });
+        if (['take_profit', 'take_profit_volatility'].includes(action.reason)) {
+          const target = fixedTargetPrice(tpPosition, ctx.params);
+          if (fullSizeLimit + 1e-9 < target) {
+            await this.recordOutcome(strategy, 'live', {
+              type: 'skip', reason: 'tp_full_size_price_below_target',
+              detail: 'El libro FOK completo ya no alcanza el objetivo TP',
+            }, ctx);
+            return null;
+          }
+        }
+        quotes[0].price = fullSizeLimit;
+      } catch (err) {
+        await this.recordOutcome(strategy, 'live', {
+          type: 'skip', reason: 'tp_full_size_depth_unavailable',
+          detail: 'FOK no enviado: faltan liquidez completa o datos frescos',
+        }, ctx);
+        this.logger.warn('options_synthetic_tp_fok_blocked', {
+          strategyId: strategy.id, positionId: tpPosition.id,
+          error: err.message,
+        });
+        return null;
+      }
     }
     // Un TP basado en volatilidad no puede ejecutar a peor precio por
     // movimientos entre el tick y el preflight de cotización fresca.
