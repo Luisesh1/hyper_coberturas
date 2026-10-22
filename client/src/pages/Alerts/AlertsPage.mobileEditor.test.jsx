@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AlertsPage from './AlertsPage';
@@ -78,5 +78,47 @@ describe('AlertsPage · editor móvil', () => {
     const dialog = await screen.findByRole('dialog');
     expect(alertsApi.test).toHaveBeenCalledWith(1, { dryRun: true });
     expect(within(dialog).getByText(/55\.0% \/ 70%/)).toBeTruthy();
+    // El resultado solo va en la hoja, no también en línea.
+    expect(screen.queryByText('Resultado del test')).toBeNull();
+    expect(screen.getAllByText(/55\.0% \/ 70%/)).toHaveLength(1);
+  });
+
+  it('el interruptor Activa de una alerta guardada guarda al momento', async () => {
+    await openEditor();
+    const sw = screen.getByRole('switch', { name: 'Activa' });
+    fireEvent.click(sw);
+    await waitFor(() => expect(alertsApi.update).toHaveBeenCalledWith(1, expect.objectContaining({ isActive: false, name: 'RSI bajo' })));
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Activa' }).getAttribute('aria-checked')).toBe('false'));
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+  });
+
+  it('si falla el interruptor, sigue Activa y avisa', async () => {
+    alertsApi.update.mockRejectedValue(new Error('boom'));
+    await openEditor();
+    fireEvent.click(screen.getByRole('switch', { name: 'Activa' }));
+    await waitFor(() => expect(addNotification).toHaveBeenCalledWith('error', expect.stringContaining('boom')));
+    expect(screen.getByRole('switch', { name: 'Activa' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('en una alerta nueva, el interruptor Activa no guarda', async () => {
+    renderPage();
+    await screen.findByText('RSI bajo');
+    fireEvent.click(screen.getByRole('button', { name: '+ Nueva alerta' }));
+    const sw = screen.getByRole('switch', { name: 'Activa' });
+    fireEvent.click(sw);
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+    expect(alertsApi.update).not.toHaveBeenCalled();
+    expect(alertsApi.create).not.toHaveBeenCalled();
+  });
+
+  it('cambiar a modo JSON y volver cierra la regla abierta', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    expect(screen.getByTestId('rule-editor')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Modo JSON' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Modo visual' }));
+    expect(screen.queryByTestId('rule-editor')).toBeNull();
   });
 });

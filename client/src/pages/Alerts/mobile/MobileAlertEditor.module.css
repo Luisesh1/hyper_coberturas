@@ -140,6 +140,7 @@
 .switchOn { color: #22c55e; }
 .switchOn .switchTrack { border-color: #22c55e; background: rgba(34,197,94,0.14); }
 .switchOn .switchThumb { background: #22c55e; transform: translateX(18px); }
+.switchBtn:disabled { opacity: 0.5; cursor: default; }
 .switchBtn:focus-visible { outline: 2px solid var(--accent, #3b82f6); border-radius: 10px; }
 
 /* Umbral − valor + */
@@ -272,6 +273,8 @@
   font-weight: 600;
   cursor: pointer;
 }
+.secondaryBtn:disabled { opacity: 0.45; cursor: default; }
+.symbolRow { display: flex; gap: 8px; min-width: 0; }
 .secondaryBtn:focus-visible { outline: 2px solid var(--accent, #3b82f6); }
 
 /* ---------- Activos ---------- */

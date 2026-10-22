@@ -42,7 +42,8 @@ export default function MobileAlertEditor({
   onSave,
   onRemove,
   onTest,
-  testResult,
+  onToggleActive,
+  isTogglingActive,
   editorMode,
   rawText,
   rawError,
@@ -159,12 +160,16 @@ export default function MobileAlertEditor({
             <section className={styles.card}>
               <div className={styles.cardHead}>
                 <h2 className={styles.cardTitle}>General</h2>
+                {/* Guardada: se guarda al momento, como en escritorio y la lista.
+                    Nueva: es un campo más del formulario. */}
                 <button
                   type="button"
                   role="switch"
                   aria-checked={!!form.isActive}
                   className={`${styles.switchBtn} ${form.isActive ? styles.switchOn : ''}`}
-                  onClick={() => updateField('isActive', !form.isActive)}
+                  disabled={!!selectedId && (isSaving || isTogglingActive || effectiveDirty)}
+                  title={selectedId && effectiveDirty ? 'Guarda o descarta los cambios antes de activar/desactivar' : undefined}
+                  onClick={() => (selectedId ? onToggleActive() : updateField('isActive', !form.isActive))}
                 >
                   <span className={styles.switchLabel}>Activa</span>
                   <span className={styles.switchTrack} aria-hidden="true"><span className={styles.switchThumb} /></span>
@@ -302,21 +307,26 @@ export default function MobileAlertEditor({
                   </span>
                 ))}
               </div>
-              <input
-                className={styles.input}
-                aria-label="Añadir símbolo"
-                value={assetInput}
-                autoCapitalize="characters"
-                placeholder={`Escribe un símbolo (${form.datasource === 'hyperliquid' ? 'BTC' : 'BTCUSDT'}) y pulsa Intro`}
-                onChange={(e) => onAssetInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ',' || e.key === ' ') {
-                    e.preventDefault();
-                    onAddAsset();
-                  }
-                }}
-                onBlur={onAddAsset}
-              />
+              <div className={styles.symbolRow}>
+                <input
+                  className={styles.input}
+                  aria-label="Símbolo"
+                  value={assetInput}
+                  autoCapitalize="characters"
+                  enterKeyHint="done"
+                  placeholder={`Símbolo (${form.datasource === 'hyperliquid' ? 'BTC' : 'BTCUSDT'})`}
+                  onChange={(e) => onAssetInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      onAddAsset();
+                    }
+                  }}
+                />
+                <button type="button" className={styles.secondaryBtn} onClick={onAddAsset} disabled={!assetInput.trim()}>
+                  Añadir
+                </button>
+              </div>
             </section>
 
             <section className={styles.card}>
@@ -328,7 +338,7 @@ export default function MobileAlertEditor({
                 <div key={rule.id || i} className={styles.ruleItem}>
                   <RuleSummaryCard index={i} rule={rule} onOpen={onOpenRule} />
                   {/* Provisional hasta la hoja de regla: el editor de siempre, en línea. */}
-                  {openRuleIndex === i && (
+                  {openRuleIndex === i && form.rules[i] && (
                     <div data-testid="rule-editor" className={styles.ruleEditor}>
                       <AlertRuleRow
                         index={i}
@@ -343,12 +353,6 @@ export default function MobileAlertEditor({
               <button type="button" className={styles.addRule} onClick={onAddRule}>+ Añadir regla</button>
             </section>
 
-            {testResult && (
-              <section className={styles.card}>
-                <h2 className={styles.cardTitle}>Resultado del test</h2>
-                <TestResultView result={testResult} />
-              </section>
-            )}
           </>
         )}
       </div>

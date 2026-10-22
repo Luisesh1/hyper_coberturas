@@ -38,7 +38,8 @@ function setup(overrides = {}) {
     onSave: vi.fn(),
     onRemove: vi.fn(),
     onTest: vi.fn().mockResolvedValue(null),
-    testResult: null,
+    onToggleActive: vi.fn(),
+    isTogglingActive: false,
     editorMode: 'visual',
     rawText: '',
     rawError: '',
@@ -125,12 +126,45 @@ describe('MobileAlertEditor', () => {
     expect(screen.getByText('Nota de dirección')).toBeTruthy();
   });
 
-  it('el interruptor Activa cambia el campo del formulario', () => {
+  it('en una alerta guardada, el interruptor Activa guarda al momento', () => {
     const p = setup();
     const sw = screen.getByRole('switch', { name: 'Activa' });
     expect(sw.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(sw);
+    expect(p.onToggleActive).toHaveBeenCalled();
+    expect(p.updateField).not.toHaveBeenCalled();
+  });
+
+  it('en una alerta guardada con cambios, el interruptor queda deshabilitado', () => {
+    setup({ effectiveDirty: true });
+    expect(screen.getByRole('switch', { name: 'Activa' }).disabled).toBe(true);
+  });
+
+  it('en una alerta nueva, el interruptor Activa es un campo del formulario', () => {
+    const p = setup({ selectedId: null, effectiveDirty: true });
+    const sw = screen.getByRole('switch', { name: 'Activa' });
+    expect(sw.disabled).toBe(false);
+    fireEvent.click(sw);
     expect(p.updateField).toHaveBeenCalledWith('isActive', false);
+    expect(p.onToggleActive).not.toHaveBeenCalled();
+  });
+
+  it('el símbolo se añade solo con Intro o con «Añadir», nunca al salir del campo', () => {
+    const p = setup({ assetInput: 'SOLUSDT' });
+    const input = screen.getByRole('textbox', { name: 'Símbolo' });
+    fireEvent.blur(input);
+    fireEvent.keyDown(input, { key: ' ' });
+    fireEvent.keyDown(input, { key: ',' });
+    expect(p.onAddAsset).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(p.onAddAsset).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Añadir' }));
+    expect(p.onAddAsset).toHaveBeenCalledTimes(2);
+  });
+
+  it('«Añadir» deshabilitado sin símbolo', () => {
+    setup();
+    expect(screen.getByRole('button', { name: 'Añadir' }).disabled).toBe(true);
   });
 
   it('«Más opciones» despliega datasource, Telegram y la vista previa', () => {

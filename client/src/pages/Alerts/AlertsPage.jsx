@@ -245,6 +245,7 @@ export default function AlertsPage() {
   const formatRaw = (payload = buildPayload()) => JSON.stringify(payload, null, 2);
 
   const openRawMode = () => {
+    setOpenRuleIndex(null);
     setRawText(formatRaw());
     setRawError('');
     setRawTextDirty(false);
@@ -258,6 +259,7 @@ export default function AlertsPage() {
   };
 
   const openVisualMode = () => {
+    setOpenRuleIndex(null);
     setEditorMode('visual');
     setRawError('');
   };
@@ -267,6 +269,7 @@ export default function AlertsPage() {
       const parsed = JSON.parse(rawText);
       const next = payloadToForm(parsed);
       setForm(next);
+      setOpenRuleIndex(null);
       setRawText(formatRaw(formToPayload(next)));
       setRawError('');
       setRawTextDirty(false);
@@ -484,7 +487,8 @@ export default function AlertsPage() {
           onSave={save}
           onRemove={remove}
           onTest={() => testNow({ dryRun: true })}
-          testResult={testResult}
+          onToggleActive={toggleActive}
+          isTogglingActive={isTogglingActive}
           editorMode={editorMode}
           rawText={rawText}
           rawError={rawError}
@@ -511,7 +515,7 @@ export default function AlertsPage() {
           // Provisional hasta la hoja de regla: tocar alterna el editor en línea.
           onOpenRule={(i) => setOpenRuleIndex((cur) => (cur === i ? null : i))}
           onAddRule={() => { setOpenRuleIndex(form.rules.length); addRule(); }}
-          openRuleIndex={openRuleIndex}
+          openRuleIndex={openRuleIndex != null && form.rules[openRuleIndex] ? openRuleIndex : null}
           updateRule={updateRule}
           removeRule={(i) => { setOpenRuleIndex(null); removeRule(i); }}
         />
