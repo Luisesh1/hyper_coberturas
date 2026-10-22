@@ -284,9 +284,9 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
           />
           <NumberField
             label="Vencimiento mínimo"
-            help="Opcional: con rango, solo elige vencimientos dentro de él"
+            help="Opcional. Vacío = sin límite"
             unit="días"
-            placeholder="Sin límite"
+            placeholder="—"
             value={form.expiryMinDays}
             min={0}
             max={180}
@@ -296,9 +296,9 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
           />
           <NumberField
             label="Vencimiento máximo"
-            help="Vacío en ambos = sin restricción"
+            help="Con rango, solo elige vencimientos dentro de él"
             unit="días"
-            placeholder="Sin límite"
+            placeholder="—"
             value={form.expiryMaxDays}
             min={0}
             max={180}
