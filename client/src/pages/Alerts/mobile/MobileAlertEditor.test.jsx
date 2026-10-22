@@ -66,8 +66,10 @@ function setup(overrides = {}) {
     onOpenRule: vi.fn(),
     onAddRule: vi.fn(),
     openRuleIndex: null,
-    updateRule: vi.fn(),
-    removeRule: vi.fn(),
+    openRuleIsNew: false,
+    onApplyRule: vi.fn(),
+    onDiscardRule: vi.fn(),
+    onDeleteRule: vi.fn(),
     ...overrides,
   };
   render(<MemoryRouter><MobileAlertEditor {...props} /></MemoryRouter>);
@@ -247,6 +249,19 @@ describe('MobileAlertEditor', () => {
     expect(p.onOpenRule).toHaveBeenCalledWith(1);
     fireEvent.click(screen.getByRole('button', { name: '+ Añadir regla' }));
     expect(p.onAddRule).toHaveBeenCalled();
+  });
+
+  it('con una regla abierta muestra su hoja y la conecta con la página', () => {
+    const p = setup({ openRuleIndex: 1 });
+    const sheet = screen.getByRole('dialog', { name: 'Regla 2' });
+    // Con dos reglas se puede eliminar.
+    expect(within(sheet).getByRole('button', { name: 'Eliminar regla' }).disabled).toBe(false);
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Aplicar regla' }));
+    expect(p.onApplyRule).toHaveBeenCalledWith(1, expect.objectContaining({ conditions: expect.any(Array) }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Eliminar regla' }));
+    expect(p.onDeleteRule).toHaveBeenCalledWith(1);
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Descartar cambios' }));
+    expect(p.onDiscardRule).toHaveBeenCalled();
   });
 
   it('con effectiveDirty se ve «Cambios sin guardar»', () => {

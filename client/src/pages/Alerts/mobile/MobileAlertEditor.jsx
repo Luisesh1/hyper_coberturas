@@ -1,11 +1,11 @@
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import BottomSheet from '../../TradingView/components/BottomSheet';
-import { AlertRuleRow } from '../components/AlertRuleRow';
 import { DirectionChip, DirectionSelector } from '../components/Direction';
 import TestResultView from '../components/TestResultView';
 import { botModeLabel, botOpensLabel, normalizeDirection } from '../lib/direction';
 import { COOLDOWN_PRESETS, cooldownLabel } from '../lib/labels';
+import MobileRuleSheet from './MobileRuleSheet';
 import RuleSummaryCard from './RuleSummaryCard';
 import styles from './MobileAlertEditor.module.css';
 
@@ -70,8 +70,10 @@ export default function MobileAlertEditor({
   onOpenRule,
   onAddRule,
   openRuleIndex,
-  updateRule,
-  removeRule,
+  openRuleIsNew,
+  onApplyRule,
+  onDiscardRule,
+  onDeleteRule,
 }) {
   const ids = useId();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -335,20 +337,7 @@ export default function MobileAlertEditor({
                 <span className={styles.hint}>dispara con ≥ {threshold} % del peso</span>
               </div>
               {form.rules.map((rule, i) => (
-                <div key={rule.id || i} className={styles.ruleItem}>
-                  <RuleSummaryCard index={i} rule={rule} onOpen={onOpenRule} />
-                  {/* Provisional hasta la hoja de regla: el editor de siempre, en línea. */}
-                  {openRuleIndex === i && form.rules[i] && (
-                    <div data-testid="rule-editor" className={styles.ruleEditor}>
-                      <AlertRuleRow
-                        index={i}
-                        rule={rule}
-                        onChange={(next) => updateRule(i, next)}
-                        onRemove={() => removeRule(i)}
-                      />
-                    </div>
-                  )}
-                </div>
+                <RuleSummaryCard key={rule.id || i} index={i} rule={rule} onOpen={onOpenRule} />
               ))}
               <button type="button" className={styles.addRule} onClick={onAddRule}>+ Añadir regla</button>
             </section>
@@ -380,6 +369,18 @@ export default function MobileAlertEditor({
           {isSaving ? 'Guardando…' : (selectedId ? 'Guardar cambios' : 'Crear alerta')}
         </button>
       </div>
+
+      {/* Pantalla 3: la regla abierta, a pantalla completa sobre el editor. */}
+      <MobileRuleSheet
+        open={editorMode !== 'raw' && openRuleIndex != null && !!form.rules[openRuleIndex]}
+        index={openRuleIndex}
+        rule={openRuleIndex != null ? form.rules[openRuleIndex] : null}
+        isNew={!!openRuleIsNew}
+        canDelete={form.rules.length > 1}
+        onApply={(next) => onApplyRule(openRuleIndex, next)}
+        onDiscard={onDiscardRule}
+        onDelete={() => onDeleteRule(openRuleIndex)}
+      />
 
       <BottomSheet open={menuOpen} title="Acciones" actionLabel="Cerrar" onClose={() => setMenuOpen(false)}>
         <div className={styles.menu}>

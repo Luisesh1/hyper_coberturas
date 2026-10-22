@@ -76,8 +76,10 @@ export default function AlertsPage() {
   const isMobile = useMediaQuery(MOBILE_QUERY);
   // En móvil se ve la lista o el editor a pantalla completa, no ambos.
   const [mobileView, setMobileView] = useState('list');
-  // Regla abierta en el editor móvil (null = ninguna).
+  // Regla abierta en la hoja de regla móvil (null = ninguna). `openRuleIsNew`:
+  // la abrió «+ Añadir regla», así que descartarla la quita del formulario.
   const [openRuleIndex, setOpenRuleIndex] = useState(null);
+  const [openRuleIsNew, setOpenRuleIsNew] = useState(false);
   const [directionFilter, setDirectionFilter] = useState('all');
   // Map alertId → bots que la usan. null = no disponible (se oculta sin error).
   const [botUsage, setBotUsage] = useState(null);
@@ -512,12 +514,16 @@ export default function AlertsPage() {
           onAddAsset={addAsset}
           onRemoveAsset={removeAsset}
           onOpenPicker={() => setPickerOpen(true)}
-          // Provisional hasta la hoja de regla: tocar alterna el editor en línea.
-          onOpenRule={(i) => setOpenRuleIndex((cur) => (cur === i ? null : i))}
-          onAddRule={() => { setOpenRuleIndex(form.rules.length); addRule(); }}
+          onOpenRule={(i) => { setOpenRuleIsNew(false); setOpenRuleIndex(i); }}
+          onAddRule={() => { setOpenRuleIsNew(true); setOpenRuleIndex(form.rules.length); addRule(); }}
           openRuleIndex={openRuleIndex != null && form.rules[openRuleIndex] ? openRuleIndex : null}
-          updateRule={updateRule}
-          removeRule={(i) => { setOpenRuleIndex(null); removeRule(i); }}
+          openRuleIsNew={openRuleIsNew}
+          onApplyRule={(i, next) => { setOpenRuleIndex(null); updateRule(i, next); }}
+          onDiscardRule={() => {
+            if (openRuleIsNew && openRuleIndex != null) removeRule(openRuleIndex);
+            setOpenRuleIndex(null);
+          }}
+          onDeleteRule={(i) => { setOpenRuleIndex(null); removeRule(i); }}
         />
         {assetPicker}
       </div>

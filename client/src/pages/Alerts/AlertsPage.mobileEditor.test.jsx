@@ -59,16 +59,62 @@ describe('AlertsPage · editor móvil', () => {
     expect(alertsApi.update).toHaveBeenCalledWith(1, expect.objectContaining({ thresholdPercent: 75 }));
   });
 
-  it('tocar una regla abre su editor y «+ Añadir regla» abre la nueva', async () => {
+  it('tocar una regla abre su hoja; «Aplicar regla» guarda la copia en el formulario', async () => {
     await openEditor();
-    expect(screen.queryByTestId('rule-editor')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
-    expect(screen.getByTestId('rule-editor')).toBeTruthy();
+    const sheet = screen.getByRole('dialog', { name: 'Regla 1' });
+    fireEvent.change(within(sheet).getByLabelText('Etiqueta en Telegram'), { target: { value: 'rebote' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Aplicar regla' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: /Regla 1/ }).textContent).toContain('«rebote» · peso 1');
+    expect(screen.getByText(/Cambios sin guardar/)).toBeTruthy();
+  });
+
+  it('la ✕ de la hoja descarta los cambios', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Regla 1' });
+    fireEvent.change(within(sheet).getByLabelText('Etiqueta en Telegram'), { target: { value: 'rebote' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Descartar cambios' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: /Regla 1/ }).textContent).toContain('«sobreventa» · peso 1');
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+  });
+
+  it('«+ Añadir regla» abre la nueva; descartarla la quita y aplicarla la deja', async () => {
+    await openEditor();
     fireEvent.click(screen.getByRole('button', { name: '+ Añadir regla' }));
+    let sheet = screen.getByRole('dialog', { name: 'Regla 2' });
     expect(screen.getByRole('heading', { name: 'Reglas (2)' })).toBeTruthy();
-    const editors = screen.getAllByTestId('rule-editor');
-    expect(editors).toHaveLength(1);
-    expect(within(editors[0]).getByText(/#2/)).toBeTruthy();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Descartar cambios' }));
+    expect(screen.getByRole('heading', { name: 'Reglas (1)' })).toBeTruthy();
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Añadir regla' }));
+    sheet = screen.getByRole('dialog', { name: 'Regla 2' });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Aplicar regla' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Reglas (2)' })).toBeTruthy();
+    // Ya no es nueva: reabrirla y descartar no la quita.
+    fireEvent.click(screen.getByRole('button', { name: /Regla 2/ }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 2' })).getByRole('button', { name: 'Descartar cambios' }));
+    expect(screen.getByRole('heading', { name: 'Reglas (2)' })).toBeTruthy();
+  });
+
+  it('la papelera elimina la regla, salvo si es la única', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    expect(within(screen.getByRole('dialog', { name: 'Regla 1' })).getByRole('button', { name: 'Eliminar regla' }).disabled).toBe(true);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 1' })).getByRole('button', { name: 'Descartar cambios' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Añadir regla' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 2' })).getByRole('button', { name: 'Aplicar regla' }));
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 1' })).getByRole('button', { name: 'Eliminar regla' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Reglas (1)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Regla 1/ }).textContent).not.toContain('sobreventa');
   });
 
   it('Probar usa dryRun y abre la hoja del resultado', async () => {
@@ -114,11 +160,11 @@ describe('AlertsPage · editor móvil', () => {
   it('cambiar a modo JSON y volver cierra la regla abierta', async () => {
     await openEditor();
     fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
-    expect(screen.getByTestId('rule-editor')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Regla 1' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Modo JSON' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Acciones' })).getByRole('button', { name: 'Modo JSON' }));
     fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Modo visual' }));
-    expect(screen.queryByTestId('rule-editor')).toBeNull();
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Acciones' })).getByRole('button', { name: 'Modo visual' }));
+    expect(screen.queryByRole('dialog', { name: 'Regla 1' })).toBeNull();
   });
 });
