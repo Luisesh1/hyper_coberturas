@@ -51,7 +51,7 @@ function AlertCard({ alert, bots, showBots, onOpen, onToggleActive, onTest }) {
         type="button"
         role="switch"
         aria-checked={isActive}
-        aria-label={`${isActive ? 'Pausar' : 'Activar'} ${alert.name}`}
+        aria-label={alert.name}
         className={`${styles.switchBtn} ${isActive ? styles.switchOn : ''}`}
         onClick={toggle}
       >
@@ -152,7 +152,7 @@ export default function MobileAlertList({
         ))}
       </div>
 
-      <button type="button" className={styles.fab} onClick={onNew}>+ Nueva alerta</button>
+      <button type="button" className={`${styles.fab} ${import.meta.env.DEV ? styles.fabDev : ''}`} onClick={onNew}>+ Nueva alerta</button>
 
       <BottomSheet open={!!sheet} title={sheet ? `Prueba · ${sheet.name}` : ''} onClose={() => setSheet(null)}>
         {sheet && (
