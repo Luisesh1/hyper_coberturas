@@ -225,23 +225,21 @@ class OptionsLiveExecution {
       return { status: 'tp_cancel_requested', sent: 0 };
     }
     // Una orden manual que todavía no ha llenado no aparece en posiciones:
-    // puede ejecutarse después de nuestro preflight. Bloquear hasta que
-    // la cuenta no tenga órdenes abiertas no gestionadas por este lote.
+    // puede ejecutarse después de nuestro preflight. Bloquear (abrir o
+    // cerrar) mientras la cuenta tenga órdenes abiertas que no sean TPs
+    // resting propios e identificados de este usuario (banda ATR / GTC).
     const openOrders = await client.getOpenOrders();
     if (!Array.isArray(openOrders)) throw new Error('Invalid Binance open-order list');
     if (openOrders.length) {
-      if (action.type !== 'close' ||
-          typeof this.repo.listRestingTpOrderIds !== 'function') {
-        throw new Error('Binance account has pending orders: manual reconciliation required');
-      }
+      const unmanaged = new Error('La cuenta de Binance tiene órdenes abiertas no gestionadas ' +
+        'por la app: cancélalas o concílialas antes de operar (manual reconciliation required)');
+      if (typeof this.repo.listRestingTpOrderIds !== 'function') throw unmanaged;
       const mine = await this.repo.listRestingTpOrderIds(strategy.userId);
-      const ids = new Set(mine.map((o) => clean(o.clientOrderId)));
+      const ids = new Set(mine.map((o) => clean(o.clientOrderId)).filter(Boolean));
       const orderIds = new Set(mine.map((o) => clean(o.orderId)).filter(Boolean));
-      // Cerrar otra posición es admisible si las únicas órdenes resting
-      // ajenas al objetivo son TPs propios e identificados.
       if (openOrders.some((o) =>
         !ids.has(clean(o.clientOrderId)) && !orderIds.has(clean(o.orderId)))) {
-        throw new Error('Binance account has pending orders: manual reconciliation required');
+        throw unmanaged;
       }
     }
     // No enviar órdenes si existen posiciones ajenas o fills que todavía

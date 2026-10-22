@@ -278,7 +278,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(f.positions.length,0);
   // The exchange-level open-order guard must block a second BUY before
   // even reaching the one-shot ledger guard.
-  await assert.rejects(f.runEntry(2),/Binance account has pending orders/);
+  await assert.rejects(f.runEntry(2),/manual reconciliation required/);
   assert.equal(f.broker.length,1);
 
   f.setFill(f.broker[0],.01,23.60,8001);
