@@ -326,6 +326,22 @@ test('backtest bot: exige el bot (strategyId), solo dvol/realized y banda ATR so
   await assert.rejects(noAlerts.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }), (err) => err.name === 'ValidationError');
 });
 
+test('backtest bot multi-subyacente: un subyacente del bot a la vez; fuera del bot → ValidationError', async () => {
+  const signals = [{ t: SIG_T, direction: 'bullish', alertId: 5 }];
+  const { service, alertCalls } = botService({ params: { underlyings: ['BTC', 'ETH'] }, signals });
+  const eth = await service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'eth', from: FROM, to: TO });
+  assert.equal(eth.underlying, 'ETH');
+  assert.equal(alertCalls.at(-1).underlying, 'ETH', 'las señales se filtran a ese subyacente');
+  assert.equal((await service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO })).underlying, 'BTC', 'por defecto el primero');
+  await assert.rejects(
+    service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'SOL', from: FROM, to: TO }),
+    (err) => err.name === 'ValidationError' && /no opera SOL/.test(err.message)
+  );
+  // Un bot de un solo subyacente tampoco acepta otro.
+  const single = botService({ signals });
+  await assert.rejects(single.service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'ETH', from: FROM, to: TO }), (err) => err.name === 'ValidationError');
+});
+
 test('listAlertSignals: lee alert_events, descarta neutral y otros subyacentes, ordena por created_at', async () => {
   const db = require('../src/db');
   const alertsRepo = require('../src/repositories/alerts.repository');

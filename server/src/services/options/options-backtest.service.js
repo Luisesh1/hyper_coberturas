@@ -15,6 +15,7 @@
 
 const logger = require('../logger.service');
 const { AppError, ValidationError, NotFoundError } = require('../../errors/app-error');
+const { botUnderlyings } = require('./bot-underlyings');
 const templates = require('./templates');
 const { intrinsic } = require('./options-pricing');
 const { buildSyntheticChain, syntheticExpiries, syntheticLeg } = require('./options-synthetic-chain');
@@ -468,8 +469,9 @@ function createOptionsBacktestService(deps = {}) {
     let params;
     let underlying = input.underlying ? String(input.underlying).toUpperCase() : null;
     let strategyId = null;
+    let strategy = null;
     if (input.strategyId != null) {
-      const strategy = await strategiesRepo.getStrategy(userId, Number(input.strategyId));
+      strategy = await strategiesRepo.getStrategy(userId, Number(input.strategyId));
       if (!strategy) throw new NotFoundError('Estrategia no encontrada');
       strategyId = strategy.id;
       template = strategy.template;
@@ -487,6 +489,14 @@ function createOptionsBacktestService(deps = {}) {
     }
     params = templates.validateParams(template, params);
     if (!underlying) throw new ValidationError('underlying es obligatorio');
+    // Bot multi-subyacente: se backtestea un subyacente del bot a la vez
+    // (por defecto el primero, que es la columna `underlying`).
+    if (signalDriven) {
+      const own = botUnderlyings({ underlying: strategy.underlying, params });
+      if (!own.includes(underlying)) {
+        throw new ValidationError(`El bot no opera ${underlying}. Opciones: ${own.join(', ')}`);
+      }
+    }
 
     const source = input.source || 'realized';
     if (!SOURCES.includes(source)) throw new ValidationError(`Fuente inválida: ${source}`);

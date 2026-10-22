@@ -10,6 +10,10 @@
  * de posiciones abiertas y operaciones del día, (3) apertura por delta en el
  * vencimiento más cercano a `expiryDays` (la cadena la elige el runner).
  *
+ * Varios subyacentes (`params.underlyings`): con señal, `ctx.positions` son
+ * solo las del subyacente de la señal (señal contraria por subyacente) y
+ * `ctx.openCountAll` las de todo el bot (máximo de posiciones compartido).
+ *
  * `takeProfitMode = 'atr_band'` (solo `buy_with`): el precio de venta se fija
  * una vez al llenarse (banda ATR, ver options-atr-band-target) y queda como
  * LIMIT GTC en Binance. No hay otras salidas: ni stop, ni por tiempo, ni por
@@ -22,6 +26,7 @@ const {
   validateParams: validateNumericParams,
 } = require('./helpers');
 const { positionCommittedUsdt } = require('../options-committed-capital');
+const { normalizeUnderlyings } = require('../bot-underlyings');
 
 const id = 'alert_signal';
 
@@ -168,7 +173,9 @@ function validateParams(raw = {}) {
   const maxSpreadPct = optionalPositive(input.maxSpreadPct, 'Spread máximo', 200);
   // El apalancamiento nominal (spot / ask) solo tiene sentido al comprar.
   const minLeverage = structure === 'buy_with' ? optionalPositive(input.minLeverage, 'Apalancamiento mínimo', 1000) : null;
-  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, budgetUsdt, budgetFractions, maxSpreadPct, minLeverage, notify: normalizeNotify(input.notify) };
+  // Varios subyacentes (opcional): sin la clave el bot opera solo su `underlying`.
+  const underlyings = normalizeUnderlyings(input.underlyings);
+  return { alertIds: normalizeAlertIds(input.alertIds), ...(underlyings ? { underlyings } : {}), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, budgetUsdt, budgetFractions, maxSpreadPct, minLeverage, notify: normalizeNotify(input.notify) };
 }
 
 /** Pata que abre una señal según la estructura. */
@@ -389,10 +396,11 @@ function evaluate(ctx) {
   const direction = signal.direction;
   if (!DIRECTIONS.includes(direction)) return [skip('neutral', 'Alerta neutral')];
 
-  // 1. Posición contraria.
+  // 1. Posición contraria (solo las de este subyacente: `ctx.positions`).
   const opposite = positions.filter((p) => positionDirection(p) !== direction);
   const actions = [];
-  let openCount = positions.length;
+  // Bot multi-subyacente: el máximo de posiciones cuenta todo el bot.
+  let openCount = Number.isFinite(ctx.openCountAll) ? ctx.openCountAll : positions.length;
   let released = 0;
   if (opposite.length) {
     if (params.onOpposite === 'ignore') {

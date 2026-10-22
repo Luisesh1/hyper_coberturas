@@ -47,11 +47,17 @@ function orderReservedUsdt(order, spot) {
 /**
  * Total comprometido: posiciones abiertas + órdenes de entrada pendientes.
  * NaN si una venta no puede valorarse (sin spot): el template bloquea.
+ * `spots` (opcional, `{ BTC: 60000, ETH: 3000 }`): spot por subyacente del
+ * símbolo, para bots con varios; lo que no esté usa `spot`.
  */
-function committedUsdt({ positions = [], orders = [], spot }) {
+function committedUsdt({ positions = [], orders = [], spot, spots = null }) {
+  const spotOf = (symbol) => {
+    const underlying = spots ? parseSymbol(symbol)?.underlying : null;
+    return underlying && underlying in spots ? spots[underlying] : spot;
+  };
   let total = 0;
-  for (const p of positions) total += positionCommittedUsdt(p, spot);
-  for (const o of orders) total += orderReservedUsdt(o, spot);
+  for (const p of positions) total += positionCommittedUsdt(p, spotOf(p.symbol));
+  for (const o of orders) total += orderReservedUsdt(o, spotOf(o.symbol));
   return total;
 }
 

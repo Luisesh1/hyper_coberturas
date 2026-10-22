@@ -179,3 +179,23 @@ test('usage.committedUsdt: null si el bot no tiene presupuesto', async () => {
   const detail = await service.get(USER, s.id);
   assert.equal(detail.usage.committedUsdt, null);
 });
+
+test('usage de un bot multi-subyacente: margen y comprometido con el spot del subyacente de cada posición', async () => {
+  const spots = { BTC: 68000, ETH: 3000 };
+  const asked = [];
+  const { repo, service } = setup({
+    market: {
+      async getChain(underlying) { asked.push(underlying); return { spot: spots[underlying] }; },
+      async getQuote() { return { delta: 0.3 }; },
+    },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'm', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [1], underlyings: ['BTC', 'ETH'], structure: 'sell_against', budgetUsdt: 10000 }, mode: 'shadow' });
+  // BTC: 0,01 × (100 + máx(0,15·68000 − 2000, 6800)) = 83. ETH: 0,1 × (10 + máx(0,15·3000 − 200, 300)) = 31.
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'SELL', quantity: 0.01, entryPrice: 100, openedAt: NOW - 3600e3 });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-3200-C', side: 'SELL', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
+
+  const detail = await service.get(USER, s.id);
+  assert.equal(detail.usage.marginUsedUsdt, 114);
+  assert.equal(detail.usage.committedUsdt, 114);
+  assert.deepEqual([...new Set(asked)].sort(), ['BTC', 'ETH']);
+});

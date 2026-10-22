@@ -5,7 +5,8 @@
  * - Se suscribe al emisor de disparos de alertas (`alert-events.js`, se carga
  *   con `require` perezoso en `start()` o se inyecta).
  * - Por cada disparo corre `runner.runForSignal` en los bots del usuario que
- *   escuchan esa alerta y operan el subyacente del activo, y registra la
+ *   escuchan esa alerta y operan el subyacente del activo (un bot puede operar
+ *   varios: `params.underlyings`, ver bot-underlyings.js), y registra la
  *   decisión en `options_auto_signals` (un disparo nunca se procesa dos veces).
  * - Además expone la gestión de bots para `/options/auto-bots`.
  *
@@ -16,6 +17,7 @@ const logger = require('../logger.service');
 const { AppError, ValidationError, NotFoundError } = require('../../errors/app-error');
 const defaultRepo = require('../../repositories/options-strategies.repository');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
+const { botUnderlyings, normalizeUnderlyings } = require('./bot-underlyings');
 
 const TEMPLATE_ID = 'alert_signal';
 const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
@@ -202,7 +204,7 @@ function createOptionsAutoTradingService(deps = {}) {
     if (!underlying) return [];
 
     const bots = (await repo.listActiveAlertBots(userId)).filter((b) => (
-      b.underlying === underlying
+      botUnderlyings(b).includes(underlying)
       && Array.isArray(b.params?.alertIds)
       && b.params.alertIds.map(Number).includes(alertId)
     ));
@@ -260,8 +262,22 @@ function createOptionsAutoTradingService(deps = {}) {
     return underlying;
   }
 
-  /** Las alertas deben ser del usuario, no neutrales y del mismo subyacente. */
-  async function validateAlertIds(userId, alertIds, underlying) {
+  /**
+   * Subyacentes de un alta o edición: `underlyings` (lista) o, si no viene,
+   * `underlying`. Devuelve null si no viene ninguno.
+   */
+  function requestedUnderlyings(body) {
+    const raw = body.underlyings !== undefined ? body.underlyings : body.params?.underlyings;
+    if (raw != null) return normalizeUnderlyings(raw);
+    if (body.underlying !== undefined) return [normalizeUnderlying(body.underlying)];
+    return null;
+  }
+
+  /**
+   * Las alertas deben ser del usuario, no neutrales y vigilar alguno de los
+   * subyacentes; y cada subyacente debe estar cubierto por alguna alerta.
+   */
+  async function validateAlertIds(userId, alertIds, underlyings) {
     if (!Array.isArray(alertIds) || !alertIds.length) throw new ValidationError('Elige al menos una alerta');
     const ids = [...new Set(alertIds.map(Number))];
     if (ids.some((n) => !Number.isInteger(n) || n <= 0)) throw new ValidationError('Ids de alerta inválidos');
@@ -272,8 +288,13 @@ function createOptionsAutoTradingService(deps = {}) {
       if (alertDirection(alert) === 'neutral') {
         throw new ValidationError(`La alerta «${alert.name}» es neutral: dale dirección alcista o bajista para usarla en un bot`);
       }
-      if (!alertMatchesUnderlying(alert, underlying)) {
-        throw new ValidationError(`La alerta «${alert.name}» no vigila ${underlying}`);
+      if (!underlyings.some((u) => alertMatchesUnderlying(alert, u))) {
+        throw new ValidationError(`La alerta «${alert.name}» no vigila ${underlyings.join(' ni ')}`);
+      }
+    }
+    for (const u of underlyings) {
+      if (!ids.some((id) => alertMatchesUnderlying(byId.get(id), u))) {
+        throw new ValidationError(`Ninguna alerta vinculada cubre ${u}`);
       }
     }
     return ids;
@@ -288,6 +309,7 @@ function createOptionsAutoTradingService(deps = {}) {
     const byId = new Map(alertList.map((a) => [Number(a.id), a]));
     return bots.map((bot) => ({
       ...bot,
+      underlyings: botUnderlyings(bot),
       alerts: (bot.params?.alertIds || [])
         .map((id) => byId.get(Number(id)))
         .filter(Boolean)
@@ -301,27 +323,46 @@ function createOptionsAutoTradingService(deps = {}) {
     return (await listBots(userId)).find((b) => b.id === id) || null;
   }
 
-  async function eligibleAlerts(userId, underlyingRaw) {
-    const underlying = normalizeUnderlying(underlyingRaw);
+  /**
+   * Alertas no neutrales que vigilan alguno de los subyacentes (lista o
+   * texto separado por comas), con los que cubre cada una.
+   */
+  async function eligibleAlerts(userId, underlyingsRaw) {
+    const raw = Array.isArray(underlyingsRaw) ? underlyingsRaw : String(underlyingsRaw ?? '').split(',').map((u) => u.trim()).filter(Boolean);
+    if (!raw.length) throw new ValidationError(`Indica el subyacente. Opciones: ${UNDERLYINGS.join(', ')}`);
+    const underlyings = normalizeUnderlyings(raw);
     return (await userAlerts(userId))
-      .filter((a) => alertDirection(a) !== 'neutral' && alertMatchesUnderlying(a, underlying))
-      .map((a) => ({
+      .filter((a) => alertDirection(a) !== 'neutral')
+      .map((a) => ({ alert: a, covered: underlyings.filter((u) => alertMatchesUnderlying(a, u)) }))
+      .filter(({ covered }) => covered.length)
+      .map(({ alert: a, covered }) => ({
         id: Number(a.id),
         name: a.name,
         direction: alertDirection(a),
         assetList: a.assetList || [],
         thresholdPercent: a.thresholdPercent ?? null,
+        coveredUnderlyings: covered,
       }));
   }
 
+  /** `underlyings` en params solo si venía como lista (un bot de siempre no la lleva). */
+  function withUnderlyings(params, underlyings, explicit) {
+    const out = { ...params };
+    if (explicit) out.underlyings = underlyings;
+    else delete out.underlyings;
+    return out;
+  }
+
   async function createBot(userId, body = {}) {
-    const underlying = normalizeUnderlying(body.underlying);
-    const alertIds = await validateAlertIds(userId, body.alertIds, underlying);
+    const underlyings = requestedUnderlyings(body);
+    if (!underlyings) normalizeUnderlying(body.underlying);
+    const explicit = body.underlyings != null || body.params?.underlyings != null;
+    const alertIds = await validateAlertIds(userId, body.alertIds, underlyings);
     const created = await strategies.create(userId, {
       name: body.name,
       template: TEMPLATE_ID,
-      underlying,
-      params: { ...(body.params || {}), alertIds },
+      underlying: underlyings[0],
+      params: withUnderlyings({ ...(body.params || {}), alertIds }, underlyings, explicit),
       limits: body.limits,
       mode: 'shadow',
     }, { alertBots: true });
@@ -349,13 +390,22 @@ function createOptionsAutoTradingService(deps = {}) {
     if (body.name !== undefined) patch.name = body.name;
     if (body.limits !== undefined) patch.limits = body.limits;
     const params = body.params !== undefined ? { ...(body.params || {}) } : null;
-    const rawIds = body.alertIds !== undefined ? body.alertIds : params?.alertIds;
+    let underlyings = requestedUnderlyings({ underlyings: body.underlyings, params: body.params || {} });
+    if (underlyings) {
+      // La columna `underlying` vale el primero; si el actual sigue en la
+      // lista va primero para no cambiarla (con posiciones abiertas, 409).
+      if (underlyings.includes(bot.underlying)) underlyings = [bot.underlying, ...underlyings.filter((u) => u !== bot.underlying)];
+      patch.underlying = underlyings[0];
+    }
+    const effective = underlyings || botUnderlyings(bot);
+    const rawIds = body.alertIds !== undefined ? body.alertIds : (params?.alertIds ?? (underlyings ? bot.params?.alertIds : undefined));
     if (rawIds !== undefined) {
-      const alertIds = await validateAlertIds(userId, rawIds, bot.underlying);
+      const alertIds = await validateAlertIds(userId, rawIds, effective);
       patch.params = { ...(params || {}), alertIds };
     } else if (params) {
       patch.params = params;
     }
+    if (underlyings) patch.params = { ...(patch.params || {}), underlyings };
     const updated = await strategies.update(userId, id, patch, { alertBots: true });
     return (await botSummary(userId, id)) || updated;
   }
@@ -435,11 +485,17 @@ function createOptionsAutoTradingService(deps = {}) {
    * Simula una señal en el libro sombra (aunque el bot esté en Real): no hay
    * evento de alerta, así que no hay dedupe; se limita a 1 cada 10 s por bot.
    */
-  async function simulateSignal(userId, id, { direction } = {}) {
+  async function simulateSignal(userId, id, { direction, underlying: underlyingRaw } = {}) {
     if (!['bullish', 'bearish'].includes(direction)) {
       throw new ValidationError('direction debe ser bullish o bearish');
     }
     const bot = await requireBot(userId, id);
+    // Bot multi-subyacente: se simula en uno (por defecto el primero).
+    const own = botUnderlyings(bot);
+    const underlying = underlyingRaw == null || underlyingRaw === '' ? own[0] : String(underlyingRaw).toUpperCase();
+    if (!own.includes(underlying)) {
+      throw new ValidationError(`El bot no opera ${underlying}. Opciones: ${own.join(', ')}`);
+    }
     if (bot.mode !== 'shadow' && bot.mode !== 'live') {
       throw new AppError('Pasa el bot a Sombra para simular', { status: 409, code: 'BOT_PAUSED' });
     }
@@ -457,7 +513,7 @@ function createOptionsAutoTradingService(deps = {}) {
       alertEventId: null,
       alertName: 'Simulación',
       direction,
-      asset: bot.underlying,
+      asset: underlying,
       score: null,
       decision: 'pending',
       detail: 'Procesando…',
@@ -470,8 +526,8 @@ function createOptionsAutoTradingService(deps = {}) {
         direction,
         alertId: null,
         alertName: 'Simulación',
-        asset: bot.underlying,
-        underlying: bot.underlying,
+        asset: underlying,
+        underlying,
         score: null,
         eventId: null,
         triggeredAt: at,

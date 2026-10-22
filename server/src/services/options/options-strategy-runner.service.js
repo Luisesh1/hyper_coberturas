@@ -33,6 +33,7 @@ const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
 const { ensureAtrBandTarget } = require('./options-atr-band-target');
 const { estimateMargin, committedUsdt } = require('./options-committed-capital');
+const { botUnderlyings } = require('./bot-underlyings');
 
 // Cierres por toma de ganancia: con un TP LIMIT residente no se cancela ni
 // se compite con él; deben alcanzar su objetivo con la cotización fresca.
@@ -80,6 +81,11 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+/** Subyacente de una posición según su símbolo (o `fallback`). */
+function positionUnderlying(position, fallback) {
+  return parseSymbol(position.symbol)?.underlying || String(fallback || '').toUpperCase();
 }
 
 function utcDayStart(ms) {
@@ -240,22 +246,32 @@ class OptionsStrategyRunner {
       const template = templates.getTemplate(strategy.template);
       const params = templates.validateParams(strategy.template, strategy.params);
       if (params.onOpposite !== 'reverse') return { status: 'mode_changed' };
-      const positions = await this.repo.listOpenPositions(strategy.id, 'live');
-      if (positions.length) return { status: 'positions_still_open' };
-      const { base, chain } = await this.targetChain(strategy, params, tickCtx);
+      let underlying;
+      try {
+        underlying = this.signalUnderlying(strategy, template, signal);
+      } catch {
+        return { status: 'underlying_removed' };
+      }
+      // Solo bloquean las posiciones del subyacente que gira; las de otros
+      // subyacentes del bot cuentan para el máximo y el presupuesto.
+      const all = await this.repo.listOpenPositions(strategy.id, 'live');
+      if (all.some((p) => positionUnderlying(p, strategy.underlying) === underlying)) {
+        return { status: 'positions_still_open' };
+      }
+      const { base, chain } = await this.targetChain(strategy, params, tickCtx, underlying);
       const spot = num(chain?.spot) ?? num(base?.spot);
       const actions = template.evaluate({
-        now: tickCtx.now, signal, spot, chain, positions: [],
+        now: tickCtx.now, signal, spot, chain, positions: [], openCountAll: all.length,
         params, mode: 'live',
         lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
         tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
           utcDayStart(tickCtx.now)),
-        committedUsdt: await this.committedFor(strategy, 'live', params, [], spot),
+        committedUsdt: await this.committedFor(strategy, 'live', params, all, { spot, underlying, tickCtx }),
       });
       const open = actions.find((a) => a.type === 'open');
       if (!open) return { status: 'no_valid_entry' };
       return await this.executeLive(strategy, open, {
-        ...tickCtx, spot, params, positions: [], mode: 'live',
+        ...tickCtx, spot, underlying, params, positions: [], mode: 'live',
       }) || { status: 'not_submitted' };
     });
   }
@@ -275,8 +291,8 @@ class OptionsStrategyRunner {
     return num(chain?.spot);
   }
 
-  async targetChain(strategy, params, tickCtx) {
-    const base = await this.chainFor(strategy.underlying, null, tickCtx);
+  async targetChain(strategy, params, tickCtx, underlying = strategy.underlying) {
+    const base = await this.chainFor(underlying, null, tickCtx);
     // El rango pertenece a la alerta disparada: no se amplía para forzar entradas.
     // Solo se aplica a bots por señales; sin rango la selección sigue igual.
     const minDays = tickCtx.signal?.optionExpiryMinDays;
@@ -286,7 +302,7 @@ class OptionsStrategyRunner {
       : base?.expiries;
     const pick = templates.pickExpiry(expiries, params.expiryDays);
     if (!pick) return { base, chain: null };
-    const chain = pick.code === base.expiry ? base : await this.chainFor(strategy.underlying, pick.code, tickCtx);
+    const chain = pick.code === base.expiry ? base : await this.chainFor(underlying, pick.code, tickCtx);
     return { base, chain };
   }
 
@@ -358,24 +374,78 @@ class OptionsStrategyRunner {
 
   // ---------- evaluación ----------
 
-  /** Template, parámetros, cadena y spot de una estrategia para esta pasada. */
+  /**
+   * Subyacente con el que se evalúa: el de la señal en un bot por alertas
+   * (multi-subyacente); si no, el de la estrategia.
+   */
+  signalUnderlying(strategy, template, signal) {
+    const fromSignal = template.signalDriven && signal?.underlying ? String(signal.underlying).toUpperCase() : null;
+    if (fromSignal && !botUnderlyings(strategy).includes(fromSignal)) {
+      throw new Error(`El bot no opera ${fromSignal}`);
+    }
+    return fromSignal || String(strategy.underlying).toUpperCase();
+  }
+
+  /** Template, parámetros, subyacente, cadena y spot de una estrategia para esta pasada. */
   async strategyMarket(strategy, tickCtx) {
     const template = templates.getTemplate(strategy.template);
     const params = templates.validateParams(strategy.template, strategy.params);
-    const { base, chain } = await this.targetChain(strategy, params, tickCtx);
+    const underlying = this.signalUnderlying(strategy, template, tickCtx.signal);
+    const { base, chain } = await this.targetChain(strategy, params, tickCtx, underlying);
     const spot = num(chain?.spot) ?? num(base?.spot);
-    return { template, params, chain, spot };
+    return { template, params, chain, spot, underlying };
+  }
+
+  /**
+   * Agrupa posiciones abiertas por subyacente (de su símbolo) con la cadena y
+   * el spot de cada uno: `[{ underlying, chain, spot, positions }]`. El del
+   * mercado de la pasada reutiliza su cadena. Solo los bots por alertas pueden
+   * tener varios; el resto de estrategias forman un único grupo, como siempre.
+   */
+  async positionGroups(strategy, market, rows, tickCtx) {
+    const { template, params, chain, spot, underlying } = market;
+    if (template.id !== 'alert_signal') return [{ underlying, chain, spot, positions: rows }];
+    const byUnderlying = new Map();
+    for (const row of rows) {
+      const key = positionUnderlying(row, underlying);
+      if (!byUnderlying.has(key)) byUnderlying.set(key, []);
+      byUnderlying.get(key).push(row);
+    }
+    const groups = [];
+    for (const [key, positions] of byUnderlying) {
+      if (key === underlying) {
+        groups.push({ underlying: key, chain, spot, positions });
+        continue;
+      }
+      // Sin el rango de vencimientos de la señal: es otro subyacente.
+      const other = await this.targetChain(strategy, params, { chains: tickCtx.chains }, key);
+      groups.push({ underlying: key, chain: other.chain, spot: num(other.chain?.spot) ?? num(other.base?.spot), positions });
+    }
+    return groups;
   }
 
   /**
    * Capital comprometido de un modo para el presupuesto total del bot:
    * posiciones abiertas y, solo en Real, órdenes de entrada no finales.
+   * Cada pata se valora con el spot de su subyacente (`spot` es el de
+   * `underlying`; los demás se piden a la caché de la pasada).
    * undefined si el bot no tiene presupuesto (no hace falta consultarlo).
    */
-  async committedFor(strategy, mode, params, positions, spot) {
+  async committedFor(strategy, mode, params, positions, { spot, underlying = strategy.underlying, tickCtx } = {}) {
     if (params?.budgetUsdt == null) return undefined;
     const orders = mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : [];
-    return committedUsdt({ positions, orders, spot });
+    const spots = { [String(underlying).toUpperCase()]: spot };
+    for (const item of [...positions, ...orders]) {
+      const key = parseSymbol(item.symbol)?.underlying;
+      if (!key || key in spots) continue;
+      try {
+        spots[key] = await this.spotFor(key, tickCtx || { chains: new Map() });
+      } catch (err) {
+        this.logger.warn('options_committed_spot_failed', { underlying: key, error: err.message });
+        spots[key] = null;
+      }
+    }
+    return committedUsdt({ positions, orders, spot, spots });
   }
 
   /**
@@ -383,18 +453,29 @@ class OptionsStrategyRunner {
    * cotización (y objetivos de volatilidad en bots por alertas), spot y
    * parámetros. Lo comparten la evaluación del template y el cierre manual.
    */
-  async modeContext(strategy, mode, tickCtx, { template, params, chain, spot }, open = null) {
+  async modeContext(strategy, mode, tickCtx, market, open = null) {
+    const { template, params, spot, underlying } = market;
     const rows = open || await this.repo.listOpenPositions(strategy.id, mode);
-    const enriched = await this.enrichPositions(rows, chain);
-    let positions = template.id === 'alert_signal'
-      ? await this.attachVolatilityTargets(enriched, params, spot, tickCtx.now)
-      : enriched;
-    // Sombra: reintento del objetivo ATR que no pudo fijarse al abrir. En
-    // real lo fija el ejecutor al armar el TP residente en Binance.
-    if (template.id === 'alert_signal' && mode === 'shadow' && params.takeProfitMode === 'atr_band') {
-      positions = await Promise.all(positions.map((p) => this.ensureAtrBandTarget(p, params, spot, tickCtx.now)));
+    const enrichedByRow = new Map();
+    // Cada subyacente con su cadena y su spot (objetivos ATR/volatilidad incluidos).
+    for (const group of await this.positionGroups(strategy, market, rows, tickCtx)) {
+      const enriched = await this.enrichPositions(group.positions, group.chain);
+      let positions = template.id === 'alert_signal'
+        ? await this.attachVolatilityTargets(enriched, params, group.spot, tickCtx.now)
+        : enriched;
+      // Sombra: reintento del objetivo ATR que no pudo fijarse al abrir. En
+      // real lo fija el ejecutor al armar el TP residente en Binance.
+      if (template.id === 'alert_signal' && mode === 'shadow' && params.takeProfitMode === 'atr_band') {
+        positions = await Promise.all(positions.map((p) => this.ensureAtrBandTarget(p, params, group.spot, tickCtx.now)));
+      }
+      group.positions.forEach((row, i) => enrichedByRow.set(row, positions[i]));
     }
-    return { ...tickCtx, spot, positions, params, mode };
+    const allPositions = rows.map((row) => enrichedByRow.get(row));
+    // Con señal, un bot solo ve (señal contraria) las posiciones de su subyacente.
+    const positions = tickCtx.signal && template.id === 'alert_signal'
+      ? allPositions.filter((p) => positionUnderlying(p, underlying) === underlying)
+      : allPositions;
+    return { ...tickCtx, spot, underlying, positions, allPositions, params, mode };
   }
 
   async runStrategy(strategy, tickCtx, { shadowOnly = false } = {}) {
@@ -405,7 +486,8 @@ class OptionsStrategyRunner {
 
     for (const mode of modes) {
       const ctx = await this.modeContext(strategy, mode, tickCtx, market);
-      const { positions } = ctx;
+      const { positions, allPositions } = ctx;
+      const botSignal = tickCtx.signal && template.id === 'alert_signal';
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
       // Solo los bots por alertas limitan operaciones por día.
       const tradesToday = template.signalDriven
@@ -413,17 +495,19 @@ class OptionsStrategyRunner {
         : undefined;
       const actions = template.evaluate({
         now: tickCtx.now,
-        underlying: strategy.underlying,
+        underlying: market.underlying,
         spot,
         chain,
         positions,
+        // Límites compartidos por todos los subyacentes del bot.
+        ...(botSignal ? { openCountAll: allPositions.length } : {}),
         params,
         lastOpenedAt,
         mode,
         signal: tickCtx.signal || null,
         tradesToday,
         committedUsdt: tickCtx.signal
-          ? await this.committedFor(strategy, mode, params, positions, spot)
+          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx })
           : undefined,
       });
       byMode[mode] = actions;
@@ -613,7 +697,7 @@ class OptionsStrategyRunner {
     for (const p of userOpen) {
       const meta = parseSymbol(p.symbol);
       if (!meta) continue;
-      const spot = meta.underlying === String(strategy.underlying).toUpperCase() ? ctx.spot : await this.spotFor(meta.underlying, ctx);
+      const spot = meta.underlying === String(ctx.underlying || strategy.underlying).toUpperCase() ? ctx.spot : await this.spotFor(meta.underlying, ctx);
       // Lo comprado ya está pagado: solo las ventas consumen margen.
       const margin = p.side === 'SELL' ? estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot }) : 0;
       userMargin += margin;
@@ -832,7 +916,8 @@ class OptionsStrategyRunner {
 
     const groups = new Map();
     for (const p of expired) {
-      const key = `${p.strategyId}:${p.mode}`;
+      // Un bot puede tener posiciones de varios subyacentes: cada uno con su índice.
+      const key = `${p.strategyId}:${p.mode}:${p.meta.underlying}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(p);
     }

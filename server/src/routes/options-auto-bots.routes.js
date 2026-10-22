@@ -19,7 +19,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/eligible-alerts', asyncHandler(async (req, res) => {
-  res.json({ success: true, data: await service().eligibleAlerts(req.user.userId, req.query.underlying) });
+  res.json({ success: true, data: await service().eligibleAlerts(req.user.userId, req.query.underlyings ?? req.query.underlying) });
 }));
 
 router.post('/', validate(createAutoBotSchema), asyncHandler(async (req, res) => {

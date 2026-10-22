@@ -134,8 +134,8 @@ test('GET /options/auto-bots/eligible-alerts filtra no neutrales del subyacente'
       const res = await call('GET', '/auto-bots/eligible-alerts?underlying=BTC');
       assert.equal(res.status, 200);
       assert.deepEqual(res.json.data, [
-        { id: 1, name: 'RSI sobreventa BTC', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70 },
-        { id: 2, name: 'Cruce bajista BTC/ETH', direction: 'bearish', assetList: ['ETHUSDT', 'BTCUSDT'], thresholdPercent: 60 },
+        { id: 1, name: 'RSI sobreventa BTC', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70, coveredUnderlyings: ['BTC'] },
+        { id: 2, name: 'Cruce bajista BTC/ETH', direction: 'bearish', assetList: ['ETHUSDT', 'BTCUSDT'], thresholdPercent: 60, coveredUnderlyings: ['BTC'] },
       ]);
       assert.deepEqual((await call('GET', '/auto-bots/eligible-alerts?underlying=sol')).json.data.map((a) => a.id), [5]);
       assert.equal((await call('GET', '/auto-bots/eligible-alerts')).status, 400);
@@ -440,6 +440,65 @@ test('POST /options/auto-bots/:id/clone copia en sombra aunque el original sea R
       assert.equal((await call('POST', '/auto-bots/9999/clone')).status, 404);
       const bad = await call('POST', '/auto-bots', { ...validBot, params: { notify: { trades: 'x' } } });
       assert.equal(bad.status, 400);
+    });
+  } finally { restore(); }
+});
+
+test('bots multi-subyacente: alta, cobertura por alertas, eligible-alerts con lista y edición', async () => {
+  const { repo, restore } = useFakeServices();
+  try {
+    await withServer(async (call) => {
+      // ETH no lo cubre la alerta 1 (solo BTC).
+      const uncovered = await call('POST', '/auto-bots', { ...validBot, underlying: undefined, underlyings: ['BTC', 'ETH'], alertIds: [1] });
+      assert.equal(uncovered.status, 400);
+      assert.match(uncovered.json.error?.message || JSON.stringify(uncovered.json), /Ninguna alerta vinculada cubre ETH/);
+      // Una alerta que no vigila ninguno de los subyacentes.
+      assert.match(JSON.stringify((await call('POST', '/auto-bots', { ...validBot, underlyings: ['BTC', 'ETH'], alertIds: [2, 5] })).json), /no vigila BTC ni ETH/);
+      for (const bad of [['BTC', 'btc'], ['BTC', 'LUNA'], [], ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'BTC']]) {
+        assert.equal((await call('POST', '/auto-bots', { ...validBot, underlyings: bad })).status, 400, JSON.stringify(bad));
+      }
+      assert.equal((await call('POST', '/auto-bots', { name: 'x', alertIds: [1] })).status, 400, 'sin subyacente');
+
+      const created = await call('POST', '/auto-bots', { name: 'Multi', underlyings: ['btc', 'ETH'], alertIds: [1, 2] });
+      assert.equal(created.status, 201);
+      const bot = created.json.data;
+      assert.equal(bot.underlying, 'BTC');
+      assert.deepEqual(bot.params.underlyings, ['BTC', 'ETH']);
+      assert.deepEqual(bot.underlyings, ['BTC', 'ETH']);
+
+      // Un bot de un solo subyacente no guarda la lista.
+      const single = (await call('POST', '/auto-bots', { ...validBot, alertIds: [1] })).json.data;
+      assert.equal(single.params.underlyings, undefined);
+      assert.deepEqual(single.underlyings, ['BTC']);
+
+      const eligible = await call('GET', '/auto-bots/eligible-alerts?underlyings=BTC,ETH');
+      assert.equal(eligible.status, 200);
+      assert.deepEqual(eligible.json.data.map((a) => [a.id, a.coveredUnderlyings]), [[1, ['BTC']], [2, ['BTC', 'ETH']]]);
+      assert.equal((await call('GET', '/auto-bots/eligible-alerts?underlyings=BTC,LUNA')).status, 400);
+
+      // Edición: añadir ETH con solo la alerta 1 → 400; con 1 y 2 → ok.
+      assert.equal((await call('PUT', `/auto-bots/${single.id}`, { underlyings: ['BTC', 'ETH'] })).status, 400);
+      const edited = await call('PUT', `/auto-bots/${single.id}`, { underlyings: ['ETH', 'BTC'], alertIds: [1, 2] });
+      assert.equal(edited.status, 200);
+      assert.equal(edited.json.data.underlying, 'BTC', 'el subyacente actual sigue primero');
+      assert.deepEqual(edited.json.data.params.underlyings, ['BTC', 'ETH']);
+      // Por /options/strategies no se cambian los subyacentes de un bot.
+      assert.equal((await call('PUT', `/strategies/${single.id}`, { params: { underlyings: ['ETH'] } })).status, 400);
+      assert.equal(repo.strategies.length, 2);
+    });
+  } finally { restore(); }
+});
+
+test('POST /options/auto-bots/:id/simulate acepta un subyacente del bot', async () => {
+  const seen = [];
+  const runner = { async runForSignal(_s, signal) { seen.push(signal.underlying); return { produced: [] }; } };
+  const { restore } = useFakeServices({ runner });
+  try {
+    await withServer(async (call) => {
+      const bot = (await call('POST', '/auto-bots', { name: 'Multi', underlyings: ['BTC', 'ETH'], alertIds: [1, 2] })).json.data;
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/simulate`, { direction: 'bullish', underlying: 'SOL' })).status, 400);
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/simulate`, { direction: 'bullish', underlying: 'ETH' })).status, 200);
+      assert.deepEqual(seen, ['ETH']);
     });
   } finally { restore(); }
 });

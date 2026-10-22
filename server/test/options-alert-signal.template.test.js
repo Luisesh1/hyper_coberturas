@@ -380,3 +380,38 @@ test('alert_signal: filtros null o ausentes no cambian la selección; minLeverag
   assert.throws(() => params({ maxSpreadPct: -1 }), /Spread máximo/);
   assert.throws(() => params({ minLeverage: 0.0 + 'x' }), /Apalancamiento/);
 });
+
+test('alert_signal: underlyings opcional — 1 a 6, de la lista, únicos, en mayúsculas', () => {
+  assert.equal(params().underlyings, undefined, 'sin underlyings el bot opera solo su subyacente');
+  assert.deepEqual(params({ underlyings: ['btc', 'Eth'] }).underlyings, ['BTC', 'ETH']);
+  assert.throws(() => params({ underlyings: [] }), /al menos uno/);
+  assert.throws(() => params({ underlyings: ['BTC', 'PEPE'] }), /no soportado: PEPE/);
+  assert.throws(() => params({ underlyings: ['BTC', 'btc'] }), /repitas/);
+  assert.throws(() => params({ underlyings: 'BTC' }), /lista/);
+  assert.equal(params({ underlyings: ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE'] }).underlyings.length, 6);
+});
+
+test('botUnderlyings: params.underlyings si no está vacío; si no, [strategy.underlying]', () => {
+  const { botUnderlyings } = require('../src/services/options/bot-underlyings');
+  assert.deepEqual(botUnderlyings({ underlying: 'BTC', params: { underlyings: ['BTC', 'ETH'] } }), ['BTC', 'ETH']);
+  assert.deepEqual(botUnderlyings({ underlying: 'BTC', params: { underlyings: [] } }), ['BTC']);
+  assert.deepEqual(botUnderlyings({ underlying: 'ETH', params: {} }), ['ETH']);
+});
+
+test('alert_signal: maxOpenPositions cuenta ctx.openCountAll (todo el bot) cuando existe', () => {
+  const p = params({ maxOpenPositions: 1 });
+  // Sin posiciones de este subyacente, pero una de otro: tope alcanzado.
+  const [capped] = alertSignal.evaluate({ now: NOW, spot: SPOT, chain: chainFor(p.expiryDays), positions: [], openCountAll: 1, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  assert.equal(capped.reason, 'max_open_positions');
+  // Sin openCountAll: igual que antes (cuenta ctx.positions).
+  const [open] = alertSignal.evaluate({ now: NOW, spot: SPOT, chain: chainFor(p.expiryDays), positions: [], params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  assert.equal(open.type, 'open');
+});
+
+test('alert_signal: con openCountAll el giro descuenta las contrarias que cierra', () => {
+  const p = params({ maxOpenPositions: 2 });
+  const put = position({ side: 'BUY', type: 'P' });
+  // 2 abiertas en el bot (1 put de este subyacente + 1 de otro): cierra la put y abre.
+  const actions = alertSignal.evaluate({ now: NOW, spot: SPOT, chain: chainFor(p.expiryDays), positions: [put], openCountAll: 2, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  assert.deepEqual(actions.map((a) => a.type), ['close', 'open']);
+});

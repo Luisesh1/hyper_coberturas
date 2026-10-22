@@ -49,10 +49,12 @@ const createBacktestSchema = z.object({
 
 // Bots por alertas: los rangos de params los valida el template `alert_signal`.
 const alertIds = z.array(z.number().int().positive()).min(1).max(50);
+// Varios subyacentes: el servicio valida la lista (1–6, únicos, soportados).
+const underlyings = z.array(underlying).min(1).max(6);
 const autoBotParams = z.record(
   z.string(),
   z.union([
-    z.number(), z.string(), z.null(), z.array(z.number().int().positive()),
+    z.number(), z.string(), z.null(), z.array(z.number().int().positive()), underlyings,
     // `notify`: el template valida que sean dos booleanos.
     z.record(z.string(), z.boolean()),
   ])
@@ -60,14 +62,16 @@ const autoBotParams = z.record(
 
 const createAutoBotSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  underlying,
+  underlying: underlying.optional(),
+  underlyings: underlyings.optional(),
   alertIds,
   params: autoBotParams,
   limits,
-});
+}).refine((v) => v.underlying != null || v.underlyings != null, { message: 'Indica el subyacente', path: ['underlying'] });
 
 const updateAutoBotSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  underlyings: underlyings.optional(),
   alertIds: alertIds.optional(),
   params: autoBotParams,
   limits,
@@ -81,6 +85,8 @@ const closeAutoBotSchema = z.object({
 
 const simulateAutoBotSchema = z.object({
   direction: z.enum(['bullish', 'bearish']),
+  // Bot multi-subyacente: en cuál simular (por defecto el primero).
+  underlying: underlying.optional(),
 });
 
 module.exports = {

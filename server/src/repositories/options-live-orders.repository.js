@@ -4,6 +4,20 @@
  */
 const dbDefault = require('../db');
 const { grossPnl, signedPremium } = require('../services/options/options-utils');
+const { botUnderlyings } = require('../services/options/bot-underlyings');
+
+/**
+ * El símbolo pertenece a un subyacente de la estrategia (fila de BD): la
+ * columna `underlying` o, en un bot multi-subyacente, `params.underlyings`.
+ */
+function symbolOfStrategy(symbol, row) {
+  let params = row?.params;
+  if (typeof params === 'string') {
+    try { params = JSON.parse(params); } catch { params = null; }
+  }
+  return botUnderlyings({ underlying: row?.underlying, params })
+    .some((u) => String(symbol).startsWith(`${u}-`));
+}
 
 const map = (r) => r && ({
   id: Number(r.id), batchId: Number(r.batch_id), strategyId: Number(r.strategy_id),
@@ -66,7 +80,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       // Locks entre réplicas: un solo lote sin conciliar por usuario,
       // incluso cuando pertenece a distintos bots.
       const { rows: [current] } = await tx.query(
-        'SELECT id,user_id,mode,underlying FROM options_strategies WHERE id=$1 FOR UPDATE',
+        'SELECT id,user_id,mode,underlying,params FROM options_strategies WHERE id=$1 FOR UPDATE',
         [strategy.id]
       );
       if (!current || Number(current.user_id) !== Number(strategy.userId) || current.mode !== 'live') {
@@ -201,7 +215,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       const orders = [];
       for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
-        if (!String(leg.symbol).startsWith(current.underlying + '-')) {
+        if (!symbolOfStrategy(leg.symbol, current)) {
           throw new Error('Option symbol does not match strategy underlying');
         }
         const clientId = `HC${BigInt(batch.id).toString(36)}L${i.toString(36)}`;
@@ -281,6 +295,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       const savedSignal = {
         eventId,
         direction: signal.direction,
+        // Bot multi-subyacente: la reentrada abre en el subyacente que giró.
+        underlying: signal.underlying ?? null,
         optionExpiryMinDays: signal.optionExpiryMinDays ?? null,
         optionExpiryMaxDays: signal.optionExpiryMaxDays ?? null,
       };
@@ -358,7 +374,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   async function beginStandingTp({ position, price, deadlineAt }) {
     return db.transaction(async (tx) => {
       const { rows: [strategy] } = await tx.query(
-        "SELECT id,user_id,mode,template,underlying FROM options_strategies WHERE id=$1 FOR UPDATE",
+        "SELECT id,user_id,mode,template,underlying,params FROM options_strategies WHERE id=$1 FOR UPDATE",
         [position.strategyId]
       );
       if (!strategy || Number(strategy.user_id) !== position.userId ||
@@ -373,7 +389,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           Number(held.strategy_id) !== position.strategyId ||
           held.symbol !== position.symbol || held.side !== position.side ||
           Math.abs(Number(held.quantity) - position.quantity) > 1e-8 ||
-          !String(position.symbol).startsWith(String(strategy.underlying) + '-')) return null;
+          !symbolOfStrategy(position.symbol, strategy)) return null;
       if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(deadlineAt) || deadlineAt <= now()) {
         throw new Error('Invalid standing TP limit price or expiration');
       }

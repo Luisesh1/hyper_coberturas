@@ -184,3 +184,32 @@ test('hasPendingClose detecta cierres reales no finales o salidas diferidas en p
   assert.equal(await repo.hasPendingClose({ userId: 7, strategyId: 5 }), false);
   assert.deepEqual(calls[1].params, [7, 5, null]);
 });
+
+test('lote: el símbolo debe ser de un subyacente del bot (varios con params.underlyings)', async () => {
+  const ETH = 'ETH-261030-4000-C';
+  const run = async (row) => {
+    const tx = {
+      async query(sql) {
+        if (sql.includes('FROM options_strategies')) return { rows: [row] };
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql.includes('INSERT INTO options_live_batches')) return { rows: [{ id: '1' }] };
+        if (sql.includes('INSERT INTO options_live_orders')) return { rows: [{
+          id: '2', batch_id: '1', strategy_id: '5', user_id: '7', action: 'open', position_id: null,
+          symbol: ETH, side: 'BUY', requested_qty: '0.1', limit_price: '100', processed_qty: '0',
+          client_order_id: 'HC1L0', exchange_order_id: null, status: 'queued', purpose: 'standard',
+          created_at: '1000', deadline_at: '601000', updated_at: '1000',
+        }] };
+        return { rows: [] };
+      },
+    };
+    const repo = createOptionsLiveOrdersRepository({ db: { transaction: (callback) => callback(tx) }, now: () => 1000 });
+    return repo.beginBatch({
+      strategy: { id: 5, userId: 7 }, action: 'open', key: 'alert:8:open', deadlineAt: 601000,
+      exchangePositions: [], legs: [{ symbol: ETH, side: 'BUY', quantity: 0.1, price: 100 }],
+    });
+  };
+  const base = { id: 5, user_id: 7, mode: 'live', underlying: 'BTC' };
+  await assert.rejects(run(base), /does not match strategy underlying/);
+  const orders = await run({ ...base, params: { underlyings: ['BTC', 'ETH'] } });
+  assert.equal(orders[0].symbol, ETH);
+});

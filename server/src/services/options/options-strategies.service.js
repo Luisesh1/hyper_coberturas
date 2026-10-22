@@ -133,14 +133,25 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
 
   let marginUsedUsdt = null;
   let netDelta = null;
-  let spot;
+  // Spot por subyacente (un bot puede operar varios): cada posición y orden
+  // se valora con el de su símbolo. Uno que falle queda sin spot (null).
+  const bookOrders = mode === 'live' ? orders : [];
+  const underlyings = new Set([String(strategy.underlying).toUpperCase()]);
+  for (const item of [...open, ...bookOrders]) {
+    const u = parseSymbol(item.symbol)?.underlying;
+    if (u) underlyings.add(u);
+  }
+  const spots = {};
+  await Promise.all([...underlyings].map(async (u) => {
+    try { spots[u] = (await market.getChain(u))?.spot; } catch { spots[u] = undefined; }
+  }));
+  const spot = spots[String(strategy.underlying).toUpperCase()];
   try {
-    ({ spot } = await market.getChain(strategy.underlying));
     marginUsedUsdt = 0;
     for (const p of open) {
       const meta = parseSymbol(p.symbol);
       if (!meta || p.side !== 'SELL') continue;
-      marginUsedUsdt += estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot });
+      marginUsedUsdt += estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot: spots[meta.underlying] });
     }
     marginUsedUsdt = Number.isFinite(marginUsedUsdt) ? round2(marginUsedUsdt) : null;
   } catch { marginUsedUsdt = null; }
@@ -152,7 +163,7 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
   // Presupuesto total del bot: el mismo cálculo que el runner pasa al template.
   let committedUsdt = null;
   if (strategy.params?.budgetUsdt != null) {
-    const total = computeCommitted({ positions: open, orders: mode === 'live' ? orders : [], spot });
+    const total = computeCommitted({ positions: open, orders: bookOrders, spot, spots });
     committedUsdt = Number.isFinite(total) ? round2(total) : null;
   }
 
@@ -277,7 +288,7 @@ function createOptionsStrategiesService(deps = {}) {
   async function update(userId, id, body = {}, opts = {}) {
     const strategy = await requireStrategy(userId, id);
     if (templates.isSignalDriven(strategy.template) && !opts.alertBots
-      && (body.underlying !== undefined || (body.params && body.params.alertIds !== undefined))) {
+      && (body.underlying !== undefined || (body.params && (body.params.alertIds !== undefined || body.params.underlyings !== undefined)))) {
       throw new ValidationError('Las alertas y el subyacente de un bot se editan desde /options/auto-bots');
     }
     const patch = {};
