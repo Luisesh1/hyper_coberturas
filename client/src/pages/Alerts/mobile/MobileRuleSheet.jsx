@@ -144,6 +144,9 @@ function SheetContent({ index, rule, isNew, canDelete, onApply, onDiscard, onDel
   const titleRef = useRef(null);
   const dialogRef = useRef(null);
   const [draft, setDraft] = useState(() => withDraftKeys(structuredClone(rule)));
+  // Foto del borrador inicial (ya normalizado) para saber si hay cambios.
+  const [initialJson] = useState(() => JSON.stringify(withoutDraftKeys(draft)));
+  const changed = JSON.stringify(withoutDraftKeys(draft)) !== initialJson;
   const edit = (fn) => setDraft((d) => withDraftKeys(fn(d)));
   const { conditions, joiners } = ruleParts(draft);
   const weight = Number.isFinite(Number(draft.weight)) ? Number(draft.weight) : 1;
@@ -155,14 +158,20 @@ function SheetContent({ index, rule, isNew, canDelete, onApply, onDiscard, onDel
     return () => { if (previous?.isConnected) previous.focus?.(); };
   }, []);
 
-  // Escape = descartar (siempre con el último callback). Tab y Mayús+Tab
-  // dan la vuelta dentro de la hoja (aria-modal): el editor de debajo no
-  // recibe el foco.
+  // Escape descarta solo si el borrador no ha cambiado; con cambios no hace
+  // nada (hay que elegir ✕ o «Aplicar regla»), para no perderlos sin querer.
+  // Tab y Mayús+Tab dan la vuelta dentro de la hoja (aria-modal): el editor
+  // de debajo no recibe el foco.
   const discardRef = useRef(onDiscard);
+  const changedRef = useRef(changed);
   useEffect(() => { discardRef.current = onDiscard; }, [onDiscard]);
+  useEffect(() => { changedRef.current = changed; }, [changed]);
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') { discardRef.current?.(); return; }
+      if (e.key === 'Escape') {
+        if (!changedRef.current) discardRef.current?.();
+        return;
+      }
       if (e.key !== 'Tab' || !dialogRef.current) return;
       const items = [...dialogRef.current.querySelectorAll(FOCUSABLE)];
       if (items.length === 0) return;
@@ -277,7 +286,7 @@ function SheetContent({ index, rule, isNew, canDelete, onApply, onDiscard, onDel
 
 // Pantalla 3: edición de UNA regla a pantalla completa sobre el editor
 // móvil. Trabaja sobre un borrador (copia de la regla): «Aplicar regla» lo
-// devuelve, la ✕ o Escape lo descartan. Quitar una regla nueva al
+// devuelve, la ✕ lo descarta (y Escape, si no hay cambios). Quitar una regla nueva al
 // descartarla (`isNew`) lo hace la página.
 export default function MobileRuleSheet({ open, index, rule, isNew = false, canDelete = true, onApply, onDiscard, onDelete }) {
   if (!open || !rule) return null;

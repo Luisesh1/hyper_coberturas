@@ -84,8 +84,21 @@ describe('MobileRuleSheet', () => {
     expect(props.onApply).not.toHaveBeenCalled();
   });
 
-  it('Escape descarta', () => {
+  it('Escape descarta si el borrador no ha cambiado', () => {
     const { props } = setup();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(props.onDiscard).toHaveBeenCalledTimes(1);
+  });
+
+  it('Escape no hace nada si el borrador tiene cambios (hay que usar ✕ o Aplicar)', () => {
+    const { props } = setup();
+    fireEvent.change(screen.getByLabelText('Etiqueta en Telegram'), { target: { value: 'otra' } });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(props.onDiscard).not.toHaveBeenCalled();
+    expect(props.onApply).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Regla 1' })).toBeTruthy();
+    // Si se deshace el cambio, Escape vuelve a descartar.
+    fireEvent.change(screen.getByLabelText('Etiqueta en Telegram'), { target: { value: RULE.label } });
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(props.onDiscard).toHaveBeenCalledTimes(1);
   });

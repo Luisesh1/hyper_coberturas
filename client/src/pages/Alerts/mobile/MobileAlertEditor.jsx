@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import BottomSheet from '../../TradingView/components/BottomSheet';
 import { DirectionChip, DirectionSelector } from '../components/Direction';
@@ -7,6 +7,7 @@ import { botModeLabel, botOpensLabel, normalizeDirection } from '../lib/directio
 import { COOLDOWN_PRESETS, cooldownLabel } from '../lib/labels';
 import MobileRuleSheet from './MobileRuleSheet';
 import RuleSummaryCard from './RuleSummaryCard';
+import sheetStyles from './SheetContent.module.css';
 import styles from './MobileAlertEditor.module.css';
 
 const THRESHOLD_STEP = 5;
@@ -78,8 +79,27 @@ export default function MobileAlertEditor({
   const ids = useId();
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [testSheet, setTestSheet] = useState(null);
+  const [testSheet, setTestSheet] = useState(null); // { data, dryRun }
   const [testing, setTesting] = useState(false);
+  const rootRef = useRef(null);
+  const barRef = useRef(null);
+
+  // El hueco inferior del contenido sigue a la altura real de la barra fija
+  // (crece con el aviso de validación y el área segura).
+  useEffect(() => {
+    const root = rootRef.current;
+    const bar = barRef.current;
+    if (!root || !bar) return undefined;
+    const update = () => {
+      const h = bar.offsetHeight;
+      if (h > 0) root.style.setProperty('--cta-bar-h', `${h}px`);
+    };
+    update();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(update);
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, []);
 
   const direction = normalizeDirection(form.direction);
   const threshold = Number(form.thresholdPercent) || 0;
@@ -89,23 +109,25 @@ export default function MobileAlertEditor({
   const dsShort = ds?.short || ds?.label || form.datasource;
   const title = form.name.trim() || (selectedId ? 'Sin nombre' : 'Nueva alerta');
   const canTest = !!selectedId && !effectiveDirty;
+  // Igual que escritorio, y además no mientras se guarda.
+  const canSendTest = canTest && !isSaving;
   const saveDisabled = isSaving || !!saveValidationError || (!effectiveDirty && !!selectedId);
 
   const runMenu = (fn) => () => { setMenuOpen(false); fn(); };
 
-  const runTest = async () => {
-    if (!canTest || testing) return;
+  const runTest = async ({ dryRun = true } = {}) => {
+    if (!canTest || testing || (!dryRun && !canSendTest)) return;
     setTesting(true);
     try {
-      const data = await onTest();
-      if (data?.results) setTestSheet(data);
+      const data = await onTest({ dryRun });
+      if (data?.results) setTestSheet({ data, dryRun });
     } finally {
       setTesting(false);
     }
   };
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} ref={rootRef}>
       <header className={styles.header}>
         <button type="button" className={styles.iconBtn} onClick={onBack} aria-label="Volver a alertas">
           <BackIcon />
@@ -346,14 +368,14 @@ export default function MobileAlertEditor({
         )}
       </div>
 
-      <div className={styles.mobileCtaBar}>
+      <div className={styles.mobileCtaBar} ref={barRef}>
         {saveValidationError && (effectiveDirty || !selectedId) && (
           <div className={styles.barError}>{saveValidationError}</div>
         )}
         <button
           type="button"
           className={styles.testBtn}
-          onClick={runTest}
+          onClick={() => runTest({ dryRun: true })}
           disabled={!canTest || testing}
           title={!selectedId ? 'Guarda la alerta antes de probarla' : (effectiveDirty ? 'Guarda primero los cambios para probar' : 'Evalúa la alerta con las últimas velas, sin enviar Telegram')}
         >
@@ -383,13 +405,24 @@ export default function MobileAlertEditor({
       />
 
       <BottomSheet open={menuOpen} title="Acciones" actionLabel="Cerrar" onClose={() => setMenuOpen(false)}>
-        <div className={styles.menu}>
+        <div className={`${sheetStyles.content} ${styles.menu}`}>
           {editorMode === 'raw' ? (
             <button type="button" className={styles.menuItem} onClick={runMenu(onOpenVisual)}>Modo visual</button>
           ) : (
             <button type="button" className={styles.menuItem} onClick={runMenu(onOpenRaw)}>Modo JSON</button>
           )}
           <button type="button" className={styles.menuItem} onClick={runMenu(onCopyConfig)}>Copiar config</button>
+          {selectedId && (
+            <button
+              type="button"
+              className={styles.menuItem}
+              onClick={runMenu(() => runTest({ dryRun: false }))}
+              disabled={!canSendTest || testing}
+              title={effectiveDirty ? 'Guarda primero los cambios para probar' : 'Evalúa y envía Telegram si supera el umbral'}
+            >
+              Probar y enviar Telegram
+            </button>
+          )}
           {selectedId && (
             <button type="button" className={`${styles.menuItem} ${styles.menuDanger}`} onClick={runMenu(onRemove)} disabled={isSaving}>
               Eliminar alerta
@@ -400,10 +433,14 @@ export default function MobileAlertEditor({
 
       <BottomSheet open={!!testSheet} title={`Prueba · ${title}`} onClose={() => setTestSheet(null)}>
         {testSheet && (
-          <>
-            <p className={styles.hint}>Prueba sin enviar a Telegram.</p>
-            <TestResultView result={testSheet} />
-          </>
+          <div className={sheetStyles.content}>
+            <p className={sheetStyles.note}>
+              {testSheet.dryRun
+                ? 'Prueba sin enviar a Telegram.'
+                : 'Enviada a Telegram para los activos que cumplen.'}
+            </p>
+            <TestResultView result={testSheet.data} />
+          </div>
         )}
       </BottomSheet>
     </div>

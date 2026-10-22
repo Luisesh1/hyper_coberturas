@@ -110,7 +110,7 @@ async function scenario(page, { light = false } = {}) {
   // Lista: sin scroll horizontal e interruptor.
   await expect(page.getByRole('button', { name: '+ Nueva alerta' })).toBeVisible();
   expect(await horizontalOverflow(page)).toBe(0);
-  const sw = page.getByRole('switch', { name: 'BTC · MACD cruce alcista 15m' });
+  const sw = page.getByRole('switch', { name: 'BTC · MACD cruce alcista 15m: Activa' });
   await expect(sw).toHaveAttribute('aria-checked', 'true');
   await sw.click();
   await expect.poll(() => updates.length).toBe(1);
@@ -122,6 +122,9 @@ async function scenario(page, { light = false } = {}) {
   await expect(sheet).toBeVisible();
   await expect(sheet).toContainText('82.5% / 70%');
   expect(await horizontalOverflow(page)).toBe(0);
+  // La hoja es oscura en los dos temas: su contenido va en claro.
+  const noteColor = await sheet.getByText('Prueba sin enviar a Telegram.').evaluate((el) => getComputedStyle(el).color);
+  expect(noteColor).toBe('rgb(182, 190, 201)');
   await sheet.getByRole('button', { name: 'Listo' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
@@ -144,6 +147,13 @@ async function scenario(page, { light = false } = {}) {
   await expect(card).toContainText('4h');
   await expect(card).toContainText('momentum subiendo');
   expect(await horizontalOverflow(page)).toBe(0);
+
+  // «⋯» ofrece «Probar y enviar Telegram» (deshabilitado con cambios).
+  await page.getByRole('button', { name: 'Más acciones' }).click();
+  const menu = page.getByRole('dialog', { name: 'Acciones' });
+  await expect(menu.getByRole('button', { name: 'Probar y enviar Telegram' })).toBeDisabled();
+  await menu.getByRole('button', { name: 'Cerrar' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Guardar cambios' }).click();
   await expect.poll(() => updates.length).toBe(2);
@@ -169,6 +179,25 @@ test.describe('Alertas en móvil', () => {
   test('390×844 en tema claro: sin errores de página', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await scenario(page, { light: true });
+  });
+});
+
+test.describe('Alertas en móvil · barra fija', () => {
+  test.use({ hasTouch: true });
+
+  test('360×740: con el aviso de validación, la barra no tapa el final del contenido', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 740 });
+    await mockApi(page);
+    await page.goto('/alertas');
+    await page.getByRole('button', { name: '+ Nueva alerta' }).click();
+    const bar = page.locator('[class*="mobileCtaBar"]');
+    await expect(bar.locator('[class*="barError"]')).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    const add = page.getByRole('button', { name: '+ Añadir regla' });
+    await expect(add).toBeVisible();
+    const addBox = await add.boundingBox();
+    const barBox = await bar.boundingBox();
+    expect(addBox.y + addBox.height).toBeLessThanOrEqual(barBox.y);
   });
 });
 

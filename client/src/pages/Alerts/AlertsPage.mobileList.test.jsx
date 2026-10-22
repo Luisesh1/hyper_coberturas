@@ -36,7 +36,7 @@ describe('AlertsPage · lista móvil', () => {
   it('el interruptor envía la alerta completa con isActive invertido', async () => {
     alertsApi.update.mockResolvedValue({ ...ALERT, isActive: false });
     renderPage();
-    const sw = await screen.findByRole('switch');
+    const sw = await screen.findByRole('switch', { name: 'RSI bajo: Activa' });
     fireEvent.click(sw);
     await waitFor(() => expect(alertsApi.update).toHaveBeenCalled());
     const [id, payload] = alertsApi.update.mock.calls[0];

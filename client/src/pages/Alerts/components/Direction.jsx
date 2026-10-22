@@ -83,6 +83,7 @@ export function DirectionSelector({ value, onChange, mobile = false }) {
             type="button"
             role="radio"
             aria-checked={checked}
+            data-direction={d}
             tabIndex={checked ? 0 : -1}
             className={`${styles.dirOption} ${checked ? OPTION_ON_CLASS[d] : ''}`}
             onClick={() => onChange(d)}

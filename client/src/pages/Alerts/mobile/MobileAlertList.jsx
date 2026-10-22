@@ -4,6 +4,7 @@ import { DirectionChip, DirectionIcon } from '../components/Direction';
 import TestResultView from '../components/TestResultView';
 import { baseTimeframe, lastTriggeredLabel } from '../lib/alertView';
 import { DIRECTION_FILTERS, matchesDirectionFilter } from '../lib/direction';
+import sheetStyles from './SheetContent.module.css';
 import styles from './MobileAlertList.module.css';
 
 const NO_BOTS = [];
@@ -51,7 +52,7 @@ function AlertCard({ alert, bots, showBots, onOpen, onToggleActive, onTest }) {
         type="button"
         role="switch"
         aria-checked={isActive}
-        aria-label={alert.name}
+        aria-label={`${alert.name}: ${isActive ? 'Activa' : 'Pausada'}`}
         className={`${styles.switchBtn} ${isActive ? styles.switchOn : ''}`}
         onClick={toggle}
       >
@@ -156,10 +157,10 @@ export default function MobileAlertList({
 
       <BottomSheet open={!!sheet} title={sheet ? `Prueba · ${sheet.name}` : ''} onClose={() => setSheet(null)}>
         {sheet && (
-          <>
-            <p className={styles.sheetNote}>Prueba sin enviar a Telegram.</p>
+          <div className={sheetStyles.content}>
+            <p className={sheetStyles.note}>Prueba sin enviar a Telegram.</p>
             <TestResultView result={sheet.data} />
-          </>
+          </div>
         )}
       </BottomSheet>
     </div>

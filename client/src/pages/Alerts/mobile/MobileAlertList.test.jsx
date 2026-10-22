@@ -84,7 +84,7 @@ describe('MobileAlertList', () => {
 
   it('el interruptor llama a onToggleActive y se refleja al instante', async () => {
     const p = setup();
-    const sw = within(card('RSI sobrevendido')).getByRole('switch');
+    const sw = within(card('RSI sobrevendido')).getByRole('switch', { name: 'RSI sobrevendido: Activa' });
     expect(sw.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(sw);
     expect(p.onToggleActive).toHaveBeenCalledWith(ALERTS[0]);
@@ -98,8 +98,11 @@ describe('MobileAlertList', () => {
     const sw = within(card('RSI sobrevendido')).getByRole('switch');
     fireEvent.click(sw);
     expect(sw.getAttribute('aria-checked')).toBe('false');
+    // El nombre accesible incluye el texto visible (WCAG 2.5.3).
+    expect(sw.getAttribute('aria-label')).toBe('RSI sobrevendido: Pausada');
     reject(new Error('x'));
     await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('true'));
+    expect(sw.getAttribute('aria-label')).toBe('RSI sobrevendido: Activa');
   });
 
   it('Probar abre la hoja con la puntuación', async () => {

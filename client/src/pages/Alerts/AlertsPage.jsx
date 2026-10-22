@@ -488,7 +488,7 @@ export default function AlertsPage() {
           onBack={() => { setOpenRuleIndex(null); setMobileView('list'); }}
           onSave={save}
           onRemove={remove}
-          onTest={() => testNow({ dryRun: true })}
+          onTest={({ dryRun = true } = {}) => testNow({ dryRun })}
           onToggleActive={toggleActive}
           isTogglingActive={isTogglingActive}
           editorMode={editorMode}

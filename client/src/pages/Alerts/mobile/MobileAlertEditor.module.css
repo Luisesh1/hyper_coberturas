@@ -51,13 +51,15 @@
 .dirty { font-size: 12px; color: var(--status-warn); }
 
 /* ---------- Contenido ---------- */
-/* Hueco inferior para que la barra fija no tape nada. */
+/* Hueco inferior para que la barra fija no tape nada: --cta-bar-h es la
+   altura medida de la barra (incluye el aviso de validación y el área
+   segura); sin medir, un valor holgado que cubre barra + aviso de 2 líneas. */
 .body {
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-  padding: 14px 16px calc(120px + env(safe-area-inset-bottom, 0px));
+  padding: 14px 16px calc(var(--cta-bar-h, calc(150px + env(safe-area-inset-bottom, 0px))) + 16px);
 }
 .card {
   display: flex;
@@ -192,16 +194,16 @@
 .dirGrid [role='radio'] > span:last-child > span:first-child { font-size: 13.5px; }
 /* El selector compartido trae colores fijos oscuros (AlertsPage.module.css,
    deuda de escritorio): aquí se pasan a tokens para que siga al tema.
-   Orden de las opciones: alcista, bajista, neutral. */
+   Cada opción lleva data-direction (DirectionSelector). */
 .dirGrid [role='radio'] {
   background: var(--bg-input);
   border-color: var(--border);
   color: var(--text-primary);
 }
-.dirGrid [role='radio'][aria-checked='true']:nth-child(1) { background: var(--green-bg); border-color: var(--green); color: var(--green-light); }
-.dirGrid [role='radio'][aria-checked='true']:nth-child(2) { background: var(--red-bg); border-color: var(--red); color: var(--red-light); }
-.dirGrid [role='radio'][aria-checked='true']:nth-child(3) { background: var(--bg-hover); border-color: var(--text-tertiary); color: var(--text-primary); }
-.dirGrid [role='radio']:nth-child(3) > span:first-child { color: var(--text-secondary); }
+.dirGrid [role='radio'][data-direction='bullish'][aria-checked='true'] { background: var(--green-bg); border-color: var(--green); color: var(--green-light); }
+.dirGrid [role='radio'][data-direction='bearish'][aria-checked='true'] { background: var(--red-bg); border-color: var(--red); color: var(--red-light); }
+.dirGrid [role='radio'][data-direction='neutral'][aria-checked='true'] { background: var(--bg-hover); border-color: var(--text-tertiary); color: var(--text-primary); }
+.dirGrid [role='radio'][data-direction='neutral'] > span:first-child { color: var(--text-secondary); }
 /* La nota de abajo explica la dirección; la pista no cabe en 3 columnas. */
 .dirGrid [role='radio'] > span:last-child > span:last-child { display: none; }
 

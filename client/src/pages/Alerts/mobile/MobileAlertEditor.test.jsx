@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import MobileAlertEditor from './MobileAlertEditor';
@@ -292,9 +292,45 @@ describe('MobileAlertEditor', () => {
     const data = { results: [{ asset: 'BTCUSDT', lowestTimeframe: '15m', score: 55, threshold: 70, wouldTrigger: false, rules: [] }] };
     const p = setup({ onTest: vi.fn().mockResolvedValue(data) });
     fireEvent.click(screen.getByRole('button', { name: 'Probar' }));
-    expect(p.onTest).toHaveBeenCalled();
+    expect(p.onTest).toHaveBeenCalledWith({ dryRun: true });
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/55\.0% \/ 70%/)).toBeTruthy();
+    expect(within(dialog).getByText('Prueba sin enviar a Telegram.')).toBeTruthy();
+  });
+
+  it('el menú «⋯» ofrece «Probar y enviar Telegram» y muestra el resultado en la hoja', async () => {
+    const data = { results: [{ asset: 'BTCUSDT', lowestTimeframe: '15m', score: 82, threshold: 70, wouldTrigger: true, rules: [] }] };
+    const p = setup({ onTest: vi.fn().mockResolvedValue(data) });
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Probar y enviar Telegram' }));
+    expect(p.onTest).toHaveBeenCalledWith({ dryRun: false });
+    const dialog = await screen.findByRole('dialog', { name: /Prueba/ });
+    expect(within(dialog).getByText(/82\.0% \/ 70%/)).toBeTruthy();
+    expect(within(dialog).getByText(/Enviada a Telegram/)).toBeTruthy();
+  });
+
+  it('«Probar y enviar Telegram» se deshabilita con cambios o guardando, y no existe sin guardar', () => {
+    setup({ effectiveDirty: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Probar y enviar Telegram' }).disabled).toBe(true);
+    cleanup();
+
+    setup({ isSaving: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Probar y enviar Telegram' }).disabled).toBe(true);
+    cleanup();
+
+    setup({ selectedId: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    expect(within(screen.getByRole('dialog')).queryByRole('button', { name: 'Probar y enviar Telegram' })).toBeNull();
+  });
+
+  it('cada opción de dirección lleva su data-direction (colores sin depender del orden)', () => {
+    setup();
+    const group = screen.getByRole('radiogroup', { name: 'Dirección de la señal' });
+    expect(within(group).getByRole('radio', { name: /Alcista/ }).dataset.direction).toBe('bullish');
+    expect(within(group).getByRole('radio', { name: /Bajista/ }).dataset.direction).toBe('bearish');
+    expect(within(group).getByRole('radio', { name: /Neutral/ }).dataset.direction).toBe('neutral');
   });
 
   it('«Probar» deshabilitado con cambios sin guardar', () => {

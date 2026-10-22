@@ -129,6 +129,34 @@ describe('AlertsPage · editor móvil', () => {
     expect(screen.getAllByText(/55\.0% \/ 70%/)).toHaveLength(1);
   });
 
+  it('«Probar y enviar Telegram» del menú «⋯» usa dryRun: false', async () => {
+    alertsApi.test.mockResolvedValue({ results: [{ asset: 'BTCUSDT', lowestTimeframe: '15m', score: 82, threshold: 70, wouldTrigger: true, triggered: true, telegramSent: true, rules: [] }] });
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Acciones' })).getByRole('button', { name: 'Probar y enviar Telegram' }));
+    const dialog = await screen.findByRole('dialog', { name: /Prueba/ });
+    expect(alertsApi.test).toHaveBeenCalledWith(1, { dryRun: false });
+    expect(within(dialog).getByText(/Enviado a Telegram/)).toBeTruthy();
+    expect(addNotification).toHaveBeenCalledWith('success', expect.stringContaining('Telegram'));
+  });
+
+  // Comportamiento de antes de la rama (escritorio: elegir una alerta de la
+  // lista recarga el formulario desde el servidor): «←» y reabrir la misma
+  // alerta descarta las ediciones sin guardar. Así el formulario nunca queda
+  // desfasado si, por ejemplo, el interruptor de la lista la pausa.
+  it('«←» y reabrir la misma alerta recarga el formulario (descarta lo no guardado)', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Subir umbral' }));
+    expect(screen.getByText('75 %')).toBeTruthy();
+    expect(screen.getByText(/Cambios sin guardar/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Volver a alertas' }));
+    fireEvent.click(await screen.findByText('RSI bajo'));
+    expect(screen.getByRole('heading', { name: 'Editar alerta' })).toBeTruthy();
+    expect(screen.getByText('70 %')).toBeTruthy();
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+    expect(alertsApi.update).not.toHaveBeenCalled();
+  });
+
   it('el interruptor Activa de una alerta guardada guarda al momento', async () => {
     await openEditor();
     const sw = screen.getByRole('switch', { name: 'Activa' });
