@@ -83,6 +83,14 @@ describe('useAlertMarkerCard (escritorio)', () => {
     expect(h.click).toBeNull();
     expect(hook.result.current.card).toBeNull();
   });
+
+  it('ignoreSynthetic: un movimiento sin sourceEvent (puntero sincronizado) no la abre', () => {
+    const { h, hook } = setup({ ignoreSynthetic: true });
+    act(() => h.move({ time: 100, point: P }));
+    expect(hook.result.current.card).toBeNull();
+    act(() => h.move({ time: 100, point: P, sourceEvent: {} }));
+    expect(hook.result.current.card.entries).toEqual([A1, B1]);
+  });
 });
 
 describe('useAlertMarkerCard (móvil)', () => {

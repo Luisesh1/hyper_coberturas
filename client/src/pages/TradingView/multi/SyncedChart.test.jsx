@@ -3,7 +3,10 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 
 // ---- lightweight-charts falso -------------------------------------------
 const lw = vi.hoisted(() => {
-  const state = { chart: null, series: null, handler: null, visibleRange: null };
+  const state = {
+    chart: null, series: null, handler: null, visibleRange: null,
+    charts: [], markerPlugins: [],
+  };
   const LineStyle = { Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3, SparseDotted: 4 };
   const CrosshairMode = { Normal: 0, Magnet: 1, Hidden: 2, MagnetOHLC: 3 };
   function makeChart() {
@@ -18,18 +21,30 @@ const lw = vi.hoisted(() => {
       applyOptions: vi.fn(),
       scrollToRealTime: vi.fn(),
     };
+    const local = { move: [], click: [] };
+    const el = document.createElement('div');
     const chart = {
+      local,
+      series,
+      chartElement: () => el,
       addSeries: vi.fn(() => series),
       applyOptions: vi.fn(),
       setCrosshairPosition: vi.fn(),
       clearCrosshairPosition: vi.fn(),
-      subscribeCrosshairMove: vi.fn((h) => { state.handler = h; }),
-      unsubscribeCrosshairMove: vi.fn(),
+      // `handler` = el primero (el del propio SyncedChart); las marcas añaden otro.
+      subscribeCrosshairMove: vi.fn((h) => {
+        if (!local.move.length) state.handler = h;
+        local.move.push(h);
+      }),
+      unsubscribeCrosshairMove: vi.fn((h) => { local.move = local.move.filter((x) => x !== h); }),
+      subscribeClick: vi.fn((h) => { local.click.push(h); }),
+      unsubscribeClick: vi.fn((h) => { local.click = local.click.filter((x) => x !== h); }),
       timeScale: () => timeScale,
       remove: vi.fn(),
     };
     state.chart = chart;
     state.series = series;
+    state.charts.push(chart);
     return chart;
   }
   return { state, LineStyle, CrosshairMode, makeChart };
@@ -41,6 +56,11 @@ vi.mock('lightweight-charts', () => ({
   CrosshairMode: lw.CrosshairMode,
   LineStyle: lw.LineStyle,
   TrackingModeExitMode: { OnTouchEnd: 0, OnNextTap: 1 },
+  createSeriesMarkers: vi.fn((series) => {
+    const plugin = { series, setMarkers: vi.fn(), detach: vi.fn() };
+    lw.state.markerPlugins.push(plugin);
+    return plugin;
+  }),
 }));
 
 // ---- API: velas de 1h desde 2026-10-19 00:00 UTC ------------------------
@@ -65,7 +85,7 @@ vi.mock('../../../services/api', () => ({
 }));
 
 import { marketApi } from '../../../services/api';
-import { LineStyle, CrosshairMode, createChart } from 'lightweight-charts';
+import { LineStyle, CrosshairMode, createChart, createSeriesMarkers } from 'lightweight-charts';
 import { createIndicatorsController } from '../indicators/renderAdapter';
 import SyncedChart from './SyncedChart';
 
@@ -110,6 +130,8 @@ function lastCrosshairOptions() {
 beforeEach(() => {
   vi.clearAllMocks();
   lw.state.visibleRange = null;
+  lw.state.charts = [];
+  lw.state.markerPlugins = [];
   marketApi.getCandles.mockResolvedValue(CANDLES_1H.map((c) => ({ ...c })));
 });
 
@@ -510,5 +532,80 @@ describe('SyncedChart · syncPrice y onAssetClick', () => {
     renderChart();
     expect(screen.queryByTestId('asset-btn-0')).toBeNull();
     await waitForData();
+  });
+});
+
+// ---- Marcas de backtest de alertas (Multi‑TF) ----------------------------
+describe('SyncedChart · marcas de alertas', () => {
+  const MIN15 = 15 * 60_000;
+  const T1400 = BASE_MS + 14 * HOUR_MS; // 19 oct 14:00 UTC
+  const CANDLES_15M = Array.from({ length: 96 }, (_, i) => ({
+    time: BASE_MS + i * MIN15, open: 1, high: 2, low: 0.5, close: 1.5,
+  }));
+  const EVENT = { evalTime: T1400 + MIN15, time: T1400, score: 1, threshold: 0.5, suppressed: false, rules: [] };
+  const ALERT = { id: 'a1', name: 'RSI rebote', direction: 'bullish', datasource: 'binance', updatedAt: 1, rules: [] };
+  const MARKS = {
+    eventsByAlert: { a1: [EVENT] },
+    items: [{ alertId: 'a1', color: '#facc15', hidden: false }],
+    alertsById: { a1: ALERT },
+  };
+  const byTf = (tf) => (tf === '15m' ? CANDLES_15M : CANDLES_1H).map((c) => ({ ...c }));
+  const lastMarks = (chart) => {
+    const p = lw.state.markerPlugins.filter((x) => x.series === chart.series).at(-1);
+    return p?.setMarkers.mock.calls.at(-1)?.[0];
+  };
+
+  beforeEach(() => {
+    marketApi.getCandles.mockImplementation(({ timeframe }) => Promise.resolve(byTf(timeframe)));
+  });
+
+  it('dos paneles (15m y 1h) con el mismo disparo de las 14:15: marca en 14:00 en ambos', async () => {
+    render(
+      <>
+        <SyncedChart asset={ASSET} timeframe="15m" index={0} alertMarkers={MARKS} />
+        <SyncedChart asset={ASSET} timeframe="1h" index={1} alertMarkers={MARKS} />
+      </>,
+    );
+    const [c15, c1h] = lw.state.charts;
+    await waitFor(() => expect(lastMarks(c15)).toHaveLength(1));
+    await waitFor(() => expect(lastMarks(c1h)).toHaveLength(1));
+    expect(lastMarks(c15)[0]).toMatchObject({ time: T1400 / 1000, shape: 'arrowUp', position: 'belowBar', color: '#facc15' });
+    expect(lastMarks(c1h)[0]).toMatchObject({ time: T1400 / 1000, shape: 'arrowUp' });
+  });
+
+  it('onLoadedRange informa del rango cargado tras cada carga', async () => {
+    const onLoadedRange = vi.fn();
+    const { rerender } = render(
+      <SyncedChart asset={ASSET} timeframe="1h" index={2} alertMarkers={MARKS} onLoadedRange={onLoadedRange} />,
+    );
+    await waitFor(() => expect(onLoadedRange).toHaveBeenCalledWith(2, { fromMs: BASE_MS, toMs: BASE_MS + 24 * HOUR_MS }));
+    rerender(<SyncedChart asset={ASSET} timeframe="15m" index={2} alertMarkers={MARKS} onLoadedRange={onLoadedRange} />);
+    await waitFor(() => expect(onLoadedRange).toHaveBeenLastCalledWith(2, { fromMs: BASE_MS, toMs: BASE_MS + 96 * MIN15 }));
+  });
+
+  it('sin alertMarkers no crea el plugin de marcas ni escucha clics', async () => {
+    render(<SyncedChart asset={ASSET} timeframe="1h" index={0} />);
+    await waitForData();
+    expect(createSeriesMarkers).not.toHaveBeenCalled();
+    expect(lw.state.chart.subscribeClick).not.toHaveBeenCalled();
+  });
+
+  it('escritorio: clic en una vela con disparo abre la tarjeta; el puntero sincronizado no la abre', async () => {
+    render(<SyncedChart asset={ASSET} timeframe="1h" index={1} alertMarkers={MARKS} />);
+    await waitFor(() => expect(lastMarks(lw.state.chart)).toHaveLength(1));
+    const { local } = lw.state.chart;
+    // Movimiento sintético (setCrosshairPosition desde otro panel): no abre nada.
+    act(() => { local.move.forEach((h) => h({ time: T1400 / 1000, point: { x: 50, y: 60 } })); });
+    expect(screen.queryByRole('dialog', { name: 'Detalle del disparo' })).toBeNull();
+    act(() => { local.click.forEach((h) => h({ time: T1400 / 1000, point: { x: 50, y: 60 }, sourceEvent: {} })); });
+    const card = screen.getByRole('dialog', { name: 'Detalle del disparo' });
+    expect(card.textContent).toContain('RSI rebote');
+  });
+
+  it('compact: tocar la marca abre la hoja inferior', async () => {
+    render(<SyncedChart asset={ASSET} timeframe="1h" index={0} alertMarkers={MARKS} compact />);
+    await waitFor(() => expect(lastMarks(lw.state.chart)).toHaveLength(1));
+    act(() => { lw.state.chart.local.click.forEach((h) => h({ time: T1400 / 1000, point: { x: 5, y: 5 } })); });
+    expect(screen.getByRole('dialog', { name: 'Disparo de alerta' }).textContent).toContain('RSI rebote');
   });
 });

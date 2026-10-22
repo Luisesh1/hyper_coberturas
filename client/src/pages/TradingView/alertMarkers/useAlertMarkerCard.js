@@ -9,7 +9,9 @@ const timeOf = (param) => (typeof param?.time === 'number' ? param.time : null);
 //   disparos dibujados de esa misma alerta en orden temporal y desplazan el
 //   gráfico si hace falta.
 // `timeline` = markerTimeline(...): [{ alertId, event, sec }] ordenado.
-export function useAlertMarkerCard({ chartRef, mobile, timeline, disabled = false }) {
+// `ignoreSynthetic`: descarta movimientos con posición pero sin `sourceEvent`
+// (setCrosshairPosition del puntero sincronizado en la vista Multi‑TF).
+export function useAlertMarkerCard({ chartRef, mobile, timeline, disabled = false, ignoreSynthetic = false }) {
   const [desk, setDesk] = useState(null); // { sec, anchor, pinned }
   const [sel, setSel] = useState(null); // móvil: { alertId, evalTime }
   const cardRef = useRef(null);
@@ -38,6 +40,7 @@ export function useAlertMarkerCard({ chartRef, mobile, timeline, disabled = fals
     if (!chart || disabled) return undefined;
     const onMove = (param) => {
       if (mobile || pinnedRef.current) return;
+      if (ignoreSynthetic && param?.point && !param.sourceEvent) return;
       const sec = timeOf(param);
       if (sec == null || !param.point || !byBucketRef.current.has(sec)) {
         setDesk((prev) => (prev ? null : prev));
@@ -62,7 +65,7 @@ export function useAlertMarkerCard({ chartRef, mobile, timeline, disabled = fals
       chart.unsubscribeCrosshairMove(onMove);
       chart.unsubscribeClick(onClick);
     };
-  }, [chartRef, mobile, disabled]);
+  }, [chartRef, mobile, disabled, ignoreSynthetic]);
 
   // Fijada en escritorio: Esc o un clic fuera de la tarjeta y del gráfico la cierran.
   const pinned = !mobile && !!desk?.pinned;

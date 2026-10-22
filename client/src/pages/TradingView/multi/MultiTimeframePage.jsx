@@ -4,13 +4,17 @@ import { settingsApi } from '../../../services/api';
 import { useTradingContext } from '../../../context/TradingContext';
 import { getDefaultChartIndicators } from '../indicators/defaults';
 import AssetPickerModal from '../components/AssetPickerModal';
-import { ChevronDownIcon, ChevronLeftIcon } from '../components/icons';
+import { BellIcon, ChevronDownIcon, ChevronLeftIcon } from '../components/icons';
 import { MOBILE_QUERY, useMediaQuery } from '../useMediaQuery';
 import { useFullscreen } from '../useFullscreen';
 import SyncedChart from './SyncedChart';
 import SplitAssetsView from './SplitAssetsView';
 import { FullscreenButton, Legend, ModeSwitch, SyncSwitch, TOUCH_HINT } from './MultiControls';
 import usePointerSync from './usePointerSync';
+import { useAlertMarkerData } from '../alertMarkers/useAlertMarkerData';
+import { MAX_ALERT_MARKERS } from '../alertMarkers/markerModel';
+import AlertPicker from '../alertMarkers/AlertPicker';
+import AlertChips from '../alertMarkers/AlertChips';
 import { formatPrice } from './chartTheme';
 import {
   LAYOUTS,
@@ -144,6 +148,42 @@ export default function MultiTimeframePage() {
   }, []);
   const shownPrice = lastPrice && lastPrice.key === priceKey ? formatPrice(lastPrice.price) : null;
 
+  // --- Marcas de backtest de alertas (solo Multi‑TF) ---
+  // Un único backtest para todos los paneles: el rango es la unión de lo
+  // cargado en cada uno. Cada rango se guarda con su par+temporalidad para no
+  // mezclar el de una carga anterior.
+  const assetKey = `${asset.datasource}:${asset.symbol}`;
+  const assetKeyRef = useRef(assetKey);
+  assetKeyRef.current = assetKey;
+  const panelTfsRef = useRef(panelTimeframes);
+  panelTfsRef.current = panelTimeframes;
+  const [loadedRanges, setLoadedRanges] = useState({});
+  const onLoadedRange = useCallback((index, range) => {
+    const key = `${assetKeyRef.current}|${panelTfsRef.current[index]}`;
+    setLoadedRanges((prev) => ({ ...prev, [index]: { ...range, key } }));
+  }, []);
+  const alertRangesList = useMemo(
+    () => panelTimeframes
+      .map((tf, i) => loadedRanges[i])
+      .filter((r, i) => r && r.key === `${assetKey}|${panelTimeframes[i]}`)
+      .map(({ fromMs, toMs }) => ({ fromMs, toMs })),
+    [panelTimeframes, loadedRanges, assetKey],
+  );
+  const alertsEnabled = mode === 'tf';
+  const alertData = useAlertMarkerData({
+    asset, ranges: alertRangesList, enabled: alertsEnabled, notify: addNotification,
+  });
+  const alertSel = alertData.selection;
+  const alertMarkers = useMemo(() => ({
+    eventsByAlert: alertData.eventsByAlert,
+    items: alertSel.items,
+    alertsById: alertSel.alertsById,
+    cutoffMs: Infinity, // sin replay en la vista múltiple
+  }), [alertData.eventsByAlert, alertSel.items, alertSel.alertsById]);
+  const [alertPickerOpen, setAlertPickerOpen] = useState(false);
+  const openAlertPicker = useCallback(() => setAlertPickerOpen(true), []);
+  const closeAlertPicker = useCallback(() => setAlertPickerOpen(false), []);
+
   // Un origen que ya no existe (otra distribución) o sync apagado → sin puntero.
   const activeSync = syncEnabled && sync && sync.sourceIndex < panelTimeframes.length ? sync : null;
   useEffect(() => {
@@ -153,6 +193,7 @@ export default function MultiTimeframePage() {
   const changeMode = (next) => {
     if (next === mode) return;
     setSync(null);
+    setAlertPickerOpen(false);
     setMode(next);
     // Sin esto el ?mode= de la URL volvería a imponerse en back/forward.
     if (searchParams.has('mode')) {
@@ -218,16 +259,47 @@ export default function MultiTimeframePage() {
         onLastPrice={onLastPrice}
         indicators={indicators || undefined}
         compact={isMobile}
+        alertMarkers={alertMarkers}
+        onLoadedRange={onLoadedRange}
       />
     </div>
   ));
 
   const picker = (
-    <AssetPickerModal
-      open={pickerOpen}
-      currentAsset={asset}
-      onSelect={handleSelectAsset}
-      onCancel={() => setPickerOpen(false)}
+    <>
+      <AssetPickerModal
+        open={pickerOpen}
+        currentAsset={asset}
+        onSelect={handleSelectAsset}
+        onCancel={() => setPickerOpen(false)}
+      />
+      <AlertPicker
+        open={alertPickerOpen}
+        mobile={isMobile}
+        alerts={alertSel.alerts}
+        items={alertSel.items}
+        onAdd={alertSel.add}
+        onRemove={alertSel.remove}
+        onClose={closeAlertPicker}
+      />
+    </>
+  );
+
+  const alertCount = alertSel.items.length;
+  const alertsLabel = alertCount > 0 ? `Alertas (${alertCount}/${MAX_ALERT_MARKERS})` : 'Alertas';
+  const alertsTitle = 'Marcar en los gráficos cuándo habrían saltado tus alertas';
+  const alertChips = alertCount > 0 && (
+    <AlertChips
+      mobile={isMobile}
+      items={alertSel.items}
+      alertsById={alertSel.alertsById}
+      statusByAlert={alertData.statusByAlert}
+      countsByAlert={alertData.countsByAlert}
+      chartDatasource={asset.datasource}
+      onToggleHidden={alertSel.toggleHidden}
+      onRemove={alertSel.remove}
+      onAdd={openAlertPicker}
+      onRetry={alertData.retry}
     />
   );
 
@@ -259,8 +331,20 @@ export default function MultiTimeframePage() {
         </header>
         <div className={styles.mModeRow}>
           {modeSwitch(true)}
+          <button
+            type="button"
+            className={`${styles.mIconBtn} ${styles.mAlertsBtn}`}
+            onClick={openAlertPicker}
+            aria-label={alertsLabel}
+            aria-haspopup="dialog"
+            title={alertsTitle}
+          >
+            <BellIcon size={20} />
+            {alertCount > 0 && <span className={styles.mAlertsCount} aria-hidden="true">{alertCount}</span>}
+          </button>
           {fullscreenButton(true)}
         </div>
+        {alertChips}
         <div className={styles.mStack}>{panels}</div>
         <footer className={styles.mBar}>
           <div className={styles.mPointer} aria-live="off">{pointerLabel}</div>
@@ -309,11 +393,24 @@ export default function MultiTimeframePage() {
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          className={styles.btn}
+          onClick={openAlertPicker}
+          aria-label={alertsLabel}
+          aria-haspopup="dialog"
+          title={alertsTitle}
+        >
+          <BellIcon size={14} />
+          <span>Alertas</span>
+          {alertCount > 0 && <span className={styles.alertsCount} aria-hidden="true">{alertCount}/{MAX_ALERT_MARKERS}</span>}
+        </button>
         <SyncSwitch checked={syncEnabled} onToggle={toggleSync} label="Puntero sincronizado" />
         <span className={styles.pointer}>{pointerLabel}</span>
         <Legend />
         {fullscreenButton(false)}
       </div>
+      {alertChips}
       <div
         className={styles.grid}
         style={{

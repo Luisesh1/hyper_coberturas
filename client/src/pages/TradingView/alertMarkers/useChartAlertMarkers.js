@@ -1,16 +1,12 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useAlertSelection } from './useAlertSelection';
-import { useAlertBacktest } from './useAlertBacktest';
-import { useSeriesAlertMarkers } from './useSeriesAlertMarkers';
-import { alertRanges, buildMarkers, countFirings, markerTimeline, replayCutoffMs } from './markerModel';
+import { useAlertMarkerData } from './useAlertMarkerData';
+import { useAlertMarkerLayer } from './useAlertMarkerLayer';
+import { alertRanges, replayCutoffMs } from './markerModel';
 
 // Pegamento de las marcas de alertas del gráfico principal: selección, backtest,
 // marcas en la serie de velas, contadores y avisos. En replay solo se ven los
 // disparos con evalTime ≤ instante actual del replay.
 export function useChartAlertMarkers({ asset, timeframe, candlesRef, candleSeriesRef, candleCount, replay, notify }) {
-  const selection = useAlertSelection();
-  const { items, alertsById, alertsStatus, saveError, loadError } = selection;
-
   // candlesRef se reasigna al cargar y se muta en sitio en replay: la identidad
   // del array + candleCount + estado del replay marcan cuándo recalcular.
   const chartCandles = candlesRef.current;
@@ -35,37 +31,26 @@ export function useChartAlertMarkers({ asset, timeframe, candlesRef, candleSerie
     return [{ fromMs: r.fromMs, toMs: Math.max(r.toMs, liveToRef.current ?? r.toMs) }];
   }, [chartRanges, replayActive]);
 
-  const backtest = useAlertBacktest({ asset, items, alertsById, ranges, enabled: true, alertsStatus });
-  const { eventsByAlert } = backtest;
-
   const cutoffMs = replayCutoffMs(replay);
-  const markerDeps = [eventsByAlert, items, alertsById, timeframe, chartCandles, candleCount, cutoffMs, replayActive, replayAnchor];
-  const markers = useMemo(
-    () => buildMarkers({ eventsByAlert, items, alertsById, chartTf: timeframe, chartCandles, cutoffMs }),
-    markerDeps, // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const timeline = useMemo(
-    () => markerTimeline(eventsByAlert, items, timeframe, chartCandles, cutoffMs),
-    markerDeps, // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  useSeriesAlertMarkers({ seriesRef: candleSeriesRef, markers });
-
-  const countsByAlert = useMemo(() => countFirings(eventsByAlert, cutoffMs), [eventsByAlert, cutoffMs]);
-  const colorsById = useMemo(() => Object.fromEntries(items.map((i) => [i.alertId, i.color])), [items]);
-
-  useEffect(() => {
-    if (saveError) notify?.('error', `No se pudo guardar la selección de alertas: ${saveError}`);
-  }, [saveError]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (loadError) notify?.('alert', `No se pudo cargar tu selección de alertas: ${loadError}`);
-  }, [loadError]); // eslint-disable-line react-hooks/exhaustive-deps
+  const data = useAlertMarkerData({ asset, ranges, enabled: true, cutoffMs, notify });
+  const { selection, eventsByAlert } = data;
+  const { timeline } = useAlertMarkerLayer({
+    seriesRef: candleSeriesRef,
+    eventsByAlert,
+    items: selection.items,
+    alertsById: selection.alertsById,
+    timeframe,
+    chartCandles,
+    cutoffMs,
+    version: `${candleCount}|${replayActive}|${replayAnchor}`,
+  });
 
   return {
     selection,
-    statusByAlert: backtest.statusByAlert,
-    retry: backtest.retry,
-    countsByAlert,
-    colorsById,
+    statusByAlert: data.statusByAlert,
+    retry: data.retry,
+    countsByAlert: data.countsByAlert,
+    colorsById: data.colorsById,
     timeline,
     cutoffMs,
   };

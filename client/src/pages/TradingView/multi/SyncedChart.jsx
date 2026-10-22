@@ -24,11 +24,18 @@ import {
 import { getInitialChartViewport } from '../chartViewport';
 import { createIndicatorsController } from '../indicators/renderAdapter';
 import { ChevronDownIcon } from '../components/icons';
+import { alertRanges } from '../alertMarkers/markerModel';
+import { useAlertMarkerLayer } from '../alertMarkers/useAlertMarkerLayer';
+import { useAlertMarkerCard } from '../alertMarkers/useAlertMarkerCard';
+import AlertMarkerCard from '../alertMarkers/AlertMarkerCard';
 import styles from './SyncedChart.module.css';
 
 const CANDLE_LIMIT = 500;
 const POLL_LIMIT = 2;
 const NO_INDICATORS = [];
+const NO_ITEMS = [];
+// Sin `alertMarkers` (p. ej. Multi‑activo) no se engancha el plugin de marcas.
+const NO_SERIES = { current: null };
 
 function toBar(c) {
   return {
@@ -81,6 +88,10 @@ export default function SyncedChart({
   onLastPrice,
   indicators = NO_INDICATORS,
   compact = false,
+  // Marcas de backtest de alertas (solo Multi‑TF): { eventsByAlert, items, alertsById, cutoffMs? }.
+  alertMarkers = null,
+  // (index, { fromMs, toMs }) tras cada carga de velas: rango a evaluar.
+  onLoadedRange,
 }) {
   const selectId = useId();
   const hostRef = useRef(null);
@@ -95,9 +106,11 @@ export default function SyncedChart({
   // monta otro árbol al cruzar el breakpoint, así que no cambia en vida).
   const compactRef = useRef(compact);
   const onLastPriceRef = useRef(onLastPrice);
+  const onLoadedRangeRef = useRef(onLoadedRange);
   const indexRef = useRef(index);
   onPointerRef.current = onPointer;
   onLastPriceRef.current = onLastPrice;
+  onLoadedRangeRef.current = onLoadedRange;
   indexRef.current = index;
 
   const [candles, setCandles] = useState([]);
@@ -233,6 +246,8 @@ export default function SyncedChart({
         chartRef.current?.timeScale().scrollToRealTime();
         setPrecision(nextPrecision);
         setCandles(next);
+        const range = alertRanges(next, timeframe)[0];
+        if (range) onLoadedRangeRef.current?.(indexRef.current, range);
       } catch (err) {
         if (!cancelled) setError(err?.message || 'Error cargando datos de mercado.');
       } finally {
@@ -381,6 +396,27 @@ export default function SyncedChart({
     }
   }, [sync, syncEnabled, syncPrice, candles, index, timeframe, applyLines]);
 
+  // --- 5) Marcas de alertas: cada panel las coloca con su temporalidad ---
+  const { timeline: alertTimeline } = useAlertMarkerLayer({
+    seriesRef: alertMarkers ? seriesRef : NO_SERIES,
+    eventsByAlert: alertMarkers?.eventsByAlert,
+    items: alertMarkers?.items ?? NO_ITEMS,
+    alertsById: alertMarkers?.alertsById,
+    timeframe,
+    chartCandles: candles,
+    cutoffMs: alertMarkers?.cutoffMs ?? Infinity,
+  });
+  // El puntero sincronizado (setCrosshairPosition) no abre tarjetas en los
+  // paneles destino: solo los movimientos reales del usuario.
+  const alertCard = useAlertMarkerCard({
+    chartRef, mobile: compact, timeline: alertTimeline, disabled: !alertMarkers, ignoreSynthetic: true,
+  });
+  const alertItems = alertMarkers?.items;
+  const alertColors = useMemo(
+    () => Object.fromEntries((alertItems || []).map((i) => [i.alertId, i.color])),
+    [alertItems],
+  );
+
   const handleLeave = useCallback(() => emitPointer(null), [emitPointer]);
 
   const isSource = !!sync && sync.sourceIndex === index;
@@ -487,6 +523,16 @@ export default function SyncedChart({
           </div>
         )}
 
+        {!compact && alertCard.card && (
+          <div ref={alertCard.cardRef} style={alertCard.pinned ? undefined : { pointerEvents: 'none' }}>
+            <AlertMarkerCard
+              {...alertCard.card}
+              alertsById={alertMarkers?.alertsById}
+              colorsById={alertColors}
+            />
+          </div>
+        )}
+
         {loading && !error && (
           <div className={styles.overlay} role="status">Cargando velas…</div>
         )}
@@ -499,6 +545,15 @@ export default function SyncedChart({
           </div>
         )}
       </div>
+
+      {compact && alertCard.card && (
+        <AlertMarkerCard
+          mobile
+          {...alertCard.card}
+          alertsById={alertMarkers?.alertsById}
+          colorsById={alertColors}
+        />
+      )}
     </section>
   );
 }

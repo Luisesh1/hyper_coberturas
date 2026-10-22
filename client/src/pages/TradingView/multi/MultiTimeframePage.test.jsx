@@ -2,8 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-vi.mock('./SyncedChart', () => ({
-  default: (props) => (
+// Rango que cada panel falso informa al montar (igual en todos).
+const LOADED = vi.hoisted(() => ({ range: { fromMs: Date.UTC(2026, 9, 19), toMs: Date.UTC(2026, 9, 20) } }));
+
+vi.mock('./SyncedChart', async () => {
+  const { useEffect } = await import('react');
+  function FakeSyncedChart(props) {
+    const { onLoadedRange, index, timeframe } = props;
+    useEffect(() => { onLoadedRange?.(index, LOADED.range); }, [onLoadedRange, index, timeframe]);
+    return (
     <div
       data-testid={`synced-chart-${props.index}`}
       data-tf={props.timeframe}
@@ -15,6 +22,9 @@ vi.mock('./SyncedChart', () => ({
       data-name={props.asset.name}
       data-indicators={JSON.stringify(props.indicators ?? null)}
       data-sync-price={String(props.syncPrice ?? true)}
+      data-alert-markers={props.alertMarkers ? JSON.stringify({
+        events: props.alertMarkers.eventsByAlert, items: props.alertMarkers.items.map((i) => i.alertId),
+      }) : ''}
     >
       {props.onAssetClick && (
         <button type="button" data-testid={`asset-btn-${props.index}`} onClick={() => props.onAssetClick(props.index)}>
@@ -30,12 +40,19 @@ vi.mock('./SyncedChart', () => ({
       <button type="button" data-testid={`price-${props.index}`} onClick={() => props.onLastPrice?.(props.index, 2345.5 + props.index)} />
       <button type="button" data-testid={`tf-${props.index}`} onClick={() => props.onTimeframeChange('1m')} />
     </div>
-  ),
-}));
+    );
+  }
+  return { default: FakeSyncedChart };
+});
 
 const api = vi.hoisted(() => ({ getChartIndicators: null, pick: null }));
 vi.mock('../../../services/api', () => ({
-  settingsApi: { getChartIndicators: (...a) => api.getChartIndicators(...a) },
+  settingsApi: {
+    getChartIndicators: (...a) => api.getChartIndicators(...a),
+    getChartAlertMarkers: vi.fn(),
+    saveChartAlertMarkers: vi.fn(),
+  },
+  alertsApi: { list: vi.fn(), backtest: vi.fn() },
 }));
 
 vi.mock('../../../context/TradingContext', () => ({
@@ -56,6 +73,7 @@ vi.mock('../components/AssetPickerModal', () => ({
 }));
 
 import { waitFor } from '@testing-library/react';
+import { alertsApi, settingsApi } from '../../../services/api';
 import MultiTimeframePage from './MultiTimeframePage';
 import { getDefaultChartIndicators } from '../indicators/defaults';
 
@@ -83,6 +101,10 @@ describe('MultiTimeframePage', () => {
     localStorage.clear();
     api.getChartIndicators = vi.fn().mockResolvedValue({ indicators: [] });
     api.pick = null;
+    alertsApi.list.mockReset().mockResolvedValue([]);
+    alertsApi.backtest.mockReset().mockResolvedValue({ events: [], insufficient: 0 });
+    settingsApi.getChartAlertMarkers.mockReset().mockResolvedValue({ items: [] });
+    settingsApi.saveChartAlertMarkers.mockReset().mockResolvedValue({});
     vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { cb(0); return 1; }));
     vi.stubGlobal('cancelAnimationFrame', () => {});
     setMobile(false);
@@ -502,6 +524,61 @@ describe('MultiTimeframePage', () => {
       expect(modeBtn('Multi‑TF').getAttribute('aria-pressed')).toBe('true');
       fireEvent.click(modeBtn('Multi‑activo'));
       expect(symbols()).toEqual(['BTC', 'ETH']);
+    });
+  });
+
+  describe('marcas de alertas (Multi‑TF)', () => {
+    const ALERT = {
+      id: 'a1', name: 'RSI rebote', direction: 'bullish', datasource: 'binance', updatedAt: 1,
+      rules: [{ conditions: [{ indicatorType: 'rsi', timeframe: '1h', operand: { kind: 'value', value: 30 } }] }],
+    };
+    const EVENT = { evalTime: Date.UTC(2026, 9, 19, 14, 15), time: Date.UTC(2026, 9, 19, 14), score: 1, threshold: 1, suppressed: false, rules: [] };
+    beforeEach(() => {
+      alertsApi.list.mockResolvedValue([ALERT]);
+      settingsApi.getChartAlertMarkers.mockResolvedValue({ items: [{ alertId: 'a1', color: '#facc15', hidden: false }] });
+      alertsApi.backtest.mockResolvedValue({ alertId: 'a1', baseTimeframe: '1h', events: [EVENT], insufficient: 0 });
+    });
+
+    it('un único backtest por tramo con 4 paneles; los eventos llegan a todos los paneles', async () => {
+      renderPage('/trading-view/multi?symbol=ETH&datasource=binance');
+      expect(tfs()).toHaveLength(4);
+      await waitFor(() => {
+        for (let i = 0; i < 4; i += 1) {
+          const am = JSON.parse(screen.getByTestId(`synced-chart-${i}`).dataset.alertMarkers);
+          expect(am.events.a1).toHaveLength(1);
+        }
+      });
+      expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+      expect(alertsApi.backtest).toHaveBeenCalledWith('a1', expect.objectContaining({
+        asset: 'ETH', datasource: 'binance', startTime: LOADED.range.fromMs, endTime: LOADED.range.toMs,
+      }));
+      // Chips sobre la rejilla con el contador de disparos.
+      const chips = screen.getByRole('toolbar', { name: 'Alertas en el gráfico' });
+      expect(chips.textContent).toContain('RSI rebote');
+      expect(chips.textContent).toContain('1');
+    });
+
+    it('el botón Alertas abre el selector', async () => {
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('toolbar', { name: 'Alertas en el gráfico' })).toBeTruthy());
+      fireEvent.click(screen.getByRole('button', { name: /^Alertas/ }));
+      expect(await screen.findByRole('dialog', { name: /alertas/i })).toBeTruthy();
+    });
+
+    it('móvil: chips y botón Alertas de 44 px en la fila de modo', async () => {
+      setMobile(true);
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('group', { name: 'Alertas en el gráfico' })).toBeTruthy());
+      expect(screen.getByRole('button', { name: /^Alertas/ }).className).toMatch(/mIconBtn/);
+    });
+
+    it('Multi‑activo: sin chips, sin marcas y sin backtest', async () => {
+      renderPage('/trading-view/multi?mode=assets');
+      await waitFor(() => expect(alertsApi.list).toHaveBeenCalled());
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.queryByRole('toolbar', { name: 'Alertas en el gráfico' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Alertas/ })).toBeNull();
+      expect(alertsApi.backtest).not.toHaveBeenCalled();
     });
   });
 });
