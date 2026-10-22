@@ -71,8 +71,11 @@ describe('useAlertBacktest', () => {
     const { hook, props } = setup();
     await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
     hook.rerender({ ...props, ranges: [{ fromMs: NOW - 10 * DAY, toMs: NOW + 5 * DAY }] });
-    await act(async () => { await Promise.resolve(); });
-    expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+    // fromMs cambia: el efecto se repite; el borde derecho sigue siendo el original
+    hook.rerender({ ...props, ranges: [{ fromMs: NOW - 20 * DAY, toMs: NOW + 5 * DAY }] });
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
+    for (const [, body] of alertsApi.backtest.mock.calls) expect(body.endTime).toBeLessThanOrEqual(NOW);
   });
 
   it('updatedAt invalida la caché', async () => {
@@ -103,9 +106,11 @@ describe('useAlertBacktest', () => {
     const { hook, props } = setup();
     await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('error'));
     expect(hook.result.current.statusByAlert.a1.error).toBe('boom');
-    hook.rerender({ ...props, ranges: [{ fromMs: NOW - 10 * DAY, toMs: NOW }] }); // sin cambios: no reintenta
+    // el efecto se repite dentro del backoff: no hay llamada nueva y se conserva el mensaje real
+    hook.rerender({ ...props, items: [...ITEMS] });
     await act(async () => { await Promise.resolve(); });
     expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.statusByAlert.a1).toMatchObject({ state: 'error', error: 'boom' });
     act(() => { hook.result.current.retry('a1'); });
     await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
     expect(alertsApi.backtest).toHaveBeenCalledTimes(2);
@@ -118,5 +123,60 @@ describe('useAlertBacktest', () => {
     await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
     expect(hook.result.current.eventsByAlert.a1.map((e) => e.evalTime)).toEqual([1000, 2000]);
     expect(hook.result.current.statusByAlert.a1).toMatchObject({ insufficient: 3, approx: true, sourceMismatch: 'deribit' });
+  });
+
+  it('al retroceder fromMs tras llegar al tope se renueva el presupuesto de tramos', async () => {
+    const alert = { ...A1, rules: [rule('1m')] };
+    alertsApi.backtest.mockResolvedValue(resp([], { baseTimeframe: '1m' }));
+    const { hook, props } = setup({ alertsById: { a1: alert }, ranges: [{ fromMs: NOW - 365 * DAY, toMs: NOW }] });
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(10));
+    await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
+    expect(hook.result.current.statusByAlert.a1.partialFromMs).toBeDefined();
+    hook.rerender({ ...props, alertsById: { a1: alert }, ranges: [{ fromMs: NOW - 400 * DAY, toMs: NOW }] });
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(20));
+    expect(hook.result.current.statusByAlert.a1.partialFromMs).toBe(NOW - 20 * 2000 * MIN);
+  });
+
+  it('desmontar a mitad de carga detiene las peticiones', async () => {
+    const alert = { ...A1, rules: [rule('1m')] };
+    let release;
+    alertsApi.backtest.mockImplementation(() => new Promise((r) => { release = () => r(resp([], { baseTimeframe: '1m' })); }));
+    const { hook } = setup({ alertsById: { a1: alert }, ranges: [{ fromMs: NOW - 100 * DAY, toMs: NOW }] });
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(1));
+    hook.unmount();
+    await act(async () => { release(); await Promise.resolve(); await Promise.resolve(); });
+    expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+  });
+
+  it('el estado sigue en loading mientras hay petición en vuelo aunque el efecto se repita', async () => {
+    let release;
+    alertsApi.backtest.mockImplementation(() => new Promise((r) => { release = () => r(resp()); }));
+    const { hook, props } = setup();
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(1));
+    hook.rerender({ ...props, items: [...ITEMS] });
+    expect(hook.result.current.statusByAlert.a1.state).toBe('loading');
+    await act(async () => { release(); });
+    await waitFor(() => expect(hook.result.current.statusByAlert.a1.state).toBe('ready'));
+  });
+
+  it('props inestables no provocan bucle de render', async () => {
+    let renders = 0;
+    const hook = renderHook(() => {
+      renders += 1;
+      return useAlertBacktest({
+        asset: { ...ASSET }, items: [...ITEMS], alertsById: { a1: { ...A1 } },
+        ranges: [{ fromMs: NOW - 10 * DAY, toMs: NOW }], enabled: true,
+      });
+    });
+    await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(renders).toBeLessThan(15);
+    expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+  });
+
+  it('lista de alertas con error: no se marca deleted, estado error', async () => {
+    const { hook } = setup({ alertsById: {}, alertsStatus: 'error' });
+    await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('error'));
+    expect(alertsApi.backtest).not.toHaveBeenCalled();
   });
 });

@@ -62,7 +62,22 @@ function addCovered(covered, s, e) {
   return out;
 }
 
-export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = true }) {
+const sameStatus = (a, b) => {
+  if (a === b) return true;
+  if (!a || !b || a.key !== b.key) return false;
+  const x = a.st;
+  const y = b.st;
+  const kx = Object.keys(x);
+  return kx.length === Object.keys(y).length && kx.every((k) => x[k] === y[k]);
+};
+const sameEvents = (a, b) => {
+  if (a === b) return true;
+  if (!a || !b || a.key !== b.key || a.list.length !== b.list.length) return false;
+  return a.list.every((e, i) => e === b.list[i]);
+};
+
+// alertsStatus: 'ready' | 'loading' | 'error' (estado de la lista de alertas; evita marcar `deleted` en falso).
+export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = true, alertsStatus = 'ready' }) {
   const [out, setOut] = useState({ events: {}, status: {} });
   const cachesRef = useRef(new Map()); // `${id}:${updatedAt}:${ds}:${symbol}` -> cache
   const edgesRef = useRef(new Map()); // `${id}:${ds}:${symbol}` -> borde derecho fijo
@@ -87,12 +102,20 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
     return `${alertId}:${alert.updatedAt}:${a.datasource}:${a.symbol}`;
   };
 
-  const publish = (alertId, key, events, status) => {
+  // Aplica cambios sólo si algo cambió de verdad (props inestables no deben provocar bucles).
+  const merge = (alertId, key, events, st) => {
     if (!aliveRef.current) return;
-    setOut((prev) => ({
-      events: events ? { ...prev.events, [alertId]: { key, list: events } } : prev.events,
-      status: { ...prev.status, [alertId]: { key, st: status } },
-    }));
+    setOut((prev) => {
+      const nextSt = { key, st };
+      const nextEv = events ? { key, list: events } : null;
+      const stSame = sameStatus(prev.status[alertId], nextSt);
+      const evSame = !nextEv || sameEvents(prev.events[alertId], nextEv);
+      if (stSame && evSame) return prev;
+      return {
+        events: evSame ? prev.events : { ...prev.events, [alertId]: nextEv },
+        status: stSame ? prev.status : { ...prev.status, [alertId]: nextSt },
+      };
+    });
   };
 
   const snapshot = (alertId, cache, state, extra = {}) => {
@@ -109,6 +132,7 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
     return st;
   };
 
+  const errorSnapshot = (alertId, cache) => snapshot(alertId, cache, 'error', { error: cache.lastError || 'error' });
   const eventList = (cache) => [...cache.events.values()].sort((x, y) => x.evalTime - y.evalTime);
 
   const run = async (alertId) => {
@@ -119,7 +143,7 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
     try {
       for (;;) {
         // Todo se relee en cada vuelta: las props pueden haber cambiado durante la petición.
-        if (keyOf(alertId) !== key0) return;
+        if (!aliveRef.current || keyOf(alertId) !== key0) return;
         const { asset: a, alertsById: byId, fromMs: f, enabled: en } = propsRef.current;
         const alert = byId[alertId];
         if (!en || f == null || cache.errorUntil > Date.now()) return;
@@ -129,17 +153,17 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
           cache.edge = edgesRef.current.get(ek);
         }
         const gap = newestGap(cache.covered, f, cache.edge);
-        if (!gap) { cache.capped = false; publish(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready')); return; }
+        if (!gap) { cache.capped = false; merge(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready')); return; }
         if (cache.chunks >= MAX_CHUNKS_PER_ALERT) {
           cache.capped = true;
-          publish(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready'));
+          merge(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready'));
           return;
         }
         const baseMs = cache.baseMs || clientBaseTfMs(alert);
         const s = Math.max(gap[0], gap[1] - MAX_EVALS_PER_REQUEST * baseMs);
         const e = gap[1];
         cache.chunks += 1;
-        publish(alertId, key0, null, snapshot(alertId, cache, 'loading'));
+        merge(alertId, key0, null, snapshot(alertId, cache, 'loading'));
         let res;
         try {
           res = await alertsApi.backtest(alertId, {
@@ -148,11 +172,11 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
         } catch (err) {
           cache.chunks -= 1;
           cache.errorUntil = Date.now() + ERROR_BACKOFF_MS;
-          if (keyOf(alertId) === key0) {
-            publish(alertId, key0, null, snapshot(alertId, cache, 'error', { error: err?.message || 'error' }));
-          }
+          cache.lastError = err?.message || 'error';
+          if (keyOf(alertId) === key0) merge(alertId, key0, null, errorSnapshot(alertId, cache));
           return;
         }
+        cache.lastError = null;
         if (OVERLAY_TF_MS[res?.baseTimeframe]) cache.baseMs = OVERLAY_TF_MS[res.baseTimeframe];
         for (const ev of res?.events || []) cache.events.set(ev.evalTime, ev);
         cache.insufficient += Number(res?.insufficient) || 0;
@@ -168,31 +192,34 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
   // El borde derecho (toMs) queda fijo tras la primera petición, así que crecer toMs no pide nada.
   const assetKey = asset ? `${asset.datasource}:${asset.symbol}` : '';
   useEffect(() => {
-    if (!enabled || !asset) return;
-    const statuses = {};
+    if (!enabled || !asset || alertsStatus !== 'ready') return;
     for (const item of items || []) {
       const alert = alertsById?.[item.alertId];
-      if (!alert) { statuses[item.alertId] = { state: 'deleted' }; continue; }
-      if (item.hidden) continue;
+      if (!alert || item.hidden) continue;
       const key = keyOf(item.alertId);
       let cache = cachesRef.current.get(key);
       if (!cache) {
-        cache = { covered: [], events: new Map(), chunks: 0, baseMs: null, insufficient: 0, approx: false, errorUntil: 0, edge: null, capped: false };
+        cache = {
+          covered: [], events: new Map(), chunks: 0, baseMs: null, insufficient: 0, approx: false,
+          errorUntil: 0, lastError: null, edge: null, capped: false, lastFrom: null,
+        };
         cachesRef.current.set(key, cache);
       }
-      if (cache.errorUntil > Date.now()) {
-        statuses[item.alertId] = snapshot(item.alertId, cache, 'error', { error: 'error' });
-      } else {
-        statuses[item.alertId] = snapshot(item.alertId, cache, cache.covered.length ? 'ready' : 'loading');
-        run(item.alertId);
+      // Cada vez que el usuario retrocede más que la petición anterior, el presupuesto de tramos se renueva.
+      if (cache.lastFrom != null && fromMs != null && fromMs < cache.lastFrom) {
+        cache.chunks = 0;
+        cache.capped = false;
       }
+      cache.lastFrom = fromMs;
+      if (cache.errorUntil > Date.now()) {
+        merge(item.alertId, key, null, errorSnapshot(item.alertId, cache));
+        continue;
+      }
+      run(item.alertId);
+      const state = runningRef.current.has(key) || (!cache.covered.length && fromMs != null) ? 'loading' : 'ready';
+      merge(item.alertId, key, null, snapshot(item.alertId, cache, state));
     }
-    setOut((prev) => {
-      const status = { ...prev.status };
-      for (const [id, st] of Object.entries(statuses)) status[id] = { key: st.state === 'deleted' ? null : keyOf(id), st };
-      return { events: prev.events, status };
-    });
-  }, [enabled, assetKey, items, alertsById, fromMs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled, assetKey, items, alertsById, alertsStatus, fromMs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const retry = useCallback((alertId) => {
     const key = keyOf(alertId);
@@ -208,16 +235,20 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
     const status = {};
     for (const item of items || []) {
       const alert = alertsById?.[item.alertId];
-      if (!alert) { status[item.alertId] = { state: 'deleted' }; continue; }
+      if (!alert) {
+        if (alertsStatus === 'ready') status[item.alertId] = { state: 'deleted' };
+        else if (alertsStatus === 'error') status[item.alertId] = { state: 'error', error: 'alerts' };
+        else status[item.alertId] = { state: 'loading' };
+        continue;
+      }
       const key = asset ? `${item.alertId}:${alert.updatedAt}:${asset.datasource}:${asset.symbol}` : null;
-      const cache = key && cachesRef.current.get(key);
       const ev = out.events[item.alertId];
-      if (cache && ev?.key === key) events[item.alertId] = ev.list;
+      if (ev?.key === key) events[item.alertId] = ev.list;
       const st = out.status[item.alertId];
       if (st?.key === key) status[item.alertId] = st.st;
     }
     return { events, status };
-  }, [out, items, alertsById, asset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [out, items, alertsById, alertsStatus, asset]);
 
   return { eventsByAlert: view.events, statusByAlert: view.status, retry };
 }

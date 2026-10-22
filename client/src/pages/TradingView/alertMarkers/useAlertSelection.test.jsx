@@ -40,4 +40,46 @@ describe('useAlertSelection', () => {
     expect(result.current.items[0].hidden).toBe(true);
     await waitFor(() => expect(result.current.items[0].hidden).toBe(false));
   });
+
+  it('guardados en serie: dos cambios rápidos que fallan acaban en el estado confirmado', async () => {
+    settingsApi.saveChartAlertMarkers.mockRejectedValue(new Error('x'));
+    const { result } = renderHook(() => useAlertSelection());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => { result.current.toggleHidden('a1'); });
+    act(() => { result.current.add('a2'); });
+    await waitFor(() => expect(result.current.saveError).toBe('x'));
+    expect(result.current.items).toEqual([{ alertId: 'a1', color: '#facc15', hidden: false }]);
+    expect(settingsApi.saveChartAlertMarkers).toHaveBeenCalledTimes(1);
+  });
+
+  it('guarda el último estado cuando el guardado anterior termina', async () => {
+    let first;
+    settingsApi.saveChartAlertMarkers.mockImplementationOnce(() => new Promise((r) => { first = r; }));
+    const { result } = renderHook(() => useAlertSelection());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => { result.current.toggleHidden('a1'); });
+    act(() => { result.current.add('a2'); });
+    expect(settingsApi.saveChartAlertMarkers).toHaveBeenCalledTimes(1);
+    await act(async () => { first({}); });
+    await waitFor(() => expect(settingsApi.saveChartAlertMarkers).toHaveBeenCalledTimes(2));
+    expect(settingsApi.saveChartAlertMarkers.mock.calls[1][0].items.map((i) => i.alertId)).toEqual(['a1', 'a2']);
+  });
+
+  it('si la selección guardada no carga, los cambios son no-ops', async () => {
+    settingsApi.getChartAlertMarkers.mockRejectedValue(new Error('down'));
+    const { result } = renderHook(() => useAlertSelection());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.loadError).toBe('down');
+    act(() => { result.current.add('a2'); });
+    expect(result.current.items).toEqual([]);
+    expect(settingsApi.saveChartAlertMarkers).not.toHaveBeenCalled();
+  });
+
+  it('si falla la lista de alertas lo expone', async () => {
+    alertsApi.list.mockRejectedValue(new Error('nope'));
+    const { result } = renderHook(() => useAlertSelection());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.alertsStatus).toBe('error');
+    expect(result.current.items).toHaveLength(1);
+  });
 });
