@@ -163,14 +163,14 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     async listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {
       const ok = (d) => (filter === 'traded' ? ['opened', 'closed', 'reversed'].includes(d) : filter === 'ignored' ? d === 'ignored' : true);
       return signals
-        .filter((x) => x.strategyId === strategyId && ok(x.decision))
+        .filter((x) => x.strategyId === strategyId && ok(x.decision) && !(filter === 'traded' && x.simulated))
         .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
         .slice(0, limit)
         .map(clone);
     },
     async lastAutoSignalsByUser(userId) {
       const map = new Map();
-      for (const x of [...signals].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)) if (x.userId === userId) map.set(x.strategyId, x);
+      for (const x of [...signals].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)) if (x.userId === userId && !x.simulated) map.set(x.strategyId, x);
       return [...map.values()].map(clone);
     },
 

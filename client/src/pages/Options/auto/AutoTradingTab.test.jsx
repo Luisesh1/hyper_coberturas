@@ -231,6 +231,7 @@ describe('AutoTradingTab · escritorio', () => {
         structure: 'sell_against', targetDelta: 0.3, expiryDays: 7, quantity: 0.01, onOpposite: 'close',
         takeProfitPct: 50, stopLossPct: 200, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
         contractCount: 1, capitalUsdt: null, budgetUsdt: null, budgetFractions: 4,
+        maxPremiumUsdt: null, maxSpreadPct: null, minLeverage: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
         notify: { trades: true, errors: true },
       },
@@ -387,9 +388,30 @@ describe('AutoTradingTab · cierre manual y cancelación', () => {
     await act(async () => { resolveCancel({ id: 9, cancelRequested: true }); });
     expect(await screen.findByText(/Cancelación solicitada/)).toBeTruthy();
   });
+  it('cambiar de bot cierra la confirmación de cierre abierta', async () => {
+    withActivity({ positions: [POSITION] });
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cerrar todo' }));
+    await screen.findByRole('dialog', { name: 'Cerrar todas las posiciones' });
+    fireEvent.click(within(screen.getByRole('list', { name: 'Bots' })).getByRole('button', { name: /Breakout SOL/ }));
+    expect(await screen.findByRole('heading', { name: 'Breakout SOL' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Cerrar todas las posiciones' })).toBeNull());
+    expect(autoBotsApi.close).not.toHaveBeenCalled();
+  });
 });
 
 describe('AutoTradingTab · probar señal', () => {
+  it('cambiar de bot cierra el menú «Probar señal» abierto', async () => {
+    serverModes[2] = 'shadow';
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /Probar señal/ }));
+    expect(screen.getByRole('menuitem', { name: 'Alcista' })).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('list', { name: 'Bots' })).getByRole('button', { name: /Breakout SOL/ }));
+    expect(await screen.findByRole('heading', { name: 'Breakout SOL' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Alcista' })).toBeNull();
+  });
+
   it('«Probar señal ▾» → Alcista envía la simulación, avisa del resultado y recarga las señales', async () => {
     autoBotsApi.simulate.mockResolvedValue({ decision: 'opened', detail: 'Sombra: Compra BTC-261024-70000-C' });
     renderTab();

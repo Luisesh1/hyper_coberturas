@@ -36,4 +36,10 @@ describe('buildLimits con usage', () => {
     expect(rows.maxMarginUsdt.pct).toBeCloseTo(62);
     expect(rows.maxOrdersPerDay.value).toContain('2 / 10');
   });
+
+  it('netDelta null (bot con varios subyacentes) se muestra como «—» sin barra', () => {
+    const rows = Object.fromEntries(buildLimits({ ...detail, usage: { ...detail.usage, netDelta: null } }).map((r) => [r.key, r]));
+    expect(rows.maxNetDelta.value).toMatch(/^— \//);
+    expect(rows.maxNetDelta.pct).toBe(0);
+  });
 });

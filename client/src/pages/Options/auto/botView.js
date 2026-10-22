@@ -257,9 +257,10 @@ export function normalizeSignals(list) {
     .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
 }
 
-// Defensa en el cliente por si el servidor ignora `filter`.
+// Defensa en el cliente por si el servidor ignora `filter`. Las simuladas
+// solo aparecen en «Todas» (con su etiqueta «Simulada»).
 export function filterSignals(signals, filter) {
-  if (filter === 'traded') return signals.filter(isTraded);
+  if (filter === 'traded') return signals.filter((s) => isTraded(s) && !s.simulated);
   if (filter === 'ignored') return signals.filter((s) => s.decision === 'ignored');
   return signals;
 }
@@ -271,7 +272,7 @@ export function latestSignal(bots) {
   let best = null;
   for (const b of bots || []) {
     const s = b.lastSignal;
-    if (!s) continue;
+    if (!s || s.simulated) continue;
     if (!best || (s.at ?? 0) > (best.signal.at ?? 0)) best = { bot: b, signal: s };
   }
   return best;
@@ -523,7 +524,10 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     // Con presupuesto total el capital por entrada se ignora: no se envía.
     capitalUsdt: !(Number(form.budgetUsdt) > 0) && Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
     budgetUsdt: Number(form.budgetUsdt) > 0 ? Number(form.budgetUsdt) : null,
-    budgetFractions: Number.isInteger(Number(form.budgetFractions)) && isNum(form.budgetFractions)
+    // Sin presupuesto el campo de fracciones está oculto: un valor fuera de
+    // rango daría un 400 invisible. Se envía el valor por defecto.
+    budgetFractions: Number(form.budgetFractions) > 0 && Number(form.budgetUsdt) > 0 &&
+      Number.isInteger(Number(form.budgetFractions)) && isNum(form.budgetFractions)
       ? Number(form.budgetFractions) : COMMON_DEFAULTS.budgetFractions,
     onOpposite: form.onOpposite,
     takeProfitPct: Number(form.takeProfitPct),
@@ -546,10 +550,11 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     params.atrBandMultiplier = Number(form.atrBandMultiplier);
     params.tpMaxGainPct = Number(form.tpMaxGainPct);
   }
-  if (buy && Number(form.maxPremiumUsdt) > 0) params.maxPremiumUsdt = Number(form.maxPremiumUsdt);
-  // Filtros de entrada opcionales: vacío/0 = apagado (no se envía).
-  if (Number(form.maxSpreadPct) > 0) params.maxSpreadPct = Number(form.maxSpreadPct);
-  if (buy && Number(form.minLeverage) > 0) params.minLeverage = Number(form.minLeverage);
+  // Opcionales: vacío/0 = apagado → null. Siempre se envían: el servidor
+  // fusiona params al editar y una clave omitida conservaría el valor viejo.
+  params.maxPremiumUsdt = buy && Number(form.maxPremiumUsdt) > 0 ? Number(form.maxPremiumUsdt) : null;
+  params.maxSpreadPct = Number(form.maxSpreadPct) > 0 ? Number(form.maxSpreadPct) : null;
+  params.minLeverage = buy && Number(form.minLeverage) > 0 ? Number(form.minLeverage) : null;
   // 0 o vacío = sin margen propio (sólo el límite global).
   const limits = { ...(baseLimits || {}) };
   if (!buy && Number(form.maxMarginUsdt) > 0) limits.maxMarginUsdt = Number(form.maxMarginUsdt);

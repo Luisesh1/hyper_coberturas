@@ -168,6 +168,9 @@ export default function AutoTradingTab({ underlying } = {}) {
 
   // El aviso de un clonado fallido es del bot que se clonó: se limpia al cambiar de selección.
   useEffect(() => { setCloneError(null); }, [selectedId]);
+  // La confirmación de cierre es del bot en pantalla: al cambiar de bot se
+  // descarta (no debe poder confirmarse contra otro bot).
+  useEffect(() => { setCloseDialog(CLOSED_CLOSE); }, [selectedId]);
 
   const selected = bots.find((b) => b.id === selectedId) || null;
   // Lo que trae la lista (alertas, estado) + el detalle (kpis, params, límites).

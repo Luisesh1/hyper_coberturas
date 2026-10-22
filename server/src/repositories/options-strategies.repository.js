@@ -400,20 +400,22 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     let decisions = null;
     if (filter === 'traded') decisions = TRADED_DECISIONS;
     else if (filter === 'ignored') decisions = ['ignored'];
+    // «Operadas» = señales reales: las simuladas solo aparecen en «Todas».
     const { rows } = await db.query(
       `SELECT * FROM options_auto_signals
         WHERE strategy_id = $1 AND ($3::text[] IS NULL OR decision = ANY($3::text[]))
+          AND NOT ($4::boolean AND simulated)
         ORDER BY created_at DESC, id DESC LIMIT $2`,
-      [strategyId, limit, decisions]
+      [strategyId, limit, decisions, filter === 'traded']
     );
     return rows.map(mapAutoSignal);
   }
 
-  /** Última señal de cada bot del usuario. */
+  /** Última señal real (no simulada) de cada bot del usuario. */
   async function lastAutoSignalsByUser(userId) {
     const { rows } = await db.query(
       `SELECT DISTINCT ON (strategy_id) * FROM options_auto_signals
-        WHERE user_id = $1
+        WHERE user_id = $1 AND NOT simulated
         ORDER BY strategy_id, created_at DESC, id DESC`,
       [userId]
     );

@@ -226,7 +226,7 @@ export default function BotDetail({
             <button type="button" className={ui.btn} onClick={onEdit}>
               <PencilIcon size={18} /> Alertas, salidas y riesgo
             </button>
-            <SimulateMenu bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
+            <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
           </section>
           <section className={styles.mobileSection}>
             <div className={styles.sectionHead}>
@@ -296,7 +296,7 @@ export default function BotDetail({
           <AlertRows alerts={bot.alerts} onUnlink={onUnlink} unlinking={unlinking} />
           <div className={styles.simRow}>
             <button type="button" className={ui.btn} onClick={onEdit}>Vincular alerta…</button>
-            <SimulateMenu bot={bot} onSimulate={onSimulate} busy={actionBusy} />
+            <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} />
           </div>
           <p className={styles.note}>
             Solo se listan alertas alcistas o bajistas cuyo activo tiene opciones en Binance (BTC, ETH, BNB, SOL, XRP, DOGE). Las neutrales no operan.

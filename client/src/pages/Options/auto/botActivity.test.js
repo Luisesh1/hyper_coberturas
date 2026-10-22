@@ -90,6 +90,10 @@ describe('usageRows', () => {
     expect(rows[4]).toMatchObject({ label: 'Comprometido', used: 12, max: 48, pct: 25, text: '12 de 48 USDT' });
     expect(usageRows(bot).some((r) => r.label === 'Comprometido')).toBe(false);
   });
+  it('no muestra fila de delta neto (null en bots con varios subyacentes)', () => {
+    const rows = usageRows({ ...bot, usage: { ...bot.usage, netDelta: null } });
+    expect(rows.some((r) => /delta|Δ/i.test(r.label))).toBe(false);
+  });
 });
 
 describe('closedTradeRows', () => {

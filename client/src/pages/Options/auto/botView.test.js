@@ -101,6 +101,7 @@ describe('formulario de bot', () => {
         structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, quantity: 0.01, onOpposite: 'reverse',
         takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
         maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null, budgetUsdt: null, budgetFractions: 4,
+        maxSpreadPct: null, minLeverage: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
         notify: { trades: true, errors: true },
       },
@@ -109,7 +110,8 @@ describe('formulario de bot', () => {
     const sell = buildBotPayload({ ...withStructure(initialBotForm(), 'sell_against'), name: 'S', alertIds: [1] }, { editing: true, baseLimits: { maxDailyLossUsdt: 50 } });
     expect(sell.underlying).toBeUndefined();
     expect(sell.underlyings).toEqual(['BTC']);
-    expect(sell.params.maxPremiumUsdt).toBeUndefined();
+    expect(sell.params.maxPremiumUsdt).toBeNull();
+    expect(sell.params.minLeverage).toBeNull();
     expect(sell.limits).toEqual({ maxDailyLossUsdt: 50, maxMarginUsdt: 1000 });
   });
 
@@ -231,6 +233,21 @@ describe('señales y KPIs', () => {
     ];
     expect(latestSignal(bots).bot.id).toBe(2);
   });
+
+  it('las señales simuladas no cuentan como «Última señal» ni como «Operadas» (sí en «Todas»)', () => {
+    const bots = [
+      normalizeBot({ id: 1, lastSignal: { direction: 'bearish', decision: 'opened', createdAt: 10 } }),
+      normalizeBot({ id: 2, lastSignal: { direction: 'bullish', decision: 'opened', simulated: true, createdAt: 20 } }),
+    ];
+    expect(latestSignal(bots).bot.id).toBe(1);
+    expect(latestSignal([bots[1]])).toBeNull();
+    const list = normalizeSignals([
+      { id: 1, decision: 'opened', createdAt: 10 },
+      { id: 2, decision: 'closed', simulated: true, createdAt: 20 },
+    ]);
+    expect(filterSignals(list, 'traded').map((s) => s.id)).toEqual([1]);
+    expect(filterSignals(list, 'all').map((s) => [s.id, s.simulated])).toEqual([[2, true], [1, false]]);
+  });
 });
 
 describe('KPIs de operaciones cerradas (del servidor)', () => {
@@ -305,6 +322,18 @@ describe('presupuesto total en fracciones', () => {
     expect(q).toMatchObject({ budgetUsdt: null, budgetFractions: 4, capitalUsdt: 500 });
   });
 
+  it('presupuesto vacío: fracciones ocultas fuera de rango no viajan (evita 400 invisible)', () => {
+    const p = buildBotPayload(form({ budgetUsdt: '', budgetFractions: 99 })).params;
+    expect(p).toMatchObject({ budgetUsdt: null, budgetFractions: 4 });
+    expect(buildBotPayload(form({ budgetUsdt: null, budgetFractions: 2.5 })).params.budgetFractions).toBe(4);
+  });
+
+  it('editar y vaciar el presupuesto envía budgetUsdt: null', () => {
+    const bot = normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with', budgetUsdt: 48, budgetFractions: 6 } });
+    const edited = { ...initialBotForm({ bot }), name: 'B', alertIds: [1], budgetUsdt: '' };
+    expect(buildBotPayload(edited, { editing: true }).params).toMatchObject({ budgetUsdt: null, budgetFractions: 4 });
+  });
+
   it('editar recupera presupuesto y fracciones; los bots antiguos sin claves quedan sin presupuesto', () => {
     expect(initialBotForm({ bot: normalizeBot({ id: 1, params: { budgetUsdt: 48, budgetFractions: 6 } }) })).toMatchObject({ budgetUsdt: 48, budgetFractions: 6 });
     expect(initialBotForm({ bot: normalizeBot({ id: 1, params: {} }) })).toMatchObject({ budgetUsdt: null, budgetFractions: 4 });
@@ -324,14 +353,24 @@ describe('filtros de entrada: spread y apalancamiento', () => {
   const form = (extra = {}) => ({ ...initialBotForm({ underlying: 'BTC' }), name: 'B', alertIds: [1], ...extra });
   const row = (rows, key) => rows.find((r) => r.key === key);
 
-  it('apagados por defecto: no se envían ni se muestran', () => {
+  it('apagados por defecto: viajan como null y no se muestran', () => {
     expect(initialBotForm()).toMatchObject({ maxSpreadPct: null, minLeverage: null });
     const p = buildBotPayload(form()).params;
-    expect(p.maxSpreadPct).toBeUndefined();
-    expect(p.minLeverage).toBeUndefined();
+    // Se envían como null: el servidor fusiona params y un valor omitido persistiría.
+    expect(p.maxSpreadPct).toBeNull();
+    expect(p.minLeverage).toBeNull();
     const d = describeParams(normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with' } }));
     expect(row(d.entry, 'maxSpreadPct')).toBeUndefined();
     expect(row(d.entry, 'minLeverage')).toBeUndefined();
+  });
+
+  it('editar un bot con filtros y vaciarlos envía null (no persisten)', () => {
+    const bot = normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with', maxSpreadPct: 8, minLeverage: 5, maxPremiumUsdt: 150 } });
+    const edited = { ...initialBotForm({ bot }), name: 'B', alertIds: [1], maxSpreadPct: '', minLeverage: '', maxPremiumUsdt: '' };
+    const p = buildBotPayload(edited, { editing: true }).params;
+    expect(p).toHaveProperty('maxSpreadPct', null);
+    expect(p).toHaveProperty('minLeverage', null);
+    expect(p).toHaveProperty('maxPremiumUsdt', null);
   });
 
   it('payload, validación y detalle cuando están activos', () => {
@@ -339,7 +378,7 @@ describe('filtros de entrada: spread y apalancamiento', () => {
     expect(p).toMatchObject({ maxSpreadPct: 8, minLeverage: 5 });
     const s = buildBotPayload({ ...form({ maxSpreadPct: 8, minLeverage: 5 }), structure: 'sell_against' }).params;
     expect(s.maxSpreadPct).toBe(8);
-    expect(s.minLeverage).toBeUndefined();
+    expect(s.minLeverage).toBeNull();
     expect(validateBotForm(form({ maxSpreadPct: 0 })).maxSpreadPct).toBeTruthy();
     expect(validateBotForm(form({ minLeverage: -1 })).minLeverage).toBeTruthy();
     expect(validateBotForm(form({ maxSpreadPct: 8, minLeverage: 5 }))).toEqual({});
