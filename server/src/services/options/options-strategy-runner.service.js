@@ -26,6 +26,7 @@ const {
   num,
 } = require('./options-utils');
 const { intrinsic } = require('./options-pricing');
+const { closeLegs } = require('./templates/helpers');
 const { projectTakeProfit } = require('./options-take-profit');
 const { fullSizeFokLimit } = require('./options-fok-depth');
 const { isPilotSyntheticTpEligible, fixedTargetPrice } =
@@ -181,10 +182,42 @@ class OptionsStrategyRunner {
    * mismo contexto que el tick. Devuelve las acciones del template por modo y
    * lo que produjeron: llenados (`booked`) y motivos de skip/hold/error.
    */
-  async runForSignal(strategy, signal) {
+  async runForSignal(strategy, signal, { shadowOnly = false } = {}) {
     const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
-    const actions = await this.withLock(strategy.id, () => this.runStrategy(strategy, tickCtx));
+    const actions = await this.withLock(strategy.id,
+      () => this.runStrategy(strategy, tickCtx, { shadowOnly }));
     return { actions, produced: tickCtx.produced };
+  }
+
+  /**
+   * Cierre manual (desde la UI) de las posiciones abiertas de un modo, o
+   * solo de `positionIds`. Pasa por el mismo ejecutor que un cierre del
+   * template: en sombra se llena contra el libro; en real aplica el camino
+   * de TP residente (`requestProtectedExit`) igual que un stop.
+   * Las posiciones se leen DENTRO del lock: una segunda llamada concurrente
+   * ve lo que dejó la primera y no cierra dos veces.
+   */
+  async closeManually(strategy, { mode, positionIds } = {}) {
+    if (mode !== 'shadow' && mode !== 'live') throw new Error(`Modo de cierre inválido: ${mode}`);
+    const tickCtx = { now: this.now(), chains: new Map(), signal: null, produced: [] };
+    return this.withLock(strategy.id, async () => {
+      const wanted = Array.isArray(positionIds) ? new Set(positionIds.map(Number)) : null;
+      const open = await this.repo.listOpenPositions(strategy.id, mode);
+      const targets = wanted ? open.filter((p) => wanted.has(Number(p.id))) : open;
+      if (!targets.length) return { status: 'nothing_to_close', produced: tickCtx.produced };
+      const market = await this.strategyMarket(strategy, tickCtx);
+      const ctx = await this.modeContext(strategy, mode, tickCtx, market, open);
+      const ids = new Set(targets.map((p) => Number(p.id)));
+      const positions = ctx.positions.filter((p) => ids.has(Number(p.id)));
+      const action = { type: 'close', reason: 'manual', detail: 'Cierre manual', legs: closeLegs(positions) };
+      if (mode === 'shadow') {
+        const event = await this.executeShadow(strategy, action, ctx);
+        return { status: event ? 'closed' : 'not_submitted', produced: tickCtx.produced };
+      }
+      const result = await this.executeLive(strategy, action, ctx);
+      const pending = ['submitted', 'tp_cancel_requested', 'attention'].includes(result?.status);
+      return { status: pending ? 'pending' : 'not_submitted', produced: tickCtx.produced };
+    });
   }
 
   /**
@@ -304,20 +337,38 @@ class OptionsStrategyRunner {
 
   // ---------- evaluación ----------
 
-  async runStrategy(strategy, tickCtx) {
+  /** Template, parámetros, cadena y spot de una estrategia para esta pasada. */
+  async strategyMarket(strategy, tickCtx) {
     const template = templates.getTemplate(strategy.template);
     const params = templates.validateParams(strategy.template, strategy.params);
     const { base, chain } = await this.targetChain(strategy, params, tickCtx);
     const spot = num(chain?.spot) ?? num(base?.spot);
-    const modes = strategy.mode === 'live' ? ['shadow', 'live'] : ['shadow'];
+    return { template, params, chain, spot };
+  }
+
+  /**
+   * Contexto de ejecución de un modo: posiciones abiertas enriquecidas con
+   * cotización (y objetivos de volatilidad en bots por alertas), spot y
+   * parámetros. Lo comparten la evaluación del template y el cierre manual.
+   */
+  async modeContext(strategy, mode, tickCtx, { template, params, chain, spot }, open = null) {
+    const rows = open || await this.repo.listOpenPositions(strategy.id, mode);
+    const enriched = await this.enrichPositions(rows, chain);
+    const positions = template.id === 'alert_signal'
+      ? await this.attachVolatilityTargets(enriched, params, spot, tickCtx.now)
+      : enriched;
+    return { ...tickCtx, spot, positions, params, mode };
+  }
+
+  async runStrategy(strategy, tickCtx, { shadowOnly = false } = {}) {
+    const market = await this.strategyMarket(strategy, tickCtx);
+    const { template, params, chain, spot } = market;
+    const modes = strategy.mode === 'live' && !shadowOnly ? ['shadow', 'live'] : ['shadow'];
     const byMode = {};
 
     for (const mode of modes) {
-      const open = await this.repo.listOpenPositions(strategy.id, mode);
-      const enriched = await this.enrichPositions(open, chain);
-      const positions = template.id === 'alert_signal'
-        ? await this.attachVolatilityTargets(enriched, params, spot, tickCtx.now)
-        : enriched;
+      const ctx = await this.modeContext(strategy, mode, tickCtx, market);
+      const { positions } = ctx;
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
       // Solo los bots por alertas limitan operaciones por día.
       const tradesToday = template.signalDriven
@@ -336,7 +387,6 @@ class OptionsStrategyRunner {
         tradesToday,
       });
       byMode[mode] = actions;
-      const ctx = { ...tickCtx, spot, positions, params, mode };
       // Una alerta opuesta con onOpposite=reverse registra CIERRE + REENTRADA
       // en una sola transacción. El reconciliador abrirá la nueva dirección
       // únicamente al confirmar todos los cierres, nunca en el mismo tick.

@@ -323,3 +323,122 @@ test('estimateMargin: una venta sin spot válido no se reduce a la prima', () =>
   assert.ok(Number.isNaN(estimateMargin({ side: 'SELL', type: 'C', strike: 66000, price: 100, quantity: 1, spot: null })));
   assert.equal(estimateMargin({ side: 'BUY', type: 'C', strike: 66000, price: 100, quantity: 1, spot: null }), 100);
 });
+
+// ---------- cierre manual y señal solo-sombra ----------
+
+test('closeManually en sombra sin ids cierra todas las posiciones con closeReason manual', async () => {
+  const { repo, runner, strategy } = await setup();
+  await runner.tick();
+  assert.equal((await repo.listOpenPositions(strategy.id, 'shadow')).length, 2);
+  const result = await runner.closeManually(strategy, { mode: 'shadow' });
+  assert.equal(result.status, 'closed');
+  assert.ok(result.produced.some((p) => p.booked && p.type === 'close' && p.reason === 'manual'));
+  const closed = repo.positions.filter((p) => p.closedAt != null);
+  assert.equal(closed.length, 2);
+  assert.ok(closed.every((p) => p.closeReason === 'manual'));
+  const event = repo.events.find((e) => e.action === 'close');
+  assert.equal(event.detail, 'Cierre manual');
+});
+
+test('closeManually con positionIds cierra solo esas posiciones', async () => {
+  const { repo, runner, strategy } = await setup();
+  await runner.tick();
+  const [first, second] = await repo.listOpenPositions(strategy.id, 'shadow');
+  const result = await runner.closeManually(strategy, { mode: 'shadow', positionIds: [first.id] });
+  assert.equal(result.status, 'closed');
+  assert.equal(repo.positions.find((p) => p.id === first.id).closeReason, 'manual');
+  assert.equal(repo.positions.find((p) => p.id === second.id).closedAt, null);
+});
+
+test('closeManually sin posiciones abiertas devuelve nothing_to_close', async () => {
+  const { runner, strategy, repo } = await setup({ mode: 'paused' });
+  const result = await runner.closeManually(strategy, { mode: 'shadow' });
+  assert.equal(result.status, 'nothing_to_close');
+  assert.deepEqual(result.produced, []);
+  assert.equal(repo.events.length, 0);
+});
+
+async function setupLiveWithPositions() {
+  const ctx = await setup({ mode: 'live' });
+  const { repo, runner, strategy, credentials } = ctx;
+  await runner.tick();
+  for (const p of await repo.listOpenPositions(strategy.id, 'shadow')) {
+    const { id: _id, ...rest } = p;
+    await repo.insertPosition({ ...rest, mode: 'live' });
+  }
+  credentials.orders.length = 0;
+  let submits = 0;
+  const originalSubmit = runner.liveExecutor.submit;
+  runner.liveExecutor.submit = async (...args) => { submits += 1; return originalSubmit(...args); };
+  return { ...ctx, submits: () => submits };
+}
+
+test('closeManually en real con TP residente: pending vía requestProtectedExit, sin submit', async () => {
+  const { runner, strategy, repo, submits } = await setupLiveWithPositions();
+  const requested = [];
+  runner.liveExecutor.requestProtectedExit = async (s, action) => { requested.push(action); return true; };
+  const result = await runner.closeManually(strategy, { mode: 'live' });
+  assert.equal(result.status, 'pending');
+  assert.equal(submits(), 0);
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].reason, 'manual');
+  assert.equal(requested[0].legs.length, 2);
+  assert.ok(result.produced.some((p) => p.pending && p.reason === 'tp_cancel_requested'));
+  assert.equal(repo.positions.filter((p) => p.mode === 'live' && p.closedAt != null).length, 0);
+});
+
+test('closeManually en real sin TP residente envía órdenes y queda pending', async () => {
+  const { runner, strategy, credentials, submits } = await setupLiveWithPositions();
+  const result = await runner.closeManually(strategy, { mode: 'live' });
+  assert.equal(result.status, 'pending');
+  assert.equal(submits(), 1);
+  assert.equal(credentials.orders.length, 2);
+  assert.ok(credentials.orders.every((o) => o.side === 'BUY' && o.reduceOnly === true));
+});
+
+test('closeManually en real con el ejecutor deshabilitado devuelve not_submitted', async () => {
+  const { runner, strategy, repo, submits } = await setupLiveWithPositions();
+  runner.liveExecutor.enabled = false;
+  const result = await runner.closeManually(strategy, { mode: 'live' });
+  assert.equal(result.status, 'not_submitted');
+  assert.equal(submits(), 0);
+  assert.ok(result.produced.some((p) => p.reason === 'live_disabled'));
+  assert.ok(repo.events.some((e) => e.mode === 'live' && e.action === 'skip'));
+});
+
+test('dos closeManually concurrentes en sombra cierran cada posición una sola vez', async () => {
+  const { repo, runner, strategy } = await setup();
+  await runner.tick();
+  const calls = [];
+  const originalClose = repo.closePosition;
+  repo.closePosition = async (id, data) => { calls.push(id); return originalClose(id, data); };
+  const [a, b] = await Promise.all([
+    runner.closeManually(strategy, { mode: 'shadow' }),
+    runner.closeManually(strategy, { mode: 'shadow' }),
+  ]);
+  assert.deepEqual([a.status, b.status].sort(), ['closed', 'nothing_to_close']);
+  assert.equal(calls.length, 2);
+  assert.equal(new Set(calls).size, 2);
+  assert.equal(repo.events.filter((e) => e.action === 'close').length, 1);
+});
+
+test('runForSignal con shadowOnly en un bot real no envía órdenes reales', async () => {
+  const { repo, runner, strategy, credentials } = await setup({ mode: 'live' });
+  let submits = 0;
+  runner.liveExecutor.submit = async () => { submits += 1; return { status: 'submitted', sent: 1 }; };
+  const { actions, produced } = await runner.runForSignal(strategy, { direction: 'long' }, { shadowOnly: true });
+  assert.equal(submits, 0);
+  assert.equal(credentials.orders.length, 0);
+  assert.deepEqual(Object.keys(actions), ['shadow']);
+  assert.ok(produced.every((p) => p.mode === 'shadow'));
+  assert.equal(repo.positions.filter((p) => p.mode === 'shadow').length, 2);
+});
+
+test('runForSignal sin shadowOnly en un bot real sigue evaluando el modo real', async () => {
+  const { runner, strategy } = await setup({ mode: 'live' });
+  let submits = 0;
+  runner.liveExecutor.submit = async () => { submits += 1; return { status: 'submitted', sent: 2 }; };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'long' });
+  assert.equal(submits, 1);
+  assert.deepEqual(Object.keys(actions), ['shadow', 'live']);
+});
