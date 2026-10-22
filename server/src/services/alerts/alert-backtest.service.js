@@ -31,9 +31,11 @@ const MAX_EVALS_PER_REQUEST = 2000;
 const MAX_COOLDOWN_LOOKBACK_FACTOR = 32;
 
 // Calentamiento del cooldown: 32·cd, pero nunca más de MAX_EVALS_PER_REQUEST
-// boundaries extra (cd = 1 día en 1m serían 46 080 evaluaciones).
+// boundaries extra (cd = 1 día en 1m serían 46 080 evaluaciones). Redondeado
+// hacia arriba a un múltiplo de baseMs (mínimo 1) para caer en la rejilla.
 function cooldownLookbackMs(cooldownMs, baseMs) {
-  return Math.min(MAX_COOLDOWN_LOOKBACK_FACTOR * cooldownMs, MAX_EVALS_PER_REQUEST * baseMs);
+  const raw = Math.min(MAX_COOLDOWN_LOOKBACK_FACTOR * cooldownMs, MAX_EVALS_PER_REQUEST * baseMs);
+  return Math.max(1, Math.ceil(raw / baseMs)) * baseMs;
 }
 
 // ------------------------------------------------------------------
@@ -133,31 +135,31 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
   const firstBoundary = lastBefore(fromMs) + baseMs; // primer boundary > fromMs
   const lastBoundary = lastBefore(toMs);
 
-  // Punto de reinicio: último boundary p ≤ fromMs sin ningún wouldTrigger en
-  // (p − cd, p]. En los boundaries > p ningún envío anterior pesa: el último
-  // posible cae en ≤ p − cd, y cd + tf ≥ cd + SEND_DELAY_MS.
-  // Recorrer hacia atrás de forma perezosa equivale a duplicar W hasta el tope.
+  // Punto de reinicio p ≤ firstBoundary: en p no hay cooldown activo si ningún
+  // envío real ocurrió en un boundary q < p con (p + 3 s) − (q + 3 s + δ) < cd,
+  // es decir p − q < cd + SEND_DELAY_MS. Basta con que ningún q así cumpla
+  // wouldTrigger (los envíos son un subconjunto). El propio p da igual: se
+  // simula desde p con estado limpio. Si cd < tf − δ, todo boundary vale.
   let simStart = firstBoundary; // primer boundary que se simula
   let cooldownApprox = false;
   if (cooldownMs > 0) {
-    // Anclado al boundary (no a fromMs) para que el tope cubra siempre el
-    // mismo número de boundaries; run pide velas desde ese mismo ancla.
+    // Cuántos boundaries previos pueden pesar sobre p.
+    const reach = Math.ceil((cooldownMs + SEND_DELAY_MS) / baseMs) - 1;
+    // Anclado al boundary (no a fromMs); run pide velas desde ese mismo ancla.
     const lowest = lastBefore(fromMs) - cooldownLookbackMs(cooldownMs, baseMs);
-    let candidate = null;
     let found = null;
-    for (let b = lastBefore(fromMs); b >= lowest; b -= baseMs) {
-      if (evaluateAt(b).wouldTrigger) {
-        candidate = null;
-        continue;
+    let p = firstBoundary;
+    while (found == null && p - reach * baseMs >= lowest) {
+      let blocker = null;
+      for (let k = 1; k <= reach; k += 1) {
+        if (evaluateAt(p - k * baseMs).wouldTrigger) { blocker = p - k * baseMs; break; }
       }
-      if (candidate == null) candidate = b;
-      if (b - baseMs <= candidate - cooldownMs) {
-        found = candidate;
-        break;
-      }
+      if (blocker == null) found = p;
+      // Todo p' en (blocker, p] también tiene ese disparo a su alcance.
+      else p = blocker;
     }
     if (found != null) {
-      simStart = found + baseMs;
+      simStart = found;
     } else {
       cooldownApprox = true;
       simStart = lowest;

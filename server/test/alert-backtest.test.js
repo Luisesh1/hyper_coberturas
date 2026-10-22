@@ -229,8 +229,8 @@ test('fromMs no alineado con cd < tf no marca cooldownApprox', async () => {
   });
   const res = await svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: fromMs, endTime: fromMs + 10 * 3600_000 });
   assert.equal(res.cooldownApprox, false);
-  // Fetch anclado al boundary: lastBefore(from) − 32·cd − 250·1h.
-  assert.equal(calls[0][2].startTime, BASE + 400 * 3600_000 - 32 * 60_000 - 250 * 3600_000);
+  // Fetch anclado al boundary: lastBefore(from) − ceil(32·cd → 1h) − 250·1h.
+  assert.equal(calls[0][2].startTime, BASE + 400 * 3600_000 - 3600_000 - 250 * 3600_000);
 });
 
 test('cada regla lista todas sus condiciones', () => {
@@ -354,4 +354,40 @@ test('cooldown de 1 día en 1m: el calentamiento se limita a 2000 boundaries', a
   const res = await svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: fromMs, endTime: toMs });
   assert.equal(res.cooldownApprox, true);
   assert.equal(calls[0][2].startTime, fromMs - 2000 * M1 - 250 * M1);
+});
+
+test('cd < tf con disparo en el boundary previo a from: exacto y sin cooldownApprox', () => {
+  const H = 3600_000;
+  const k0 = 400; // lastBefore(fromMs) = BASE + 400h → vela 399 (abre 399h)
+  const hot = new Set([398, 399, 400, 401]);
+  const candles = makeCandles(H, BASE, 600, (i) => (hot.has(i) ? 100 : 10));
+  const alert = makeAlert({ cooldownSeconds: 60, rules: [volumeRule('1h', 50)] });
+  const fromMs = BASE + k0 * H + 45 * 60_000;
+  const toMs = BASE + 420 * H;
+  const out = simulate({ alert, candlesByTf: { '1h': candles }, fromMs, toMs });
+  assert.equal(out.cooldownApprox, false);
+  const long = simulate({ alert, candlesByTf: { '1h': candles }, fromMs: BASE + 300 * H, toMs });
+  assert.deepEqual(out.events, long.events.filter((e) => e.evalTime > fromMs));
+  assert.deepEqual(out.events.map((e) => e.evalTime), [BASE + 401 * H, BASE + 402 * H]);
+});
+
+test('rama aproximada con 32·cd fuera de rejilla: todos los evalTime son boundaries', async () => {
+  // cd = 1000 s → 32·cd = 32 000 s = 35,5 velas de 15m (se redondea a 36).
+  const candles = makeCandles(M15, BASE, 600, (i) => (i >= 100 ? 100 : 10));
+  const alert = makeAlert({ cooldownSeconds: 1000 });
+  const fromMs = closeOf(500) + 7 * 60_000;
+  const toMs = closeOf(520);
+  const out = simulate({ alert, candlesByTf: { '15m': candles }, fromMs, toMs });
+  assert.equal(out.cooldownApprox, true);
+  assert.ok(out.events.length > 0);
+  for (const e of out.events) assert.equal(e.evalTime % M15, 0);
+  const calls = [];
+  const svc = createAlertBacktest({
+    getAlert: async () => alert,
+    getCandles: async (...args) => { calls.push(args); return candles; },
+    now: () => toMs + 3000,
+  });
+  const res = await svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: fromMs, endTime: toMs });
+  for (const e of res.events) assert.equal(e.evalTime % M15, 0);
+  assert.equal(calls[0][2].startTime, closeOf(500) - 36 * M15 - 250 * M15);
 });
