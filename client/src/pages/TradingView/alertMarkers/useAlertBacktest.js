@@ -5,7 +5,7 @@ import { ERROR_BACKOFF_MS, OVERLAY_TF_MS } from '../overlays/useChartOverlays.js
 export const MAX_EVALS_PER_REQUEST = 2000;
 export const MAX_CHUNKS_PER_ALERT = 10;
 
-const ruleConditions = (rule) => {
+export const ruleConditions = (rule) => {
   if (Array.isArray(rule?.conditions)) return rule.conditions;
   if (rule?.indicatorType) return [rule];
   return [];
