@@ -47,7 +47,7 @@ describe('formulario de bot', () => {
       underlying: 'BTC',
       alertIds: [3],
       params: {
-        structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, quantity: 0.01, onOpposite: 'reverse',
+        structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, expiryMinDays: null, expiryMaxDays: null, quantity: 0.01, onOpposite: 'reverse',
         takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
         maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
@@ -76,6 +76,21 @@ describe('formulario de bot', () => {
     expect(validateBotForm({ ...dynamic, tpAtrMultiplier: 5, tpHorizonHours: 2.5 })).toMatchObject({
       tpAtrMultiplier: 'Máximo 4', tpHorizonHours: 'Debe ser un número entero',
     });
+  });
+
+  it('rango de vencimiento opcional del bot: ambos o ninguno, mínimo ≤ máximo', () => {
+    const base = { ...initialBotForm({ underlying: 'ETH' }), name: 'R', alertIds: [3] };
+    expect(base).toMatchObject({ expiryMinDays: null, expiryMaxDays: null });
+    expect(validateBotForm(base)).toEqual({});
+    const ranged = { ...base, expiryMinDays: 7, expiryMaxDays: 14 };
+    expect(validateBotForm(ranged)).toEqual({});
+    expect(buildBotPayload(ranged).params).toMatchObject({ expiryMinDays: 7, expiryMaxDays: 14 });
+    expect(initialBotForm({ bot: normalizeBot({ id: 2, params: { expiryMinDays: 7, expiryMaxDays: 14 } }) }))
+      .toMatchObject({ expiryMinDays: 7, expiryMaxDays: 14 });
+    expect(validateBotForm({ ...base, expiryMinDays: 7 })).toEqual({ expiryMaxDays: 'Indica también el máximo' });
+    expect(validateBotForm({ ...base, expiryMaxDays: 7 })).toEqual({ expiryMinDays: 'Indica también el mínimo' });
+    expect(validateBotForm({ ...base, expiryMinDays: 20, expiryMaxDays: 10 })).toEqual({ expiryMaxDays: 'Debe ser ≥ al mínimo' });
+    expect(validateBotForm({ ...base, expiryMinDays: 1, expiryMaxDays: 200 })).toEqual({ expiryMaxDays: 'Máximo 180' });
   });
 
   it('al editar parte de los parámetros guardados', () => {

@@ -228,7 +228,6 @@ test('un disparo real emite la señal con la dirección y guarda la foto en el e
   const p = received[0];
   assert.deepEqual(Object.keys(p).sort(), [
     'alertId', 'alertName', 'asset', 'candleCloseTime', 'direction', 'eventId',
-    'optionExpiryMaxDays', 'optionExpiryMinDays',
     'score', 'thresholdPercent', 'triggeredAt', 'userId',
   ]);
   assert.equal(p.userId, 1);

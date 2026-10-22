@@ -104,8 +104,6 @@ const alertSchema = z.object({
   cooldownSeconds: z.number().int().nonnegative().default(900),
   datasource: z.enum(DATASOURCES).default('binance'),
   direction: z.enum(DIRECTIONS).default(DEFAULT_DIRECTION),
-  optionExpiryMinDays: z.number().positive().max(180).nullable().default(null),
-  optionExpiryMaxDays: z.number().positive().max(180).nullable().default(null),
 });
 
 // Compatibilidad operador → kinds aceptados de operand.
@@ -131,11 +129,6 @@ function validatePayload(input) {
     throw new ValidationError(`Payload inválido: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(' | ')}`);
   }
   const data = parsed.data;
-  const minExpiry = data.optionExpiryMinDays;
-  const maxExpiry = data.optionExpiryMaxDays;
-  if ((minExpiry == null) !== (maxExpiry == null) || (minExpiry != null && minExpiry > maxExpiry)) {
-    throw new ValidationError('Vencimiento de opciones: indica mínimo y máximo, con mínimo ≤ máximo');
-  }
   for (const [i, rule] of data.rules.entries()) {
     if (rule.joiners.length !== Math.max(0, rule.conditions.length - 1)) {
       throw new ValidationError(`regla ${i}: joiners debe tener ${rule.conditions.length - 1} elemento(s), recibido ${rule.joiners.length}`);
@@ -176,8 +169,6 @@ function rowToDto(row) {
     datasource: row.datasource,
     // Antes de la migración 032 la fila no trae la columna → 'neutral'.
     direction: normalizeDirection(row.direction),
-    optionExpiryMinDays: row.option_expiry_min_days == null ? null : Number(row.option_expiry_min_days),
-    optionExpiryMaxDays: row.option_expiry_max_days == null ? null : Number(row.option_expiry_max_days),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -200,8 +191,6 @@ function dtoToRowPayload(data) {
     cooldownSeconds: data.cooldownSeconds,
     datasource: data.datasource,
     direction: normalizeDirection(data.direction),
-    optionExpiryMinDays: data.optionExpiryMinDays,
-    optionExpiryMaxDays: data.optionExpiryMaxDays,
     now: Date.now(),
   };
 }
@@ -471,8 +460,6 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
         asset,
         score,
         thresholdPercent: Number(alertDto.thresholdPercent),
-        optionExpiryMinDays: alertDto.optionExpiryMinDays ?? null,
-        optionExpiryMaxDays: alertDto.optionExpiryMaxDays ?? null,
         eventId: event.id,
         candleCloseTime,
         triggeredAt: alertSentAt,

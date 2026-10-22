@@ -90,8 +90,6 @@ function emptyForm() {
     telegramEnabled: true,
     datasource: 'binance',
     direction: DEFAULT_DIRECTION,
-    optionExpiryMinDays: null,
-    optionExpiryMaxDays: null,
     assetList: ['BTCUSDT'],
     rules: [emptyRule()],
   };
@@ -101,12 +99,6 @@ function getFormValidationError(value) {
   if (!value.name.trim()) return 'Falta el nombre de la alerta';
   if (value.assetList.length === 0) return 'Agrega al menos un activo';
   if (value.rules.length === 0) return 'Agrega al menos una regla';
-  const minExpiry = value.optionExpiryMinDays;
-  const maxExpiry = value.optionExpiryMaxDays;
-  if ((minExpiry == null) !== (maxExpiry == null)) return 'Indica ambos límites del vencimiento o deja ambos vacíos';
-  if (minExpiry != null && (!Number.isFinite(minExpiry) || !Number.isFinite(maxExpiry) || minExpiry <= 0 || maxExpiry > 180 || minExpiry > maxExpiry)) {
-    return 'Vencimiento: mínimo mayor que cero, máximo hasta 180 días y mínimo no mayor al máximo';
-  }
   for (const [i, r] of value.rules.entries()) {
     const conds = Array.isArray(r.conditions) ? r.conditions : [];
     if (conds.length === 0) return `Regla #${i + 1} no tiene condiciones`;
@@ -126,8 +118,6 @@ function formToPayload(value) {
     telegramEnabled: value.telegramEnabled,
     datasource: value.datasource,
     direction: normalizeDirection(value.direction),
-    optionExpiryMinDays: value.optionExpiryMinDays == null ? null : Number(value.optionExpiryMinDays),
-    optionExpiryMaxDays: value.optionExpiryMaxDays == null ? null : Number(value.optionExpiryMaxDays),
     assetList: value.assetList.slice(),
     rules: value.rules.map((r) => ({
       label: String(r.label || '').trim(),
@@ -230,8 +220,6 @@ export default function AlertsPage() {
       telegramEnabled: alert.telegramEnabled,
       datasource: alert.datasource,
       direction: normalizeDirection(alert.direction),
-      optionExpiryMinDays: alert.optionExpiryMinDays ?? null,
-      optionExpiryMaxDays: alert.optionExpiryMaxDays ?? null,
       assetList: Array.isArray(alert.assetList) ? alert.assetList.slice() : [],
       rules: Array.isArray(alert.rules) && alert.rules.length > 0
         ? alert.rules.map(normalizeLoadedRule)
@@ -316,8 +304,6 @@ export default function AlertsPage() {
       telegramEnabled: source.telegramEnabled !== false,
       datasource: source.datasource || 'binance',
       direction: normalizeDirection(source.direction),
-      optionExpiryMinDays: source.optionExpiryMinDays ?? null,
-      optionExpiryMaxDays: source.optionExpiryMaxDays ?? null,
       assetList: Array.isArray(source.assetList)
         ? source.assetList.map((asset) => String(asset || '').trim().toUpperCase()).filter(Boolean)
         : [],
@@ -765,35 +751,6 @@ export default function AlertsPage() {
                   Enviar a Telegram (config en /config)
                 </label>
               </div>
-            </div>
-
-            <div className={styles.formField}>
-              <label>Vencimiento de opciones (opcional, en días)</label>
-              <div className={styles.formGrid}>
-                <div className={styles.formField}>
-                  <label htmlFor="alert-expiry-min">Mínimo</label>
-                  <input
-                    id="alert-expiry-min"
-                    className={styles.input}
-                    type="number" min="0.001" max="180" step="0.25"
-                    placeholder="Sin límite"
-                    value={form.optionExpiryMinDays ?? ''}
-                    onChange={(e) => updateField('optionExpiryMinDays', e.target.value === '' ? null : Number(e.target.value))}
-                  />
-                </div>
-                <div className={styles.formField}>
-                  <label htmlFor="alert-expiry-max">Máximo</label>
-                  <input
-                    id="alert-expiry-max"
-                    className={styles.input}
-                    type="number" min="0.001" max="180" step="0.25"
-                    placeholder="Sin límite"
-                    value={form.optionExpiryMaxDays ?? ''}
-                    onChange={(e) => updateField('optionExpiryMaxDays', e.target.value === '' ? null : Number(e.target.value))}
-                  />
-                </div>
-              </div>
-              <p className={styles.dirNote}>Si defines el rango, los bots de opciones solo elegirán vencimientos dentro de él. No modifica las alertas de Telegram.</p>
             </div>
 
             <fieldset className={`${styles.dirFieldset} ${isMobile ? styles.dirFieldsetMobile : ''}`}>

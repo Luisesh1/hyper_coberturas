@@ -283,6 +283,30 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             onChange={(v) => update({ expiryDays: v })}
           />
           <NumberField
+            label="Vencimiento mínimo"
+            help="Opcional: con rango, solo elige vencimientos dentro de él"
+            unit="días"
+            placeholder="Sin límite"
+            value={form.expiryMinDays}
+            min={0}
+            max={180}
+            step={1}
+            error={errors.expiryMinDays}
+            onChange={(v) => update({ expiryMinDays: v })}
+          />
+          <NumberField
+            label="Vencimiento máximo"
+            help="Vacío en ambos = sin restricción"
+            unit="días"
+            placeholder="Sin límite"
+            value={form.expiryMaxDays}
+            min={0}
+            max={180}
+            step={1}
+            error={errors.expiryMaxDays}
+            onChange={(v) => update({ expiryMaxDays: v })}
+          />
+          <NumberField
             label="Contratos distintos"
             help="Elegidos por cercanía a la delta objetivo"
             value={form.contractCount}

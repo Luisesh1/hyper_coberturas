@@ -8,7 +8,8 @@
  * `evaluate(ctx)` es pura. Sin `ctx.signal` solo evalúa salidas (tick del
  * runner). Con señal: (1) posición contraria según `onOpposite`, (2) límites
  * de posiciones abiertas y operaciones del día, (3) apertura por delta en el
- * vencimiento más cercano a `expiryDays` (la cadena la elige el runner).
+ * vencimiento más cercano a `expiryDays`, dentro del rango opcional
+ * `expiryMinDays`..`expiryMaxDays` (la cadena la elige el runner).
  */
 
 const { ValidationError } = require('../../../errors/app-error');
@@ -35,6 +36,8 @@ const defaultParams = {
   structure: 'buy_with',
   ...STRUCTURE_DEFAULTS.buy_with,
   expiryDays: 7,
+  expiryMinDays: null,
+  expiryMaxDays: null,
   quantity: 0.01,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
@@ -51,6 +54,8 @@ const defaultParams = {
 const NUMERIC_FIELDS = [
   { ...FIELDS.targetDelta, max: 0.95 },
   FIELDS.expiryDays,
+  { key: 'expiryMinDays', label: 'Vencimiento mínimo', type: 'number', min: 0, max: 180, step: 1, unit: 'días', nullable: true },
+  { key: 'expiryMaxDays', label: 'Vencimiento máximo', type: 'number', min: 0, max: 180, step: 1, unit: 'días', nullable: true },
   { ...FIELDS.quantity, label: 'Cantidad' },
   { ...FIELDS.takeProfitPct, max: 1000 },
   { key: 'stopLossPct', label: 'Stop por pérdida', type: 'number', min: 1, max: 1000, step: 5, unit: '% de la prima' },
@@ -99,6 +104,10 @@ function validateParams(raw = {}) {
     { paramSchema: NUMERIC_FIELDS, defaultParams: { ...defaultParams, ...STRUCTURE_DEFAULTS[structure] } },
     input
   );
+  const { expiryMinDays: lo, expiryMaxDays: hi } = numeric;
+  if ((lo == null) !== (hi == null) || (lo != null && lo > hi)) {
+    throw new ValidationError('Vencimiento: indica mínimo y máximo (o ninguno), con mínimo ≤ máximo');
+  }
   // La prima máxima solo aplica al comprar.
   if (structure !== 'buy_with') numeric.maxPremiumUsdt = null;
   const contractCount = input.contractCount == null ? 1 : Number(input.contractCount);

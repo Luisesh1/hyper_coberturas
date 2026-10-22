@@ -46,6 +46,9 @@ export const STRUCTURE_DEFAULTS = {
 
 export const COMMON_DEFAULTS = {
   expiryDays: 7,
+  // Rango opcional de vencimientos (días); null/null = sin restricción.
+  expiryMinDays: null,
+  expiryMaxDays: null,
   quantity: 0.01,
   contractCount: 1,
   capitalUsdt: null,
@@ -276,6 +279,8 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       structure,
       targetDelta: Math.abs(val('targetDelta')),
       expiryDays: val('expiryDays'),
+      expiryMinDays: toNumber(p.expiryMinDays),
+      expiryMaxDays: toNumber(p.expiryMaxDays),
       quantity: val('quantity'),
       contractCount: val('contractCount'),
       capitalUsdt: toNumber(p.capitalUsdt),
@@ -329,6 +334,17 @@ export function validateBotForm(form) {
   };
   range('targetDelta', 0.05, 0.95);
   range('expiryDays', 1, 90, { integer: true });
+  const hasMin = isNum(form.expiryMinDays);
+  const hasMax = isNum(form.expiryMaxDays);
+  if (hasMin && !hasMax) errors.expiryMaxDays = 'Indica también el máximo';
+  else if (hasMax && !hasMin) errors.expiryMinDays = 'Indica también el mínimo';
+  else if (hasMin && hasMax) {
+    range('expiryMinDays', 0, 180);
+    range('expiryMaxDays', 0, 180);
+    if (!errors.expiryMinDays && !errors.expiryMaxDays && Number(form.expiryMinDays) > Number(form.expiryMaxDays)) {
+      errors.expiryMaxDays = 'Debe ser ≥ al mínimo';
+    }
+  }
   range('quantity', 0.0001, 1000000, { minLabel: 'Debe ser mayor que 0' });
   range('contractCount', 1, 10, { integer: true });
   if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
@@ -354,6 +370,8 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     structure: form.structure,
     targetDelta: Number(form.targetDelta),
     expiryDays: Number(form.expiryDays),
+    expiryMinDays: isNum(form.expiryMinDays) ? Number(form.expiryMinDays) : null,
+    expiryMaxDays: isNum(form.expiryMaxDays) ? Number(form.expiryMaxDays) : null,
     quantity: Number(form.quantity),
     contractCount: Number(form.contractCount),
     capitalUsdt: Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
@@ -398,6 +416,13 @@ export function describeParams(bot) {
     entry: [
       { key: 'targetDelta', label: 'Delta objetivo', value: formatNumber(Math.abs(v('targetDelta')), { decimals: 2 }) },
       { key: 'expiryDays', label: 'Vencimiento', value: `${formatNumber(v('expiryDays'), { decimals: 0 })} días` },
+      {
+        key: 'expiryWindow',
+        label: 'Rango de vencimiento',
+        value: toNumber(p.expiryMinDays) != null && toNumber(p.expiryMaxDays) != null
+          ? `${formatNumber(toNumber(p.expiryMinDays), { decimals: 2, minDecimals: 0 })}–${formatNumber(toNumber(p.expiryMaxDays), { decimals: 2, minDecimals: 0 })} días`
+          : 'Sin límite',
+      },
       { key: 'quantity', label: 'Cantidad', value: `${formatNumber(v('quantity'), { decimals: 4, minDecimals: 0 })} ${bot.underlying || ''}`.trim() },
       { key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true },
     ],

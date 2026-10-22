@@ -278,12 +278,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         "OR (action='open' AND symbol=ANY($4::text[])))",
         [strategy.userId, at, ids, held.map((p) => p.symbol)]
       );
-      const savedSignal = {
-        eventId,
-        direction: signal.direction,
-        optionExpiryMinDays: signal.optionExpiryMinDays ?? null,
-        optionExpiryMaxDays: signal.optionExpiryMaxDays ?? null,
-      };
+      const savedSignal = { eventId, direction: signal.direction };
       await tx.query(
         `INSERT INTO options_live_reentries
          (strategy_id,user_id,alert_event_id,signal,wait_position_ids,created_at,updated_at)

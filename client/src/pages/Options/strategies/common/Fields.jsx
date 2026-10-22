@@ -32,7 +32,7 @@ function RowText({ label, help, error, htmlFor, id }) {
 
 // Stepper − [valor] +. Mientras se escribe se guarda un borrador (para
 // permitir '1,' camino de '1,5'); sólo se limita y redondea al confirmar.
-export function NumberField({ label, help, unit, value, min, max, step, integer = false, error, onChange, disabled = false }) {
+export function NumberField({ label, help, unit, value, min, max, step, integer = false, error, onChange, disabled = false, placeholder }) {
   const id = useId();
   const [draft, setDraft] = useState(null);
   const current = Number.isFinite(Number(value)) && value !== '' && value !== null ? Number(value) : null;
@@ -101,6 +101,7 @@ export function NumberField({ label, help, unit, value, min, max, step, integer 
             autoComplete="off"
             className={styles.stepInput}
             value={shown}
+            placeholder={placeholder}
             onChange={handleChange}
             onBlur={confirmDraft}
             onKeyDown={handleKeyDown}

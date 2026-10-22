@@ -237,10 +237,10 @@ class OptionsStrategyRunner {
 
   async targetChain(strategy, params, tickCtx) {
     const base = await this.chainFor(strategy.underlying, null, tickCtx);
-    // El rango pertenece a la alerta disparada: no se amplía para forzar entradas.
-    // Solo se aplica a bots por señales; sin rango la selección sigue igual.
-    const minDays = tickCtx.signal?.optionExpiryMinDays;
-    const maxDays = tickCtx.signal?.optionExpiryMaxDays;
+    // El rango pertenece al bot por señales: no se amplía para forzar entradas.
+    // Sin rango la selección sigue igual (el más cercano a expiryDays).
+    const minDays = params.expiryMinDays;
+    const maxDays = params.expiryMaxDays;
     const expiries = minDays != null && maxDays != null && strategy.template === 'alert_signal'
       ? (base?.expiries || []).filter((expiry) => Number(expiry.dte) >= minDays && Number(expiry.dte) <= maxDays)
       : base?.expiries;
