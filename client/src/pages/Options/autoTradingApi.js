@@ -25,4 +25,9 @@ export const autoBotsApi = {
     const f = SIGNAL_FILTERS.includes(filter) ? filter : 'all';
     return request('GET', `/options/auto-bots/${enc(id)}/signals?limit=${enc(limit)}&filter=${f}`);
   },
+  // Cierre manual en el libro del modo actual (Real → órdenes LIMIT reales).
+  // Sin positionIds cierra todas. → { status: 'closed' | 'pending' | 'nothing_to_close' | 'not_submitted', detail }
+  close: (id, { positionIds } = {}) => request('POST', `/options/auto-bots/${enc(id)}/close`, { positionIds, confirm: true }),
+  // Pide cancelar una orden real pendiente (no el TP residente). → orden con cancelRequested
+  cancelOrder: (id, orderId) => request('POST', `/options/auto-bots/${enc(id)}/orders/${enc(orderId)}/cancel`),
 };

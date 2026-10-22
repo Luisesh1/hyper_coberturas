@@ -59,7 +59,7 @@ const fakeMarket = {
   async getQuote() { return { delta: 0.3 }; },
 };
 
-function useFakeServices() {
+function useFakeServices({ runner = null, liveOrders = null } = {}) {
   const repo = createFakeOptionsRepo();
   const origStrategies = { ...strategiesService };
   const origAuto = { ...autoTradingService };
@@ -69,7 +69,8 @@ function useFakeServices() {
     repo,
     strategies,
     alerts: { listAlerts: async (userId) => (userId === USER ? ALERTS : []) },
-    runner: { async runForSignal() { return { produced: [] }; } },
+    runner: runner || { async runForSignal() { return { produced: [] }; } },
+    ...(liveOrders ? { liveOrders } : {}),
   }));
   return {
     repo,
@@ -249,6 +250,135 @@ test('detalle, modo y borrado de un bot van por /options/strategies/:id', async 
       await repo.closePosition(repo.positions[0].id, { exitPrice: 120, closedAt: 2, pnlUsdt: 0.2, feesUsdt: 0 });
       assert.equal((await call('DELETE', `/strategies/${bot.id}`)).status, 200);
       assert.deepEqual((await call('GET', '/auto-bots')).json.data, []);
+    });
+  } finally { restore(); }
+});
+
+function fakeCloseRunner(result = { status: 'closed', produced: [] }) {
+  const calls = [];
+  return {
+    calls,
+    async runForSignal() { return { produced: [] }; },
+    async closeManually(strategy, opts) {
+      calls.push({ strategyId: strategy.id, ...opts });
+      return typeof result === 'function' ? result(strategy, opts) : result;
+    },
+  };
+}
+
+function fakeLiveOrders({ orders = [], pendingClose = false } = {}) {
+  const cancels = [];
+  const pendingChecks = [];
+  return {
+    orders,
+    cancels,
+    pendingChecks,
+    async listByStrategy(strategyId) { return orders.filter((o) => o.strategyId === strategyId); },
+    async hasPendingClose(args) { pendingChecks.push(args); return pendingClose; },
+    async requestCancel({ userId, strategyId, orderId }) {
+      const o = orders.find((x) => x.id === orderId && x.userId === userId && x.strategyId === strategyId
+        && x.status !== 'final' && x.purpose !== 'take_profit');
+      if (!o) return null;
+      cancels.push(orderId);
+      o.cancelRequested = true;
+      return o;
+    },
+  };
+}
+
+test('POST /options/auto-bots/:id/close exige confirm, valida forma y es del usuario', async () => {
+  const runner = fakeCloseRunner();
+  const { repo, restore } = useFakeServices({ runner, liveOrders: fakeLiveOrders() });
+  try {
+    await withServer(async (call) => {
+      const bot = (await call('POST', '/auto-bots', validBot)).json.data;
+      const noConfirm = await call('POST', `/auto-bots/${bot.id}/close`, {});
+      assert.equal(noConfirm.status, 400);
+      assert.equal(noConfirm.json.code, 'CONFIRM_REQUIRED');
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/close`, { confirm: false })).json.code, 'CONFIRM_REQUIRED');
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/close`, { confirm: 'yes' })).json.code, 'CONFIRM_REQUIRED');
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/close`, { confirm: true, positionIds: ['a'] })).status, 400);
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/close`, { confirm: true, positionIds: [0] })).status, 400);
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/close`, { confirm: true, positionIds: [1.5] })).status, 400);
+
+      const foreign = await repo.createStrategy({ userId: 2, name: 'ajeno', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [1] }, mode: 'shadow' });
+      assert.equal((await call('POST', `/auto-bots/${foreign.id}/close`, { confirm: true })).status, 404);
+      const strat = await repo.createStrategy({ userId: USER, name: 's', template: 'short_strangle', underlying: 'BTC', mode: 'shadow' });
+      assert.equal((await call('POST', `/auto-bots/${strat.id}/close`, { confirm: true })).status, 404);
+      assert.equal(runner.calls.length, 0);
+    });
+  } finally { restore(); }
+});
+
+test('POST /options/auto-bots/:id/close usa el libro del modo actual y devuelve { status, detail }', async () => {
+  const runner = fakeCloseRunner((strategy, { mode }) => (mode === 'shadow'
+    ? { status: 'closed', produced: [{ mode: 'shadow', type: 'close', reason: 'manual', detail: 'Cierre manual', booked: true }] }
+    : { status: 'not_submitted', produced: [{ mode: 'live', type: 'skip', reason: 'no_liquidity', detail: 'Sin precio para BTC-261023-70000-C' }] }));
+  const liveOrders = fakeLiveOrders();
+  const { repo, restore } = useFakeServices({ runner, liveOrders });
+  try {
+    await withServer(async (call) => {
+      const bot = (await call('POST', '/auto-bots', validBot)).json.data;
+      const shadow = await call('POST', `/auto-bots/${bot.id}/close`, { confirm: true });
+      assert.equal(shadow.status, 200);
+      assert.deepEqual(shadow.json.data, { status: 'closed', detail: 'Cierre manual' });
+      assert.deepEqual(runner.calls[0], { strategyId: bot.id, mode: 'shadow', positionIds: undefined });
+      assert.equal(liveOrders.pendingChecks.length, 0, 'en sombra no se consulta el libro real');
+
+      await repo.setMode(USER, bot.id, 'live');
+      const live = await call('POST', `/auto-bots/${bot.id}/close`, { confirm: true, positionIds: [41, 42] });
+      assert.equal(live.status, 200);
+      assert.equal(live.json.data.status, 'not_submitted');
+      assert.match(live.json.data.detail, /Sin precio para BTC-261023-70000-C/);
+      assert.deepEqual(runner.calls[1], { strategyId: bot.id, mode: 'live', positionIds: [41, 42] });
+      assert.deepEqual(liveOrders.pendingChecks[0], { userId: USER, strategyId: bot.id, positionIds: [41, 42] });
+    });
+  } finally { restore(); }
+});
+
+test('POST /options/auto-bots/:id/close en Real con un cierre en curso responde 409 CLOSE_PENDING', async () => {
+  const runner = fakeCloseRunner();
+  const { repo, restore } = useFakeServices({ runner, liveOrders: fakeLiveOrders({ pendingClose: true }) });
+  try {
+    await withServer(async (call) => {
+      const bot = (await call('POST', '/auto-bots', validBot)).json.data;
+      await repo.setMode(USER, bot.id, 'live');
+      const res = await call('POST', `/auto-bots/${bot.id}/close`, { confirm: true });
+      assert.equal(res.status, 409);
+      assert.equal(res.json.code, 'CLOSE_PENDING');
+      assert.match(res.json.message || JSON.stringify(res.json), /cierre en curso/);
+      assert.equal(runner.calls.length, 0, 'no llama a closeManually');
+    });
+  } finally { restore(); }
+});
+
+test('POST /options/auto-bots/:id/orders/:orderId/cancel solo cancela órdenes propias no finales y no TP', async () => {
+  const liveOrders = fakeLiveOrders();
+  const { repo, restore } = useFakeServices({ runner: fakeCloseRunner(), liveOrders });
+  try {
+    await withServer(async (call) => {
+      const bot = (await call('POST', '/auto-bots', validBot)).json.data;
+      const other = await repo.createStrategy({ userId: 2, name: 'ajeno', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [1] }, mode: 'live' });
+      liveOrders.orders.push(
+        { id: 501, strategyId: bot.id, userId: USER, action: 'open', purpose: 'standard', status: 'active', cancelRequested: false },
+        { id: 502, strategyId: bot.id, userId: USER, action: 'close', purpose: 'standard', status: 'final', cancelRequested: false },
+        { id: 503, strategyId: bot.id, userId: USER, action: 'close', purpose: 'take_profit', status: 'active', cancelRequested: false },
+        { id: 504, strategyId: other.id, userId: 2, action: 'open', purpose: 'standard', status: 'active', cancelRequested: false },
+      );
+      const final = await call('POST', `/auto-bots/${bot.id}/orders/502/cancel`);
+      assert.equal(final.status, 409);
+      const tp = await call('POST', `/auto-bots/${bot.id}/orders/503/cancel`);
+      assert.equal(tp.status, 409);
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/orders/504/cancel`)).status, 404);
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/orders/999/cancel`)).status, 404);
+      assert.equal((await call('POST', `/auto-bots/${other.id}/orders/504/cancel`)).status, 404);
+      assert.deepEqual(liveOrders.cancels, []);
+
+      const ok = await call('POST', `/auto-bots/${bot.id}/orders/501/cancel`);
+      assert.equal(ok.status, 200);
+      assert.equal(ok.json.data.id, 501);
+      assert.equal(ok.json.data.cancelRequested, true);
+      assert.deepEqual(liveOrders.cancels, [501]);
     });
   } finally { restore(); }
 });

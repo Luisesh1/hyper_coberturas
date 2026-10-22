@@ -13,7 +13,7 @@
  */
 
 const logger = require('../logger.service');
-const { ValidationError, NotFoundError } = require('../../errors/app-error');
+const { AppError, ValidationError, NotFoundError } = require('../../errors/app-error');
 const defaultRepo = require('../../repositories/options-strategies.repository');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
 
@@ -105,7 +105,36 @@ function lazyStrategies() {
 
 function lazyRunner() {
   // eslint-disable-next-line global-require
-  return { runForSignal: (...args) => require('./options-strategy-runner.service').runForSignal(...args) };
+  const load = () => require('./options-strategy-runner.service');
+  return {
+    runForSignal: (...args) => load().runForSignal(...args),
+    closeManually: (...args) => load().closeManually(...args),
+  };
+}
+
+function lazyLiveOrders() {
+  // eslint-disable-next-line global-require
+  const load = () => require('../../repositories/options-live-orders.repository');
+  return {
+    listByStrategy: (...args) => load().listByStrategy(...args),
+    hasPendingClose: (...args) => load().hasPendingClose(...args),
+    requestCancel: (...args) => load().requestCancel(...args),
+  };
+}
+
+const CLOSE_FALLBACK = {
+  closed: 'Posiciones cerradas',
+  pending: 'Orden LIMIT de cierre enviada, esperando ejecución',
+  nothing_to_close: 'No hay posiciones abiertas que cerrar',
+  not_submitted: 'No se envió la orden de cierre',
+};
+
+function orderDto(o) {
+  return {
+    id: o.id, purpose: o.purpose, action: o.action, symbol: o.symbol, side: o.side,
+    price: o.limitPrice, quantity: o.quantity, executedQty: o.processedQty,
+    status: o.status, cancelRequested: o.cancelRequested,
+  };
 }
 
 function createOptionsAutoTradingService(deps = {}) {
@@ -113,6 +142,7 @@ function createOptionsAutoTradingService(deps = {}) {
   const runner = deps.runner || lazyRunner();
   const alerts = deps.alerts || lazyAlerts();
   const strategies = deps.strategies || lazyStrategies();
+  const liveOrders = deps.liveOrders || lazyLiveOrders();
   const log = deps.logger || logger;
   const now = deps.now || Date.now;
   let unsubscribe = null;
@@ -319,6 +349,66 @@ function createOptionsAutoTradingService(deps = {}) {
     return (await repo.listAutoSignals(id, { limit: n, filter })).map(signalDto);
   }
 
+  // ---------- cierre manual y cancelación ----------
+
+  /**
+   * Cierra a mano las posiciones del libro del modo actual (Real → live,
+   * si no → shadow). Devuelve `{ status, detail }`, con `detail` legible
+   * (p. ej. por qué no se envió: sin liquidez, envío real deshabilitado…).
+   */
+  async function closeBot(userId, id, { positionIds, confirm } = {}) {
+    if (confirm !== true) {
+      throw new AppError('Cerrar posiciones requiere confirmación: envía confirm: true', { status: 400, code: 'CONFIRM_REQUIRED' });
+    }
+    const bot = await requireBot(userId, id);
+    const mode = bot.mode === 'live' ? 'live' : 'shadow';
+    const ids = Array.isArray(positionIds) ? positionIds.map(Number) : undefined;
+    if (mode === 'live' && await liveOrders.hasPendingClose({ userId, strategyId: bot.id, positionIds: ids })) {
+      throw new AppError('Ya hay un cierre en curso para esta posición', { status: 409, code: 'CLOSE_PENDING' });
+    }
+    const { status, produced = [] } = await runner.closeManually(bot, { mode, positionIds: ids });
+    const detail = produced
+      .filter((p) => p.mode === mode)
+      .map((p) => p.detail)
+      .filter(Boolean)
+      .join(' · ') || CLOSE_FALLBACK[status] || status;
+    // Un cierre en sombra ya deja su evento «Cierre manual» con las patas.
+    if (status === 'pending' || status === 'not_submitted') {
+      try {
+        await repo.insertEvent({
+          strategyId: bot.id,
+          userId: bot.userId,
+          mode,
+          action: status === 'pending' ? 'close' : 'skip',
+          detail: status === 'pending' ? `Cierre manual: ${detail}` : `Cierre manual no enviado: ${detail}`,
+          createdAt: now(),
+        });
+      } catch (err) {
+        log.warn('options_manual_close_event_failed', { strategyId: bot.id, error: err.message });
+      }
+    }
+    log.info('options_manual_close', { strategyId: bot.id, mode, status, positions: ids?.length ?? 'all' });
+    return { status, detail };
+  }
+
+  /** Pide cancelar una orden real pendiente del bot (no el TP residente). */
+  async function cancelOrder(userId, id, orderId) {
+    const bot = await requireBot(userId, id);
+    const order = (await liveOrders.listByStrategy(bot.id))
+      .find((o) => Number(o.id) === Number(orderId) && Number(o.userId) === Number(userId));
+    if (!order) throw new NotFoundError('Orden no encontrada');
+    if (order.purpose === 'take_profit') {
+      throw new AppError('El TP residente se cancela cerrando la posición', { status: 409, code: 'ORDER_NOT_CANCELLABLE' });
+    }
+    if (order.status === 'final') {
+      throw new AppError('La orden ya terminó y no se puede cancelar', { status: 409, code: 'ORDER_FINAL' });
+    }
+    const updated = await liveOrders.requestCancel({ userId, strategyId: bot.id, orderId: order.id });
+    if (!updated) throw new AppError('La orden ya no se puede cancelar', { status: 409, code: 'ORDER_FINAL' });
+    log.info('options_order_cancel_requested', { strategyId: bot.id, orderId: order.id });
+    return orderDto(updated);
+  }
+
   return {
     start,
     stop,
@@ -328,6 +418,8 @@ function createOptionsAutoTradingService(deps = {}) {
     createBot,
     updateBot,
     listSignals,
+    closeBot,
+    cancelOrder,
   };
 }
 

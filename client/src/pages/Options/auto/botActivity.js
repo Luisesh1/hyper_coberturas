@@ -95,6 +95,9 @@ export function pendingOrderRows(detail = {}, now = Date.now()) {
       statusTone: attention ? 'neg' : 'neutral',
       expiresIn: expiresIn(o.deadlineAt, now),
       needsAttention: attention,
+      // El TP residente solo se cancela cerrando la posición.
+      cancelRequested: o.cancelRequested === true,
+      cancellable: o.purpose !== 'take_profit' && o.cancelRequested !== true,
     };
   });
 }

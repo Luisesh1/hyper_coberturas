@@ -28,6 +28,13 @@ const LIVE_POINTS = [
 ];
 
 const CLOSED_DIALOG = { open: false, submitting: false, error: null };
+const CLOSED_CLOSE = { open: false, positionIds: undefined, submitting: false, error: null, result: null };
+const CLOSE_RESULT = {
+  closed: 'Cerrado.',
+  pending: 'Orden enviada; esperando ejecución.',
+  nothing_to_close: 'No había posiciones abiertas que cerrar.',
+  not_submitted: 'No se envió la orden.',
+};
 
 // Pestaña «Trading automatizado» del módulo de Opciones: bots que abren y
 // cierran opciones cuando se disparan alertas alcistas o bajistas.
@@ -55,6 +62,11 @@ export default function AutoTradingTab({ underlying } = {}) {
   const [liveDialog, setLiveDialog] = useState(CLOSED_DIALOG);
   const [deleteDialog, setDeleteDialog] = useState(CLOSED_DIALOG);
   const [unlink, setUnlink] = useState({ pending: false, error: null });
+  const [closeDialog, setCloseDialog] = useState(CLOSED_CLOSE);
+  const [cancel, setCancel] = useState({ pendingId: null, notice: null });
+  // Bloqueo síncrono: un doble clic no puede lanzar dos peticiones antes
+  // de que React vuelva a pintar los botones deshabilitados.
+  const actionInFlight = useRef(false);
 
   const mounted = useRef(true);
   // StrictMode monta, desmonta y vuelve a montar en desarrollo: hay que
@@ -125,6 +137,7 @@ export default function AutoTradingTab({ underlying } = {}) {
   useEffect(() => {
     setModeError(null);
     setUnlink({ pending: false, error: null });
+    setCancel({ pendingId: null, notice: null });
     if (!detailVisible) return;
     setDetail((prev) => (prev?.id === selectedId ? prev : null));
     loadDetail(selectedId);
@@ -275,6 +288,54 @@ export default function AutoTradingTab({ underlying } = {}) {
     }
   };
 
+  const openClose = (positionIds) => {
+    if (actionInFlight.current) return;
+    setCloseDialog({ ...CLOSED_CLOSE, open: true, positionIds });
+  };
+
+  const dismissClose = () => {
+    if (closeDialog.submitting) return;
+    setCloseDialog(CLOSED_CLOSE);
+  };
+
+  const confirmClose = async () => {
+    if (!shown || actionInFlight.current) return;
+    const id = shown.id;
+    const { positionIds } = closeDialog;
+    actionInFlight.current = true;
+    setCloseDialog((d) => ({ ...d, submitting: true, error: null, result: null }));
+    try {
+      const result = await autoBotsApi.close(id, { positionIds });
+      if (mounted.current) setCloseDialog((d) => ({ ...d, submitting: false, result: result || { status: 'closed' } }));
+      refresh(id);
+    } catch (err) {
+      if (mounted.current) setCloseDialog((d) => ({ ...d, submitting: false, error: err }));
+    } finally {
+      actionInFlight.current = false;
+    }
+  };
+
+  const cancelOrder = async (orderId) => {
+    if (!shown || actionInFlight.current) return;
+    const id = shown.id;
+    actionInFlight.current = true;
+    setCancel({ pendingId: orderId, notice: null });
+    try {
+      await autoBotsApi.cancelOrder(id, orderId);
+      if (mounted.current) {
+        setCancel({ pendingId: null, notice: { message: 'Cancelación solicitada: se cancelará en Binance en la próxima conciliación.' } });
+        setDetail((d) => (d && d.id === id && Array.isArray(d.pendingOrders)
+          ? { ...d, pendingOrders: d.pendingOrders.map((o) => (o.id === orderId ? { ...o, cancelRequested: true } : o)) }
+          : d));
+      }
+      refresh(id);
+    } catch (err) {
+      if (mounted.current) setCancel({ pendingId: null, notice: { error: true, message: `No se pudo cancelar la orden: ${err.message}` } });
+    } finally {
+      actionInFlight.current = false;
+    }
+  };
+
   // ── Piezas comunes ───────────────────────────────────────────────────
   const signalsReady = shown && signals.id === shown.id && signals.filter === signalsFilter;
   const detailProps = shown && {
@@ -295,7 +356,16 @@ export default function AutoTradingTab({ underlying } = {}) {
     onDelete: () => setDeleteDialog({ open: true, submitting: false, error: null }),
     onUnlink: unlinkAlert,
     onBack: () => setMobileDetailOpen(false),
+    onClosePosition: (positionId) => openClose([positionId]),
+    onCloseAll: () => openClose(undefined),
+    onCancelOrder: cancelOrder,
+    actionBusy: closeDialog.submitting || cancel.pendingId !== null,
+    actionNotice: cancel.notice,
   };
+
+  const closeAll = closeDialog.positionIds === undefined;
+  const closeResult = closeDialog.result;
+  const closeTone = closeResult && ['closed', 'pending'].includes(closeResult.status) ? ui.alertInfo : ui.alertWarn;
 
   const dialogs = (
     <>
@@ -339,6 +409,41 @@ export default function AutoTradingTab({ underlying } = {}) {
           {shown?.mode === 'live' && ' Está en modo Real: las posiciones abiertas en Binance no se cierran automáticamente.'}
         </p>
         {deleteDialog.error && <p className={`${ui.alert} ${ui.alertError}`} role="alert">{deleteDialog.error.message}</p>}
+      </Sheet>
+      <Sheet
+        open={closeDialog.open}
+        title={closeAll ? 'Cerrar todas las posiciones' : 'Cerrar posición'}
+        description={shown ? `«${shown.name}»` : undefined}
+        size="sm"
+        tone={shown?.mode === 'live' ? 'warning' : 'default'}
+        onClose={dismissClose}
+        closeDisabled={closeDialog.submitting}
+        footer={closeResult ? (
+          <button type="button" className={ui.btn} onClick={dismissClose}>Listo</button>
+        ) : (
+          <>
+            <button type="button" className={ui.btn} onClick={dismissClose} disabled={closeDialog.submitting}>
+              Volver
+            </button>
+            <button type="button" className={`${ui.btn} ${ui.btnDanger}`} onClick={confirmClose} disabled={closeDialog.submitting}>
+              {closeDialog.submitting ? 'Cerrando…' : 'Confirmar cierre'}
+            </button>
+          </>
+        )}
+      >
+        {!closeResult && (
+          <p className={styles.prose}>
+            {shown?.mode === 'live'
+              ? <>Se enviará una orden LIMIT real a Binance para cerrar {closeAll ? 'todas las posiciones reales del bot' : 'esta posición'} al precio de mercado actual. Si hay un TP residente, primero se cancela.</>
+              : <>Se cerrará{closeAll ? 'n todas las posiciones' : ' la posición'} del libro en sombra con un llenado simulado. No se envía nada a Binance.</>}
+          </p>
+        )}
+        {closeResult && (
+          <p className={`${ui.alert} ${closeTone}`} role="status">
+            {CLOSE_RESULT[closeResult.status] || ''} {closeResult.detail || ''}
+          </p>
+        )}
+        {closeDialog.error && <p className={`${ui.alert} ${ui.alertError}`} role="alert">{closeDialog.error.message}</p>}
       </Sheet>
     </>
   );

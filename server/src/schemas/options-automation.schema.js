@@ -69,8 +69,15 @@ const updateAutoBotSchema = z.object({
   limits,
 });
 
+// La falta de confirm la responde antes la ruta con CONFIRM_REQUIRED.
+const closeAutoBotSchema = z.object({
+  positionIds: z.array(z.number().int().positive()).min(1).max(50).optional(),
+  confirm: z.literal(true),
+});
+
 module.exports = {
   createAutoBotSchema,
+  closeAutoBotSchema,
   updateAutoBotSchema,
   createStrategySchema,
   updateStrategySchema,

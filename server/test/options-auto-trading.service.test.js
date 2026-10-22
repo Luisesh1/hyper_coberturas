@@ -262,3 +262,55 @@ test('integración: un disparo real de alerts/alert-events llega al bot y abre e
   }
   assert.equal(alertEvents.listenerCount(), 0);
 });
+
+test('cierre manual en sombra: cierra con el runner real y deja un solo evento «Cierre manual»', async () => {
+  const { repo, service, bot } = await setup();
+  await service.handleAlertTriggered(signal());
+  assert.equal(repo.positions.filter((p) => p.closedAt == null).length, 1);
+  const before = repo.events.length;
+
+  const res = await service.closeBot(USER, bot.id, { confirm: true });
+  assert.equal(res.status, 'closed');
+  assert.match(res.detail, /Cierre manual/);
+  const [p] = repo.positions;
+  assert.ok(p.closedAt != null);
+  assert.equal(p.closeReason, 'manual');
+  const added = repo.events.slice(before);
+  assert.equal(added.length, 1);
+  assert.equal(added[0].action, 'close');
+  assert.equal(added[0].detail, 'Cierre manual');
+
+  const again = await service.closeBot(USER, bot.id, { confirm: true });
+  assert.equal(again.status, 'nothing_to_close');
+  assert.match(again.detail, /No hay posiciones abiertas/);
+  assert.equal(repo.events.length, before + 1, 'sin posiciones no se registra evento');
+});
+
+test('cierre manual en Real: registra el evento y explica por qué no se envió', async () => {
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  let next = { status: 'pending', produced: [{ mode: 'live', type: 'close', pending: true, reason: 'submitted', detail: 'Orden límite enviada; ejecución pendiente' }] };
+  const calls = [];
+  const runner = { async closeManually(strategy, opts) { calls.push(opts); return next; } };
+  const liveOrders = { async hasPendingClose() { return false; } };
+  const service = createOptionsAutoTradingService({ repo, runner, liveOrders, logger: silent, now: () => NOW, alerts: { listAlerts: async () => [] } });
+  const bot = await repo.createStrategy({ userId: USER, name: 'Bot', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [11] }, mode: 'live' });
+
+  await assert.rejects(service.closeBot(USER, bot.id, {}), (err) => err.code === 'CONFIRM_REQUIRED' && err.status === 400);
+
+  const pending = await service.closeBot(USER, bot.id, { confirm: true, positionIds: [3] });
+  assert.deepEqual(pending, { status: 'pending', detail: 'Orden límite enviada; ejecución pendiente' });
+  assert.deepEqual(calls[0], { mode: 'live', positionIds: [3] });
+  assert.equal(repo.events.at(-1).action, 'close');
+  assert.equal(repo.events.at(-1).mode, 'live');
+  assert.match(repo.events.at(-1).detail, /^Cierre manual/);
+
+  next = { status: 'not_submitted', produced: [
+    { mode: 'shadow', type: 'close', detail: 'no debe salir' },
+    { mode: 'live', type: 'skip', reason: 'live_disabled', detail: 'Envio real deshabilitado: OPTIONS_LIVE_TRADING_ENABLED no está activo' },
+  ] };
+  const skipped = await service.closeBot(USER, bot.id, { confirm: true });
+  assert.equal(skipped.status, 'not_submitted');
+  assert.equal(skipped.detail, 'Envio real deshabilitado: OPTIONS_LIVE_TRADING_ENABLED no está activo');
+  assert.equal(repo.events.at(-1).action, 'skip');
+  assert.match(repo.events.at(-1).detail, /^Cierre manual no enviado: Envio real deshabilitado/);
+});

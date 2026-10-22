@@ -58,18 +58,18 @@ function TpStopBar({ row }) {
   );
 }
 
-function CloseBtn({ row, onClosePosition }) {
+function CloseBtn({ row, onClosePosition, busy }) {
   if (!onClosePosition) return null;
   return (
-    <button type="button" className={`${ICON_BTN} ${styles.touchBtn}`} aria-label={`Cerrar ${row.symbol}`} onClick={() => onClosePosition(row.id)}>
+    <button type="button" className={`${ICON_BTN} ${styles.touchBtn}`} aria-label={`Cerrar ${row.symbol}`} onClick={() => onClosePosition(row.id)} disabled={busy}>
       Cerrar
     </button>
   );
 }
 
-function Positions({ rows, mobile, onClosePosition, onCloseAll }) {
+function Positions({ rows, mobile, onClosePosition, onCloseAll, busy }) {
   const closeAll = onCloseAll && rows.length > 0 && (
-    <button type="button" className={`${ICON_BTN} ${styles.touchBtn}`} onClick={() => onCloseAll()}>Cerrar todas</button>
+    <button type="button" className={`${ICON_BTN} ${styles.touchBtn}`} onClick={() => onCloseAll()} disabled={busy}>Cerrar todo</button>
   );
   return (
     <Section title="Posiciones abiertas" actions={closeAll} mobile={mobile}>
@@ -90,7 +90,7 @@ function Positions({ rows, mobile, onClosePosition, onCloseAll }) {
                 Entrada {price(r.entry)} · Mark {price(r.mark)}{r.hoursToExpiry !== null ? ` · vence en ${r.hoursToExpiry} h` : ''}
               </div>
               <TpStopBar row={r} />
-              <CloseBtn row={r} onClosePosition={onClosePosition} />
+              <CloseBtn row={r} onClosePosition={onClosePosition} busy={busy} />
             </li>
           ))}
         </ul>
@@ -119,7 +119,7 @@ function Positions({ rows, mobile, onClosePosition, onCloseAll }) {
                   <td className={`${ui.mono} ${ui.num}`}>{price(r.stopPrice)}</td>
                   <td className={`${ui.mono} ${ui.num}`}>{price(r.tpPrice)}</td>
                   <td className={`${ui.mono} ${ui.num}`}>{r.hoursToExpiry === null ? '—' : `${r.hoursToExpiry} h`}</td>
-                  {onClosePosition && <td className={ui.num}><CloseBtn row={r} onClosePosition={onClosePosition} /></td>}
+                  {onClosePosition && <td className={ui.num}><CloseBtn row={r} onClosePosition={onClosePosition} busy={busy} /></td>}
                 </tr>
               ))}
             </tbody>
@@ -137,16 +137,18 @@ function Attention({ row }) {
   );
 }
 
-function CancelBtn({ row, onCancelOrder }) {
+function CancelBtn({ row, onCancelOrder, busy }) {
   if (!onCancelOrder) return null;
+  if (row.cancelRequested) return <span className={`${ui.muted} ${ui.small}`}>Cancelación solicitada</span>;
+  if (!row.cancellable) return null;
   return (
-    <button type="button" className={`${ICON_BTN} ${styles.touchBtn}`} aria-label={`Cancelar orden ${row.id}`} onClick={() => onCancelOrder(row.id)}>
+    <button type="button" className={`${ICON_BTN} ${styles.touchBtn}`} aria-label={`Cancelar orden ${row.id}`} onClick={() => onCancelOrder(row.id)} disabled={busy}>
       Cancelar
     </button>
   );
 }
 
-function PendingOrders({ rows, mobile, onCancelOrder }) {
+function PendingOrders({ rows, mobile, onCancelOrder, busy }) {
   if (!rows.length) return null;
   return (
     <Section title="Órdenes pendientes" mobile={mobile}>
@@ -161,7 +163,7 @@ function PendingOrders({ rows, mobile, onCancelOrder }) {
                 </span>
                 <Attention row={o} />
               </div>
-              <CancelBtn row={o} onCancelOrder={onCancelOrder} />
+              <CancelBtn row={o} onCancelOrder={onCancelOrder} busy={busy} />
             </li>
           ))}
         </ul>
@@ -184,7 +186,7 @@ function PendingOrders({ rows, mobile, onCancelOrder }) {
                   <td className={`${ui.mono} ${ui.num}`}>{o.filled}</td>
                   <td><Attention row={o} /></td>
                   <td className={`${ui.mono} ${ui.num}`}>{o.expiresIn || '—'}</td>
-                  {onCancelOrder && <td className={ui.num}><CancelBtn row={o} onCancelOrder={onCancelOrder} /></td>}
+                  {onCancelOrder && <td className={ui.num}><CancelBtn row={o} onCancelOrder={onCancelOrder} busy={busy} /></td>}
                 </tr>
               ))}
             </tbody>
@@ -270,9 +272,10 @@ function ClosedTrades({ rows, mobile }) {
 /**
  * Actividad del bot. `part="top"` (posiciones, órdenes, límites) va entre los
  * KPIs y las señales; `part="bottom"` (curva y operaciones cerradas) al final.
- * Sin callbacks no se pintan botones de acción.
+ * Sin callbacks no se pintan botones de acción; `busy` los deshabilita
+ * mientras hay una petición de cierre o cancelación en curso.
  */
-export default function BotActivity({ bot, mobile = false, part = 'top', onClosePosition, onCloseAll, onCancelOrder }) {
+export default function BotActivity({ bot, mobile = false, part = 'top', onClosePosition, onCloseAll, onCancelOrder, busy = false }) {
   const mode = bot.mode === 'live' ? 'live' : 'shadow';
   const positions = useMemo(() => openPositionRows(bot, mode), [bot, mode]);
   const orders = useMemo(() => pendingOrderRows(bot), [bot]);
@@ -296,8 +299,8 @@ export default function BotActivity({ bot, mobile = false, part = 'top', onClose
   }
   return (
     <>
-      <Positions rows={positions} mobile={mobile} onClosePosition={onClosePosition} onCloseAll={onCloseAll} />
-      <PendingOrders rows={orders} mobile={mobile} onCancelOrder={onCancelOrder} />
+      <Positions rows={positions} mobile={mobile} onClosePosition={onClosePosition} onCloseAll={onCloseAll} busy={busy} />
+      <PendingOrders rows={orders} mobile={mobile} onCancelOrder={onCancelOrder} busy={busy} />
       <Usage rows={usage} mobile={mobile} />
     </>
   );

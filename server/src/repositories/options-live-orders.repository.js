@@ -565,6 +565,42 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.length > 0;
   }
 
+  /**
+   * Cancelación pedida desde la UI: solo una orden del propio bot y usuario,
+   * no final y que no sea el TP residente (ese se cancela vía cierre).
+   * El reconciliador hace la cancelación real en Binance.
+   */
+  async function requestCancel({ userId, strategyId, orderId }) {
+    const ids = [orderId, userId, strategyId].map(Number);
+    if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) throw new Error('Invalid cancel request');
+    const { rows } = await db.query(
+      "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$4 " +
+      "WHERE id=$1 AND user_id=$2 AND strategy_id=$3 AND status<>'final' " +
+      "AND purpose<>'take_profit' RETURNING *",
+      [ids[0], ids[1], ids[2], now()]
+    );
+    return rows[0] ? map(rows[0]) : null;
+  }
+
+  /**
+   * ¿Hay ya un cierre real en curso (orden de cierre no final que no sea el
+   * TP, o salida diferida persistida) en alguna posición abierta objetivo?
+   * Sin positionIds se miran todas las posiciones reales abiertas del bot.
+   */
+  async function hasPendingClose({ userId, strategyId, positionIds = null }) {
+    const ids = Array.isArray(positionIds) ? positionIds.map(Number) : null;
+    const { rows } = await db.query(
+      "SELECT p.id FROM options_strategy_positions p " +
+      "WHERE p.user_id=$1 AND p.strategy_id=$2 AND p.mode='live' AND p.closed_at IS NULL " +
+      "AND ($3::bigint[] IS NULL OR p.id=ANY($3::bigint[])) " +
+      "AND (EXISTS (SELECT 1 FROM options_live_orders o WHERE o.position_id=p.id " +
+      "AND o.action='close' AND o.purpose<>'take_profit' AND o.status<>'final') " +
+      "OR EXISTS (SELECT 1 FROM options_live_exit_requests r WHERE r.position_id=p.id)) LIMIT 1",
+      [Number(userId), Number(strategyId), ids]
+    );
+    return rows.length > 0;
+  }
+
   async function listRestingTpOrderIds(userId) {
     const { rows } = await db.query(
       "SELECT client_order_id,exchange_order_id FROM options_live_orders " +
@@ -907,7 +943,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
-    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
+    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, requestCancel, hasPendingClose, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     claimIncidentNotificationToken, releaseIncidentNotification,

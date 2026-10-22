@@ -90,13 +90,15 @@ export default function BotDetail({
   onClosePosition,
   onCloseAll,
   onCancelOrder,
+  actionBusy = false,
+  actionNotice = null,
 }) {
   const kpis = useMemo(() => buildBotKpis(bot, stats), [bot, stats]);
   const desc = useMemo(() => describeParams(bot), [bot]);
   const info = STRUCTURE_INFO[bot.structure];
   const isLive = bot.mode === 'live';
   const p = bot.params || {};
-  const activity = { bot, mobile, onClosePosition, onCloseAll, onCancelOrder };
+  const activity = { bot, mobile, onClosePosition, onCloseAll, onCancelOrder, busy: actionBusy };
 
   const liveWarning = isLive && (
     <p className={`${ui.alert} ${ui.alertWarn}`}>
@@ -110,6 +112,12 @@ export default function BotDetail({
   );
   const loadAlert = loadError && (
     <p className={`${ui.alert} ${ui.alertError}`} role="alert">No se pudo actualizar el detalle: {loadError.message}</p>
+  );
+  // Resultado de la última cancelación de orden (éxito o error).
+  const noticeAlert = actionNotice && (
+    <p className={`${ui.alert} ${actionNotice.error ? ui.alertError : ui.alertInfo}`} role={actionNotice.error ? 'alert' : 'status'}>
+      {actionNotice.message}
+    </p>
   );
   const unlinkAlert = unlinkError && (
     <p className={`${ui.alert} ${ui.alertError}`} role="alert">No se pudo desvincular la alerta: {unlinkError.message}</p>
@@ -138,6 +146,7 @@ export default function BotDetail({
           <ModeError error={modeError} />
           {liveWarning}
           {loadAlert}
+          {noticeAlert}
           <LiveTpStatus bot={bot} />
           <div className={ui.tileGrid}>
             <div className={ui.tile}>
@@ -198,6 +207,7 @@ export default function BotDetail({
       <ModeError error={modeError} />
       {liveWarning}
       {loadAlert}
+      {noticeAlert}
       <LiveTpStatus bot={bot} />
 
       <div className={ui.kpiGrid}>

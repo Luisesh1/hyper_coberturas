@@ -70,4 +70,26 @@ describe('BotActivity', () => {
     expect(screen.getByText('Uso de límites')).toBeTruthy();
     expect(screen.getAllByRole('progressbar').length).toBeGreaterThan(0);
   });
+
+  it('«Cerrar todo» en la cabecera; el TP no se cancela y una cancelación pedida no repite botón', () => {
+    const onCloseAll = vi.fn();
+    const onCancelOrder = vi.fn();
+    const tp = { ...ATTENTION, id: 10, purpose: 'take_profit', status: 'active' };
+    const asked = { ...ATTENTION, id: 11, status: 'active', cancelRequested: true };
+    render(<BotActivity bot={bot({ pendingOrders: [ATTENTION, tp, asked] })} part="top" onCloseAll={onCloseAll} onCancelOrder={onCancelOrder} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar todo' }));
+    expect(onCloseAll).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /Cancelar orden 9/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Cancelar orden 10/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Cancelar orden 11/ })).toBeNull();
+    expect(screen.getAllByText('Cancelación solicitada').length).toBeGreaterThan(0);
+  });
+
+  it('con busy los botones de acción quedan deshabilitados', () => {
+    const onClosePosition = vi.fn();
+    render(<BotActivity bot={bot({ pendingOrders: [ATTENTION] })} part="top" busy onClosePosition={onClosePosition} onCloseAll={vi.fn()} onCancelOrder={vi.fn()} />);
+    for (const b of screen.getAllByRole('button')) expect(b.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Cerrar ETH-261031-2500-C/ }));
+    expect(onClosePosition).not.toHaveBeenCalled();
+  });
 });

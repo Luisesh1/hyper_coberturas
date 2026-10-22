@@ -14,7 +14,7 @@ vi.mock('../optionsAutomationApi', () => ({
 }));
 vi.mock('../autoTradingApi', () => ({
   SIGNAL_FILTERS: ['all', 'traded', 'ignored'],
-  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn() },
+  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn() },
 }));
 
 const ALERT_UP = { id: 11, name: 'BTC · MACD cruce alcista 15m', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70 };
@@ -275,6 +275,87 @@ describe('AutoTradingTab · escritorio', () => {
     expect(optionsStrategiesApi.remove).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Eliminar' }));
     await waitFor(() => expect(optionsStrategiesApi.remove).toHaveBeenCalledWith(1));
+  });
+});
+
+const POSITION = { id: 5, mode: 'shadow', symbol: 'BTC-261024-70000-C', side: 'BUY', quantity: 0.05, entryPrice: 900, mark: 950, closedAt: null };
+const ENTRY_ORDER = { id: 9, purpose: 'standard', action: 'open', symbol: 'BTC-261024-72000-C', side: 'BUY', price: 500, quantity: 0.05, executedQty: 0, status: 'active', cancelRequested: false, deadlineAt: NOW + 3600e3 };
+const TP_ORDER = { id: 10, purpose: 'take_profit', action: 'close', symbol: 'BTC-261024-70000-C', side: 'SELL', price: 1600, quantity: 0.05, executedQty: 0, status: 'active', cancelRequested: false, deadlineAt: NOW + 3600e3 };
+
+function withActivity(extra = {}) {
+  const base = optionsStrategiesApi.get.getMockImplementation();
+  optionsStrategiesApi.get.mockImplementation(async (id) => ({ ...(await base(id)), ...extra }));
+}
+
+describe('AutoTradingTab · cierre manual y cancelación', () => {
+  it('«Cerrar todo» pide confirmación, envía positionIds undefined una sola vez y muestra el resultado', async () => {
+    withActivity({ positions: [POSITION] });
+    let resolveClose;
+    autoBotsApi.close.mockImplementation(() => new Promise((r) => { resolveClose = r; }));
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cerrar todo' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cerrar todas las posiciones' });
+    expect(within(dialog).getByText(/sombra/i)).toBeTruthy();
+    expect(within(dialog).queryByText(/orden LIMIT real/)).toBeNull();
+    expect(autoBotsApi.close).not.toHaveBeenCalled();
+
+    const confirm = within(dialog).getByRole('button', { name: 'Confirmar cierre' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(autoBotsApi.close).toHaveBeenCalledTimes(1));
+    expect(autoBotsApi.close).toHaveBeenCalledWith(1, { positionIds: undefined });
+    expect(within(dialog).getByRole('button', { name: /Cerrando/ }).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('button', { name: /Cerrando/ }));
+    expect(autoBotsApi.close).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveClose({ status: 'closed', detail: 'Cierre manual' }); });
+    expect(await within(dialog).findByText(/Cierre manual/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Listo' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Cerrar todas las posiciones' })).toBeNull());
+  });
+
+  it('en Real «Cerrar» de una posición avisa de la orden LIMIT real y explica si no se envió', async () => {
+    serverModes[1] = 'live';
+    withActivity({ positions: [{ ...POSITION, mode: 'live' }] });
+    autoBotsApi.close.mockResolvedValue({ status: 'not_submitted', detail: 'Sin precio para BTC-261024-70000-C' });
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cerrar BTC-261024-70000-C' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cerrar posición' });
+    expect(within(dialog).getByText(/Se enviará una orden LIMIT real a Binance/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar cierre' }));
+    await waitFor(() => expect(autoBotsApi.close).toHaveBeenCalledWith(1, { positionIds: [5] }));
+    expect(await within(dialog).findByText(/Sin precio para BTC-261024-70000-C/)).toBeTruthy();
+  });
+
+  it('un error del servidor (cierre en curso) se muestra en la confirmación', async () => {
+    withActivity({ positions: [POSITION] });
+    autoBotsApi.close.mockRejectedValue(Object.assign(new Error('Ya hay un cierre en curso para esta posición'), { code: 'CLOSE_PENDING' }));
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cerrar todo' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Cerrar todas las posiciones' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar cierre' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toMatch(/cierre en curso/);
+  });
+
+  it('«Cancelar» pide la cancelación de una orden pendiente; el TP no tiene botón', async () => {
+    serverModes[1] = 'live';
+    withActivity({ pendingOrders: [ENTRY_ORDER, TP_ORDER] });
+    let resolveCancel;
+    autoBotsApi.cancelOrder.mockImplementation(() => new Promise((r) => { resolveCancel = r; }));
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    const btn = await screen.findByRole('button', { name: 'Cancelar orden 9' });
+    expect(screen.queryByRole('button', { name: 'Cancelar orden 10' })).toBeNull();
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    await waitFor(() => expect(autoBotsApi.cancelOrder).toHaveBeenCalledTimes(1));
+    expect(autoBotsApi.cancelOrder).toHaveBeenCalledWith(1, 9);
+    expect(screen.getByRole('button', { name: 'Cancelar orden 9' }).disabled).toBe(true);
+    await act(async () => { resolveCancel({ id: 9, cancelRequested: true }); });
+    expect(await screen.findByText(/Cancelación solicitada/)).toBeTruthy();
   });
 });
 
