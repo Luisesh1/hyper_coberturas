@@ -119,3 +119,30 @@
 - [ ] Escenario de escritorio a 1440: el editor de escritorio sigue igual (sin componentes móviles).
 - [ ] Ejecutar contra el Vite del worktree con la API simulada. Comprobar `cd client && npm test && npm run lint && npm run build`.
 - [ ] Commit `test(alerts): mobile e2e`.
+
+### Task 5: Operadores Squeeze Momentum «momentum subiendo / bajando» (petición del usuario)
+
+**Por qué:** el usuario quiere saber la direccionalidad del momentum en todo momento, no solo en la vela del giro.
+
+**Semántica:**
+- `momentum_rising` se cumple si `momentum[idx] > momentum[idx-1]`.
+- `momentum_falling` se cumple si `momentum[idx] < momentum[idx-1]`.
+- Si los valores son iguales, o alguno no es finito, no se cumple ninguno (`reason`: «momentum no disponible»).
+- Son operadores de **estado**: se cumplen en cada vela mientras se mantenga la dirección. No requieren operando, como `momentum_positive`.
+
+**Files:**
+- Modify: `server/src/services/alerts/indicator-evaluator.js`. Mismo bloque que `momentum_positive/negative`.
+  - `reason`: `momentum subiendo: {prev} -> {cur}` / `momentum bajando: {prev} -> {cur}`.
+  - `value = cur` y `threshold = prev`.
+- Modify: `server/src/services/alerts/alerts.service.js`. Añadir los dos operadores al `z.enum` del schema de condición.
+- Modify: `client/src/pages/Alerts/lib/labels.js`. En `SQZ_OPS`, después de `momentum −`:
+  - `{ value: 'momentum_rising', label: 'momentum subiendo ↗' }`
+  - `{ value: 'momentum_falling', label: 'momentum bajando ↘' }`
+  - Añadir también a `OP_STATE`, para que `summarizeCondition` diga «momentum subiendo» / «momentum bajando».
+  - Revisar cualquier otra lista de operadores sin operando: el operando implícito de `ConditionFields` y el backtest de alertas del cliente. Deben tratar los nuevos igual que `momentum_positive`.
+- Tests:
+  - servidor: rising, falling, igual (ninguno) y no disponible, en `server/test/` siguiendo los tests existentes del evaluador de sqzmom; el schema acepta los nuevos operadores;
+  - cliente: `operatorsFor('sqzmom')` los incluye, `summarizeCondition` y el selector de operador en móvil y escritorio.
+
+- [ ] Tests primero; `cd server && npm run check`; `cd client && npx vitest run src/pages/Alerts`.
+- [ ] Commit `feat(alerts): sqzmom momentum rising/falling operators`.
