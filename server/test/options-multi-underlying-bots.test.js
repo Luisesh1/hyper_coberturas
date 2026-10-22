@@ -97,6 +97,16 @@ test('límites compartidos: maxOpenPositions 1 con BTC abierta → señal ETH ma
   assert.equal(openOf(repo).length, 1);
 });
 
+test('una opción por subyacente: 2.ª alcista en BTC se ignora aunque haya cupo; ETH sí abre', async () => {
+  const { repo, service } = await setup({ params: { maxOpenPositions: 5 } });
+  assert.equal((await service.handleAlertTriggered(fire({ asset: 'BTCUSDT' })))[0].decision, 'opened');
+  const [again] = await service.handleAlertTriggered(fire({ asset: 'BTCUSDT' }));
+  assert.equal(again.decision, 'ignored');
+  assert.match(again.detail, /Ya hay una opción abierta en BTC/);
+  assert.equal((await service.handleAlertTriggered(fire({ asset: 'ETHUSDT' })))[0].decision, 'opened');
+  assert.deepEqual(openOf(repo).map(underlyingOf).sort(), ['BTC', 'ETH']);
+});
+
 test('límites compartidos: maxTradesPerDay suma todos los subyacentes', async () => {
   const { service } = await setup({ params: { maxOpenPositions: 5, maxTradesPerDay: 1 } });
   assert.equal((await service.handleAlertTriggered(fire({ asset: 'BTCUSDT' })))[0].decision, 'opened');

@@ -457,8 +457,8 @@ test('simulate atr_band: sin llegar al objetivo no cierra por stop ni por tiempo
 });
 
 test('simulate: tradesToday se cuenta por día UTC y limita maxTradesPerDay', () => {
-  // Bot de compra con maxTradesPerDay 1 y maxOpenPositions 5: dos señales el mismo día → 1 apertura;
-  // otra el día siguiente → abre.
+  // Bot de compra con maxTradesPerDay 1: la bajista del mismo día cierra la call
+  // pero no puede abrir la put; la del día siguiente (sin posición) sí abre.
   const params = templatesIndex.validateParams('alert_signal', { alertIds: [5], maxTradesPerDay: 1, maxOpenPositions: 5, stopLossPct: 1000, takeProfitPct: 1000 });
   const bids = Array.from({ length: 30 }, () => 195);
   const result = simulate({
@@ -466,12 +466,14 @@ test('simulate: tradesToday se cuenta por día UTC y limita maxTradesPerDay', ()
     steps: controlledSteps(bids), capitalUsdt: 1000, feePct: 0,
     signals: [
       { t: ATR_T0 + HOUR_MS, direction: 'bullish', alertId: 5 },
-      { t: ATR_T0 + 3 * HOUR_MS, direction: 'bullish', alertId: 5 },
-      { t: ATR_T0 + 25 * HOUR_MS, direction: 'bullish', alertId: 5 },
+      { t: ATR_T0 + 3 * HOUR_MS, direction: 'bearish', alertId: 5 },
+      { t: ATR_T0 + 25 * HOUR_MS, direction: 'bearish', alertId: 5 },
     ],
   });
   assert.equal(result.metrics.cycles, 2);
-  assert.deepEqual(result.signals, { received: 3, traded: 2, ignored: 1 });
+  // La 2.ª cuenta como operada (cierra la call aunque no abra). Sin el tope
+  // diario abriría la put y la 3.ª se ignoraría por subyacente ocupado.
+  assert.deepEqual(result.signals, { received: 3, traded: 3, ignored: 0 });
 });
 
 test('backtest bot dvol + banda ATR: pide historia previa de 1h y reproduce la señal', async () => {
@@ -489,7 +491,7 @@ test('backtest bot dvol + banda ATR: pide historia previa de 1h y reproduce la s
   assert.deepEqual(result.signals, { received: 1, traded: 1, ignored: 0 });
 });
 
-test('backtest bot: respeta el presupuesto total (lo comprometido por posiciones abiertas)', async () => {
+test('backtest bot: respeta el presupuesto total y una sola opción por subyacente', async () => {
   const signals = [
     { t: SIG_T, direction: 'bullish', alertId: 5 },
     { t: SIG_T + 10 * 60 * 1000, direction: 'bullish', alertId: 6 },
@@ -497,7 +499,8 @@ test('backtest bot: respeta el presupuesto total (lo comprometido por posiciones
   const base = { maxOpenPositions: 5, quantity: 1, stopLossPct: 1000, takeProfitPct: 1000 };
   const free = botService({ params: { ...base, capitalUsdt: 10 }, signals });
   const freeResult = await free.service.runBacktest(await free.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }));
-  assert.equal(freeResult.metrics.cycles, 2, 'sin presupuesto, capitalUsdt es por entrada');
+  assert.equal(freeResult.metrics.cycles, 1, 'la 2.ª alcista encuentra el subyacente ocupado');
+  assert.deepEqual(freeResult.signals, { received: 2, traded: 1, ignored: 1 });
 
   const capped = botService({ params: { ...base, budgetUsdt: 10, budgetFractions: 1 }, signals });
   const result = await capped.service.runBacktest(await capped.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }));

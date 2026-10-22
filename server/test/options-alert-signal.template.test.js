@@ -110,9 +110,9 @@ test('alert_signal: onOpposite ignore no toca nada', () => {
 
 test('alert_signal: motivos de skip', () => {
   const p = params();
-  const sameSide = run(p, { signal: { direction: 'bullish' }, positions: [position({ side: 'BUY', type: 'C' })] });
-  assert.deepEqual(sameSide.map((a) => a.reason), ['max_open_positions']);
-  assert.match(sameSide[0].detail, /Máximo de 1 posición/);
+  const capped = alertSignal.evaluate({ now: NOW, spot: SPOT, chain: chainFor(p.expiryDays), positions: [], openCountAll: 1, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  assert.deepEqual(capped.map((a) => a.reason), ['max_open_positions']);
+  assert.match(capped[0].detail, /Máximo de 1 posición/);
 
   const trades = run(p, { signal: { direction: 'bullish' }, tradesToday: 4 });
   assert.deepEqual(trades.map((a) => a.reason), ['max_trades_per_day']);
@@ -266,19 +266,25 @@ test('alert_signal: budgetUsdt/budgetFractions por defecto y validación', () =>
   assert.throws(() => params({ budgetUsdt: -1 }), /budgetUsdt/);
 });
 
-test('alert_signal: presupuesto 48 en 4 fracciones, nada comprometido → 12 por señal, ≤ 4 USDT por contrato', () => {
-  const p = params({ budgetUsdt: 48, budgetFractions: 4, contractCount: 3, maxOpenPositions: 3, quantity: 1, capitalUsdt: 1000 });
+test('alert_signal: presupuesto 48 en 4 fracciones, nada comprometido → ≤ 12 USDT por señal', () => {
+  const p = params({ budgetUsdt: 48, budgetFractions: 4, maxOpenPositions: 3, quantity: 1, capitalUsdt: 1000 });
   const [open] = runBudget(p, { committedUsdt: 0 });
   assert.equal(open.type, 'open');
-  assert.equal(open.legs.length, 3);
-  for (const leg of open.legs) {
-    assert.ok(legCost(leg) <= 4 + 1e-9, `pata ${legCost(leg)} > 4`);
-    assert.ok(legCost(leg) > 3, 'el presupuesto se aprovecha (redondeo hacia abajo al step)');
-  }
+  assert.equal(open.legs.length, 1);
+  assert.ok(legCost(open.legs[0]) <= 12 + 1e-9, `pata ${legCost(open.legs[0])} > 12`);
+  assert.ok(legCost(open.legs[0]) > 11, 'el presupuesto se aprovecha (redondeo hacia abajo al step)');
+});
+
+test('alert_signal: una opción por señal — contractCount siempre 1 (los bots viejos con más se normalizan)', () => {
+  assert.equal(params({ contractCount: 3 }).contractCount, 1);
+  assert.equal(params().contractCount, 1);
+  assert.ok(!alertSignal.paramSchema.some((f) => f.key === 'contractCount'));
+  const [open] = run(params({ contractCount: 3, maxOpenPositions: 5 }), { signal: { direction: 'bullish' } });
+  assert.equal(open.legs.length, 1);
 });
 
 test('alert_signal: comprometido 40 de 48 → 8 por señal', () => {
-  const p = params({ budgetUsdt: 48, budgetFractions: 4, contractCount: 1, quantity: 1 });
+  const p = params({ budgetUsdt: 48, budgetFractions: 4, quantity: 1 });
   const [open] = runBudget(p, { committedUsdt: 40 });
   assert.equal(open.type, 'open');
   assert.ok(legCost(open.legs[0]) <= 8 + 1e-9);
@@ -414,4 +420,31 @@ test('alert_signal: con openCountAll el giro descuenta las contrarias que cierra
   // 2 abiertas en el bot (1 put de este subyacente + 1 de otro): cierra la put y abre.
   const actions = alertSignal.evaluate({ now: NOW, spot: SPOT, chain: chainFor(p.expiryDays), positions: [put], openCountAll: 2, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
   assert.deepEqual(actions.map((a) => a.type), ['close', 'open']);
+});
+
+test('alert_signal: una sola opción por subyacente — misma dirección con posición abierta se salta', () => {
+  // Aunque el máximo del bot permita más, el subyacente ya tiene su opción.
+  const p = params({ maxOpenPositions: 5 });
+  const actions = run(p, { signal: { direction: 'bullish' }, positions: [position({ side: 'BUY', type: 'C' })] });
+  assert.deepEqual(actions.map((a) => a.reason), ['underlying_busy']);
+  assert.match(actions[0].detail, /BTC/);
+});
+
+test('alert_signal: una sola opción por subyacente — orden de entrada pendiente bloquea', () => {
+  const p = params({ maxOpenPositions: 5 });
+  const actions = alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain: chainFor(p.expiryDays), positions: [], pendingOpens: 1, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  assert.deepEqual(actions.map((a) => a.reason), ['underlying_busy']);
+  assert.match(actions[0].detail, /pendiente/);
+});
+
+test('alert_signal: una sola opción por subyacente — onOpposite reverse cierra y abre', () => {
+  const p = params({ maxOpenPositions: 5 });
+  const actions = run(p, { signal: { direction: 'bullish' }, positions: [position({ side: 'BUY', type: 'P' })] });
+  assert.deepEqual(actions.map((a) => a.type), ['close', 'open']);
+});
+
+test('alert_signal: una sola opción por subyacente — sin posiciones en este subyacente abre aunque otro tenga', () => {
+  const p = params({ maxOpenPositions: 2 });
+  const [open] = alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain: chainFor(p.expiryDays), positions: [], openCountAll: 1, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  assert.equal(open.type, 'open');
 });

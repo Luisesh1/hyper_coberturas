@@ -52,7 +52,6 @@ test('unsafe bot modes, naked short and broad limits are rejected',async()=>{
  for(const s of [
   {...valid,mode:'live'},
   {...valid,params:{...valid.params,structure:'sell_against'}},
-  {...valid,params:{...valid.params,contractCount:2}},
   {...valid,params:{...valid.params,maxTradesPerDay:4}},
   {...valid,params:{...valid.params,onOpposite:'reverse'}},
   {...valid,params:{...valid.params,maxPremiumUsdt:null}},

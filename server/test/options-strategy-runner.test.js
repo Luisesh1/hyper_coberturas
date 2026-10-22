@@ -574,9 +574,10 @@ test('notify por bot: una apertura real con trades=false no llama a notify', asy
 const BUDGET_PARAMS = { alertIds: [1], budgetUsdt: 10, budgetFractions: 1, quantity: 1 };
 
 function pendingEntry(strategyId, overrides = {}) {
-  // 0,01 BTC a 1000 USDT = 10 USDT pendientes de ejecutar.
+  // 0,01 a 1000 USDT = 10 USDT pendientes de ejecutar. En ETH para que no
+  // ocupe el subyacente de la señal (BTC): una opción por subyacente.
   return { id: 1, strategyId, action: 'open', purpose: 'standard', status: 'active',
-    symbol: 'BTC-261023-65000-C', side: 'BUY', quantity: 0.01, processedQty: 0, limitPrice: 1000, ...overrides };
+    symbol: 'ETH-261023-3200-C', side: 'BUY', quantity: 0.01, processedQty: 0, limitPrice: 1000, ...overrides };
 }
 
 test('presupuesto: una orden de entrada pendiente de 10 USDT en Real cuenta como comprometida', async () => {
@@ -606,7 +607,7 @@ test('presupuesto: lo ejecutado o cancelado de una orden no reserva; la orden fi
 
 test('presupuesto: las posiciones abiertas del modo comprometen su prima', async () => {
   const { repo, runner, strategy } = await setup({ template: 'alert_signal', params: { ...BUDGET_PARAMS, maxOpenPositions: 5 } });
-  await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261023-65000-C',
+  await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'ETH-261023-3200-C',
     side: 'BUY', quantity: 0.01, entryPrice: 1000, openedAt: FRIDAY_9, feesUsdt: 0 });
   const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
   const skipped = actions.shadow.find((a) => a.type === 'skip');
@@ -620,9 +621,27 @@ test('presupuesto: la reentrada diferida también resta lo reservado', async () 
   assert.equal(result.status, 'no_valid_entry');
 });
 
-test('presupuesto: sin budgetUsdt no se consulta el ledger de órdenes', async () => {
+test('presupuesto: sin budgetUsdt las órdenes ya ejecutadas o cerradas no bloquean la entrada', async () => {
   const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1] } });
-  runner.liveOrders = { async listByStrategy() { throw new Error('no debería consultarse'); } };
+  runner.liveOrders = { async listByStrategy(id) {
+    return [pendingEntry(id, { status: 'final' }), pendingEntry(id, { id: 2, processedQty: 0.01 }), pendingEntry(id, { id: 3, action: 'close' })];
+  } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(actions.live[0].type, 'open');
+});
+
+test('una opción por subyacente: una entrada pendiente en Real bloquea otra en el mismo subyacente', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id, { symbol: 'BTC-261023-65000-C' })]; } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(actions.live[0].reason, 'underlying_busy');
+  // La sombra no tiene órdenes pendientes: abre.
+  assert.equal(actions.shadow[0].type, 'open');
+});
+
+test('una opción por subyacente: la entrada pendiente de otro subyacente no bloquea', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id)]; } };
   const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
   assert.equal(actions.live[0].type, 'open');
 });

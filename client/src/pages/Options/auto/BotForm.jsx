@@ -328,17 +328,6 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             onChange={(v) => update({ expiryMaxDays: v })}
           />
           <NumberField
-            label="Contratos distintos"
-            help="Elegidos por cercanía a la delta objetivo"
-            value={form.contractCount}
-            min={1}
-            max={10}
-            step={1}
-            integer
-            error={errors.contractCount}
-            onChange={(v) => update({ contractCount: v })}
-          />
-          <NumberField
             label="Presupuesto total"
             help={perSignal !== null
               ? `Hasta ${formatNumber(perSignal, { decimals: 2, minDecimals: 0 })} USDT por señal`
