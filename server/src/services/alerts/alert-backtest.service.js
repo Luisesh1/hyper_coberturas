@@ -71,10 +71,12 @@ function windowAt(candles, tf, evalTimeMs) {
 
 function ruleSummary(result) {
   const rule = result.rule || {};
-  const first = Array.isArray(rule.conditions) ? rule.conditions[0] || {} : rule;
+  const conds = Array.isArray(rule.conditions) ? rule.conditions : [rule];
+  const first = conds[0] || {};
   return {
     indicatorType: first.indicatorType ?? null,
     timeframe: first.timeframe ?? null,
+    conditions: conds.map((c) => ({ indicatorType: c?.indicatorType ?? null, timeframe: c?.timeframe ?? null })),
     weight: rule.weight,
     matched: Boolean(result.matched),
     reason: result.reason ?? null,
@@ -138,7 +140,9 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
   let simStart = firstBoundary; // primer boundary que se simula
   let cooldownApprox = false;
   if (cooldownMs > 0) {
-    const lowest = fromMs - cooldownLookbackMs(cooldownMs, baseMs);
+    // Anclado al boundary (no a fromMs) para que el tope cubra siempre el
+    // mismo número de boundaries; run pide velas desde ese mismo ancla.
+    const lowest = lastBefore(fromMs) - cooldownLookbackMs(cooldownMs, baseMs);
     let candidate = null;
     let found = null;
     for (let b = lastBefore(fromMs); b >= lowest; b -= baseMs) {
@@ -156,7 +160,7 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
       simStart = found + baseMs;
     } else {
       cooldownApprox = true;
-      simStart = Math.ceil(lowest / baseMs) * baseMs;
+      simStart = lowest;
     }
   }
 
@@ -203,7 +207,8 @@ function createAlertBacktest({ getAlert, getCandles, now = Date.now }) {
     if (!asset) throw new ValidationError('asset requerido');
 
     const from = Number(startTime);
-    const to = Math.min(Number(endTime), now());
+    // Ningún boundary que el scheduler aún no habría evaluado (b + 3 s ≤ now).
+    const to = Math.min(Number(endTime), now() - POST_CLOSE_BUFFER_MS);
     if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) {
       throw new ValidationError('rango inválido: startTime debe ser menor que endTime');
     }
@@ -218,7 +223,7 @@ function createAlertBacktest({ getAlert, getCandles, now = Date.now }) {
     await Promise.all(distinctTimeframes(rules).map(async (tf) => {
       candlesByTf[tf] = await getCandles(asset, tf, {
         datasource: ds,
-        startTime: from - lookbackMs - CANDLE_FETCH_LIMIT * TF_MS[tf],
+        startTime: Math.floor(from / baseMs) * baseMs - lookbackMs - CANDLE_FETCH_LIMIT * TF_MS[tf],
         endTime: to,
       });
     }));

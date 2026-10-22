@@ -7,6 +7,7 @@ const telegramRegistry = require('../src/services/telegram.registry');
 const backtest = require('../src/services/alerts/alert-backtest.service');
 
 const { windowAt, simulate, createAlertBacktest } = backtest;
+const { filterClosedCandles } = require('../src/services/alerts/alerts.service');
 
 const M15 = 15 * 60_000;
 const H4 = 4 * 60 * 60_000;
@@ -97,6 +98,7 @@ test('cooldown igual al TF suprime la vela siguiente', () => {
   assert.equal(out.events[0].rules[0].indicatorType, 'volume');
   assert.equal(out.events[0].rules[0].timeframe, '15m');
   assert.equal(out.events[0].rules[0].matched, true);
+  assert.deepEqual(out.events[0].rules[0].conditions, [{ indicatorType: 'volume', timeframe: '15m' }]);
   assert.equal(out.cooldownApprox, false);
 });
 
@@ -198,15 +200,62 @@ test('run es de solo lectura', async (t) => {
   for (const spy of spies) assert.equal(spy.mock.callCount(), 0);
 });
 
-test('run recorta endTime a now()', async () => {
-  const candles = makeCandles(M15, BASE, 600);
+test('run recorta endTime a now() − 3 s: no evalúa boundaries que el scheduler aún no evaluó', async () => {
+  const candles = makeCandles(M15, BASE, 600, () => 100);
+  const alert = makeAlert({ cooldownSeconds: 0 });
+  const mk = (nowMs) => createAlertBacktest({ getAlert: async () => alert, getCandles: async () => candles, now: () => nowMs });
+  const req = { asset: 'BTCUSDT', datasource: 'binance', startTime: closeOf(400), endTime: closeOf(900) };
+  // 2 s después del cierre 500 el scheduler aún no lo ha evaluado.
+  const early = await mk(closeOf(500) + 2000).run(1, 7, req);
+  assert.equal(early.to, closeOf(500) + 2000 - 3000);
+  assert.equal(early.events[early.events.length - 1].evalTime, closeOf(499));
+  // A los 3 s ya sí.
+  const onTime = await mk(closeOf(500) + 3000).run(1, 7, req);
+  assert.equal(onTime.to, closeOf(500));
+  assert.equal(onTime.events[onTime.events.length - 1].evalTime, closeOf(500));
+});
+
+test('fromMs no alineado con cd < tf no marca cooldownApprox', async () => {
+  const candles = makeCandles(H4 / 4, BASE, 600); // 1h, sin disparos
+  const alert = makeAlert({ cooldownSeconds: 60, rules: [volumeRule('1h', 50)] });
+  const fromMs = BASE + 400 * 3600_000 + 45 * 60_000;
+  const out = simulate({ alert, candlesByTf: { '1h': candles }, fromMs, toMs: fromMs + 10 * 3600_000 });
+  assert.equal(out.cooldownApprox, false);
+  const calls = [];
   const svc = createAlertBacktest({
-    getAlert: async () => makeAlert(),
-    getCandles: async () => candles,
-    now: () => closeOf(500),
+    getAlert: async () => alert,
+    getCandles: async (...args) => { calls.push(args); return candles; },
+    now: () => fromMs + 100 * 3600_000,
   });
-  const res = await svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: closeOf(400), endTime: closeOf(900) });
-  assert.equal(res.to, closeOf(500));
+  const res = await svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: fromMs, endTime: fromMs + 10 * 3600_000 });
+  assert.equal(res.cooldownApprox, false);
+  // Fetch anclado al boundary: lastBefore(from) − 32·cd − 250·1h.
+  assert.equal(calls[0][2].startTime, BASE + 400 * 3600_000 - 32 * 60_000 - 250 * 3600_000);
+});
+
+test('cada regla lista todas sus condiciones', () => {
+  const rule = {
+    weight: 2,
+    conditions: [volumeRule('15m', 50).conditions[0], volumeRule('4h', 0).conditions[0]],
+    joiners: ['and'],
+  };
+  const candles15 = makeCandles(M15, BASE, 3000, () => 100);
+  const candles4h = makeCandles(H4, BASE - 300 * H4, 600, () => 100);
+  const out = simulate({
+    alert: makeAlert({ cooldownSeconds: 0, rules: [rule] }),
+    candlesByTf: { '15m': candles15, '4h': candles4h },
+    fromMs: closeOf(2990),
+    toMs: closeOf(2991),
+  });
+  assert.equal(out.events.length, 1);
+  const [r] = out.events[0].rules;
+  assert.equal(r.indicatorType, 'volume');
+  assert.equal(r.timeframe, '15m');
+  assert.equal(r.weight, 2);
+  assert.deepEqual(r.conditions, [
+    { indicatorType: 'volume', timeframe: '15m' },
+    { indicatorType: 'volume', timeframe: '4h' },
+  ]);
 });
 
 test('run rechaza rangos de más de 2000 velas base', async () => {
@@ -240,18 +289,32 @@ const H1 = 60 * 60_000;
 const M1 = 60_000;
 
 test('velas horarias que abren en :30 (Yahoo) se evalúan en las horas del epoch', () => {
-  const candles = makeCandles(H1, BASE + 30 * 60_000, 600, () => 100);
-  const alert = makeAlert({ cooldownSeconds: 0, rules: [volumeRule('1h', 50)] });
-  const fromMs = BASE + 300 * H1;
-  const toMs = BASE + 320 * H1;
-  const out = simulate({ alert, candlesByTf: { '1h': candles }, fromMs, toMs });
-  assert.equal(out.baseTimeframe, '1h');
-  assert.equal(out.insufficient, 0);
-  assert.equal(out.events.length, 20);
-  for (const e of out.events) {
-    assert.equal(e.evalTime % H1, 0);
-    assert.equal(e.time, e.evalTime - 30 * 60_000);
-    assert.equal(e.suppressed, false);
+  // Sin closeTime (cierre = apertura + 1h) y con closeTime = time, que es lo
+  // que devuelve yahoo.provider: en vivo filterClosedCandles da por cerrada
+  // la vela en cuanto abre, así que entra la vela abierta a b − 30m.
+  for (const yahooClose of [false, true]) {
+    const candles = makeCandles(H1, BASE + 30 * 60_000, 600, () => 100)
+      .map((c) => (yahooClose ? { ...c, closeTime: c.time } : c));
+    const alert = makeAlert({ cooldownSeconds: 0, rules: [volumeRule('1h', 50)] });
+    const fromMs = BASE + 300 * H1;
+    const toMs = BASE + 320 * H1;
+    const out = simulate({ alert, candlesByTf: { '1h': candles }, fromMs, toMs });
+    assert.equal(out.baseTimeframe, '1h');
+    assert.equal(out.insufficient, 0);
+    assert.equal(out.events.length, 20);
+    for (const e of out.events) {
+      assert.equal(e.evalTime % H1, 0);
+      assert.equal(e.time, e.evalTime - 30 * 60_000);
+      assert.equal(e.suppressed, false);
+      // windowAt === lo que vería el motor: ventana de tiempo de getCandles
+      // + filterClosedCandles en T.
+      const T = e.evalTime + 3000;
+      const live = filterClosedCandles(candles.filter((c) => c.time >= T - 250 * H1 && c.time <= T), '1h', T);
+      const win = windowAt(candles, '1h', T);
+      assert.deepEqual(win, live);
+      const lastOpen = win[win.length - 1].time;
+      assert.equal(lastOpen, yahooClose ? e.evalTime - 30 * 60_000 : e.evalTime - 90 * 60_000);
+    }
   }
 });
 
