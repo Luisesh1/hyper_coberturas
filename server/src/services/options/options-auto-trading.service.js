@@ -328,6 +328,21 @@ function createOptionsAutoTradingService(deps = {}) {
     return (await botSummary(userId, created.id)) || created;
   }
 
+  /** Copia un bot en sombra (nunca hereda Real) con los mismos params/límites. */
+  async function cloneBot(userId, id) {
+    const bot = await requireBot(userId, id);
+    const suffix = ' (copia)';
+    const created = await strategies.create(userId, {
+      name: `${String(bot.name || '').slice(0, 120 - suffix.length)}${suffix}`,
+      template: TEMPLATE_ID,
+      underlying: bot.underlying,
+      params: JSON.parse(JSON.stringify(bot.params || {})),
+      limits: JSON.parse(JSON.stringify(bot.limits || {})),
+      mode: 'shadow',
+    }, { alertBots: true });
+    return (await botSummary(userId, created.id)) || created;
+  }
+
   async function updateBot(userId, id, body = {}) {
     const bot = await requireBot(userId, id);
     const patch = {};
@@ -479,6 +494,7 @@ function createOptionsAutoTradingService(deps = {}) {
     listBots,
     eligibleAlerts,
     createBot,
+    cloneBot,
     updateBot,
     listSignals,
     closeBot,

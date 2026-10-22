@@ -417,3 +417,29 @@ test('POST /options/auto-bots/:id/simulate valida la dirección, simula en sombr
     });
   } finally { restore(); }
 });
+
+test('POST /options/auto-bots/:id/clone copia en sombra aunque el original sea Real', async () => {
+  const { repo, restore } = useFakeServices();
+  try {
+    await withServer(async (call) => {
+      const created = await call('POST', '/auto-bots', { ...validBot, params: { ...validBot.params, notify: { trades: false, errors: true } }, limits: { maxOrdersPerDay: 3 } });
+      const id = created.json.data.id;
+      repo.strategies.find((s) => s.id === id).mode = 'live';
+      const res = await call('POST', `/auto-bots/${id}/clone`);
+      assert.equal(res.status, 201);
+      const copy = res.json.data;
+      assert.notEqual(copy.id, id);
+      assert.equal(copy.mode, 'shadow');
+      assert.equal(copy.name, 'Bot BTC (copia)');
+      assert.equal(copy.underlying, 'BTC');
+      assert.deepEqual(copy.params.alertIds, [1, 2]);
+      assert.equal(copy.params.quantity, 0.02);
+      assert.deepEqual(copy.params.notify, { trades: false, errors: true });
+      assert.equal(copy.limits.maxOrdersPerDay, 3);
+      assert.equal(repo.strategies.find((s) => s.id === id).mode, 'live');
+      assert.equal((await call('POST', '/auto-bots/9999/clone')).status, 404);
+      const bad = await call('POST', '/auto-bots', { ...validBot, params: { notify: { trades: 'x' } } });
+      assert.equal(bad.status, 400);
+    });
+  } finally { restore(); }
+});

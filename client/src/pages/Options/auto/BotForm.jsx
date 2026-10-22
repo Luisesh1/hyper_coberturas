@@ -493,6 +493,18 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
           )}
         </FieldGroup>
 
+        <FieldGroup title="5 · Avisos">
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={form.notifyTrades !== false} onChange={(e) => update({ notifyTrades: e.target.checked })} />
+            <span>Avisar de operaciones por Telegram</span>
+          </label>
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={form.notifyErrors !== false} onChange={(e) => update({ notifyErrors: e.target.checked })} />
+            <span>Avisar de errores y órdenes bloqueadas</span>
+          </label>
+          <p className={styles.note}>Solo aplica en modo Real. Las alertas de incidentes del ejecutor siempre se envían.</p>
+        </FieldGroup>
+
         {submitted && errorCount > 0 && (
           <p className={`${ui.alert} ${ui.alertError}`} role="alert">
             Revisa {errorCount === 1 ? 'el campo marcado' : `los ${errorCount} campos marcados`}.

@@ -36,6 +36,7 @@ export const WarningIcon = (p) => (
 export const InfoIcon = (p) => (
   <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></Svg>
 );
+export const CopyIcon = (p) => <Svg {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></Svg>;
 export const RunIcon = (p) => <Svg fill="currentColor" {...p}><path d="M7 4v16l13-8z" /></Svg>;
 export const DownloadIcon = (p) => (
   <Svg {...p}><path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" /></Svg>

@@ -236,3 +236,12 @@ test('alert_signal atr_band: sin objetivo guardado espera (hold) y no inventa sa
   assert.equal(actions[0].type, 'hold');
   assert.equal(actions[0].reason, 'atr_band_tp_pending');
 });
+
+test('alert_signal: notify por defecto {trades:true, errors:true} y se valida', () => {
+  assert.deepEqual(params().notify, { trades: true, errors: true });
+  assert.deepEqual(alertSignal.defaultParams.notify, { trades: true, errors: true });
+  assert.deepEqual(params({ notify: { trades: false, errors: true } }).notify, { trades: false, errors: true });
+  assert.deepEqual(params({ notify: { trades: false } }).notify, { trades: false, errors: true });
+  assert.throws(() => params({ notify: { trades: 'si', errors: true } }), /notify/);
+  assert.throws(() => params({ notify: 5 }), /notify/);
+});

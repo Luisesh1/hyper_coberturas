@@ -14,7 +14,7 @@ vi.mock('../optionsAutomationApi', () => ({
 }));
 vi.mock('../autoTradingApi', () => ({
   SIGNAL_FILTERS: ['all', 'traded', 'ignored'],
-  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn(), simulate: vi.fn() },
+  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn(), simulate: vi.fn(), clone: vi.fn() },
 }));
 
 const ALERT_UP = { id: 11, name: 'BTC · MACD cruce alcista 15m', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70 };
@@ -231,6 +231,7 @@ describe('AutoTradingTab · escritorio', () => {
         takeProfitPct: 50, stopLossPct: 200, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
         contractCount: 1, capitalUsdt: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
+        notify: { trades: true, errors: true },
       },
       limits: { maxMarginUsdt: 1000 },
     });
@@ -265,6 +266,21 @@ describe('AutoTradingTab · escritorio', () => {
     expect(id).toBe(1);
     expect(payload.underlying).toBeUndefined();
     expect(payload).toMatchObject({ name: 'Momentum BTC v2', alertIds: [12], params: { structure: 'buy_with', quantity: 0.05 } });
+  });
+
+  it('clonar llama a POST /clone y selecciona el bot nuevo (en sombra)', async () => {
+    const copy = { id: 7, name: 'Momentum BTC (copia)', underlying: 'BTC', mode: 'shadow', template: 'alert_signal', params: {}, limits: {} };
+    autoBotsApi.clone.mockImplementation(async () => {
+      autoBotsApi.list.mockImplementation(async () => [...LIST.map(withServerState), copy]);
+      return copy;
+    });
+    const base = optionsStrategiesApi.get.getMockImplementation();
+    optionsStrategiesApi.get.mockImplementation(async (id) => (Number(id) === 7 ? copy : base(id)));
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    fireEvent.click(screen.getByRole('button', { name: 'Clonar bot' }));
+    await waitFor(() => expect(autoBotsApi.clone).toHaveBeenCalledWith(1));
+    await screen.findByRole('heading', { name: 'Momentum BTC (copia)' });
   });
 
   it('eliminar pide confirmación y llama a DELETE', async () => {

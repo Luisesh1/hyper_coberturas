@@ -441,7 +441,7 @@ class OptionsStrategyRunner {
         } catch (err) {
           this.logger.warn('options_action_failed', { strategyId: strategy.id, mode, error: err.message });
           await this.recordOutcome(strategy, mode, { type: 'error', reason: 'exec_error', detail: err.message }, tickCtx);
-          if (mode === 'live') await this.maybeNotify(strategy, `Error en modo real: ${err.message}`);
+          if (mode === 'live') await this.maybeNotify(strategy, `Error en modo real: ${err.message}`, 'error');
         }
       }
     }
@@ -769,13 +769,13 @@ class OptionsStrategyRunner {
         await this.recordOutcome(strategy, 'live', {
           type: 'skip', reason: 'live_risk_limit', detail: `Bloqueada por límite: ${limits.reason}`,
         }, ctx);
-        await this.maybeNotify(strategy, `Orden real bloqueada: ${limits.reason}`);
+        await this.maybeNotify(strategy, `Orden real bloqueada: ${limits.reason}`, 'error');
         return null;
       }
     }
     const result = await this.liveExecutor.submit(strategy, { ...action, legs: quoted }, ctx);
     if (result.status === 'submitted' || result.status === 'attention') {
-      await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`);
+      await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`, 'trade');
     }
     ctx.produced?.push({ mode: 'live', type: action.type,
       pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
@@ -783,8 +783,11 @@ class OptionsStrategyRunner {
     return result;
   }
 
-  async maybeNotify(strategy, message) {
+  /** `kind`: 'trade' | 'error'. Respeta `params.notify` del bot (activo si falta). */
+  async maybeNotify(strategy, message, kind = 'trade') {
     try {
+      const flag = kind === 'error' ? 'errors' : 'trades';
+      if (strategy.params?.notify?.[flag] === false) return;
       const limits = await this.credentials.getLimits(strategy.userId);
       if (!limits?.notifyTelegram) return;
       await this.notify(

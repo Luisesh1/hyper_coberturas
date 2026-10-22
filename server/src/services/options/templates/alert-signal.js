@@ -56,6 +56,7 @@ const defaultParams = {
   atrBandLength: 14,
   atrBandMultiplier: 2,
   tpMaxGainPct: 200,
+  notify: { trades: true, errors: true },
 };
 
 const NUMERIC_FIELDS = [
@@ -100,6 +101,19 @@ function pickEnum(value, options, fallback, label) {
   return v;
 }
 
+/** Avisos de Telegram del bot: dos booleanos; lo que falte queda activo. */
+function normalizeNotify(value) {
+  if (value == null) return { ...defaultParams.notify };
+  if (typeof value !== 'object' || Array.isArray(value)) throw new ValidationError('notify: debe ser un objeto { trades, errors }');
+  const out = { ...defaultParams.notify };
+  for (const key of ['trades', 'errors']) {
+    if (value[key] === undefined) continue;
+    if (typeof value[key] !== 'boolean') throw new ValidationError(`notify.${key}: debe ser booleano`);
+    out[key] = value[key];
+  }
+  return out;
+}
+
 /**
  * Valida y completa los parámetros. Los valores por defecto de delta y
  * salidas dependen de la estructura (comprar o vender).
@@ -130,7 +144,7 @@ function validateParams(raw = {}) {
   const capitalUsdt = input.capitalUsdt == null || input.capitalUsdt === '' ? null : Number(input.capitalUsdt);
   if (!Number.isInteger(contractCount) || contractCount < 1 || contractCount > 10) throw new ValidationError('contractCount debe estar entre 1 y 10');
   if (capitalUsdt !== null && (!Number.isFinite(capitalUsdt) || capitalUsdt <= 0 || capitalUsdt > 1e7)) throw new ValidationError('capitalUsdt inválido');
-  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt };
+  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, notify: normalizeNotify(input.notify) };
 }
 
 /** Pata que abre una señal según la estructura. */

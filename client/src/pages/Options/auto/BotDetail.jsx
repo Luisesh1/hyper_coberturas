@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ModeSwitch from '../strategies/ModeSwitch';
-import { ChevronLeftIcon, CloseIcon, PencilIcon, TrashIcon, WarningIcon } from '../strategies/common/icons';
+import { ChevronLeftIcon, CloseIcon, CopyIcon, PencilIcon, TrashIcon, WarningIcon } from '../strategies/common/icons';
 import { isCredentialsError } from '../strategies/strategyView';
 import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
@@ -116,7 +116,9 @@ export default function BotDetail({
   unlinking = false,
   onModeSelect,
   onEdit,
+  onClone,
   onDelete,
+  cloning = false,
   onUnlink,
   onBack,
   onClosePosition,
@@ -170,6 +172,9 @@ export default function BotDetail({
             <span className={styles.mobileDetailName}>{bot.name}</span>
             <span className={styles.mobileDetailSub}>{bot.underlying} · {info.shorter}</span>
           </div>
+          <button type="button" className={ui.iconBtn} onClick={onClone} disabled={cloning} aria-label="Clonar bot">
+            <CopyIcon size={20} />
+          </button>
           <button type="button" className={ui.iconBtn} onClick={onDelete} aria-label="Eliminar bot">
             <TrashIcon size={20} />
           </button>
@@ -231,6 +236,9 @@ export default function BotDetail({
           <ModeSwitch value={bot.mode} onSelect={onModeSelect} disabled={!!modePending} pending={modePending} labels={BOT_MODE_LABEL} />
           <button type="button" className={ui.iconBtn} onClick={onEdit} aria-label="Editar bot" title="Editar">
             <PencilIcon size={18} />
+          </button>
+          <button type="button" className={ui.iconBtn} onClick={onClone} disabled={cloning} aria-label="Clonar bot" title="Clonar (se crea en sombra)">
+            <CopyIcon size={18} />
           </button>
           <button type="button" className={ui.iconBtn} onClick={onDelete} aria-label="Eliminar bot" title="Eliminar">
             <TrashIcon size={18} />

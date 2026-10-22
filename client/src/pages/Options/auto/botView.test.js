@@ -101,6 +101,7 @@ describe('formulario de bot', () => {
         takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
         maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
+        notify: { trades: true, errors: true },
       },
       limits: {},
     });
@@ -204,6 +205,8 @@ describe('señales y KPIs', () => {
       ['P&L sombra', '+214,60', 'USDT · 30 días'],
       ['P&L real', '−5,00', 'USDT · 30 días'],
       ['Acierto', '6 / 9', 'operaciones ganadoras'],
+      ['P&L medio por operación', '—', 'USDT · operaciones cerradas'],
+      ['Peor racha / drawdown', '—', 'caída máx. y pérdidas seguidas (USDT)'],
     ]);
   });
 
@@ -225,5 +228,50 @@ describe('señales y KPIs', () => {
       normalizeBot({ id: 3 }),
     ];
     expect(latestSignal(bots).bot.id).toBe(2);
+  });
+});
+
+describe('KPIs de operaciones cerradas', () => {
+  const closed = (pnls, mode = 'shadow') => pnls.map((pnlUsdt, i) => ({ id: i + 1, mode, pnlUsdt, closedAt: 1000 + i }));
+  const byKey = (bot) => Object.fromEntries(buildBotKpis(bot, null).map((k) => [k.key, k]));
+
+  it('con 3 cierres el acierto es «n/a (3 ops)»', () => {
+    const k = byKey({ mode: 'shadow', closedPositions: closed([10, -5, 4]) });
+    expect(k.wins.value).toBe('n/a (3 ops)');
+    expect(k.avgPnl.value).toBe('+3,00');
+  });
+
+  it('con 5 o más cierres muestra aciertos, media, drawdown y peor racha del libro activo', () => {
+    // acumulado: 10, 5, 0, -3, 7, 2  → pico 10, mínimo -3 → drawdown 13; racha perdedora 3
+    const k = byKey({ mode: 'shadow', closedPositions: [...closed([10, -5, -5, -3, 10, -5]), ...closed([999], 'live')] });
+    expect(k.wins.value).toBe('2 / 6');
+    expect(k.drawdown.value).toBe('−13,00 · 3 seguidas');
+    expect(k.avgPnl.value).toBe('+0,33');
+  });
+
+  it('usa el libro real si el bot está en Real y ordena por cierre', () => {
+    const live = [
+      { mode: 'live', pnlUsdt: -4, closedAt: 30 }, { mode: 'live', pnlUsdt: 6, closedAt: 10 },
+      { mode: 'live', pnlUsdt: 1, closedAt: 20 }, { mode: 'live', pnlUsdt: 1, closedAt: 40 }, { mode: 'live', pnlUsdt: 1, closedAt: 50 },
+      { mode: 'shadow', pnlUsdt: -100, closedAt: 5 },
+    ];
+    const k = byKey({ mode: 'live', closedPositions: live });
+    expect(k.wins.value).toBe('4 / 5');
+    expect(k.drawdown.value).toBe('−4,00 · 1 seguida');
+  });
+
+  it('sin operaciones cerradas: «—»', () => {
+    const k = byKey({ mode: 'shadow', closedPositions: [] });
+    expect(k.avgPnl.value).toBe('—');
+    expect(k.drawdown.value).toBe('—');
+    expect(k.wins.value).toBe('n/a (0 ops)');
+  });
+
+  it('notify: el formulario lo lee (activo si falta) y el payload lo envía', () => {
+    const form = initialBotForm({ bot: normalizeBot({ id: 1, underlying: 'BTC', params: { alertIds: [1], notify: { trades: false, errors: true } } }) });
+    expect(form.notifyTrades).toBe(false);
+    expect(form.notifyErrors).toBe(true);
+    expect(initialBotForm({ bot: normalizeBot({ id: 1, params: { alertIds: [1] } }) }).notifyTrades).toBe(true);
+    expect(buildBotPayload({ ...form, alertIds: [1], name: 'x' }).params.notify).toEqual({ trades: false, errors: true });
   });
 });

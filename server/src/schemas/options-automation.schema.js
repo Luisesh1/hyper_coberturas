@@ -51,7 +51,11 @@ const createBacktestSchema = z.object({
 const alertIds = z.array(z.number().int().positive()).min(1).max(50);
 const autoBotParams = z.record(
   z.string(),
-  z.union([z.number(), z.string(), z.null(), z.array(z.number().int().positive())])
+  z.union([
+    z.number(), z.string(), z.null(), z.array(z.number().int().positive()),
+    // `notify`: el template valida que sean dos booleanos.
+    z.record(z.string(), z.boolean()),
+  ])
 ).optional();
 
 const createAutoBotSchema = z.object({

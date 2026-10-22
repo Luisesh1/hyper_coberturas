@@ -64,6 +64,8 @@ export default function AutoTradingTab({ underlying } = {}) {
   const [unlink, setUnlink] = useState({ pending: false, error: null });
   const [closeDialog, setCloseDialog] = useState(CLOSED_CLOSE);
   const [cancel, setCancel] = useState({ pendingId: null, notice: null });
+  const [cloning, setCloning] = useState(false);
+  const [cloneError, setCloneError] = useState(null);
   const [sim, setSim] = useState({ pending: false, notice: null });
   // Bloqueo síncrono: un doble clic no puede lanzar dos peticiones antes
   // de que React vuelva a pintar los botones deshabilitados.
@@ -253,6 +255,27 @@ export default function AutoTradingTab({ underlying } = {}) {
     loadList();
   };
 
+  const cloneBot = async () => {
+    if (!shown || cloning) return;
+    setCloning(true);
+    setCloneError(null);
+    try {
+      const created = await autoBotsApi.clone(shown.id);
+      if (!mounted.current) return;
+      const item = normalizeBot({ mode: 'shadow', ...(created || {}) });
+      setBots((list) => [item, ...list.filter((b) => b.id !== item.id)]);
+      if (item.id !== undefined) {
+        setSelectedId(item.id);
+        if (isMobile) setMobileDetailOpen(true);
+      }
+      loadList();
+    } catch (err) {
+      if (mounted.current) setCloneError(err);
+    } finally {
+      if (mounted.current) setCloning(false);
+    }
+  };
+
   const unlinkAlert = async (alertId) => {
     if (!shown) return;
     const ids = (shown.alertIds || []).filter((id) => id !== alertId);
@@ -376,6 +399,8 @@ export default function AutoTradingTab({ underlying } = {}) {
     unlinking: unlink.pending,
     onModeSelect: changeMode,
     onEdit: () => setForm({ mode: 'edit' }),
+    onClone: cloneBot,
+    cloning,
     onDelete: () => setDeleteDialog({ open: true, submitting: false, error: null }),
     onUnlink: unlinkAlert,
     onBack: () => setMobileDetailOpen(false),
@@ -384,7 +409,8 @@ export default function AutoTradingTab({ underlying } = {}) {
     onCancelOrder: cancelOrder,
     onSimulate: simulate,
     actionBusy: closeDialog.submitting || cancel.pendingId !== null || sim.pending,
-    actionNotice: sim.notice || cancel.notice,
+    actionNotice: sim.notice || cancel.notice
+      || (cloneError ? { error: true, message: `No se pudo clonar el bot: ${cloneError.message}` } : null),
   };
 
   const closeAll = closeDialog.positionIds === undefined;

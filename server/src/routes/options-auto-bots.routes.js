@@ -26,6 +26,10 @@ router.post('/', validate(createAutoBotSchema), asyncHandler(async (req, res) =>
   res.status(201).json({ success: true, data: await service().createBot(req.user.userId, req.body) });
 }));
 
+router.post('/:id/clone', asyncHandler(async (req, res) => {
+  res.status(201).json({ success: true, data: await service().cloneBot(req.user.userId, requireIntParam(req, 'id')) });
+}));
+
 router.put('/:id', validate(updateAutoBotSchema), asyncHandler(async (req, res) => {
   res.json({ success: true, data: await service().updateBot(req.user.userId, requireIntParam(req, 'id'), req.body) });
 }));

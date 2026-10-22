@@ -541,3 +541,30 @@ test('real atr_band: con TP residente en Binance el tick no cancela ni compite c
   assert.equal(result, null);
   assert.equal(produced[0].reason, 'tp_resting');
 });
+
+test('notify por bot: trades=false silencia el envío de órdenes pero errors=true sigue avisando', async () => {
+  const { runner, strategy, notes } = await setup({ mode: 'live', params: { notify: { trades: false, errors: true } } });
+  await runner.maybeNotify(strategy, 'Órdenes LIMIT enviadas', 'trade');
+  assert.equal(notes.length, 0);
+  await runner.maybeNotify(strategy, 'Error en modo real: x', 'error');
+  assert.equal(notes.length, 1);
+});
+
+test('notify por bot: errors=false silencia errores; sin la clave notify ambos avisan', async () => {
+  const a = await setup({ mode: 'live', params: { notify: { trades: true, errors: false } } });
+  await a.runner.maybeNotify(a.strategy, 'Error', 'error');
+  assert.equal(a.notes.length, 0);
+  await a.runner.maybeNotify(a.strategy, 'Orden', 'trade');
+  assert.equal(a.notes.length, 1);
+  const b = await setup({ mode: 'live' });
+  await b.runner.maybeNotify(b.strategy, 'Orden', 'trade');
+  await b.runner.maybeNotify(b.strategy, 'Error', 'error');
+  assert.equal(b.notes.length, 2);
+});
+
+test('notify por bot: una apertura real con trades=false no llama a notify', async () => {
+  const { runner, notes, credentials } = await setup({ mode: 'live', params: { notify: { trades: false, errors: true } } });
+  await runner.tick();
+  assert.equal(credentials.orders.length, 2);
+  assert.equal(notes.length, 0);
+});

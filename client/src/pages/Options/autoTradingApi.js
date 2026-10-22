@@ -20,6 +20,8 @@ export const autoBotsApi = {
   create: (data) => request('POST', '/options/auto-bots', data),
   // { name?, alertIds?, params?, limits? }
   update: (id, data) => request('PUT', `/options/auto-bots/${enc(id)}`, data),
+  // Copia el bot en modo sombra (nunca hereda Real): nombre «<nombre> (copia)». → bot nuevo
+  clone: (id) => request('POST', `/options/auto-bots/${enc(id)}/clone`),
   // [{ id, alertId, alertName, direction, asset, score, decision, detail, createdAt }]
   signals: (id, { limit = 100, filter = 'all' } = {}) => {
     const f = SIGNAL_FILTERS.includes(filter) ? filter : 'all';

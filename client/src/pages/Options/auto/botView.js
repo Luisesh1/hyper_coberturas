@@ -73,6 +73,8 @@ export const COMMON_DEFAULTS = {
   exitHoursBeforeExpiry: 12,
   maxOpenPositions: 1,
   maxTradesPerDay: 4,
+  notifyTrades: true,
+  notifyErrors: true,
 };
 
 export const TAKE_PROFIT_MODES = [
@@ -270,6 +272,35 @@ export function signalStats(signals, now = Date.now()) {
   };
 }
 
+export const MIN_TRADES_FOR_WIN_RATE = 5;
+
+// Operaciones cerradas del libro activo (real si el bot está en Real; si no,
+// sombra), ordenadas por cierre. null si el detalle aún no trae `closedPositions`.
+export function activeClosedTrades(bot) {
+  if (!Array.isArray(bot?.closedPositions)) return null;
+  const mode = bot.mode === 'live' ? 'live' : 'shadow';
+  return bot.closedPositions
+    .filter((p) => (p.mode || 'shadow') === mode)
+    .map((p) => ({ closedAt: toMs(p.closedAt) ?? 0, pnl: toNumber(p.pnlUsdt) ?? 0 }))
+    .sort((a, b) => a.closedAt - b.closedAt);
+}
+
+// Estadísticas de P&L realizado de las operaciones cerradas (ya ordenadas):
+// total, media, aciertos, caída máxima (USDT) de la curva acumulada y la
+// mayor racha de operaciones perdedoras seguidas.
+export function tradeStats(trades) {
+  let cum = 0; let peak = 0; let drawdown = 0; let streak = 0; let worstStreak = 0; let wins = 0;
+  for (const t of trades) {
+    cum += t.pnl;
+    peak = Math.max(peak, cum);
+    drawdown = Math.max(drawdown, peak - cum);
+    if (t.pnl < 0) { streak += 1; worstStreak = Math.max(worstStreak, streak); } else streak = 0;
+    if (t.pnl > 0) wins += 1;
+  }
+  const n = trades.length;
+  return { n, wins, total: cum, avg: n ? cum / n : null, drawdown, worstStreak };
+}
+
 // El detalle (GET /options/strategies/:id) trae los KPIs por libro:
 // { shadow: { pnl30dUsdt, cycles, winRatePct }, live: {...} }.
 export function buildBotKpis(bot, stats) {
@@ -279,9 +310,15 @@ export function buildBotKpis(bot, stats) {
   const pnlShadow = toNumber(shadow.pnl30dUsdt) ?? bot?.pnlShadow ?? null;
   const pnlLive = toNumber(live.pnl30dUsdt) ?? bot?.pnlLive ?? null;
   const active = bot?.mode === 'live' ? live : shadow;
-  const cycles = toNumber(active.cycles);
+  const trades = activeClosedTrades(bot);
+  const stats2 = trades ? tradeStats(trades) : null;
+  const cycles = stats2 ? stats2.n : toNumber(active.cycles);
   const winRate = toNumber(active.winRatePct);
-  const wins = cycles !== null && winRate !== null ? Math.round((cycles * winRate) / 100) : null;
+  const wins = stats2 ? stats2.wins
+    : cycles !== null && winRate !== null ? Math.round((cycles * winRate) / 100) : null;
+  const fewTrades = cycles !== null && cycles < MIN_TRADES_FOR_WIN_RATE;
+  const winsValue = fewTrades ? `n/a (${cycles} ${cycles === 1 ? 'op' : 'ops'})`
+    : wins !== null ? `${wins} / ${cycles}` : formatPct(winRate, { decimals: 0 });
   return [
     {
       key: 'signals',
@@ -302,9 +339,25 @@ export function buildBotKpis(bot, stats) {
     {
       key: 'wins',
       label: 'Acierto',
-      value: wins !== null ? `${wins} / ${cycles}` : formatPct(winRate, { decimals: 0 }),
+      value: winsValue,
       tone: 'neutral',
-      hint: 'operaciones ganadoras',
+      hint: fewTrades ? `mínimo ${MIN_TRADES_FOR_WIN_RATE} operaciones cerradas` : 'operaciones ganadoras',
+    },
+    {
+      key: 'avgPnl',
+      label: 'P&L medio por operación',
+      value: stats2?.n ? usdtSigned(stats2.avg) : '—',
+      tone: stats2?.n ? toneOfPnl(stats2.avg) : 'neutral',
+      hint: 'USDT · operaciones cerradas',
+    },
+    {
+      key: 'drawdown',
+      label: 'Peor racha / drawdown',
+      value: stats2?.n
+        ? `${stats2.drawdown > 0 ? usdtSigned(-stats2.drawdown) : formatUsdt(0)} · ${stats2.worstStreak} ${stats2.worstStreak === 1 ? 'seguida' : 'seguidas'}`
+        : '—',
+      tone: stats2?.n && stats2.drawdown > 0 ? 'neg' : 'neutral',
+      hint: 'caída máx. y pérdidas seguidas (USDT)',
     },
   ];
 }
@@ -341,6 +394,8 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       exitHoursBeforeExpiry: val('exitHoursBeforeExpiry'),
       maxOpenPositions: val('maxOpenPositions'),
       maxTradesPerDay: val('maxTradesPerDay'),
+      notifyTrades: p.notify?.trades !== false,
+      notifyErrors: p.notify?.errors !== false,
       maxPremiumUsdt: structure === 'buy_with' ? (toNumber(p.maxPremiumUsdt) ?? null) : defs.maxPremiumUsdt,
       maxMarginUsdt: structure === 'sell_against' ? (toNumber(bot.limits?.maxMarginUsdt) ?? null) : null,
     };
@@ -453,6 +508,7 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     exitHoursBeforeExpiry: Number(form.exitHoursBeforeExpiry),
     maxOpenPositions: Number(form.maxOpenPositions),
     maxTradesPerDay: Number(form.maxTradesPerDay),
+    notify: { trades: form.notifyTrades !== false, errors: form.notifyErrors !== false },
   };
   if (buy && form.takeProfitMode === 'atr_band') {
     // Sin stop: el servidor fuerza onOpposite=ignore y sin salida por tiempo.
