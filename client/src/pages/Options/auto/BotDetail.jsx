@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { BacktestIcon } from '../icons';
 import ModeSwitch from '../strategies/ModeSwitch';
 import { ChevronLeftIcon, CloseIcon, CopyIcon, PencilIcon, TrashIcon, WarningIcon } from '../strategies/common/icons';
 import { isCredentialsError } from '../strategies/strategyView';
@@ -132,6 +133,7 @@ export default function BotDetail({
   const desc = useMemo(() => describeParams(bot), [bot]);
   const info = STRUCTURE_INFO[bot.structure];
   const isLive = bot.mode === 'live';
+  const backtestHref = `/opciones?tab=backtesting&strategyId=${encodeURIComponent(bot.id)}`;
   const p = bot.params || {};
   const activity = { bot, mobile, onClosePosition, onCloseAll, onCancelOrder, busy: actionBusy };
 
@@ -172,6 +174,9 @@ export default function BotDetail({
             <span className={styles.mobileDetailName}>{bot.name}</span>
             <span className={styles.mobileDetailSub}>{bot.underlying} · {info.shorter}</span>
           </div>
+          <Link to={backtestHref} className={`${ui.iconBtn} ${styles.touchBtn}`} aria-label="Backtestear este bot">
+            <BacktestIcon size={20} />
+          </Link>
           <button type="button" className={ui.iconBtn} onClick={onClone} disabled={cloning} aria-label="Clonar bot">
             <CopyIcon size={20} />
           </button>
@@ -234,6 +239,9 @@ export default function BotDetail({
         </div>
         <div className={styles.detailActions}>
           <ModeSwitch value={bot.mode} onSelect={onModeSelect} disabled={!!modePending} pending={modePending} labels={BOT_MODE_LABEL} />
+          <Link to={backtestHref} className={ui.btn} title="Simula este bot con las alertas históricas">
+            <BacktestIcon size={16} /> Backtestear
+          </Link>
           <button type="button" className={ui.iconBtn} onClick={onEdit} aria-label="Editar bot" title="Editar">
             <PencilIcon size={18} />
           </button>

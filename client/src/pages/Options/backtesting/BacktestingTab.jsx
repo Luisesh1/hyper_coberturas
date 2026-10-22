@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MOBILE_QUERY, useMediaQuery } from '../../TradingView/useMediaQuery';
+import { autoBotsApi } from '../autoTradingApi';
 import { optionsBacktestsApi, optionsStrategiesApi } from '../optionsAutomationApi';
 import Sheet from '../strategies/common/Sheet';
 import { formatPct, formatUsdt, toNumber } from '../strategies/common/format';
@@ -48,10 +49,11 @@ function HistoryList({ runs, activeId, onOpen, strategies, templates }) {
 
 // Pestaña «Backtesting» del módulo de Opciones. Sin props obligatorias
 // (`underlying` sólo preselecciona el subyacente).
-export default function BacktestingTab({ underlying } = {}) {
+export default function BacktestingTab({ underlying, initialStrategyId = null } = {}) {
   const isMobile = useMediaQuery(MOBILE_QUERY);
 
   const [strategies, setStrategies] = useState([]);
+  const [bots, setBots] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [form, setForm] = useState(() => defaultForm({ underlying }));
   const [submitted, setSubmitted] = useState(false);
@@ -73,7 +75,8 @@ export default function BacktestingTab({ underlying } = {}) {
     return () => { mounted.current = false; };
   }, []);
 
-  const ctx = useMemo(() => ({ strategies, templates }), [strategies, templates]);
+  const allStrategies = useMemo(() => [...strategies, ...bots], [strategies, bots]);
+  const ctx = useMemo(() => ({ strategies: allStrategies, templates }), [allStrategies, templates]);
 
   // ── Carga inicial ────────────────────────────────────────────────────
   const loadHistory = useCallback(async ({ autoOpen = false } = {}) => {
@@ -103,15 +106,35 @@ export default function BacktestingTab({ underlying } = {}) {
     optionsStrategiesApi.list()
       .then((data) => { if (mounted.current) setStrategies((Array.isArray(data) ? data : []).map(normalizeStrategy)); })
       .catch(() => {});
+    autoBotsApi.list()
+      .then((data) => { if (mounted.current) setBots((Array.isArray(data) ? data : []).map(normalizeStrategy)); })
+      .catch(() => {});
     optionsStrategiesApi.listTemplates()
       .then((data) => { if (mounted.current) setTemplates(Array.isArray(data) ? data : []); })
       .catch(() => {});
     loadHistory({ autoOpen: true });
   }, [loadHistory]);
 
+  // Preselección desde `?strategyId=` (botón «Backtestear» del bot).
+  useEffect(() => {
+    if (form.selection || initialStrategyId === null || initialStrategyId === undefined || initialStrategyId === '') return;
+    const s = allStrategies.find((x) => String(x.id) === String(initialStrategyId));
+    if (!s) return;
+    const isBot = bots.some((b) => b.id === s.id);
+    setForm((f) => {
+      if (f.selection) return f;
+      const und = s.underlying || f.underlying;
+      const dvolOk = ['BTC', 'ETH'].includes(und);
+      let source = f.source;
+      if ((isBot && source === 'recorded') || (source === 'dvol' && !dvolOk)) source = dvolOk ? 'dvol' : 'realized';
+      return { ...f, selection: `s:${s.id}`, underlying: und, source };
+    });
+  }, [allStrategies, bots, initialStrategyId, form.selection]);
+
   // Preselección: la primera estrategia guardada o, si no hay, la primera plantilla.
   useEffect(() => {
     if (form.selection) return;
+    if (initialStrategyId !== null && initialStrategyId !== undefined && initialStrategyId !== '') return;
     if (strategies.length) {
       const s = strategies[0];
       setForm((f) => (f.selection ? f : {
@@ -236,6 +259,7 @@ export default function BacktestingTab({ underlying } = {}) {
       form={form}
       onChange={updateForm}
       strategies={strategies}
+      bots={bots}
       templates={templates}
       errors={errors}
       disabled={submitting}
@@ -248,7 +272,7 @@ export default function BacktestingTab({ underlying } = {}) {
   // ── Móvil ────────────────────────────────────────────────────────────
   if (isMobile) {
     const sel = parseSelection(form.selection);
-    const strat = selectedStrategy(form, strategies);
+    const strat = selectedStrategy(form, allStrategies);
     const tpl = sel?.kind === 'template' ? templates.find((t) => t.id === sel.id) : null;
     const title = strat?.name || (tpl ? `${tpl.label || tpl.id} (plantilla)` : 'Elige una estrategia');
     const summary = [periodLabel(form), `${formatUsdt(form.capitalUsdt, { decimals: 0 })} USDT`, sourceByKey(form.source).short]

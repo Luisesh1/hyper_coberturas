@@ -3,7 +3,7 @@ import LineChart, { ChartLegend } from '../strategies/common/LineChart';
 import { formatDateTime, formatDay, formatMonthYear, formatUsdt, tone } from '../strategies/common/format';
 import { DownloadIcon, InfoIcon } from '../strategies/common/icons';
 import {
-  buildBacktestEquity, buildMetrics, cyclesToCsv, downloadCsv, normalizeCycles, sourceByKey,
+  buildBacktestEquity, buildMetrics, cyclesToCsv, downloadCsv, normalizeCycles, signalsSummary, sourceByKey,
 } from './backtestView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './BacktestingTab.module.css';
@@ -71,6 +71,8 @@ export default function BacktestResults({ run, mobile = false }) {
   );
   const cycles = useMemo(() => normalizeCycles(result.cycles), [result.cycles]);
   const hodlLabel = `Mantener ${cfg.underlying || 'subyacente'}`;
+  const signalsText = signalsSummary(result.signals);
+  const signalsNode = signalsText && <p className={`${ui.small} ${ui.mono}`} style={{ margin: 0 }}>{signalsText}</p>;
 
   const exportBtn = (
     <button
@@ -87,6 +89,7 @@ export default function BacktestResults({ run, mobile = false }) {
     return (
       <>
         <SourceNote source={cfg.source} note={result.sourceNote} mobile />
+        {signalsNode}
         <div className={ui.tileGrid}>
           {metrics.slice(0, 6).map((m) => (
             <div key={m.key} className={ui.tile}>
@@ -122,6 +125,7 @@ export default function BacktestResults({ run, mobile = false }) {
   return (
     <>
       <SourceNote source={cfg.source} note={result.sourceNote} />
+      {signalsNode}
       <div className={ui.kpiGrid}>
         {metrics.map((m) => (
           <div key={m.key} className={ui.kpi}>

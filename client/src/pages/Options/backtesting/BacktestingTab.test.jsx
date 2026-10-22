@@ -2,12 +2,16 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import BacktestingTab, { BACKTEST_POLL_MS } from './BacktestingTab';
 import { optionsBacktestsApi, optionsStrategiesApi } from '../optionsAutomationApi';
+import { autoBotsApi } from '../autoTradingApi';
 
 vi.mock('../optionsAutomationApi', () => ({
   optionsStrategiesApi: { listTemplates: vi.fn(), list: vi.fn(), get: vi.fn() },
   optionsBacktestsApi: { create: vi.fn(), list: vi.fn(), get: vi.fn() },
 }));
 
+vi.mock('../autoTradingApi', () => ({ autoBotsApi: { list: vi.fn() } }));
+
+const BOTS = [{ id: 7, name: 'Bot ETH alcista', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' }];
 const STRATEGIES = [{ id: 1, name: 'Strangle semanal BTC', template: 'short_strangle', underlying: 'BTC', mode: 'shadow' }];
 const TEMPLATES = [{ id: 'short_strangle', label: 'Strangle corto', defaultParams: { deltaTarget: 0.2 }, paramSchema: [{ key: 'deltaTarget', label: 'Delta objetivo', type: 'number', min: 0.05, max: 0.5, step: 0.05 }] }];
 
@@ -40,6 +44,7 @@ beforeEach(() => {
   optionsStrategiesApi.list.mockResolvedValue(STRATEGIES);
   optionsStrategiesApi.listTemplates.mockResolvedValue(TEMPLATES);
   optionsBacktestsApi.list.mockResolvedValue([]);
+  autoBotsApi.list.mockResolvedValue([]);
   optionsBacktestsApi.create.mockResolvedValue({ id: 99, status: 'queued' });
 });
 
@@ -176,5 +181,32 @@ describe('BacktestingTab · móvil', () => {
     const sheet = await screen.findByRole('dialog', { name: 'Configuración del backtest' });
     expect(within(sheet).getByText('Elige una estrategia o una plantilla')).toBeTruthy();
     expect(optionsBacktestsApi.create).not.toHaveBeenCalled();
+  });
+
+  it('con el id de un bot preselecciona el bot y deshabilita «IV registrada» con su motivo', async () => {
+    autoBotsApi.list.mockResolvedValue(BOTS);
+    render(<BacktestingTab initialStrategyId="7" />);
+    const select = await screen.findByLabelText('Estrategia');
+    await waitFor(() => expect(select.value).toBe('s:7'));
+    expect(within(select).getByText('Bot ETH alcista · ETH · bot')).toBeTruthy();
+    const recorded = screen.getByRole('button', { name: /IV registrada por la app/ });
+    expect(recorded.disabled).toBe(true);
+    expect(screen.getByText(/Los bots solo admiten DVOL o volatilidad realizada/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Índice DVOL/ }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('muestra el error 400 del servidor y el resumen de señales', async () => {
+    autoBotsApi.list.mockResolvedValue(BOTS);
+    optionsBacktestsApi.create.mockRejectedValueOnce(new Error('Las alertas de este bot no se dispararon entre a y b'));
+    render(<BacktestingTab initialStrategyId="7" />);
+    await waitFor(() => expect((screen.getByLabelText('Estrategia')).value).toBe('s:7'));
+    fireEvent.click(screen.getByRole('button', { name: /Ejecutar backtest/ }));
+    expect(await screen.findByText(/Las alertas de este bot no se dispararon/)).toBeTruthy();
+  });
+
+  it('muestra «Señales: N recibidas · M operadas» en el resultado de un bot', async () => {
+    optionsBacktestsApi.list.mockResolvedValue([{ id: 5, status: 'done', config: { underlying: 'ETH', source: 'dvol', strategyId: 7, capitalUsdt: 5000 }, result: { ...RESULT, signals: { received: 12, traded: 9, ignored: 3 } } }]);
+    render(<BacktestingTab />);
+    expect(await screen.findByText(/Señales: 12 recibidas · 9 operadas/)).toBeTruthy();
   });
 });
