@@ -239,3 +239,270 @@ test('enqueue: máximo 3 tareas pendientes por usuario', async () => {
     (err) => err.status === 429
   );
 });
+
+// ---------- bots por alertas: repetición de disparos ----------
+
+const { simulate } = require('../src/services/options/options-backtest.service');
+const templatesIndex = require('../src/services/options/templates');
+
+const BOT_ID = 7;
+const SIG_T = FROM + 10 * DAY_MS + 30 * 60 * 1000;
+
+function botService({ params = {}, signals = [], ...overrides } = {}) {
+  const alertCalls = [];
+  const made = makeService({
+    strategiesRepo: {
+      async getStrategy(userId, id) {
+        if (id !== BOT_ID) return null;
+        return { id: BOT_ID, userId, template: 'alert_signal', underlying: 'BTC', params: { alertIds: [5, 6], ...params } };
+      },
+    },
+    alertsRepo: {
+      async listAlertSignals(args) {
+        alertCalls.push(args);
+        return signals.filter((s) => s.t >= args.from && s.t <= args.to);
+      },
+    },
+    ...overrides,
+  });
+  return { ...made, alertCalls };
+}
+
+test('backtest bot: 2 señales alcistas con maxOpenPositions 1 → 1 apertura y 1 ignorada', async () => {
+  const signals = [
+    { t: SIG_T, direction: 'bullish', alertId: 5 },
+    { t: SIG_T + 10 * 60 * 1000, direction: 'bullish', alertId: 6 },
+  ];
+  const { service, alertCalls } = botService({ params: { maxOpenPositions: 1 }, signals });
+  const config = await service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO, source: 'realized' });
+  assert.equal(config.template, 'alert_signal');
+  assert.deepEqual(alertCalls[0], { userId: 3, alertIds: [5, 6], underlying: 'BTC', from: FROM, to: TO });
+  const result = await service.runBacktest(config);
+  assert.equal(result.metrics.cycles, 1);
+  assert.equal(result.cycles[0].legs[0].side, 'BUY');
+  assert.match(result.cycles[0].legs[0].symbol, /-C$/);
+  // Abre en el paso que contiene la señal (la hora siguiente cerrada).
+  assert.equal(result.cycles[0].openedAt, Math.ceil(SIG_T / HOUR_MS) * HOUR_MS);
+  assert.deepEqual(result.signals, { received: 2, traded: 1, ignored: 1 });
+});
+
+test('backtest bot: señal bajista con onOpposite reverse cierra la call y abre un put', async () => {
+  const signals = [
+    { t: SIG_T, direction: 'bullish', alertId: 5 },
+    { t: SIG_T + 2 * HOUR_MS, direction: 'bearish', alertId: 5 },
+  ];
+  const { service } = botService({ params: { onOpposite: 'reverse', stopLossPct: 1000, takeProfitPct: 1000 }, signals });
+  const result = await service.runBacktest(await service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }));
+  assert.equal(result.metrics.cycles, 2);
+  const [call, put] = result.cycles;
+  assert.match(call.legs[0].symbol, /-C$/);
+  assert.equal(call.exitReason, 'opposite_signal');
+  assert.match(put.legs[0].symbol, /-P$/);
+  assert.equal(put.legs[0].side, 'BUY');
+  assert.equal(put.openedAt, Math.ceil((SIG_T + 2 * HOUR_MS) / HOUR_MS) * HOUR_MS);
+  assert.deepEqual(result.signals, { received: 2, traded: 2, ignored: 0 });
+});
+
+test('backtest bot: sin disparos en el rango → ValidationError explicada (Review Focus 4)', async () => {
+  const { service } = botService({ signals: [{ t: FROM - DAY_MS, direction: 'bullish', alertId: 5 }] });
+  await assert.rejects(
+    service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }),
+    (err) => err.name === 'ValidationError'
+      && err.message === `Las alertas de este bot no se dispararon entre ${new Date(FROM).toISOString().slice(0, 10)} y ${new Date(TO).toISOString().slice(0, 10)}`
+  );
+});
+
+test('backtest bot: exige el bot (strategyId), solo dvol/realized y banda ATR solo en 1h', async () => {
+  const signals = [{ t: SIG_T, direction: 'bullish', alertId: 5 }];
+  const { service } = botService({ signals });
+  await assert.rejects(service.normalizeConfig(3, { template: 'alert_signal', underlying: 'BTC', from: FROM, to: TO }), /strategyId/);
+  await assert.rejects(service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO, source: 'recorded' }), (err) => err.name === 'ValidationError' && /grabad/.test(err.message));
+  const atr4h = botService({ params: { takeProfitMode: 'atr_band', atrBandInterval: '4h' }, signals });
+  await assert.rejects(
+    atr4h.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }),
+    (err) => err.name === 'ValidationError' && err.message === 'El backtest de venta por banda ATR solo admite velas de 1h por ahora'
+  );
+  const noAlerts = botService({ params: { alertIds: [] }, signals });
+  await assert.rejects(noAlerts.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }), (err) => err.name === 'ValidationError');
+});
+
+test('backtest bot multi-subyacente: un subyacente del bot a la vez; fuera del bot → ValidationError', async () => {
+  const signals = [{ t: SIG_T, direction: 'bullish', alertId: 5 }];
+  const { service, alertCalls } = botService({ params: { underlyings: ['BTC', 'ETH'] }, signals });
+  const eth = await service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'eth', from: FROM, to: TO });
+  assert.equal(eth.underlying, 'ETH');
+  assert.equal(alertCalls.at(-1).underlying, 'ETH', 'las señales se filtran a ese subyacente');
+  assert.equal((await service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO })).underlying, 'BTC', 'por defecto el primero');
+  await assert.rejects(
+    service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'SOL', from: FROM, to: TO }),
+    (err) => err.name === 'ValidationError' && /no opera SOL/.test(err.message)
+  );
+  // params del input no amplían los subyacentes del bot guardado.
+  await assert.rejects(
+    service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'SOL', params: { underlyings: ['BTC', 'ETH', 'SOL'] }, from: FROM, to: TO }),
+    (err) => err.name === 'ValidationError' && /no opera SOL/.test(err.message)
+  );
+  // Un bot de un solo subyacente tampoco acepta otro.
+  const single = botService({ signals });
+  await assert.rejects(single.service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'ETH', from: FROM, to: TO }), (err) => err.name === 'ValidationError');
+});
+
+test('listAlertSignals: lee alert_events, descarta neutral y otros subyacentes, ordena por created_at', async () => {
+  const db = require('../src/db');
+  const alertsRepo = require('../src/repositories/alerts.repository');
+  const original = db.query;
+  const calls = [];
+  db.query = async (sql, params) => {
+    calls.push({ sql, params });
+    return {
+      rows: [
+        { alert_id: 5, asset: 'BTCUSDT', created_at: '3000', direction: 'bearish' },
+        { alert_id: 5, asset: 'ETHUSDT', created_at: '1000', direction: 'bullish' },
+        { alert_id: 6, asset: 'BINANCE:BTCUSDT', created_at: '1000', direction: 'bullish' },
+        { alert_id: 6, asset: 'BTCUSDT', created_at: '2000', direction: 'neutral' },
+        { alert_id: 6, asset: 'BTCUSDT', created_at: '2500', direction: null },
+      ],
+    };
+  };
+  try {
+    const out = await alertsRepo.listAlertSignals({ userId: 3, alertIds: [5, 6], underlying: 'BTC', from: 500, to: 4000 });
+    assert.deepEqual(out, [
+      { t: 1000, direction: 'bullish', alertId: 6 },
+      { t: 3000, direction: 'bearish', alertId: 5 },
+    ]);
+    assert.match(calls[0].sql, /FROM alert_events/);
+    assert.match(calls[0].sql, /ORDER BY created_at/);
+    assert.deepEqual(calls[0].params, [3, [5, 6], 500, 4000]);
+    assert.deepEqual(await alertsRepo.listAlertSignals({ userId: 3, alertIds: [], underlying: 'BTC', from: 0, to: 1 }), []);
+    assert.equal(calls.length, 1, 'sin alertas no consulta');
+  } finally {
+    db.query = original;
+  }
+});
+
+// Pasos controlados: cadena de una call (61000) y un put (59000) que vencen el 9-oct 08:00 UTC.
+const ATR_T0 = Date.UTC(2026, 9, 1, 0);
+const ATR_EXPIRY = '261009';
+const CALL = `BTC-${ATR_EXPIRY}-61000-C`;
+const PUT = `BTC-${ATR_EXPIRY}-59000-P`;
+
+function controlledSteps(bids) {
+  return bids.map((bid, i) => {
+    const t = ATR_T0 + i * HOUR_MS;
+    const leg = (symbol, delta) => ({ symbol, bid, ask: i === 0 ? 200 : bid + 5, mark: bid + 2, delta, iv: 0.6 });
+    return {
+      t,
+      spot: 60000,
+      chainFor() {
+        return { underlying: 'BTC', spot: 60000, expiry: ATR_EXPIRY, rows: [
+          { strike: 59000, call: null, put: leg(PUT, -0.3) },
+          { strike: 61000, call: leg(CALL, 0.35), put: null },
+        ] };
+      },
+      quote(symbol) { return t < Date.UTC(2026, 9, 9, 8) ? leg(symbol, 0.35) : null; },
+    };
+  });
+}
+
+/** 20 velas de 1h cerradas antes de ATR_T0: rango 100 y cierre fijo → ATR 100, banda superior 60200. */
+const atrCandles = Array.from({ length: 20 }, (_, i) => {
+  const time = ATR_T0 - (20 - i) * HOUR_MS;
+  return { time, closeTime: time + HOUR_MS - 1, open: 60000, high: 60050, low: 59950, close: 60000, volume: 1 };
+});
+
+function atrParams(extra = {}) {
+  return templatesIndex.validateParams('alert_signal', {
+    alertIds: [5], structure: 'buy_with', takeProfitMode: 'atr_band', atrBandInterval: '1h',
+    atrBandLength: 14, atrBandMultiplier: 2, tpMaxGainPct: 200, quantity: 0.01, ...extra,
+  });
+}
+
+test('simulate atr_band: abre con la señal y cierra con take_profit_atr_band al llegar el bid al objetivo', () => {
+  // Fill 200, spot 60000, banda 60200 → distancia 0,333 % × apalancamiento 300 = +100 % → objetivo 400.
+  // El bid se desploma (sin stop) y luego llega a 399 (no cierra) y a 400 (cierra).
+  const bids = [195, 20, 5, 399, 400, 410];
+  const result = simulate({
+    template: templatesIndex.getTemplate('alert_signal'), params: atrParams(),
+    steps: controlledSteps(bids), capitalUsdt: 1000, feePct: 0,
+    signals: [{ t: ATR_T0 - 10 * 60 * 1000, direction: 'bullish', alertId: 5 }], candles: atrCandles,
+  });
+  assert.equal(result.metrics.cycles, 1);
+  const [cycle] = result.cycles;
+  assert.equal(cycle.openedAt, ATR_T0);
+  assert.equal(cycle.legs[0].symbol, CALL);
+  assert.equal(cycle.legs[0].price, 200);
+  assert.equal(cycle.exitReason, 'take_profit_atr_band');
+  assert.equal(cycle.closedAt ?? null, null, 'el DTO no expone closedAt');
+  assert.equal(cycle.pnlUsdt, 2, '(400 − 200) × 0,01');
+  assert.deepEqual(result.signals, { received: 1, traded: 1, ignored: 0 });
+});
+
+test('simulate atr_band: sin llegar al objetivo no cierra por stop ni por tiempo y liquida al vencimiento', () => {
+  // Desde el 1-oct 00:00 hasta pasado el 9-oct 08:00 en pasos de 1h; el bid nunca pasa de 300.
+  const hours = 8 * 24 + 10;
+  const bids = Array.from({ length: hours }, (_, i) => (i === 0 ? 195 : Math.max(1, 300 - i)));
+  const result = simulate({
+    template: templatesIndex.getTemplate('alert_signal'), params: atrParams(),
+    steps: controlledSteps(bids), capitalUsdt: 1000, feePct: 0,
+    signals: [
+      { t: ATR_T0, direction: 'bullish', alertId: 5 },
+      // La contraria se ignora en modo banda ATR (onOpposite forzado a ignore).
+      { t: ATR_T0 + 5 * HOUR_MS, direction: 'bearish', alertId: 5 },
+    ],
+    candles: atrCandles,
+  });
+  assert.equal(result.metrics.cycles, 1);
+  assert.equal(result.cycles[0].exitReason, 'expiry');
+  assert.deepEqual(result.signals, { received: 2, traded: 1, ignored: 1 });
+});
+
+test('simulate: tradesToday se cuenta por día UTC y limita maxTradesPerDay', () => {
+  // Bot de compra con maxTradesPerDay 1 y maxOpenPositions 5: dos señales el mismo día → 1 apertura;
+  // otra el día siguiente → abre.
+  const params = templatesIndex.validateParams('alert_signal', { alertIds: [5], maxTradesPerDay: 1, maxOpenPositions: 5, stopLossPct: 1000, takeProfitPct: 1000 });
+  const bids = Array.from({ length: 30 }, () => 195);
+  const result = simulate({
+    template: templatesIndex.getTemplate('alert_signal'), params,
+    steps: controlledSteps(bids), capitalUsdt: 1000, feePct: 0,
+    signals: [
+      { t: ATR_T0 + HOUR_MS, direction: 'bullish', alertId: 5 },
+      { t: ATR_T0 + 3 * HOUR_MS, direction: 'bullish', alertId: 5 },
+      { t: ATR_T0 + 25 * HOUR_MS, direction: 'bullish', alertId: 5 },
+    ],
+  });
+  assert.equal(result.metrics.cycles, 2);
+  assert.deepEqual(result.signals, { received: 3, traded: 2, ignored: 1 });
+});
+
+test('backtest bot dvol + banda ATR: pide historia previa de 1h y reproduce la señal', async () => {
+  const fetchImpl = async () => ({ ok: true, json: async () => ({ result: { data: [[FROM - DAY_MS, 60, 60, 60, 60]], continuation: null } }) });
+  const { service, candleCalls } = botService({
+    params: { takeProfitMode: 'atr_band', atrBandInterval: '1h' },
+    signals: [{ t: SIG_T, direction: 'bullish', alertId: 5 }],
+    fetchImpl,
+  });
+  const result = await service.runBacktest(await service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO, source: 'dvol' }));
+  assert.equal(candleCalls[0].timeframe, '1h');
+  assert.equal(candleCalls[0].startTime, FROM - 30 * DAY_MS);
+  assert.equal(result.metrics.cycles, 1);
+  assert.ok(['take_profit_atr_band', 'expiry'].includes(result.cycles[0].exitReason), result.cycles[0].exitReason);
+  assert.deepEqual(result.signals, { received: 1, traded: 1, ignored: 0 });
+});
+
+test('backtest bot: respeta el presupuesto total (lo comprometido por posiciones abiertas)', async () => {
+  const signals = [
+    { t: SIG_T, direction: 'bullish', alertId: 5 },
+    { t: SIG_T + 10 * 60 * 1000, direction: 'bullish', alertId: 6 },
+  ];
+  const base = { maxOpenPositions: 5, quantity: 1, stopLossPct: 1000, takeProfitPct: 1000 };
+  const free = botService({ params: { ...base, capitalUsdt: 10 }, signals });
+  const freeResult = await free.service.runBacktest(await free.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }));
+  assert.equal(freeResult.metrics.cycles, 2, 'sin presupuesto, capitalUsdt es por entrada');
+
+  const capped = botService({ params: { ...base, budgetUsdt: 10, budgetFractions: 1 }, signals });
+  const result = await capped.service.runBacktest(await capped.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }));
+  assert.equal(result.metrics.cycles, 1);
+  const leg = result.cycles[0].legs[0];
+  assert.ok(leg.price * leg.quantity <= 10 + 1e-6);
+  assert.deepEqual(result.signals, { received: 2, traded: 1, ignored: 1 });
+});

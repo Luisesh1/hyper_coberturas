@@ -213,3 +213,25 @@ test('rutas de backtests: crea (202), lista y lee por usuario', async () => {
     });
   } finally { Object.assign(backtestService, original); }
 });
+
+test('kpisFor: closedTrades, avgPnlUsdt, maxDrawdownUsdt y longestLosingStreak por libro', () => {
+  const { kpisFor } = strategiesService;
+  const pos = (id, mode, closedAt, pnlUsdt) => ({ id, mode, openedAt: id, closedAt, pnlUsdt, feesUsdt: 0 });
+  const positions = [
+    // sombra: mismo closedAt 100 → desempata el id (1 antes que 2): +10, -5 ; luego -5, -3, +10, -5
+    pos(2, 'shadow', 100, -5), pos(1, 'shadow', 100, 10), pos(3, 'shadow', 200, -5),
+    pos(4, 'shadow', 300, -3), pos(5, 'shadow', 400, 10), pos(6, 'shadow', 500, -5),
+    pos(7, 'shadow', 600, null), { ...pos(8, 'shadow', null, 0), closedAt: null },
+    pos(9, 'live', 50, -2), pos(10, 'live', 60, 4),
+  ];
+  const s = kpisFor(positions, [], 'shadow', 1000);
+  // acumulado: 10, 5, 0, -3, 7, 2 (la fila con pnl null no suma) → pico 10, mínimo -3
+  assert.equal(s.closedTrades, 7);
+  assert.equal(s.avgPnlUsdt, 0.33);
+  assert.equal(s.maxDrawdownUsdt, 13);
+  assert.equal(s.longestLosingStreak, 3);
+  const l = kpisFor(positions, [], 'live', 1000);
+  assert.deepEqual([l.closedTrades, l.avgPnlUsdt, l.maxDrawdownUsdt, l.longestLosingStreak], [2, 1, 2, 1]);
+  const none = kpisFor([], [], 'live', 1000);
+  assert.deepEqual([none.closedTrades, none.avgPnlUsdt, none.maxDrawdownUsdt, none.longestLosingStreak], [0, null, null, 0]);
+});

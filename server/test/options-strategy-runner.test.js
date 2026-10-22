@@ -278,6 +278,22 @@ test('liquidación al vencimiento: intrínseco contra el índice, con comisión 
   assert.equal(await repo.countOrdersSince(strategy.id, 'shadow', 0), 0);
 });
 
+test('cierre en sombra guarda el motivo de la acción y la liquidación guarda expiry', async () => {
+  const { repo, runner, strategy } = await setup({ mode: 'paused' });
+  const pos = await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261030-58000-P', side: 'SELL', quantity: 0.1, entryPrice: 300, openedAt: FRIDAY_9 - HOUR_MS, feesUsdt: 1 });
+  const leg = { symbol: pos.symbol, side: 'BUY', quantity: 0.1, price: 400, fee: 1, positionId: pos.id };
+  await runner.book(strategy, 'shadow', { type: 'close', reason: 'stop_loss', legs: [leg] }, [leg], { now: FRIDAY_9, positions: [pos] });
+  assert.equal(repo.positions.find((p) => p.id === pos.id).closeReason, 'stop_loss');
+});
+
+test('la liquidación al vencimiento guarda closeReason expiry', async () => {
+  const { repo, runner, market, strategy } = await setup({ mode: 'paused' });
+  await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261016-58000-P', side: 'SELL', quantity: 0.1, entryPrice: 300, openedAt: FRIDAY_9 - 7 * DAY_MS, feesUsdt: 1.8 });
+  market.state.spot = 57000;
+  await runner.tick();
+  assert.equal(repo.positions[0].closeReason, 'expiry');
+});
+
 test('estimateMargin: venta usa prima + máx(15 % spot − OTM, 10 % spot); compra, la prima', () => {
   assert.equal(estimateMargin({ side: 'SELL', type: 'C', strike: 66000, price: 100, quantity: 1, spot: 60000 }), 100 + 6000);
   assert.equal(estimateMargin({ side: 'SELL', type: 'P', strike: 60000, price: 100, quantity: 0.5, spot: 60000 }), 0.5 * (100 + 9000));
@@ -306,4 +322,324 @@ test('modo real: sin spot no se estima el margen de una venta y la entrada se bl
 test('estimateMargin: una venta sin spot válido no se reduce a la prima', () => {
   assert.ok(Number.isNaN(estimateMargin({ side: 'SELL', type: 'C', strike: 66000, price: 100, quantity: 1, spot: null })));
   assert.equal(estimateMargin({ side: 'BUY', type: 'C', strike: 66000, price: 100, quantity: 1, spot: null }), 100);
+});
+
+// ---------- cierre manual y señal solo-sombra ----------
+
+test('closeManually en sombra sin ids cierra todas las posiciones con closeReason manual', async () => {
+  const { repo, runner, strategy } = await setup();
+  await runner.tick();
+  assert.equal((await repo.listOpenPositions(strategy.id, 'shadow')).length, 2);
+  const result = await runner.closeManually(strategy, { mode: 'shadow' });
+  assert.equal(result.status, 'closed');
+  assert.ok(result.produced.some((p) => p.booked && p.type === 'close' && p.reason === 'manual'));
+  const closed = repo.positions.filter((p) => p.closedAt != null);
+  assert.equal(closed.length, 2);
+  assert.ok(closed.every((p) => p.closeReason === 'manual'));
+  const event = repo.events.find((e) => e.action === 'close');
+  assert.equal(event.detail, 'Cierre manual');
+});
+
+test('closeManually con positionIds cierra solo esas posiciones', async () => {
+  const { repo, runner, strategy } = await setup();
+  await runner.tick();
+  const [first, second] = await repo.listOpenPositions(strategy.id, 'shadow');
+  const result = await runner.closeManually(strategy, { mode: 'shadow', positionIds: [first.id] });
+  assert.equal(result.status, 'closed');
+  assert.equal(repo.positions.find((p) => p.id === first.id).closeReason, 'manual');
+  assert.equal(repo.positions.find((p) => p.id === second.id).closedAt, null);
+});
+
+test('closeManually sin posiciones abiertas devuelve nothing_to_close', async () => {
+  const { runner, strategy, repo } = await setup({ mode: 'paused' });
+  const result = await runner.closeManually(strategy, { mode: 'shadow' });
+  assert.equal(result.status, 'nothing_to_close');
+  assert.deepEqual(result.produced, []);
+  assert.equal(repo.events.length, 0);
+});
+
+async function setupLiveWithPositions() {
+  const ctx = await setup({ mode: 'live' });
+  const { repo, runner, strategy, credentials } = ctx;
+  await runner.tick();
+  for (const p of await repo.listOpenPositions(strategy.id, 'shadow')) {
+    const { id: _id, ...rest } = p;
+    await repo.insertPosition({ ...rest, mode: 'live' });
+  }
+  credentials.orders.length = 0;
+  let submits = 0;
+  const originalSubmit = runner.liveExecutor.submit;
+  runner.liveExecutor.submit = async (...args) => { submits += 1; return originalSubmit(...args); };
+  return { ...ctx, submits: () => submits };
+}
+
+test('closeManually en real con TP residente: pending vía requestProtectedExit, sin submit', async () => {
+  const { runner, strategy, repo, submits } = await setupLiveWithPositions();
+  const requested = [];
+  runner.liveExecutor.requestProtectedExit = async (s, action) => { requested.push(action); return true; };
+  const result = await runner.closeManually(strategy, { mode: 'live' });
+  assert.equal(result.status, 'pending');
+  assert.equal(submits(), 0);
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].reason, 'manual');
+  assert.equal(requested[0].legs.length, 2);
+  assert.ok(result.produced.some((p) => p.pending && p.reason === 'tp_cancel_requested'));
+  assert.equal(repo.positions.filter((p) => p.mode === 'live' && p.closedAt != null).length, 0);
+});
+
+test('closeManually en real sin TP residente envía órdenes y queda pending', async () => {
+  const { runner, strategy, credentials, submits } = await setupLiveWithPositions();
+  const result = await runner.closeManually(strategy, { mode: 'live' });
+  assert.equal(result.status, 'pending');
+  assert.equal(submits(), 1);
+  assert.equal(credentials.orders.length, 2);
+  assert.ok(credentials.orders.every((o) => o.side === 'BUY' && o.reduceOnly === true));
+});
+
+test('closeManually en real con el ejecutor deshabilitado devuelve not_submitted', async () => {
+  const { runner, strategy, repo, submits } = await setupLiveWithPositions();
+  runner.liveExecutor.enabled = false;
+  const result = await runner.closeManually(strategy, { mode: 'live' });
+  assert.equal(result.status, 'not_submitted');
+  assert.equal(submits(), 0);
+  assert.ok(result.produced.some((p) => p.reason === 'live_disabled'));
+  assert.ok(repo.events.some((e) => e.mode === 'live' && e.action === 'skip'));
+});
+
+test('dos closeManually concurrentes en sombra cierran cada posición una sola vez', async () => {
+  const { repo, runner, strategy } = await setup();
+  await runner.tick();
+  const calls = [];
+  const originalClose = repo.closePosition;
+  repo.closePosition = async (id, data) => { calls.push(id); return originalClose(id, data); };
+  const [a, b] = await Promise.all([
+    runner.closeManually(strategy, { mode: 'shadow' }),
+    runner.closeManually(strategy, { mode: 'shadow' }),
+  ]);
+  assert.deepEqual([a.status, b.status].sort(), ['closed', 'nothing_to_close']);
+  assert.equal(calls.length, 2);
+  assert.equal(new Set(calls).size, 2);
+  assert.equal(repo.events.filter((e) => e.action === 'close').length, 1);
+});
+
+test('runForSignal con shadowOnly en un bot real no envía órdenes reales', async () => {
+  const { repo, runner, strategy, credentials } = await setup({ mode: 'live' });
+  let submits = 0;
+  runner.liveExecutor.submit = async () => { submits += 1; return { status: 'submitted', sent: 1 }; };
+  const { actions, produced } = await runner.runForSignal(strategy, { direction: 'long' }, { shadowOnly: true });
+  assert.equal(submits, 0);
+  assert.equal(credentials.orders.length, 0);
+  assert.deepEqual(Object.keys(actions), ['shadow']);
+  assert.ok(produced.every((p) => p.mode === 'shadow'));
+  assert.equal(repo.positions.filter((p) => p.mode === 'shadow').length, 2);
+});
+
+test('runForSignal sin shadowOnly en un bot real sigue evaluando el modo real', async () => {
+  const { runner, strategy } = await setup({ mode: 'live' });
+  let submits = 0;
+  runner.liveExecutor.submit = async () => { submits += 1; return { status: 'submitted', sent: 2 }; };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'long' });
+  assert.equal(submits, 1);
+  assert.deepEqual(Object.keys(actions), ['shadow', 'live']);
+});
+
+// ---------- bot por alertas en modo atr_band (sombra) ----------
+
+function withAtrBand(market, { band = { close: SPOT - 100, atr: 400, upper: SPOT + 700, lower: SPOT - 900, multiplier: 2 } } = {}) {
+  market.state.calls.band = 0;
+  market.getAtrBand = async () => {
+    market.state.calls.band += 1;
+    if (band instanceof Error) throw band;
+    return band;
+  };
+  market.getVolatilityInputs = async () => ({ atrHourly: 300, tickSize: 5, minPrice: 5 });
+  return market;
+}
+
+test('sombra atr_band: la apertura fija y persiste el objetivo una vez; un segundo tick no recalcula', async () => {
+  const { repo, runner, market, strategy, clock } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band', tpMaxGainPct: 200 },
+  });
+  withAtrBand(market);
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  const [p] = repo.positions;
+  assert.equal(repo.positions.length, 1);
+  assert.equal(p.side, 'BUY');
+  assert.ok(p.tpTargetPrice > p.entryPrice, `objetivo ${p.tpTargetPrice} > prima ${p.entryPrice}`);
+  assert.equal(p.tpTargetMeta.spot, SPOT);
+  assert.equal(p.tpTargetMeta.interval, '1h');
+  assert.equal(p.tpTargetMeta.length, 14);
+  assert.equal(p.tpTargetMeta.multiplier, 2);
+  assert.equal(p.tpTargetMeta.computedAt, FRIDAY_9);
+  assert.equal(market.state.calls.band, 1);
+  const target = p.tpTargetPrice;
+
+  clock.now = FRIDAY_9 + HOUR_MS;
+  await runner.tick();
+  assert.equal(market.state.calls.band, 1, 'el segundo tick no vuelve a llamar a getAtrBand');
+  assert.equal(repo.positions[0].tpTargetPrice, target);
+  assert.equal(repo.positions[0].closedAt, null, 'sin stop ni salida por tiempo');
+});
+
+test('sombra atr_band: sin banda al abrir, el objetivo queda pendiente y se reintenta en el siguiente tick', async () => {
+  const { repo, runner, market, strategy, clock } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' },
+  });
+  withAtrBand(market, { band: new Error('sin velas') });
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(repo.positions.length, 1, 'la posición se registra aunque falle la banda');
+  assert.equal(repo.positions[0].tpTargetPrice ?? null, null);
+  withAtrBand(market);
+  clock.now = FRIDAY_9 + 5 * 60_000;
+  await runner.tick();
+  assert.ok(repo.positions[0].tpTargetPrice > 0);
+  assert.equal(market.state.calls.band, 1);
+});
+
+test('sombra atr_band: el bid en el objetivo cierra con take_profit_atr_band', async () => {
+  const { repo, runner, market, strategy, clock } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' },
+  });
+  withAtrBand(market);
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  const target = repo.positions[0].tpTargetPrice;
+  const original = market.getQuote;
+  market.getQuote = async (symbol) => ({ ...(await original(symbol)), bid: target, ask: target + 10 });
+  market.getChain = async () => ({ underlying: 'BTC', spot: SPOT, expiry: null, expiries: [], rows: [] });
+  clock.now = FRIDAY_9 + HOUR_MS;
+  await runner.tick();
+  const [p] = repo.positions;
+  assert.equal(p.closeReason, 'take_profit_atr_band');
+  assert.equal(p.exitPrice, target);
+});
+
+test('atr_band: el cierre manual sigue funcionando (acción explícita del usuario)', async () => {
+  const { repo, runner, market, strategy } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' },
+  });
+  withAtrBand(market);
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  const out = await runner.closeManually(strategy, { mode: 'shadow' });
+  assert.equal(out.status, 'closed');
+  assert.equal(repo.positions[0].closeReason, 'manual');
+});
+
+test('real atr_band: con TP residente en Binance el tick no cancela ni compite con él', async () => {
+  const runner = new OptionsStrategyRunner({
+    repo: createFakeOptionsRepo({ now: () => FRIDAY_9 }), market: fakeMarket(), logger: silent, now: () => FRIDAY_9,
+    liveExecutor: {
+      enabled: true,
+      repo: { async hasStandingTp() { return true; } },
+      async requestProtectedExit() { throw new Error('no debe cancelar el TP residente'); },
+      async submit() { throw new Error('no debe enviar'); },
+    },
+  });
+  const produced = [];
+  const action = { type: 'close', reason: 'take_profit_atr_band',
+    legs: [{ positionId: 3, symbol: 'BTC-261030-65000-C', side: 'SELL', quantity: 0.01, targetPrice: 300 }] };
+  const result = await runner.executeLive({ id: 1, userId: 7 }, action, { now: FRIDAY_9, produced, positions: [], params: {} });
+  assert.equal(result, null);
+  assert.equal(produced[0].reason, 'tp_resting');
+});
+
+test('notify por bot: trades=false silencia el envío de órdenes pero errors=true sigue avisando', async () => {
+  const { runner, strategy, notes } = await setup({ mode: 'live', params: { notify: { trades: false, errors: true } } });
+  await runner.maybeNotify(strategy, 'Órdenes LIMIT enviadas', 'trade');
+  assert.equal(notes.length, 0);
+  await runner.maybeNotify(strategy, 'Error en modo real: x', 'error');
+  assert.equal(notes.length, 1);
+});
+
+test('notify por bot: errors=false silencia errores; sin la clave notify ambos avisan', async () => {
+  const a = await setup({ mode: 'live', params: { notify: { trades: true, errors: false } } });
+  await a.runner.maybeNotify(a.strategy, 'Error', 'error');
+  assert.equal(a.notes.length, 0);
+  await a.runner.maybeNotify(a.strategy, 'Orden', 'trade');
+  assert.equal(a.notes.length, 1);
+  const b = await setup({ mode: 'live' });
+  await b.runner.maybeNotify(b.strategy, 'Orden', 'trade');
+  await b.runner.maybeNotify(b.strategy, 'Error', 'error');
+  assert.equal(b.notes.length, 2);
+});
+
+test('notify por bot: una apertura real con trades=false no llama a notify', async () => {
+  const { runner, notes, credentials } = await setup({ mode: 'live', params: { notify: { trades: false, errors: true } } });
+  await runner.tick();
+  assert.equal(credentials.orders.length, 2);
+  assert.equal(notes.length, 0);
+});
+
+// ---------- presupuesto total con reserva de pendientes (Task 11) ----------
+
+const BUDGET_PARAMS = { alertIds: [1], budgetUsdt: 10, budgetFractions: 1, quantity: 1 };
+
+function pendingEntry(strategyId, overrides = {}) {
+  // 0,01 BTC a 1000 USDT = 10 USDT pendientes de ejecutar.
+  return { id: 1, strategyId, action: 'open', purpose: 'standard', status: 'active',
+    symbol: 'BTC-261023-65000-C', side: 'BUY', quantity: 0.01, processedQty: 0, limitPrice: 1000, ...overrides };
+}
+
+test('presupuesto: una orden de entrada pendiente de 10 USDT en Real cuenta como comprometida', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  const asked = [];
+  runner.liveOrders = { async listByStrategy(id) { asked.push(id); return [pendingEntry(id)]; } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.deepEqual(asked, [strategy.id]);
+  assert.equal(actions.live[0].type, 'skip');
+  assert.equal(actions.live[0].reason, 'budget_exhausted');
+  assert.equal(actions.live[0].detail, 'Presupuesto comprometido: 10 de 10 USDT');
+  // La sombra solo cuenta sus posiciones: abre.
+  assert.equal(actions.shadow[0].type, 'open');
+});
+
+test('presupuesto: lo ejecutado o cancelado de una orden no reserva; la orden final tampoco', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  runner.liveOrders = { async listByStrategy(id) {
+    return [pendingEntry(id, { processedQty: 0.005 }), pendingEntry(id, { id: 2, status: 'final' }),
+      pendingEntry(id, { id: 3, action: 'close' })];
+  } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  const open = actions.live.find((a) => a.type === 'open');
+  assert.ok(open, 'quedan 5 USDT libres');
+  assert.ok(open.legs.reduce((s, l) => s + l.price * l.quantity, 0) <= 5 + 1e-9);
+});
+
+test('presupuesto: las posiciones abiertas del modo comprometen su prima', async () => {
+  const { repo, runner, strategy } = await setup({ template: 'alert_signal', params: { ...BUDGET_PARAMS, maxOpenPositions: 5 } });
+  await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261023-65000-C',
+    side: 'BUY', quantity: 0.01, entryPrice: 1000, openedAt: FRIDAY_9, feesUsdt: 0 });
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  const skipped = actions.shadow.find((a) => a.type === 'skip');
+  assert.equal(skipped?.reason, 'budget_exhausted');
+});
+
+test('presupuesto: la reentrada diferida también resta lo reservado', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id)]; } };
+  const result = await runner.executeDeferredReentry(strategy.id, { direction: 'bullish' });
+  assert.equal(result.status, 'no_valid_entry');
+});
+
+test('presupuesto: sin budgetUsdt no se consulta el ledger de órdenes', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1] } });
+  runner.liveOrders = { async listByStrategy() { throw new Error('no debería consultarse'); } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(actions.live[0].type, 'open');
+});
+
+test('presupuesto: el ejecutor real revalida contra la parte de la señal e ignora capitalUsdt', async () => {
+  const { runner, strategy, credentials, market } = await setup({ mode: 'live' });
+  const symbol = 'BTC-261016-60000-C';
+  const q = await market.getQuote(symbol);
+  const quantity = 0.1;
+  const legs = [{ symbol, side: 'BUY', quantity, optionType: 'C', strike: 60000 }];
+  const ctx = { now: FRIDAY_9, spot: SPOT, positions: [] };
+  // capitalUsdt diminuto ignorado: la parte de la señal cubre la prima.
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs, signalBudgetUsdt: q.ask * quantity * 1.1 },
+    { ...ctx, params: { capitalUsdt: 1, budgetUsdt: 1e6, budgetFractions: 4 } });
+  assert.equal(credentials.orders.length, 1);
+  // La parte de la señal no alcanza al precio LIMIT actual: bloquea.
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs, signalBudgetUsdt: q.ask * quantity * 0.9 },
+    { ...ctx, params: { capitalUsdt: null, budgetUsdt: 1e6, budgetFractions: 4 } });
+  assert.equal(credentials.orders.length, 1);
 });

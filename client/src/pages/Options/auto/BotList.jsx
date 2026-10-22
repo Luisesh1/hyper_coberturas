@@ -28,18 +28,18 @@ export default function BotList({ bots, selectedId, onSelect, mobile = false }) 
                 {dirs.length
                   ? dirs.map((d) => <DirectionChip key={d} direction={d} />)
                   : <span className={styles.cardMeta}>Sin alertas vinculadas</span>}
-                <span className={styles.cardMeta}>{b.underlying}</span>
+                <span className={styles.cardMeta}>{(b.underlyings?.length ? b.underlyings : [b.underlying]).join(' · ')}</span>
               </span>
               <span className={styles.cardBottom}>
                 {mobile ? (
                   <>
-                    <span>{b.status || '—'}</span>
+                    <span>{b.statusLabel}</span>
                     <Pnl value={cardPnl(b)} className={styles.cardPnlBig} />
                   </>
                 ) : (
                   <>
                     <span>P&amp;L 30d <Pnl value={cardPnl(b)} /></span>
-                    <span>{b.status}</span>
+                    <span>{b.statusLabel}</span>
                   </>
                 )}
               </span>

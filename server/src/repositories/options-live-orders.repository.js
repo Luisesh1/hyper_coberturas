@@ -4,6 +4,20 @@
  */
 const dbDefault = require('../db');
 const { grossPnl, signedPremium } = require('../services/options/options-utils');
+const { botUnderlyings } = require('../services/options/bot-underlyings');
+
+/**
+ * El símbolo pertenece a un subyacente de la estrategia (fila de BD): la
+ * columna `underlying` o, en un bot multi-subyacente, `params.underlyings`.
+ */
+function symbolOfStrategy(symbol, row) {
+  let params = row?.params;
+  if (typeof params === 'string') {
+    try { params = JSON.parse(params); } catch { params = null; }
+  }
+  return botUnderlyings({ underlying: row?.underlying, params })
+    .some((u) => String(symbol).startsWith(`${u}-`));
+}
 
 const map = (r) => r && ({
   id: Number(r.id), batchId: Number(r.batch_id), strategyId: Number(r.strategy_id),
@@ -66,7 +80,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       // Locks entre réplicas: un solo lote sin conciliar por usuario,
       // incluso cuando pertenece a distintos bots.
       const { rows: [current] } = await tx.query(
-        'SELECT id,user_id,mode,underlying FROM options_strategies WHERE id=$1 FOR UPDATE',
+        'SELECT id,user_id,mode,underlying,params FROM options_strategies WHERE id=$1 FOR UPDATE',
         [strategy.id]
       );
       if (!current || Number(current.user_id) !== Number(strategy.userId) || current.mode !== 'live') {
@@ -201,7 +215,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       const orders = [];
       for (let i = 0; i < legs.length; i++) {
         const leg = legs[i];
-        if (!String(leg.symbol).startsWith(current.underlying + '-')) {
+        if (!symbolOfStrategy(leg.symbol, current)) {
           throw new Error('Option symbol does not match strategy underlying');
         }
         const clientId = `HC${BigInt(batch.id).toString(36)}L${i.toString(36)}`;
@@ -278,7 +292,12 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         "OR (action='open' AND symbol=ANY($4::text[])))",
         [strategy.userId, at, ids, held.map((p) => p.symbol)]
       );
-      const savedSignal = { eventId, direction: signal.direction };
+      const savedSignal = {
+        eventId,
+        direction: signal.direction,
+        // Bot multi-subyacente: la reentrada abre en el subyacente que giró.
+        underlying: signal.underlying ?? null,
+      };
       await tx.query(
         `INSERT INTO options_live_reentries
          (strategy_id,user_id,alert_event_id,signal,wait_position_ids,created_at,updated_at)
@@ -326,6 +345,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   async function listMissingTpPositions(limit = 100) {
     const { rows } = await db.query(
       "SELECT p.id,p.strategy_id,p.user_id,p.symbol,p.side,p.quantity,p.entry_price," +
+      "p.tp_target_price,p.tp_target_meta," +
       "s.params,s.underlying FROM options_strategy_positions p " +
       "JOIN options_strategies s ON s.id=p.strategy_id " +
       "WHERE p.mode='live' AND p.closed_at IS NULL AND p.quantity > 0 " +
@@ -343,6 +363,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       entryPrice: Number(p.entry_price),
       params: typeof p.params === 'string' ? JSON.parse(p.params) : p.params,
       underlying: p.underlying,
+      tpTargetPrice: p.tp_target_price == null ? null : Number(p.tp_target_price),
+      tpTargetMeta: typeof p.tp_target_meta === 'string' ? JSON.parse(p.tp_target_meta) : (p.tp_target_meta ?? null),
     }));
   }
 
@@ -350,7 +372,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   async function beginStandingTp({ position, price, deadlineAt }) {
     return db.transaction(async (tx) => {
       const { rows: [strategy] } = await tx.query(
-        "SELECT id,user_id,mode,template,underlying FROM options_strategies WHERE id=$1 FOR UPDATE",
+        "SELECT id,user_id,mode,template,underlying,params FROM options_strategies WHERE id=$1 FOR UPDATE",
         [position.strategyId]
       );
       if (!strategy || Number(strategy.user_id) !== position.userId ||
@@ -365,7 +387,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           Number(held.strategy_id) !== position.strategyId ||
           held.symbol !== position.symbol || held.side !== position.side ||
           Math.abs(Number(held.quantity) - position.quantity) > 1e-8 ||
-          !String(position.symbol).startsWith(String(strategy.underlying) + '-')) return null;
+          !symbolOfStrategy(position.symbol, strategy)) return null;
       if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(deadlineAt) || deadlineAt <= now()) {
         throw new Error('Invalid standing TP limit price or expiration');
       }
@@ -410,7 +432,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
    */
   async function listUnprotectedLivePositions(olderThan, limit = 100) {
     const { rows } = await db.query(
-      "SELECT p.id,p.user_id,p.strategy_id,p.opened_at FROM options_strategy_positions p " +
+      "SELECT p.id,p.user_id,p.strategy_id,p.opened_at,p.symbol,s.params FROM options_strategy_positions p " +
       "JOIN options_strategies s ON s.id=p.strategy_id " +
       "WHERE p.mode='live' AND p.closed_at IS NULL AND p.quantity > 0 " +
       "AND s.mode='live' AND s.template='alert_signal' AND p.opened_at <= $1 " +
@@ -423,6 +445,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.map((r) => ({
       positionId: Number(r.id), userId: Number(r.user_id),
       strategyId: Number(r.strategy_id), openedAt: Number(r.opened_at),
+      symbol: r.symbol,
+      params: typeof r.params === 'string' ? JSON.parse(r.params) : (r.params ?? null),
     }));
   }
 
@@ -493,16 +517,21 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
 
   /** El plazo del TP obliga a dejar constancia de una salida por tiempo,
    * incluso si falla la lectura de la cadena de opciones del runner.
+   * Excepción: en 'atr_band' no hay salida por tiempo (se mantiene hasta la
+   * liquidación); el TP se cancela en su plazo pero no se pide cierre.
    */
   async function requestDeadlineExit(order) {
     if (order.purpose !== 'take_profit') return false;
     return db.transaction(async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [order.userId]);
       const { rows: [held] } = await tx.query(
-        "SELECT id,user_id,strategy_id,symbol FROM options_strategy_positions " +
-        "WHERE id=$1 AND mode='live' AND closed_at IS NULL FOR UPDATE", [order.positionId]
+        "SELECT p.id,p.user_id,p.strategy_id,p.symbol,s.params FROM options_strategy_positions p " +
+        "JOIN options_strategies s ON s.id=p.strategy_id " +
+        "WHERE p.id=$1 AND p.mode='live' AND p.closed_at IS NULL FOR UPDATE OF p", [order.positionId]
       );
       if (!held) return false;
+      const params = typeof held.params === 'string' ? JSON.parse(held.params) : held.params;
+      if (params?.takeProfitMode === 'atr_band') return false;
       if (Number(held.user_id) !== order.userId ||
           Number(held.strategy_id) !== order.strategyId ||
           held.symbol !== order.symbol) {
@@ -556,6 +585,42 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     const { rows } = await db.query(
       "SELECT id FROM options_live_orders WHERE position_id=ANY($1::bigint[]) " +
       "AND purpose='take_profit' AND status<>'final' LIMIT 1", [ids]
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * Cancelación pedida desde la UI: solo una ENTRADA del propio bot y
+   * usuario, no final. Las salidas (incluido el TP residente) no se cancelan:
+   * se reintentan solas. El reconciliador hace la cancelación en Binance.
+   */
+  async function requestCancel({ userId, strategyId, orderId }) {
+    const ids = [orderId, userId, strategyId].map(Number);
+    if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) throw new Error('Invalid cancel request');
+    const { rows } = await db.query(
+      "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$4 " +
+      "WHERE id=$1 AND user_id=$2 AND strategy_id=$3 AND status<>'final' " +
+      "AND purpose<>'take_profit' AND action='open' RETURNING *",
+      [ids[0], ids[1], ids[2], now()]
+    );
+    return rows[0] ? map(rows[0]) : null;
+  }
+
+  /**
+   * ¿Hay ya un cierre real en curso (orden de cierre no final que no sea el
+   * TP, o salida diferida persistida) en alguna posición abierta objetivo?
+   * Sin positionIds se miran todas las posiciones reales abiertas del bot.
+   */
+  async function hasPendingClose({ userId, strategyId, positionIds = null }) {
+    const ids = Array.isArray(positionIds) ? positionIds.map(Number) : null;
+    const { rows } = await db.query(
+      "SELECT p.id FROM options_strategy_positions p " +
+      "WHERE p.user_id=$1 AND p.strategy_id=$2 AND p.mode='live' AND p.closed_at IS NULL " +
+      "AND ($3::bigint[] IS NULL OR p.id=ANY($3::bigint[])) " +
+      "AND (EXISTS (SELECT 1 FROM options_live_orders o WHERE o.position_id=p.id " +
+      "AND o.action='close' AND o.purpose<>'take_profit' AND o.status<>'final') " +
+      "OR EXISTS (SELECT 1 FROM options_live_exit_requests r WHERE r.position_id=p.id)) LIMIT 1",
+      [Number(userId), Number(strategyId), ids]
     );
     return rows.length > 0;
   }
@@ -807,6 +872,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
             position.mode !== 'live') {
           throw new Error('Live close order does not belong to the target position');
         }
+        // Solo se conoce el motivo cuando la orden es el TP; el resto queda NULL.
+        const closeReason = locked.purpose === 'take_profit' ? 'take_profit' : null;
         const held = Number(position.quantity);
         if (quantity > held + 1e-9) throw new Error('Fill larger than open position');
         const allocatedEntryFee = Number(position.fees_usdt) * (quantity / held);
@@ -816,8 +883,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         if (Math.abs(held - quantity) < 1e-9) {
           await tx.query(
             `UPDATE options_strategy_positions
-             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5 WHERE id=$1`,
-            [position.id, trade.price, trade.at, pnl, fees]
+             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5,close_reason=$6 WHERE id=$1`,
+            [position.id, trade.price, trade.at, pnl, fees, closeReason]
           );
         } else {
           await tx.query(
@@ -827,10 +894,10 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           await tx.query(
             `INSERT INTO options_strategy_positions
              (strategy_id,user_id,mode,symbol,side,quantity,entry_price,exit_price,
-              opened_at,closed_at,pnl_usdt,fees_usdt)
-             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+              opened_at,closed_at,pnl_usdt,fees_usdt,close_reason)
+             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
             [position.strategy_id, position.user_id, position.symbol, position.side, quantity,
-              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees]
+              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees, closeReason]
           );
         }
       }
@@ -900,7 +967,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
-    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
+    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, requestCancel, hasPendingClose, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     claimIncidentNotificationToken, releaseIncidentNotification,

@@ -21,7 +21,7 @@ function info() {
       tickSize: '0.1', minQty: '0.01', maxQty: '10', stepSize: '0.01' }],
   }] };
 }
-function fixture({ positions = [], send = async () => ({ orderId: '12345678901234567' }) } = {}) {
+function fixture({ positions = [], send = async () => ({ orderId: '12345678901234567' }), market = null, targetRepo = null } = {}) {
   const clock = { now: NOW };
   const log = { sent: [], cancels: [], reads: [] };
   const orders = [];
@@ -95,7 +95,8 @@ function fixture({ positions = [], send = async () => ({ orderId: '1234567890123
   };
   const engine = new OptionsLiveExecution({
     repo: repository, credentials: { getClientForUser: async () => client },
-    market: { async getQuote() { return { spot: 100000, iv: 0.5, bid: 165, ask: 166 }; } },
+    market: market || { async getQuote() { return { spot: 100000, iv: 0.5, bid: 165, ask: 166 }; } },
+    ...(targetRepo ? { targetRepo } : {}),
     settlement: { async reconcileExpired() {} }, logger: silent,
     notify: async () => {}, now: () => clock.now, enabled: true,
   });
@@ -285,4 +286,96 @@ test('las alertas de Telegram usan saltos de línea reales, no la secuencia \\n 
     assert.ok(!m.includes('\\n'), `mensaje con \\n literal: ${m}`);
     assert.ok(m.includes('\n'));
   }
+});
+
+// ---------- modo atr_band: objetivo fijo al llenarse, LIMIT GTC en Binance ----------
+
+function atrPosition(extra = {}) {
+  return { ...filledPosition(), params: { takeProfitMode: 'atr_band', exitHoursBeforeExpiry: 12, tpMaxGainPct: 200 },
+    tpTargetPrice: null, tpTargetMeta: null, ...extra };
+}
+function atrMarket({ band = { close: 99900, atr: 75, upper: 100050, lower: 99750, multiplier: 2 } } = {}) {
+  const calls = { band: 0, quote: 0, inputs: 0 };
+  return {
+    calls,
+    async getQuote() { calls.quote++; return { spot: 100000, iv: 0.5, bid: 120, ask: 125 }; },
+    async getAtrBand() { calls.band++; if (band instanceof Error) throw band; return band; },
+    async getVolatilityInputs() { calls.inputs++; return { atrHourly: 10, tickSize: 0.1, minPrice: 0 }; },
+  };
+}
+function atrTargetRepo(positions) {
+  const saved = [];
+  return { saved, async setTpTarget(id, price, meta) {
+    saved.push({ id, price, meta });
+    const p = positions.find((x) => x.id === id);
+    if (p.tpTargetPrice == null) Object.assign(p, { tpTargetPrice: price, tpTargetMeta: meta });
+    return { ...p };
+  } };
+}
+
+test('atr_band real: sin objetivo se calcula con el spot de la cotización, se persiste y el TP lleva ese precio', async () => {
+  const positions = [atrPosition()];
+  const market = atrMarket();
+  const targetRepo = atrTargetRepo(positions);
+  const f = fixture({ positions, market, targetRepo });
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.protection.queued, 1);
+  assert.equal(targetRepo.saved.length, 1);
+  assert.equal(targetRepo.saved[0].price, 150);
+  assert.equal(targetRepo.saved[0].meta.spot, 100000);
+  assert.equal(market.calls.inputs, 0, 'el tick sale del exchangeInfo ya leído');
+  assert.equal(f.orders[0].limitPrice, 150);
+  assert.equal(f.log.sent[0].price, 150);
+  assert.equal(f.log.sent[0].timeInForce, 'GTC');
+  assert.equal(f.orders[0].deadlineAt, EXPIRY - 3600000, 'plazo: vencimiento − 1 h');
+});
+
+test('atr_band real: con objetivo guardado no llama a getAtrBand y usa ese precio', async () => {
+  const positions = [atrPosition({ tpTargetPrice: 212.3 })];
+  const market = atrMarket();
+  const targetRepo = atrTargetRepo(positions);
+  const f = fixture({ positions, market, targetRepo });
+  await f.engine.reconcilePending();
+  assert.equal(market.calls.band, 0);
+  assert.equal(targetRepo.saved.length, 0);
+  assert.equal(f.orders[0].limitPrice, 212.3);
+  assert.equal(f.log.sent[0].price, 212.3);
+});
+
+test('atr_band real: si getAtrBand lanza no se encola TP, se avisa y la posición se reintenta', async () => {
+  const positions = [atrPosition()];
+  const market = atrMarket({ band: new Error('klines caídas') });
+  const targetRepo = atrTargetRepo(positions);
+  const f = fixture({ positions, market, targetRepo });
+  const alerts = [];
+  f.repository.claimIncidentNotification = async (_u, kind) => { alerts.push(kind); return true; };
+  const result = await f.engine.createMissingTakeProfits();
+  assert.deepEqual(result, { attempted: 1, queued: 0 });
+  assert.equal(f.orders.length, 0);
+  assert.equal(targetRepo.saved.length, 0);
+  assert.deepEqual(alerts, ['TP_NOT_PROTECTED']);
+  // Siguiente ciclo, con velas: se calcula y se encola.
+  market.getAtrBand = async () => ({ close: 99900, atr: 75, upper: 100050, lower: 99750, multiplier: 2 });
+  assert.equal((await f.engine.createMissingTakeProfits()).queued, 1);
+  assert.equal(f.orders[0].limitPrice, 150);
+});
+
+test('atr_band real: en la última hora no hay TP posible y se mantiene hasta el vencimiento sin alertas', async () => {
+  const positions = [atrPosition({ tpTargetPrice: 150 })];
+  const f = fixture({ positions, market: atrMarket(), targetRepo: atrTargetRepo(positions) });
+  f.clock.now = EXPIRY - 30 * 60_000;
+  const alerts = [];
+  f.repository.claimIncidentNotification = async (_u, kind) => { alerts.push(kind); return true; };
+  const result = await f.engine.createMissingTakeProfits();
+  assert.equal(result.queued, 0);
+  assert.equal(f.orders.length, 0);
+  assert.deepEqual(alerts, []);
+  // El vigilante tampoco avisa de esa posición, pero sí de una fixed.
+  f.repository.listUnprotectedLivePositions = async () => [
+    { positionId: 100, userId: 7, strategyId: 4, symbol: SYMBOL, params: { takeProfitMode: 'atr_band' } },
+    { positionId: 101, userId: 7, strategyId: 5, symbol: SYMBOL, params: { takeProfitMode: 'fixed' } },
+  ];
+  const scan = await f.engine.scanUnprotectedPositions();
+  assert.equal(scan.alerts, 1);
+  assert.deepEqual(alerts, ['UNPROTECTED_TP']);
 });

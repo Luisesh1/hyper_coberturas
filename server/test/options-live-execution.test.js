@@ -222,9 +222,40 @@ test('clave de señal es estable, ventana exacta diez minutos', () => {
 test('bloquea nuevas órdenes cuando hay órdenes manuales abiertas en Binance', async () => {
   const f = fixture();
   f.setOpenOrders([{ symbol: leg.symbol, orderId: '555', status: 'NEW' }]);
-  await assert.rejects(f.submit(), /pending orders/);
+  await assert.rejects(f.submit(), /no gestionadas por la app.*manual reconciliation required/);
   assert.equal(f.calls.post.length, 0);
   assert.equal(f.orders.length, 0);
+});
+
+test('abrir tolera órdenes abiertas que solo son TPs resting propios', async () => {
+  const f = fixture();
+  f.repo.listRestingTpOrderIds = async () => [
+    { clientOrderId: 'HCTP1', orderId: '900' }, { clientOrderId: 'HCTP2', orderId: null }];
+  f.setOpenOrders([
+    { symbol: leg.symbol, clientOrderId: 'HCTP1', orderId: '900', status: 'NEW' },
+    { symbol: leg.symbol, clientOrderId: 'HCTP2', orderId: '902', status: 'NEW' },
+  ]);
+  assert.equal((await f.submit()).status, 'submitted');
+  assert.equal(f.calls.post.length, 1);
+});
+
+test('abrir con TP propio y una orden desconocida sigue bloqueado', async () => {
+  const f = fixture();
+  f.repo.listRestingTpOrderIds = async () => [{ clientOrderId: 'HCTP1', orderId: '900' }];
+  f.setOpenOrders([
+    { symbol: leg.symbol, clientOrderId: 'HCTP1', orderId: '900', status: 'NEW' },
+    { symbol: leg.symbol, clientOrderId: 'manual', orderId: '555', status: 'NEW' },
+  ]);
+  await assert.rejects(f.submit(), /órdenes abiertas no gestionadas por la app.*manual reconciliation required/);
+  assert.equal(f.calls.post.length, 0);
+  assert.equal(f.orders.length, 0);
+});
+
+test('sin listRestingTpOrderIds, abrir con órdenes abiertas sigue bloqueado', async () => {
+  const f = fixture();
+  f.setOpenOrders([{ symbol: leg.symbol, clientOrderId: 'HCTP1', orderId: '900', status: 'NEW' }]);
+  await assert.rejects(f.submit(), /manual reconciliation required/);
+  assert.equal(f.calls.post.length, 0);
 });
 
 test('bloquea el envío cuando Binance y el ledger tienen exposiciones distintas', async () => {

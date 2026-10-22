@@ -10,6 +10,7 @@ const templates = require('./templates');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const { DAY_MS, parseSymbol } = require('./options-utils');
 const { estimateMargin, legDeltaExposure, utcDayStart, lazyMarket } = require('./options-strategy-runner.service');
+const { committedUsdt: computeCommitted } = require('./options-committed-capital');
 
 const MODES = ['paused', 'shadow', 'live'];
 const LIMIT_KEYS = ['maxMarginUsdt', 'maxDailyLossUsdt', 'maxNetDelta', 'maxOrdersPerDay'];
@@ -52,6 +53,25 @@ function round(value, decimals = 2) {
   return Math.round(Number(value) * f) / f;
 }
 
+/** Estadísticas de las operaciones cerradas de un libro (orden: cierre, luego id). */
+function tradeStatsFor(closed) {
+  const sorted = [...closed].sort((a, b) => a.closedAt - b.closedAt || a.id - b.id);
+  let cum = 0; let peak = 0; let drawdown = 0; let streak = 0; let worst = 0; let sum = 0; let counted = 0;
+  for (const p of sorted) {
+    const pnl = Number.isFinite(p.pnlUsdt) ? p.pnlUsdt : null;
+    if (pnl !== null) { cum += pnl; sum += pnl; counted += 1; }
+    peak = Math.max(peak, cum);
+    drawdown = Math.max(drawdown, peak - cum);
+    if (pnl !== null && pnl < 0) { streak += 1; worst = Math.max(worst, streak); } else streak = 0;
+  }
+  return {
+    closedTrades: sorted.length,
+    avgPnlUsdt: counted ? round(sum / counted) : null,
+    maxDrawdownUsdt: sorted.length ? round(drawdown) : null,
+    longestLosingStreak: worst,
+  };
+}
+
 function kpisFor(positions, events, mode, now) {
   const mine = positions.filter((p) => p.mode === mode);
   const closed = mine.filter((p) => p.closedAt != null);
@@ -75,6 +95,7 @@ function kpisFor(positions, events, mode, now) {
     cycles: cycles.size,
     winRatePct: finished.length ? round((finished.filter((c) => c.pnl > 0).length / finished.length) * 100, 1) : null,
     openPositions: mine.length - closed.length,
+    ...tradeStatsFor(closed),
   };
 }
 
@@ -101,7 +122,7 @@ const round2 = (v) => Math.round(v * 1e4) / 1e4;
  * estrategia está en `live`, si no el de sombra. El margen y la delta piden
  * datos de mercado: si fallan quedan en null en vez de romper el detalle.
  */
-async function limitsUsage({ repo, market, strategy, positions, at }) {
+async function limitsUsage({ repo, market, strategy, positions, at, quotes = new Map(), orders = [] }) {
   const mode = strategy.mode === 'live' ? 'live' : 'shadow';
   const since = utcDayStart(at);
   const open = positions.filter((p) => p.mode === mode && p.closedAt == null);
@@ -112,22 +133,43 @@ async function limitsUsage({ repo, market, strategy, positions, at }) {
 
   let marginUsedUsdt = null;
   let netDelta = null;
+  // Spot por subyacente (un bot puede operar varios): cada posición y orden
+  // se valora con el de su símbolo. Uno que falle queda sin spot (null).
+  const bookOrders = mode === 'live' ? orders : [];
+  const underlyings = new Set([String(strategy.underlying).toUpperCase()]);
+  for (const item of [...open, ...bookOrders]) {
+    const u = parseSymbol(item.symbol)?.underlying;
+    if (u) underlyings.add(u);
+  }
+  const spots = {};
+  await Promise.all([...underlyings].map(async (u) => {
+    try { spots[u] = (await market.getChain(u))?.spot; } catch { spots[u] = undefined; }
+  }));
+  const spot = spots[String(strategy.underlying).toUpperCase()];
   try {
-    const { spot } = await market.getChain(strategy.underlying);
     marginUsedUsdt = 0;
     for (const p of open) {
       const meta = parseSymbol(p.symbol);
       if (!meta || p.side !== 'SELL') continue;
-      marginUsedUsdt += estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot });
+      marginUsedUsdt += estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot: spots[meta.underlying] });
     }
     marginUsedUsdt = Number.isFinite(marginUsedUsdt) ? round2(marginUsedUsdt) : null;
   } catch { marginUsedUsdt = null; }
   try {
-    const quotes = await Promise.all(open.map((p) => market.getQuote(p.symbol)));
-    netDelta = round2(open.reduce((acc, p, i) => acc + legDeltaExposure({ side: p.side, delta: quotes[i]?.delta, quantity: p.quantity }), 0));
+    // Delta en unidades del subyacente: sumar BTC con ETH no tiene sentido.
+    if (new Set(open.map((p) => parseSymbol(p.symbol)?.underlying)).size > 1) throw new Error('varios subyacentes');
+    if (open.some((p) => !quotes.get(p.id))) throw new Error('cotización no disponible');
+    netDelta = round2(open.reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: quotes.get(p.id)?.delta, quantity: p.quantity }), 0));
   } catch { netDelta = null; }
 
-  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta };
+  // Presupuesto total del bot: el mismo cálculo que el runner pasa al template.
+  let committedUsdt = null;
+  if (strategy.params?.budgetUsdt != null) {
+    const total = computeCommitted({ positions: open, orders: bookOrders, spot, spots });
+    committedUsdt = Number.isFinite(total) ? round2(total) : null;
+  }
+
+  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta, committedUsdt };
 }
 
 function createOptionsStrategiesService(deps = {}) {
@@ -206,11 +248,20 @@ function createOptionsStrategiesService(deps = {}) {
         : Promise.resolve([]),
     ]);
     const at = now();
+    // Una sola cotización por posición abierta: alimenta el mark que ve el
+    // cliente y la delta neta de los límites. Una que falle no rompe el detalle.
+    const openNow = positions.filter((p) => p.closedAt == null);
+    const quotes = new Map(await Promise.all(openNow.map(async (p) => {
+      try { return [p.id, (await market.getQuote(p.symbol)) || null]; } catch { return [p.id, null]; }
+    })));
     return {
       ...strategy,
       kpis: { shadow: kpisFor(positions, events, 'shadow', at), live: kpisFor(positions, events, 'live', at) },
       equity: equityCurve(positions, strategy.createdAt),
-      positions: positions.filter((p) => p.closedAt == null),
+      positions: openNow.map((p) => {
+        const q = quotes.get(p.id);
+        return { ...p, mark: q?.mark ?? null, bid: q?.bid ?? null, ask: q?.ask ?? null };
+      }),
       // Solo información operacional; las credenciales nunca llegan al cliente.
       takeProfitOrders: standingOrders.filter((o) => o.purpose === 'take_profit')
         .slice(0, 20).map((o) => ({
@@ -218,7 +269,20 @@ function createOptionsStrategiesService(deps = {}) {
           price: o.limitPrice, quantity: o.quantity, executedQty: o.processedQty,
           status: o.status, cancelRequested: o.cancelRequested,
         })),
-      usage: await limitsUsage({ repo, market, strategy, positions, at }),
+      ...(strategy.template === 'alert_signal' ? { pendingOrders: standingOrders.filter((o) => o.status !== 'final').slice(0, 50).map((o) => ({
+        id: o.id, purpose: o.purpose, action: o.action, symbol: o.symbol, side: o.side,
+        price: o.limitPrice, quantity: o.quantity, executedQty: o.processedQty,
+        status: o.status, cancelRequested: o.cancelRequested,
+        createdAt: o.createdAt, deadlineAt: o.deadlineAt, error: o.error ?? null,
+      })) } : {}),
+      closedPositions: positions.filter((p) => p.closedAt != null)
+        .sort((a, b) => b.closedAt - a.closedAt || b.id - a.id).slice(0, 50).map((p) => ({
+          id: p.id, mode: p.mode, symbol: p.symbol, side: p.side, quantity: p.quantity,
+          entryPrice: p.entryPrice, exitPrice: p.exitPrice, openedAt: p.openedAt,
+          closedAt: p.closedAt, pnlUsdt: p.pnlUsdt, feesUsdt: p.feesUsdt,
+          closeReason: p.closeReason ?? null,
+        })),
+      usage: await limitsUsage({ repo, market, strategy, positions, at, quotes, orders: standingOrders }),
       events,
     };
   }
@@ -226,7 +290,7 @@ function createOptionsStrategiesService(deps = {}) {
   async function update(userId, id, body = {}, opts = {}) {
     const strategy = await requireStrategy(userId, id);
     if (templates.isSignalDriven(strategy.template) && !opts.alertBots
-      && (body.underlying !== undefined || (body.params && body.params.alertIds !== undefined))) {
+      && (body.underlying !== undefined || (body.params && (body.params.alertIds !== undefined || body.params.underlyings !== undefined)))) {
       throw new ValidationError('Las alertas y el subyacente de un bot se editan desde /options/auto-bots');
     }
     const patch = {};
@@ -237,6 +301,13 @@ function createOptionsStrategiesService(deps = {}) {
     }
     if (body.params !== undefined) {
       patch.params = templates.validateParams(strategy.template, { ...strategy.params, ...(body.params || {}) });
+      // La banda ATR anula stop y salida por tiempo, y el runner no calcula
+      // objetivo para posiciones reales ya abiertas: quedarían sin salida.
+      if (patch.params.takeProfitMode === 'atr_band' && strategy.params?.takeProfitMode !== 'atr_band' &&
+          (await repo.listOpenPositions(strategy.id, 'live')).length) {
+        throw new AppError('Cierra las posiciones reales abiertas antes de cambiar a venta por banda ATR',
+          { status: 409, code: 'OPEN_LIVE_POSITIONS' });
+      }
     }
     if (body.limits !== undefined) patch.limits = normalizeLimits(body.limits || {}, { ...DEFAULT_LIMITS, ...strategy.limits });
     if (body.underlying !== undefined) {
@@ -320,3 +391,4 @@ function createOptionsStrategiesService(deps = {}) {
 module.exports = createOptionsStrategiesService();
 module.exports.createOptionsStrategiesService = createOptionsStrategiesService;
 module.exports.DEFAULT_LIMITS = DEFAULT_LIMITS;
+module.exports.kpisFor = kpisFor;

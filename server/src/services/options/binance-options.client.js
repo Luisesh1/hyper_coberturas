@@ -20,6 +20,7 @@ const crypto = require('crypto');
 const { AppError, ExternalServiceError, ValidationError } = require('../../errors/app-error');
 const logger = require('../logger.service');
 
+const SPOT_KLINE_INTERVALS = ['5m', '15m', '1h', '4h', '1d'];
 const DEFAULT_BASE_URL = 'https://eapi.binance.com';
 const DEFAULT_SPOT_BASE_URL = 'https://api.binance.com';
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -237,10 +238,11 @@ function createBinanceOptionsClient({
         base: spotBaseUrl,
       });
     },
-    // Velas spot públicas: ATR de 1 h, no implica ejecución de órdenes.
+    // Velas spot públicas (5m–1d, hasta 500): ATR, no implica ejecución de órdenes.
     getSpotKlines(symbol, interval = '1h', limit = 17) {
       if (!/^[A-Z0-9]{3,20}$/.test(String(symbol)) ||
-          interval !== '1h' || !Number.isInteger(limit) || limit < 15 || limit > 100) {
+          !SPOT_KLINE_INTERVALS.includes(interval) ||
+          !Number.isInteger(limit) || limit < 15 || limit > 500) {
         throw new ValidationError('Parámetros de klines inválidos');
       }
       return request('GET', '/api/v3/klines', {

@@ -48,6 +48,9 @@ function mapPosition(row) {
     closedAt: numberOrNull(row.closed_at),
     pnlUsdt: numberOrNull(row.pnl_usdt),
     feesUsdt: Number(row.fees_usdt || 0),
+    closeReason: row.close_reason || null,
+    tpTargetPrice: numberOrNull(row.tp_target_price),
+    tpTargetMeta: parseJson(row.tp_target_meta, null),
   };
 }
 
@@ -76,6 +79,7 @@ function mapAutoSignal(row) {
     score: numberOrNull(row.score),
     decision: row.decision,
     detail: row.detail || null,
+    simulated: row.simulated === true,
     createdAt: Number(row.created_at),
   };
 }
@@ -191,14 +195,31 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return mapPosition(rows[0]);
   }
 
-  /** Cierra una posición abierta. `feesUsdt` es el total (entrada + salida). */
-  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt }) {
+  /**
+   * Fija el objetivo de venta (banda ATR) SOLO si sigue vacío: una vez
+   * escrito no se recalcula. Devuelve la fila guardada (la de quien ganó).
+   */
+  async function setTpTarget(id, price, meta) {
     const { rows } = await db.query(
       `UPDATE options_strategy_positions
-          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5
+          SET tp_target_price = $2, tp_target_meta = $3::jsonb
+        WHERE id = $1 AND tp_target_price IS NULL
+        RETURNING *`,
+      [id, price, JSON.stringify(meta ?? null)]
+    );
+    if (rows[0]) return mapPosition(rows[0]);
+    const { rows: current } = await db.query('SELECT * FROM options_strategy_positions WHERE id = $1', [id]);
+    return current[0] ? mapPosition(current[0]) : null;
+  }
+
+  /** Cierra una posición abierta. `feesUsdt` es el total (entrada + salida). */
+  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
+    const { rows } = await db.query(
+      `UPDATE options_strategy_positions
+          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5, close_reason = $6
         WHERE id = $1 AND closed_at IS NULL
         RETURNING *`,
-      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt]
+      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt, closeReason]
     );
     return rows[0] ? mapPosition(rows[0]) : null;
   }
@@ -351,14 +372,14 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
    * Reserva el procesamiento de un disparo para un bot. Devuelve la fila, o
    * null si ese `alertEventId` ya se procesó (índice único por bot y evento).
    */
-  async function claimAutoSignal({ strategyId, userId, alertId, alertEventId, alertName, direction, asset, score, decision, detail = null, createdAt }) {
+  async function claimAutoSignal({ strategyId, userId, alertId, alertEventId, alertName, direction, asset, score, decision, detail = null, simulated = false, createdAt }) {
     const { rows } = await db.query(
       `INSERT INTO options_auto_signals
-         (strategy_id, user_id, alert_id, alert_event_id, alert_name, direction, asset, score, decision, detail, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         (strategy_id, user_id, alert_id, alert_event_id, alert_name, direction, asset, score, decision, detail, simulated, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (strategy_id, alert_event_id) DO NOTHING
        RETURNING *`,
-      [strategyId, userId, alertId ?? null, alertEventId ?? null, alertName ?? null, direction ?? null, asset ?? null, score ?? null, decision, detail, createdAt ?? now()]
+      [strategyId, userId, alertId ?? null, alertEventId ?? null, alertName ?? null, direction ?? null, asset ?? null, score ?? null, decision, detail, simulated === true, createdAt ?? now()]
     );
     return rows[0] ? mapAutoSignal(rows[0]) : null;
   }
@@ -379,20 +400,22 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     let decisions = null;
     if (filter === 'traded') decisions = TRADED_DECISIONS;
     else if (filter === 'ignored') decisions = ['ignored'];
+    // «Operadas» = señales reales: las simuladas solo aparecen en «Todas».
     const { rows } = await db.query(
       `SELECT * FROM options_auto_signals
         WHERE strategy_id = $1 AND ($3::text[] IS NULL OR decision = ANY($3::text[]))
+          AND NOT ($4::boolean AND simulated)
         ORDER BY created_at DESC, id DESC LIMIT $2`,
-      [strategyId, limit, decisions]
+      [strategyId, limit, decisions, filter === 'traded']
     );
     return rows.map(mapAutoSignal);
   }
 
-  /** Última señal de cada bot del usuario. */
+  /** Última señal real (no simulada) de cada bot del usuario. */
   async function lastAutoSignalsByUser(userId) {
     const { rows } = await db.query(
       `SELECT DISTINCT ON (strategy_id) * FROM options_auto_signals
-        WHERE user_id = $1
+        WHERE user_id = $1 AND NOT simulated
         ORDER BY strategy_id, created_at DESC, id DESC`,
       [userId]
     );
@@ -417,6 +440,7 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     setState,
     deleteStrategy,
     insertPosition,
+    setTpTarget,
     closePosition,
     listOpenPositions,
     listOpenPositionsByUser,

@@ -31,7 +31,7 @@ test('reversal guarda cierre, cancelación y señal para reentrada dentro de la 
   const repo = createOptionsLiveOrdersRepository({ db, now: () => 1000 });
   const result = await repo.queueReversal(
     { id: 4, userId: 7 },
-    { eventId: '9001', direction: 'bullish' },
+    { eventId: '9001', direction: 'bullish', underlying: 'ETH' },
     { type: 'close', legs: [{ positionId: 91, symbol: SYMBOL, side: 'SELL', quantity: 0.1 }] }
   );
   assert.equal(result, true);
@@ -43,7 +43,8 @@ test('reversal guarda cierre, cancelación y señal para reentrada dentro de la 
   assert.equal(reentry.args[2], '9001');
   assert.deepEqual(reentry.args[4], [91]);
   const signal = JSON.parse(reentry.args[3]);
-  assert.deepEqual(signal, { eventId: '9001', direction: 'bullish' });
+  // El subyacente de la señal viaja con la reentrada (bots multi-subyacente).
+  assert.deepEqual(signal, { eventId: '9001', direction: 'bullish', underlying: 'ETH' });
 });
 
 test('reversal rechaza eventId inválido antes de tocar PostgreSQL', async () => {

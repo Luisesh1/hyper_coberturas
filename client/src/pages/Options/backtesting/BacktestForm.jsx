@@ -2,19 +2,29 @@ import { useId, useMemo } from 'react';
 import { ChoiceField, FieldGroup, NumberField, ParamFields, TextField } from '../strategies/common/Fields';
 import { initialParams, normalizeSchema } from '../strategies/common/paramSchema';
 import { UNDERLYINGS, templateLabel } from '../strategies/strategyView';
-import { DVOL_UNDERLYINGS, SOURCES, parseSelection, sourceAvailable } from './backtestView';
+import { BOT_SOURCE_REASON, DVOL_UNDERLYINGS, SOURCES, parseSelection, sourceAvailable } from './backtestView';
 import styles from './BacktestingTab.module.css';
 
 // Formulario del backtest. Es el mismo en la columna de escritorio y en la
 // hoja inferior del teléfono (`mobile` sólo acorta los textos de las fuentes).
-export default function BacktestForm({ form, onChange, strategies, templates, errors = {}, disabled = false, mobile = false }) {
+export default function BacktestForm({ form, onChange, strategies, bots = [], templates, errors = {}, disabled = false, mobile = false }) {
   const selectId = useId();
   const sel = parseSelection(form.selection);
   const template = sel?.kind === 'template' ? templates.find((t) => t.id === sel.id) : null;
   const schema = useMemo(() => normalizeSchema(template?.paramSchema), [template]);
 
+  const selectedBot = sel?.kind === 'strategy' ? bots.find((b) => String(b.id) === sel.id) : null;
+  const isBot = !!selectedBot;
+  // Un bot multi-subyacente se prueba con un subyacente a la vez, de los suyos.
+  const botUnderlyings = selectedBot?.underlyings?.length > 1 ? selectedBot.underlyings : null;
+
   const set = (patch) => {
     const next = { ...form, ...patch };
+    // Los bots no admiten la fuente «registrada».
+    const nextSel = parseSelection(next.selection);
+    if (next.source === 'recorded' && nextSel?.kind === 'strategy' && bots.some((b) => String(b.id) === nextSel.id)) {
+      next.source = DVOL_UNDERLYINGS.includes(next.underlying) ? 'dvol' : 'realized';
+    }
     // DVOL sólo existe para BTC/ETH: al cambiar a otro subyacente se pasa a
     // volatilidad realizada en vez de dejar una combinación imposible.
     if (!sourceAvailable(next.source, next.underlying)) next.source = 'realized';
@@ -25,8 +35,9 @@ export default function BacktestForm({ form, onChange, strategies, templates, er
     const parsed = parseSelection(value);
     const patch = { selection: value };
     if (parsed?.kind === 'strategy') {
-      const s = strategies.find((x) => String(x.id) === parsed.id);
+      const s = [...strategies, ...bots].find((x) => String(x.id) === parsed.id);
       if (s?.underlying) patch.underlying = s.underlying;
+      if (s?.underlyings?.length > 1 && !s.underlyings.includes(patch.underlying)) patch.underlying = s.underlyings[0];
       patch.params = {};
     } else if (parsed?.kind === 'template') {
       patch.params = initialParams(templates.find((t) => t.id === parsed.id));
@@ -56,6 +67,13 @@ export default function BacktestForm({ form, onChange, strategies, templates, er
               ))}
             </optgroup>
           )}
+          {bots.length > 0 && (
+            <optgroup label="Mis bots (por alertas)">
+              {bots.map((b) => (
+                <option key={b.id} value={`s:${b.id}`}>{b.name} · {b.underlying} · bot</option>
+              ))}
+            </optgroup>
+          )}
           {templates.length > 0 && (
             <optgroup label="Plantilla con parámetros propios">
               {templates.map((t) => (
@@ -82,7 +100,8 @@ export default function BacktestForm({ form, onChange, strategies, templates, er
       <FieldGroup title="Mercado y periodo">
         <ChoiceField
           label="Subyacente"
-          options={UNDERLYINGS.map((u) => ({ value: u, label: u }))}
+          help={botUnderlyings ? 'Se prueba un subyacente a la vez; los límites se aplican solo a él' : undefined}
+          options={(botUnderlyings || UNDERLYINGS).map((u) => ({ value: u, label: u }))}
           value={form.underlying}
           onChange={(u) => set({ underlying: u })}
           error={errors.underlying}
@@ -109,7 +128,7 @@ export default function BacktestForm({ form, onChange, strategies, templates, er
         <legend className={styles.legend}>Fuente de precios de las opciones</legend>
         {SOURCES.map((src) => {
           const active = form.source === src.key;
-          const unavailable = src.key === 'dvol' && dvolDisabled;
+          const unavailable = (src.key === 'dvol' && dvolDisabled) || (src.key === 'recorded' && isBot);
           return (
             <button
               key={src.key}
@@ -121,7 +140,8 @@ export default function BacktestForm({ form, onChange, strategies, templates, er
             >
               <span className={styles.sourceTitle}>{src.label}</span>
               <span className={styles.sourceHint}>{mobile ? src.hintShort : src.hint}</span>
-              {unavailable && (
+              {src.key === 'recorded' && isBot && <span className={styles.sourceWarn}>{BOT_SOURCE_REASON}</span>}
+              {src.key === 'dvol' && unavailable && (
                 <span className={styles.sourceWarn}>No disponible para {form.underlying}: Deribit solo publica DVOL de BTC y ETH.</span>
               )}
             </button>

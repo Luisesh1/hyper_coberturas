@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import ModeSwitch, { ModeBadge } from './ModeSwitch';
-import LineChart, { ChartLegend } from './common/LineChart';
+import { ChartLegend } from './common/LineChart';
+import PnlChart from './common/PnlChart';
 import { formatDateTime, formatDay, formatNumber, formatUsdt, tone } from './common/format';
 import { formatParamValue, normalizeSchema } from './common/paramSchema';
 import { ChevronLeftIcon, PencilIcon, TrashIcon, WarningIcon } from './common/icons';
@@ -14,29 +15,6 @@ const LEGEND = [
   { label: 'Sombra', variant: 'primary' },
   { label: 'Real', variant: 'live', dashed: true },
 ];
-
-function PnlChart({ equity, height }) {
-  const series = [
-    { key: 'shadow', label: 'Sombra', values: equity.shadow, variant: 'primary' },
-    ...(equity.hasLive ? [{ key: 'live', label: 'Real', values: equity.live, variant: 'live', dashed: true }] : []),
-  ];
-  const markers = equity.hasLive && equity.liveStartIndex > 0
-    ? [{ index: equity.liveStartIndex, label: 'Pasa a real' }]
-    : [];
-  return (
-    <LineChart
-      times={equity.times}
-      series={series}
-      markers={markers}
-      height={height}
-      zeroLine
-      formatValue={(v) => formatUsdt(v, { decimals: Math.abs(v) >= 100 ? 0 : 2, sign: true })}
-      formatTime={formatDateTime}
-      ariaLabel="Curva de P&L de la estrategia en modo sombra y en real"
-      emptyText="La curva aparecerá cuando la estrategia complete su primera evaluación."
-    />
-  );
-}
 
 function EventsTable({ events }) {
   if (!events.length) return <p className={ui.empty}>Todavía no hay decisiones registradas.</p>;

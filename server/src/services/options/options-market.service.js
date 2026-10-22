@@ -20,6 +20,7 @@
 const { createBinanceOptionsClient } = require('./binance-options.client');
 const { NotFoundError, ValidationError } = require('../../errors/app-error');
 const { hourlyAtr } = require('./options-take-profit');
+const { wilderAtrBands } = require('./options-atr-band-tp');
 
 const DEFAULT_TTL_MS = 30_000;
 const METADATA_TTL_MS = 10 * 60_000;
@@ -333,6 +334,16 @@ function createOptionsMarketService({
     return { atrHourly, tickSize, minPrice };
   }
 
+  // Banda ATR (cierre ± multiplicador × ATR de Wilder) de la última vela cerrada.
+  async function getAtrBand(underlying, { interval = '1h', length = 14, multiplier = 2 } = {}) {
+    if (!/^[A-Z0-9]{2,12}$/.test(String(underlying))) throw new ValidationError('Subyacente inválido para banda ATR');
+    const limit = Math.min(500, Math.max(200, length * 10));
+    return cached(`atrband:${underlying}:${interval}:${length}:${multiplier}`, async () => {
+      const candles = await getClient().getSpotKlines(`${underlying}USDT`, interval, limit);
+      return wilderAtrBands(candles, { length, multiplier, now: now() });
+    }, 60_000);
+  }
+
   // PRICE_FILTER crudo (cadenas decimales) para validar órdenes manuales con
   // exactitud antes de enviarlas. null si el contrato no está listado.
   async function getPriceFilter(rawSymbol) {
@@ -348,7 +359,7 @@ function createOptionsMarketService({
     cache.clear();
   }
 
-  return { listUnderlyings, getChain, getQuote, getMarks, getVolatilityInputs, getPriceFilter, clearCache };
+  return { listUnderlyings, getChain, getQuote, getMarks, getVolatilityInputs, getAtrBand, getPriceFilter, clearCache };
 }
 
 // Instancia por defecto (cliente público sin credenciales).
@@ -364,6 +375,7 @@ module.exports = {
   getQuote: (...args) => defaultService.getQuote(...args),
   getMarks: (...args) => defaultService.getMarks(...args),
   getVolatilityInputs: (...args) => defaultService.getVolatilityInputs(...args),
+  getAtrBand: (...args) => defaultService.getAtrBand(...args),
   getPriceFilter: (...args) => defaultService.getPriceFilter(...args),
   clearCache: () => defaultService.clearCache(),
 };

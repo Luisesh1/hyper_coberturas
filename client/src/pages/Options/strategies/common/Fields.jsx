@@ -148,6 +148,39 @@ export function SwitchField({ label, help, checked, onChange, disabled = false }
 
 // Hasta 4 opciones (o con `columns`, en rejilla): control segmentado. Más:
 // select nativo (la rueda del sistema es la mejor UX para listas largas).
+// Selección múltiple: mismos chips que ChoiceField pero con aria-pressed.
+// `value` es la lista elegida; la quitan/ponen onToggle(valor).
+export function MultiChoiceField({ label, help, options, value, onToggle, error, columns = 3, disabled = false }) {
+  const id = useId();
+  return (
+    <div className={`${styles.row} ${styles.rowStacked}`}>
+      <RowText label={label} help={help} error={error} id={id} />
+      <div
+        className={`${styles.segmented} ${styles.segmentedGrid}`}
+        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+        role="group"
+        aria-labelledby={id}
+      >
+        {options.map((opt) => {
+          const active = value.includes(opt.value);
+          return (
+            <button
+              key={String(opt.value)}
+              type="button"
+              aria-pressed={active}
+              className={`${styles.segment} ${styles.segmentTall} ${active ? styles.segmentActive : ''}`}
+              onClick={() => onToggle(opt.value)}
+              disabled={disabled || opt.disabled}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function ChoiceField({ label, help, options, value, onChange, error, columns, disabled = false }) {
   const id = useId();
   if (options.length <= 4 || columns) {

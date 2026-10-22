@@ -73,10 +73,16 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       positions.push(row);
       return clone(row);
     },
-    async closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt }) {
+    async setTpTarget(id, price, meta) {
+      const p = positions.find((x) => x.id === id);
+      if (!p) return null;
+      if (p.tpTargetPrice == null) Object.assign(p, { tpTargetPrice: price, tpTargetMeta: clone(meta) });
+      return clone(p);
+    },
+    async closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
       const p = positions.find((x) => x.id === id && x.closedAt == null);
       if (!p) return null;
-      Object.assign(p, { exitPrice, closedAt, pnlUsdt, feesUsdt });
+      Object.assign(p, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason });
       return clone(p);
     },
     async listOpenPositions(strategyId, mode) {
@@ -144,7 +150,7 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
 
     async claimAutoSignal(row) {
       if (row.alertEventId != null && signals.some((x) => x.strategyId === row.strategyId && x.alertEventId === row.alertEventId)) return null;
-      const s = { id: seq++, alertId: null, alertEventId: null, alertName: null, direction: null, asset: null, score: null, detail: null, createdAt: now(), ...row };
+      const s = { id: seq++, alertId: null, alertEventId: null, alertName: null, direction: null, asset: null, score: null, detail: null, simulated: false, createdAt: now(), ...row };
       signals.push(s);
       return clone(s);
     },
@@ -157,14 +163,14 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     async listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {
       const ok = (d) => (filter === 'traded' ? ['opened', 'closed', 'reversed'].includes(d) : filter === 'ignored' ? d === 'ignored' : true);
       return signals
-        .filter((x) => x.strategyId === strategyId && ok(x.decision))
+        .filter((x) => x.strategyId === strategyId && ok(x.decision) && !(filter === 'traded' && x.simulated))
         .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
         .slice(0, limit)
         .map(clone);
     },
     async lastAutoSignalsByUser(userId) {
       const map = new Map();
-      for (const x of [...signals].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)) if (x.userId === userId) map.set(x.strategyId, x);
+      for (const x of [...signals].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)) if (x.userId === userId && !x.simulated) map.set(x.strategyId, x);
       return [...map.values()].map(clone);
     },
 

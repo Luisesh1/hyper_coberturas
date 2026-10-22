@@ -1,12 +1,14 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { BacktestIcon } from '../icons';
 import ModeSwitch from '../strategies/ModeSwitch';
-import { ChevronLeftIcon, CloseIcon, PencilIcon, TrashIcon, WarningIcon } from '../strategies/common/icons';
+import { ChevronLeftIcon, CloseIcon, CopyIcon, PencilIcon, TrashIcon, WarningIcon } from '../strategies/common/icons';
 import { isCredentialsError } from '../strategies/strategyView';
 import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import SignalsFeed, { SignalFilter } from './SignalsFeed';
 import LiveTpStatus from './LiveTpStatus';
+import BotActivity from './BotActivity';
 import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, buildBotKpis, describeParams } from './botView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
@@ -33,6 +35,52 @@ function ParamRows({ rows }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+const underlyingsText = (bot) => (bot.underlyings?.length ? bot.underlyings : [bot.underlying]).join(' · ');
+
+// Menú «Probar señal ▾»: simula una señal alcista o bajista solo en sombra.
+// Con varios subyacentes cada entrada lleva el suyo («Alcista · ETH»).
+function SimulateMenu({ bot, onSimulate, busy, mobile }) {
+  const [open, setOpen] = useState(false);
+  if (!onSimulate) return null;
+  const paused = bot.mode === 'paused';
+  const multi = bot.underlyings?.length > 1;
+  const choose = (direction, underlying) => {
+    setOpen(false);
+    if (multi) onSimulate(direction, underlying);
+    else onSimulate(direction);
+  };
+  return (
+    <div className={styles.simMenu} onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}>
+      <button
+        type="button"
+        className={`${ui.btn} ${mobile ? styles.touchBtn : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={paused || busy}
+        title={paused ? 'Pasa el bot a Sombra para simular' : 'Simula una señal solo en sombra; no envía órdenes reales'}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Probar señal ▾
+      </button>
+      {open && !paused && (
+        <div role="menu" aria-label="Probar señal" className={styles.simMenuList}>
+          {(multi ? bot.underlyings : [null]).flatMap((u) => [['bullish', 'Alcista'], ['bearish', 'Bajista']].map(([dir, text]) => (
+            <button
+              key={`${dir}-${u}`}
+              type="button"
+              role="menuitem"
+              className={`${ui.btn} ${styles.touchBtn}`}
+              onClick={() => choose(dir, u)}
+            >
+              {u ? `${text} · ${u}` : text}
+            </button>
+          )))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -83,15 +131,25 @@ export default function BotDetail({
   unlinking = false,
   onModeSelect,
   onEdit,
+  onClone,
   onDelete,
+  cloning = false,
   onUnlink,
   onBack,
+  onClosePosition,
+  onCloseAll,
+  onCancelOrder,
+  onSimulate,
+  actionBusy = false,
+  actionNotice = null,
 }) {
   const kpis = useMemo(() => buildBotKpis(bot, stats), [bot, stats]);
   const desc = useMemo(() => describeParams(bot), [bot]);
   const info = STRUCTURE_INFO[bot.structure];
   const isLive = bot.mode === 'live';
+  const backtestHref = `/opciones?tab=backtesting&strategyId=${encodeURIComponent(bot.id)}`;
   const p = bot.params || {};
+  const activity = { bot, mobile, onClosePosition, onCloseAll, onCancelOrder, busy: actionBusy };
 
   const liveWarning = isLive && (
     <p className={`${ui.alert} ${ui.alertWarn}`}>
@@ -105,6 +163,12 @@ export default function BotDetail({
   );
   const loadAlert = loadError && (
     <p className={`${ui.alert} ${ui.alertError}`} role="alert">No se pudo actualizar el detalle: {loadError.message}</p>
+  );
+  // Resultado de la última cancelación de orden (éxito o error).
+  const noticeAlert = actionNotice && (
+    <p className={`${ui.alert} ${actionNotice.error ? ui.alertError : ui.alertInfo}`} role={actionNotice.error ? 'alert' : 'status'}>
+      {actionNotice.message}
+    </p>
   );
   const unlinkAlert = unlinkError && (
     <p className={`${ui.alert} ${ui.alertError}`} role="alert">No se pudo desvincular la alerta: {unlinkError.message}</p>
@@ -122,8 +186,14 @@ export default function BotDetail({
           </button>
           <div className={styles.mobileDetailTitle}>
             <span className={styles.mobileDetailName}>{bot.name}</span>
-            <span className={styles.mobileDetailSub}>{bot.underlying} · {info.shorter}</span>
+            <span className={styles.mobileDetailSub}>{underlyingsText(bot)} · {info.shorter}</span>
           </div>
+          <Link to={backtestHref} className={`${ui.iconBtn} ${styles.touchBtn}`} aria-label="Backtestear este bot">
+            <BacktestIcon size={20} />
+          </Link>
+          <button type="button" className={ui.iconBtn} onClick={onClone} disabled={cloning} aria-label="Clonar bot">
+            <CopyIcon size={20} />
+          </button>
           <button type="button" className={ui.iconBtn} onClick={onDelete} aria-label="Eliminar bot">
             <TrashIcon size={20} />
           </button>
@@ -133,6 +203,7 @@ export default function BotDetail({
           <ModeError error={modeError} />
           {liveWarning}
           {loadAlert}
+          {noticeAlert}
           <LiveTpStatus bot={bot} />
           <div className={ui.tileGrid}>
             <div className={ui.tile}>
@@ -146,14 +217,16 @@ export default function BotDetail({
               <span className={`${ui.tileValue} ${ui[`tone_${kPnl.tone}`]}`}>{kPnl.value}</span>
             </div>
           </div>
+          <BotActivity {...activity} part="top" />
           <section className={styles.mobileSection}>
             <h2 className={styles.mobileH2}>Al recibir la señal</h2>
             <span className={styles.structurePill}>{info.label}</span>
-            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} compact />
+            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} compact />
             <AlertRows alerts={bot.alerts} />
             <button type="button" className={ui.btn} onClick={onEdit}>
               <PencilIcon size={18} /> Alertas, salidas y riesgo
             </button>
+            <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
           </section>
           <section className={styles.mobileSection}>
             <div className={styles.sectionHead}>
@@ -162,6 +235,7 @@ export default function BotDetail({
             <SignalFilter value={signalsFilter} onChange={onSignalsFilter} />
             <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} mobile />
           </section>
+          <BotActivity {...activity} part="bottom" />
         </div>
       </div>
     );
@@ -173,14 +247,20 @@ export default function BotDetail({
         <div className={styles.detailTitle}>
           <h2 className={styles.h2}>{bot.name}</h2>
           <span className={ui.muted} style={{ fontSize: 13 }}>
-            Opera {bot.underlying} cuando se dispara una de sus alertas · {info.short}
-            {bot.status ? ` · ${bot.status}` : ''}
+            Opera {underlyingsText(bot)} cuando se dispara una de sus alertas · {info.short}
+            {bot.status ? ` · ${bot.statusLabel}` : ''}
           </span>
         </div>
         <div className={styles.detailActions}>
           <ModeSwitch value={bot.mode} onSelect={onModeSelect} disabled={!!modePending} pending={modePending} labels={BOT_MODE_LABEL} />
+          <Link to={backtestHref} className={ui.btn} title="Simula este bot con las alertas históricas">
+            <BacktestIcon size={16} /> Backtestear
+          </Link>
           <button type="button" className={ui.iconBtn} onClick={onEdit} aria-label="Editar bot" title="Editar">
             <PencilIcon size={18} />
+          </button>
+          <button type="button" className={ui.iconBtn} onClick={onClone} disabled={cloning} aria-label="Clonar bot" title="Clonar (se crea en sombra)">
+            <CopyIcon size={18} />
           </button>
           <button type="button" className={ui.iconBtn} onClick={onDelete} aria-label="Eliminar bot" title="Eliminar">
             <TrashIcon size={18} />
@@ -191,6 +271,7 @@ export default function BotDetail({
       <ModeError error={modeError} />
       {liveWarning}
       {loadAlert}
+      {noticeAlert}
       <LiveTpStatus bot={bot} />
 
       <div className={ui.kpiGrid}>
@@ -203,6 +284,8 @@ export default function BotDetail({
         ))}
       </div>
 
+      <BotActivity {...activity} part="top" />
+
       <div className={styles.twoCol}>
         <div className={`${ui.panel} ${styles.col}`}>
           <div className={ui.panelHead}>
@@ -211,7 +294,10 @@ export default function BotDetail({
           </div>
           {unlinkAlert}
           <AlertRows alerts={bot.alerts} onUnlink={onUnlink} unlinking={unlinking} />
-          <button type="button" className={ui.btn} onClick={onEdit}>Vincular alerta…</button>
+          <div className={styles.simRow}>
+            <button type="button" className={ui.btn} onClick={onEdit}>Vincular alerta…</button>
+            <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} />
+          </div>
           <p className={styles.note}>
             Solo se listan alertas alcistas o bajistas cuyo activo tiene opciones en Binance (BTC, ETH, BNB, SOL, XRP, DOGE). Las neutrales no operan.
           </p>
@@ -221,7 +307,7 @@ export default function BotDetail({
             <h3 className={ui.h3}>2 · Qué hacer con la señal</h3>
             <span className={styles.structurePill}>{info.label}</span>
           </div>
-          <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} />
+          <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} />
           <ParamRows rows={desc.entry} />
         </div>
       </div>
@@ -244,6 +330,8 @@ export default function BotDetail({
         </div>
         <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} />
       </div>
+
+      <BotActivity {...activity} part="bottom" />
     </section>
   );
 }

@@ -42,6 +42,17 @@ export function sourceAvailable(source, underlying) {
   return source !== 'dvol' || DVOL_UNDERLYINGS.includes(String(underlying || '').toUpperCase());
 }
 
+export const BOT_SOURCE_REASON = 'Los bots solo admiten DVOL o volatilidad realizada: la IV registrada no cubre las alertas históricas.';
+
+// Texto del resumen de señales de un backtest de bot (`result.signals`, de primer nivel).
+export function signalsSummary(signals) {
+  if (!signals || typeof signals !== 'object') return null;
+  const received = toNumber(signals.received);
+  const traded = toNumber(signals.traded);
+  if (received === null) return null;
+  return `Señales: ${received} recibidas · ${traded ?? 0} operadas`;
+}
+
 const DAY_MS = 86400000;
 const pad = (n) => String(n).padStart(2, '0');
 

@@ -166,7 +166,7 @@ export default function OptionsPage() {
         )}
         {tab === 'strategies' && <StrategiesTab {...shared} />}
         {tab === 'auto' && <AutoTradingTab {...shared} />}
-        {tab === 'backtesting' && <BacktestingTab {...shared} />}
+        {tab === 'backtesting' && <BacktestingTab {...shared} initialStrategyId={params.get('strategyId')} />}
       </div>
 
       {isMobile && (

@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Sheet from '../strategies/common/Sheet';
-import { ChoiceField, FieldGroup, NumberField, TextField } from '../strategies/common/Fields';
+import { ChoiceField, FieldGroup, MultiChoiceField, NumberField, TextField } from '../strategies/common/Fields';
 import { UNDERLYINGS } from '../strategies/strategyView';
 import { autoBotsApi } from '../autoTradingApi';
 import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import {
-  NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, TAKE_PROFIT_MODES, alertMeta, buildBotPayload,
-  initialBotForm, normalizeAlert, structureLabels, validateBotForm, withStructure,
+  NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, ATR_BAND_INTERVALS, ATR_BAND_NOTE, ATR_BAND_SWITCH_WARNING, alertMeta, buildBotPayload,
+  coveredList, initialBotForm, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
+import { formatNumber } from '../strategies/common/format';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
 
@@ -22,8 +23,8 @@ function CheckGlyph() {
 }
 
 // Alertas elegibles (no neutrales y del subyacente) como casillas grandes.
-function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, onRetry, invalid }) {
-  if (loading && !alerts.length) return <p className={ui.empty}>Cargando alertas de {underlying}…</p>;
+function AlertPicker({ underlyings, alerts, loading, error, selected, onToggle, onRetry, invalid }) {
+  if (loading && !alerts.length) return <p className={ui.empty}>Cargando alertas de {underlyings.join(', ')}…</p>;
   if (error && !alerts.length) {
     return (
       <div className={`${ui.alert} ${ui.alertError}`} role="alert">
@@ -36,16 +37,17 @@ function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, o
     return (
       <div className={styles.alertEmpty}>
         <p>
-          No tienes alertas alcistas o bajistas de {underlying}. Las neutrales no operan.
+          No tienes alertas alcistas o bajistas de {underlyings.join(', ')}. Las neutrales no operan.
         </p>
         <Link to="/alertas" className={`${ui.btn} ${ui.btnSmall}`}>Crear o editar alertas</Link>
       </div>
     );
   }
   return (
-    <ul className={`${styles.alertPick} ${invalid ? styles.alertPickInvalid : ''}`} aria-label={`Alertas de ${underlying}`}>
+    <ul className={`${styles.alertPick} ${invalid ? styles.alertPickInvalid : ''}`} aria-label={`Alertas de ${underlyings.join(', ')}`}>
       {alerts.map((a) => {
         const on = selected.includes(a.id);
+        const covers = coveredList(a, underlyings);
         return (
           <li key={a.id}>
             <button
@@ -59,6 +61,9 @@ function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, o
               <span className={styles.alertPickText}>
                 <span className={styles.alertPickName}>{a.name}</span>
                 {alertMeta(a) && <span className={styles.alertPickMeta}>{alertMeta(a)}</span>}
+                {underlyings.length > 1 && covers.length > 0 && (
+                  <span className={styles.alertPickMeta}>Cubre {covers.join(', ')}</span>
+                )}
               </span>
               <DirectionChip direction={a.direction} />
             </button>
@@ -69,8 +74,8 @@ function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, o
   );
 }
 
-// Crear o editar un bot. Al crear se elige el subyacente; al editar no
-// (PUT /options/auto-bots/:id no lo admite).
+// Crear o editar un bot. Los subyacentes son de selección múltiple; quitar
+// uno con posiciones abiertas lo rechaza el servidor (409) y se muestra aquí.
 export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel, onSubmit }) {
   const editing = !!bot;
   const [form, setForm] = useState(() => initialBotForm({ bot, underlying }));
@@ -78,8 +83,9 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState(null);
-  const [eligible, setEligible] = useState({ loading: false, error: null, list: [], underlying: null });
+  const [eligible, setEligible] = useState({ loading: false, error: null, list: [], key: null });
   const reqId = useRef(0);
+  const underlyingsKey = form.underlyings.join(',');
 
   useEffect(() => {
     if (!open) return;
@@ -94,22 +100,22 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
 
   const loadEligible = (u) => {
     const id = ++reqId.current;
-    setEligible((e) => ({ ...e, loading: true, error: null, underlying: u, list: e.underlying === u ? e.list : [] }));
+    setEligible((e) => ({ ...e, loading: true, error: null, key: u, list: e.key === u ? e.list : [] }));
     autoBotsApi.eligibleAlerts(u)
       .then((data) => {
         if (id !== reqId.current) return;
-        setEligible({ loading: false, error: null, underlying: u, list: (Array.isArray(data) ? data : []).map(normalizeAlert) });
+        setEligible({ loading: false, error: null, key: u, list: (Array.isArray(data) ? data : []).map(normalizeAlert) });
       })
       .catch((err) => {
-        if (id === reqId.current) setEligible({ loading: false, error: err, underlying: u, list: [] });
+        if (id === reqId.current) setEligible({ loading: false, error: err, key: u, list: [] });
       });
   };
 
   useEffect(() => {
-    if (!open || !form.underlying) return;
-    loadEligible(form.underlying);
+    if (!open || !underlyingsKey) return;
+    loadEligible(underlyingsKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, form.underlying]);
+  }, [open, underlyingsKey]);
 
   // Al editar se muestran también las alertas ya vinculadas aunque hayan
   // dejado de ser elegibles (para poder desvincularlas).
@@ -123,16 +129,26 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
     return list;
   })();
 
+  const validate = (f) => validateBotForm(f, { alerts: alertOptions });
+
   const update = (patch) => {
     const next = { ...form, ...patch };
     setForm(next);
-    if (submitted) setErrors(validateBotForm(next));
+    if (submitted) setErrors(validate(next));
   };
 
-  const pickUnderlying = (u) => {
-    if (u === form.underlying) return;
-    // Las alertas son de un activo concreto: al cambiar de subyacente se vacían.
-    update({ underlying: u, alertIds: [] });
+  const toggleUnderlying = (u) => {
+    const on = form.underlyings.includes(u);
+    if (on && form.underlyings.length === 1) return; // al menos uno
+    const underlyings = on ? form.underlyings.filter((x) => x !== u) : [...form.underlyings, u];
+    // Se sueltan las alertas marcadas que ya no cubren ninguno de los elegidos.
+    const alertIds = on
+      ? form.alertIds.filter((id) => {
+        const a = alertOptions.find((x) => x.id === id);
+        return !a || coveredList(a, underlyings).length > 0;
+      })
+      : form.alertIds;
+    update({ underlyings, alertIds });
   };
 
   const toggleAlert = (id) => {
@@ -142,15 +158,21 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
 
   const pickStructure = (s) => {
     if (s === form.structure) return;
-    const next = withStructure(form, s);
+    const next = withStructure(form, s, { editing });
     setForm(next);
-    if (submitted) setErrors(validateBotForm(next));
+    if (submitted) setErrors(validate(next));
+  };
+
+  const pickTakeProfitMode = (mode) => {
+    const next = withTakeProfitMode(form, mode);
+    setForm(next);
+    if (submitted) setErrors(validate(next));
   };
 
   const submit = async (e) => {
     e?.preventDefault?.();
     setSubmitted(true);
-    const found = validateBotForm(form);
+    const found = validate(form);
     setErrors(found);
     if (Object.keys(found).length) return;
     setSaving(true);
@@ -165,6 +187,11 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
 
   const labels = structureLabels(form.structure);
   const buy = form.structure === 'buy_with';
+  const atrBand = form.takeProfitMode === 'atr_band';
+  const perSignal = perSignalBudget(form);
+  const hasBudget = form.budgetUsdt !== null && form.budgetUsdt !== undefined && form.budgetUsdt !== '';
+  const hasOpenPositions = (bot?.positions || []).some((p) => p.closedAt == null);
+  const switchingToAtr = editing && atrBand && bot?.params?.takeProfitMode !== 'atr_band' && hasOpenPositions;
   const errorCount = Object.keys(errors).length;
   const onStructureKey = (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -177,7 +204,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
       open={open}
       title={editing ? 'Editar bot' : 'Nuevo bot'}
       description={editing
-        ? `${bot.underlying} · los cambios se aplican a la próxima señal.`
+        ? `${(bot.underlyings?.length ? bot.underlyings : [bot.underlying]).join(' · ')} · los cambios se aplican a la próxima señal.`
         : 'Se crea en modo sombra: opera con llenados simulados hasta que lo pases a Real.'}
       onClose={onCancel}
       closeDisabled={saving}
@@ -201,33 +228,27 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             placeholder="p. ej. Momentum BTC (MACD 15m)"
             maxLength={NAME_MAX + 20}
           />
-          {editing ? (
-            <div className={styles.staticRow}>
-              <span>Subyacente</span>
-              <span className={ui.mono}>{form.underlying}</span>
-            </div>
-          ) : (
-            <ChoiceField
-              label="Subyacente"
-              options={UNDERLYINGS.map((u) => ({ value: u, label: u }))}
-              value={form.underlying}
-              onChange={pickUnderlying}
-              error={errors.underlying}
-              columns={3}
-            />
-          )}
+          <MultiChoiceField
+            label="Subyacentes"
+            help="Puedes elegir varios: el bot opera cada uno cuando la alerta lo incluye"
+            options={UNDERLYINGS.map((u) => ({ value: u, label: u }))}
+            value={form.underlyings}
+            onToggle={toggleUnderlying}
+            error={errors.underlyings}
+            columns={3}
+          />
         </FieldGroup>
 
         <fieldset className={styles.fieldset}>
           <legend className={styles.legend}>1 · Señales (alertas)</legend>
           <AlertPicker
-            underlying={form.underlying}
+            underlyings={form.underlyings}
             alerts={alertOptions}
             loading={eligible.loading}
             error={eligible.error}
             selected={form.alertIds}
             onToggle={toggleAlert}
-            onRetry={() => loadEligible(form.underlying)}
+            onRetry={() => loadEligible(underlyingsKey)}
             invalid={!!errors.alertIds}
           />
           {errors.alertIds && <span className={styles.fieldError} role="alert">{errors.alertIds}</span>}
@@ -318,44 +339,142 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             onChange={(v) => update({ contractCount: v })}
           />
           <NumberField
-            label="Capital asignado"
-            help="Se reparte por igual. En compras limita prima; en ventas limita margen estimado. Vacío = usa la cantidad configurada."
+            label="Presupuesto total"
+            help={perSignal !== null
+              ? `Hasta ${formatNumber(perSignal, { decimals: 2, minDecimals: 0 })} USDT por señal`
+              : 'Vacío = sin presupuesto total (usa el capital por entrada). Las órdenes pendientes también reservan.'}
             unit="USDT"
-            value={form.capitalUsdt}
+            value={form.budgetUsdt}
             min={0}
             step={10}
-            error={errors.capitalUsdt}
-            onChange={(v) => update({ capitalUsdt: v })}
+            error={errors.budgetUsdt}
+            onChange={(v) => update({ budgetUsdt: v })}
           />
+          {hasBudget && (
+            <NumberField
+              label="Fracciones"
+              help="Cada señal usa como máximo una fracción; cambiarlo solo afecta a nuevas entradas"
+              value={form.budgetFractions}
+              min={1}
+              max={20}
+              step={1}
+              integer
+              error={errors.budgetFractions}
+              onChange={(v) => update({ budgetFractions: v })}
+            />
+          )}
+          {!hasBudget && (
+            <NumberField
+              label="Capital asignado"
+              help="Se reparte por igual. En compras limita prima; en ventas limita margen estimado. Vacío = usa la cantidad configurada."
+              unit="USDT"
+              value={form.capitalUsdt}
+              min={0}
+              step={10}
+              error={errors.capitalUsdt}
+              onChange={(v) => update({ capitalUsdt: v })}
+            />
+          )}
+          <NumberField
+            label="Spread máx. (%)"
+            help="Descarta contratos con (ask − bid) / mid mayor a esto. Vacío = sin filtro"
+            unit="%"
+            value={form.maxSpreadPct}
+            min={0}
+            max={200}
+            step={1}
+            error={errors.maxSpreadPct}
+            onChange={(v) => update({ maxSpreadPct: v })}
+          />
+          {buy && (
+            <NumberField
+              label="Apalancamiento mín. (×)"
+              help="Spot / ask del contrato. Vacío = sin filtro"
+              unit="×"
+              value={form.minLeverage}
+              min={0}
+              max={1000}
+              step={1}
+              error={errors.minLeverage}
+              onChange={(v) => update({ minLeverage: v })}
+            />
+          )}
           <NumberField
             label="Cantidad máxima por contrato"
-            unit={form.underlying}
+            unit={form.underlyings.join(' · ')}
             value={form.quantity}
             min={0.0001}
             step={0.01}
             error={errors.quantity}
             onChange={(v) => update({ quantity: v })}
           />
-          <ChoiceField
+          {!atrBand && <ChoiceField
             label="Si llega la señal contraria"
             help={(ON_OPPOSITE.find((o) => o.value === form.onOpposite) || ON_OPPOSITE[0]).help}
             options={ON_OPPOSITE.map((o) => ({ value: o.value, label: o.label }))}
             value={form.onOpposite}
             onChange={(v) => update({ onOpposite: v })}
             columns={3}
-          />
+          />}
         </FieldGroup>
 
         <FieldGroup title="3 · Salidas">
           <ChoiceField
             label="Tipo de Take Profit"
-            options={TAKE_PROFIT_MODES.map((m) => ({ value: m.value, label: m.label }))}
+            options={takeProfitModesFor(form.structure).map((m) => ({ value: m.value, label: m.label }))}
             value={form.takeProfitMode}
-            onChange={(v) => update({ takeProfitMode: v })}
+            onChange={pickTakeProfitMode}
             error={errors.takeProfitMode}
-            columns={2}
+            columns={buy ? 3 : 2}
           />
-          {form.takeProfitMode === 'volatility' ? (
+          {atrBand ? (
+            <>
+              <details className={styles.note}>
+                <summary aria-label="Información sobre la banda ATR">ⓘ Cómo se calcula</summary>
+                <p>Banda del indicador «ATR Bands»: último cierre ± multiplicador × ATR. Al llenarse la compra se fija el precio de venta = prima × (1 + distancia a la banda × apalancamiento), con el tope de ganancia, y queda como orden límite en reposo en Binance. No se recalcula.</p>
+              </details>
+              {switchingToAtr && <p className={`${ui.alert} ${ui.alertWarn}`} role="status">{ATR_BAND_SWITCH_WARNING}</p>}
+              <ChoiceField
+                label="Temporalidad de las velas"
+                options={ATR_BAND_INTERVALS.map((i) => ({ value: i, label: i }))}
+                value={form.atrBandInterval}
+                onChange={(v) => update({ atrBandInterval: v })}
+                error={errors.atrBandInterval}
+                columns={5}
+              />
+              <NumberField
+                label="Longitud del ATR"
+                unit="velas"
+                value={form.atrBandLength}
+                min={2}
+                max={100}
+                integer
+                error={errors.atrBandLength}
+                onChange={(v) => update({ atrBandLength: v })}
+              />
+              <NumberField
+                label="Multiplicador de la banda"
+                value={form.atrBandMultiplier}
+                min={0.25}
+                max={10}
+                step={0.25}
+                error={errors.atrBandMultiplier}
+                onChange={(v) => update({ atrBandMultiplier: v })}
+              />
+              <NumberField
+                label="Tope de ganancia (%)"
+                help="Máximo sobre la prima pagada"
+                unit="%"
+                value={form.tpMaxGainPct}
+                min={10}
+                max={2000}
+                step={10}
+                error={errors.tpMaxGainPct}
+                onChange={(v) => update({ tpMaxGainPct: v })}
+              />
+              <p className={styles.note}>{ATR_BAND_NOTE}</p>
+            </>
+          ) : form.takeProfitMode === 'volatility' ? (
             <>
               <details className={styles.note}>
                 <summary aria-label="Información sobre TP por volatilidad">ⓘ Cómo se calcula</summary>
@@ -394,7 +513,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
               onChange={(v) => update({ takeProfitPct: v })}
             />
           )}
-          <NumberField
+          {!atrBand && <NumberField
             label={labels.stopLoss}
             help={labels.stopLossHelp}
             unit="%"
@@ -404,8 +523,8 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             step={buy ? 5 : 25}
             error={errors.stopLossPct}
             onChange={(v) => update({ stopLossPct: v })}
-          />
-          <NumberField
+          />}
+          {!atrBand && <NumberField
             label="Cerrar antes del venc."
             unit="h"
             value={form.exitHoursBeforeExpiry}
@@ -414,7 +533,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             integer
             error={errors.exitHoursBeforeExpiry}
             onChange={(v) => update({ exitHoursBeforeExpiry: v })}
-          />
+          />}
         </FieldGroup>
 
         <FieldGroup title="4 · Riesgo">
@@ -459,6 +578,18 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
               onChange={(v) => update({ maxMarginUsdt: v })}
             />
           )}
+        </FieldGroup>
+
+        <FieldGroup title="5 · Avisos">
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={form.notifyTrades !== false} onChange={(e) => update({ notifyTrades: e.target.checked })} />
+            <span>Avisar de operaciones por Telegram</span>
+          </label>
+          <label className={styles.checkRow}>
+            <input type="checkbox" checked={form.notifyErrors !== false} onChange={(e) => update({ notifyErrors: e.target.checked })} />
+            <span>Avisar de errores y órdenes bloqueadas</span>
+          </label>
+          <p className={styles.note}>Solo aplica en modo Real. Las alertas de incidentes del ejecutor siempre se envían.</p>
         </FieldGroup>
 
         {submitted && errorCount > 0 && (

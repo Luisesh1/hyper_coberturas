@@ -85,3 +85,132 @@ test('sin posiciones ni órdenes vivas sí se puede pausar una estrategia real',
   await service.setMode(USER, s.id, { mode: 'paused' });
   assert.equal((await repo.getStrategy(USER, s.id)).mode, 'paused');
 });
+
+test('GET detalle de un bot trae solo las órdenes sin finalizar como pendingOrders', async () => {
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  const orders = [
+    { id: 2, purpose: 'standard', action: 'open', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, limitPrice: 12, processedQty: 0.04, status: 'queued', cancelRequested: false, createdAt: NOW - 1000, deadlineAt: NOW + 1000, error: null },
+    { id: 1, purpose: 'standard', action: 'open', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, limitPrice: 11, processedQty: 0.1, status: 'final' },
+  ];
+  const service = createOptionsStrategiesService({
+    repo, now: () => NOW,
+    credentials: { async getClientForUser() { return {}; }, async getLimits() { return {}; } },
+    liveOrders: { async listByStrategy() { return orders; } },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'live' });
+  const detail = await service.get(USER, s.id);
+  assert.equal(detail.pendingOrders.length, 1);
+  const [o] = detail.pendingOrders;
+  assert.equal(o.id, 2);
+  assert.equal(o.price, 12);
+  assert.equal(o.executedQty, 0.04);
+  assert.equal(o.purpose, 'standard');
+  assert.equal(o.deadlineAt, NOW + 1000);
+  assert.equal(o.limitPrice, undefined);
+});
+
+test('GET detalle: closedPositions ordena por cierre desc con motivo y una plantilla ajena no trae pendingOrders', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });
+  const mk = async (symbol, closedAt, closeReason) => {
+    const p = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol, side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 9e6 });
+    await repo.closePosition(p.id, { exitPrice: 12, closedAt, pnlUsdt: 0.2, feesUsdt: 0.01, closeReason });
+  };
+  await mk('ETH-261031-2500-C', NOW - 5000, 'stop_loss');
+  await mk('ETH-261031-2600-C', NOW - 1000, undefined);
+  const open = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2700-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW });
+  const detail = await service.get(USER, s.id);
+  assert.deepEqual(detail.closedPositions.map((p) => p.symbol), ['ETH-261031-2600-C', 'ETH-261031-2500-C']);
+  assert.equal(detail.closedPositions[1].closeReason, 'stop_loss');
+  assert.equal(detail.closedPositions[0].closeReason, null);
+  assert.ok(!detail.closedPositions.some((p) => p.id === open.id));
+  assert.deepEqual(detail.pendingOrders, []);
+
+  const other = await repo.createStrategy({ userId: USER, name: 'y', template: 'short_strangle', underlying: 'BTC', mode: 'shadow' });
+  assert.equal((await service.get(USER, other.id)).pendingOrders, undefined);
+});
+
+test('GET detalle: las posiciones abiertas traen mark, bid y ask; si la cotización falla quedan en null', async () => {
+  const market = {
+    async getChain() { return { spot: 2500 }; },
+    async getQuote(symbol) {
+      if (symbol.endsWith('-2600-C')) throw new Error('sin datos');
+      return { delta: 0.4, mark: 11.5, bid: 11, ask: 12 };
+    },
+  };
+  const { repo, service } = setup({ market });
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2600-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW });
+
+  const detail = await service.get(USER, s.id);
+
+  const ok = detail.positions.find((p) => p.symbol.endsWith('-2500-C'));
+  const bad = detail.positions.find((p) => p.symbol.endsWith('-2600-C'));
+  assert.deepEqual([ok.mark, ok.bid, ok.ask], [11.5, 11, 12]);
+  assert.deepEqual([bad.mark, bad.bid, bad.ask], [null, null, null]);
+  assert.equal(detail.usage.netDelta, null);
+});
+
+test('usage.committedUsdt: con presupuesto, posiciones del libro + entradas pendientes en Real (cálculo compartido)', async () => {
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  let orders = [];
+  const service = createOptionsStrategiesService({
+    repo, now: () => NOW,
+    credentials: { async getClientForUser() { return {}; }, async getLimits() { return {}; } },
+    market: { async getChain() { return { spot: 68000 }; }, async getQuote() { return { delta: 0.3 }; } },
+    liveOrders: { async listByStrategy() { return orders; } },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'live',
+    params: { alertIds: [1], budgetUsdt: 48, budgetFractions: 4 } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
+  // La sombra no cuenta en un bot real.
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
+  orders = [{ id: 1, action: 'open', purpose: 'standard', status: 'active', symbol: 'BTC-261031-71000-C', side: 'BUY', quantity: 0.02, processedQty: 0.01, limitPrice: 1000 }];
+
+  const detail = await service.get(USER, s.id);
+  // 12 (posición) + 0,01 × 1000 (pendiente) = 22.
+  assert.equal(detail.usage.committedUsdt, 22);
+});
+
+test('usage.committedUsdt: null si el bot no tiene presupuesto', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'shadow', params: { alertIds: [1] } });
+  const detail = await service.get(USER, s.id);
+  assert.equal(detail.usage.committedUsdt, null);
+});
+
+test('usage de un bot multi-subyacente: margen y comprometido con el spot del subyacente de cada posición', async () => {
+  const spots = { BTC: 68000, ETH: 3000 };
+  const asked = [];
+  const { repo, service } = setup({
+    market: {
+      async getChain(underlying) { asked.push(underlying); return { spot: spots[underlying] }; },
+      async getQuote() { return { delta: 0.3 }; },
+    },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'm', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [1], underlyings: ['BTC', 'ETH'], structure: 'sell_against', budgetUsdt: 10000 }, mode: 'shadow' });
+  // BTC: 0,01 × (100 + máx(0,15·68000 − 2000, 6800)) = 83. ETH: 0,1 × (10 + máx(0,15·3000 − 200, 300)) = 31.
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'SELL', quantity: 0.01, entryPrice: 100, openedAt: NOW - 3600e3 });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-3200-C', side: 'SELL', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
+
+  const detail = await service.get(USER, s.id);
+  assert.equal(detail.usage.marginUsedUsdt, 114);
+  assert.equal(detail.usage.committedUsdt, 114);
+  assert.deepEqual([...new Set(asked)].sort(), ['BTC', 'ETH']);
+});
+
+test('netDelta es null si las posiciones abiertas abarcan varios subyacentes (unidades distintas)', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'm', template: 'alert_signal', underlying: 'BTC', mode: 'live',
+    params: { alertIds: [1], underlyings: ['BTC', 'ETH'] } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 100, openedAt: NOW - 3600e3 });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
+  assert.equal((await service.get(USER, s.id)).usage.netDelta, null);
+
+  // Un solo subyacente (aunque el bot opere varios): sí se suma.
+  const one = await repo.createStrategy({ userId: USER, name: 'o', template: 'alert_signal', underlying: 'BTC', mode: 'live',
+    params: { alertIds: [1], underlyings: ['BTC', 'ETH'] } });
+  await repo.insertPosition({ strategyId: one.id, userId: USER, mode: 'live', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
+  assert.equal((await service.get(USER, one.id)).usage.netDelta, 0.03);
+});

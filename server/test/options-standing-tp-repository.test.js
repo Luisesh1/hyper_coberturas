@@ -86,12 +86,13 @@ test('watchdog selecciona solo posiciones live maduras sin TP activo y no cuenta
     db: { async query(sql, params) {
       calls.push({ sql, params });
       return { rows: [
-        { id: '100', user_id: '7', strategy_id: '4', opened_at: '120000' },
+        { id: '100', user_id: '7', strategy_id: '4', opened_at: '120000', symbol: SYMBOL, params: '{"takeProfitMode":"atr_band"}' },
       ] };
     } },
   });
   const result = await repo.listUnprotectedLivePositions(400000, 100);
-  assert.deepEqual(result, [{ positionId: 100, userId: 7, strategyId: 4, openedAt: 120000 }]);
+  assert.deepEqual(result, [{ positionId: 100, userId: 7, strategyId: 4, openedAt: 120000,
+    symbol: SYMBOL, params: { takeProfitMode: 'atr_band' } }]);
   assert.deepEqual(calls[0].params, [400000, 100]);
   const sql = calls[0].sql;
   assert.match(sql, /p\.closed_at IS NULL/);
@@ -101,4 +102,32 @@ test('watchdog selecciona solo posiciones live maduras sin TP activo y no cuenta
   assert.match(sql, /o\.status='active'/);
   assert.match(sql, /o\.cancel_requested=FALSE/);
   assert.match(sql, /ORDER BY p\.opened_at/);
+});
+
+test('beginStandingTp: un bot multi-subyacente protege posiciones de cualquiera de sus subyacentes', async () => {
+  const ETH = 'ETH-261030-4000-C';
+  const ethHeld = { ...held, symbol: ETH };
+  const run = async (row) => {
+    const tx = { async query(sql) {
+      if (sql.includes('FROM options_strategies')) return { rows: [row] };
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (sql.includes('FROM options_strategy_positions')) return { rows: [ethHeld] };
+      if (sql.includes('UNION ALL SELECT id FROM options_live_exit_requests')) return { rows: [] };
+      if (sql.includes('SELECT COUNT(*)::int AS n FROM options_live_orders')) return { rows: [{ n: 0 }] };
+      if (sql.includes('INSERT INTO options_live_batches')) return { rows: [{ id: '28' }] };
+      if (sql.includes('INSERT INTO options_live_orders')) return { rows: [{
+        id: '33', batch_id: '28', strategy_id: '4', user_id: '7', action: 'close', position_id: '100',
+        symbol: ETH, side: 'SELL', requested_qty: '0.2', limit_price: '180', processed_qty: '0',
+        client_order_id: 'HCsT0', exchange_order_id: null, status: 'queued', purpose: 'take_profit',
+        created_at: '50000', deadline_at: '100000', updated_at: '50000',
+      }] };
+      throw Error('Unexpected SQL ' + sql);
+    } };
+    const repo = createOptionsLiveOrdersRepository({ db: { transaction: (f) => f(tx) }, now: () => 50000 });
+    return repo.beginStandingTp({ position: { id: 100, strategyId: 4, userId: 7, symbol: ETH, side: 'BUY', quantity: 0.2 }, price: 180, deadlineAt: 100000 });
+  };
+  const base = { id: 4, user_id: 7, mode: 'live', template: 'alert_signal', underlying: 'BTC' };
+  assert.equal(await run(base), null, 'un bot solo BTC no protege ETH');
+  const out = await run({ ...base, params: { underlyings: ['BTC', 'ETH'] } });
+  assert.equal(out?.symbol, ETH);
 });

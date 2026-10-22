@@ -142,3 +142,74 @@ test('markRejected solo devuelve a la cola una orden sending sin id de Binance n
   });
   assert.equal(await repo.markRejected(21, 'rechazo'), false);
 });
+
+test('requestCancel solo marca una orden propia del bot, no final y no TP', async () => {
+  const calls = [];
+  let rows = [{ id: 9, batch_id: 1, strategy_id: 5, user_id: 7, action: 'open', symbol: 'BTC-261030-60000-C',
+    side: 'BUY', requested_qty: '0.1', limit_price: '100', processed_qty: '0', status: 'active',
+    purpose: 'standard', cancel_requested: true, created_at: '1', deadline_at: '2' }];
+  const repo = createOptionsLiveOrdersRepository({
+    db: { async query(sql, params) { calls.push({ sql, params }); return { rows }; } }, now: () => 1234,
+  });
+  const order = await repo.requestCancel({ userId: 7, strategyId: 5, orderId: 9 });
+  assert.equal(order.id, 9);
+  assert.equal(order.cancelRequested, true);
+  const { sql, params } = calls[0];
+  assert.match(sql, /UPDATE options_live_orders SET cancel_requested=TRUE/);
+  assert.match(sql, /user_id=\$2/);
+  assert.match(sql, /strategy_id=\$3/);
+  assert.match(sql, /status<>'final'/);
+  assert.match(sql, /purpose<>'take_profit'/);
+  assert.match(sql, /action='open'/);
+  assert.deepEqual(params, [9, 7, 5, 1234]);
+  rows = [];
+  assert.equal(await repo.requestCancel({ userId: 7, strategyId: 5, orderId: 9 }), null);
+  await assert.rejects(repo.requestCancel({ userId: 7, strategyId: 5, orderId: 'x' }), /Invalid/);
+});
+
+test('hasPendingClose detecta cierres reales no finales o salidas diferidas en posiciones abiertas', async () => {
+  const calls = [];
+  let rows = [{ id: 3 }];
+  const repo = createOptionsLiveOrdersRepository({
+    db: { async query(sql, params) { calls.push({ sql, params }); return { rows }; } },
+  });
+  assert.equal(await repo.hasPendingClose({ userId: 7, strategyId: 5, positionIds: [3, 4] }), true);
+  assert.deepEqual(calls[0].params, [7, 5, [3, 4]]);
+  assert.match(calls[0].sql, /closed_at IS NULL/);
+  assert.match(calls[0].sql, /mode='live'/);
+  assert.match(calls[0].sql, /action='close'/);
+  assert.match(calls[0].sql, /purpose<>'take_profit'/);
+  assert.match(calls[0].sql, /options_live_exit_requests/);
+  rows = [];
+  assert.equal(await repo.hasPendingClose({ userId: 7, strategyId: 5 }), false);
+  assert.deepEqual(calls[1].params, [7, 5, null]);
+});
+
+test('lote: el símbolo debe ser de un subyacente del bot (varios con params.underlyings)', async () => {
+  const ETH = 'ETH-261030-4000-C';
+  const run = async (row) => {
+    const tx = {
+      async query(sql) {
+        if (sql.includes('FROM options_strategies')) return { rows: [row] };
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+        if (sql.includes('INSERT INTO options_live_batches')) return { rows: [{ id: '1' }] };
+        if (sql.includes('INSERT INTO options_live_orders')) return { rows: [{
+          id: '2', batch_id: '1', strategy_id: '5', user_id: '7', action: 'open', position_id: null,
+          symbol: ETH, side: 'BUY', requested_qty: '0.1', limit_price: '100', processed_qty: '0',
+          client_order_id: 'HC1L0', exchange_order_id: null, status: 'queued', purpose: 'standard',
+          created_at: '1000', deadline_at: '601000', updated_at: '1000',
+        }] };
+        return { rows: [] };
+      },
+    };
+    const repo = createOptionsLiveOrdersRepository({ db: { transaction: (callback) => callback(tx) }, now: () => 1000 });
+    return repo.beginBatch({
+      strategy: { id: 5, userId: 7 }, action: 'open', key: 'alert:8:open', deadlineAt: 601000,
+      exchangePositions: [], legs: [{ symbol: ETH, side: 'BUY', quantity: 0.1, price: 100 }],
+    });
+  };
+  const base = { id: 5, user_id: 7, mode: 'live', underlying: 'BTC' };
+  await assert.rejects(run(base), /does not match strategy underlying/);
+  const orders = await run({ ...base, params: { underlyings: ['BTC', 'ETH'] } });
+  assert.equal(orders[0].symbol, ETH);
+});

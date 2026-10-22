@@ -39,6 +39,11 @@ function Decision({ signal }) {
   );
 }
 
+function SimTag({ signal }) {
+  if (!signal.simulated) return null;
+  return <span className={styles.simTag} title="Señal de prueba: solo operó en sombra">Simulada</span>;
+}
+
 function SignalDetail({ detail }) {
   if (!detail) return null;
   return (
@@ -70,6 +75,7 @@ export default function SignalsFeed({ signals, filter, loading = false, error = 
             </span>
             <span className={styles.signalCardRow}>
               <Decision signal={s} />
+              <SimTag signal={s} />
               <span className={styles.signalAlert}>{s.alertName}</span>
             </span>
             <SignalDetail detail={s.detail} />
@@ -92,7 +98,7 @@ export default function SignalsFeed({ signals, filter, loading = false, error = 
               <td>{s.alertName}</td>
               <td><DirectionChip direction={s.direction} /></td>
               <td className={`${ui.mono} ${ui.num}`}>{formatScore(s.score)}</td>
-              <td><Decision signal={s} /></td>
+              <td><Decision signal={s} /> <SimTag signal={s} /></td>
               <td className={styles.signalDetailCell}><SignalDetail detail={s.detail} /></td>
             </tr>
           ))}

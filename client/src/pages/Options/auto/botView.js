@@ -7,6 +7,19 @@ import { normalizeStrategy } from '../strategies/strategyView';
 
 export const BOT_MODE_LABEL = { paused: 'Pausado', shadow: 'Sombra', live: 'Real' };
 
+// Estado del runner (strategies service: waiting | paused | error | in_position;
+// también los motivos de espera del tick).
+export const STATUS_LABEL = {
+  waiting: 'Esperando señal',
+  waiting_signal: 'Esperando señal',
+  paused: 'Pausado',
+  in_position: 'En posición',
+  error: 'Con error',
+  no_quote: 'Sin cotización',
+  no_volatility_tp: 'Sin volatilidad para el objetivo',
+};
+export const statusLabel = (status) => (status ? STATUS_LABEL[status] || 'Sin estado' : '—');
+
 // ── Dirección de una alerta ───────────────────────────────────────────
 export const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
 export const DIRECTION_LABEL = { bullish: 'Alcista', bearish: 'Bajista', neutral: 'Neutral' };
@@ -52,19 +65,39 @@ export const COMMON_DEFAULTS = {
   quantity: 0.01,
   contractCount: 1,
   capitalUsdt: null,
+  budgetUsdt: null,
+  budgetFractions: 4,
   takeProfitMode: 'fixed',
   tpAtrMultiplier: 1,
   tpHorizonHours: 4,
+  atrBandInterval: '1h',
+  atrBandLength: 14,
+  atrBandMultiplier: 2,
+  tpMaxGainPct: 200,
+  maxSpreadPct: null,
+  minLeverage: null,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
   maxOpenPositions: 1,
   maxTradesPerDay: 4,
+  notifyTrades: true,
+  notifyErrors: true,
 };
 
 export const TAKE_PROFIT_MODES = [
+  { value: 'atr_band', label: 'Banda ATR' },
   { value: 'fixed', label: 'Porcentaje fijo' },
   { value: 'volatility', label: 'Volatilidad ATR + IV' },
 ];
+
+// «Banda ATR» solo existe al comprar a favor de la señal.
+export const takeProfitModesFor = (structure) => TAKE_PROFIT_MODES
+  .filter((m) => m.value !== 'atr_band' || normalizeStructure(structure) === 'buy_with');
+
+export const ATR_BAND_INTERVALS = ['5m', '15m', '1h', '4h', '1d'];
+
+export const ATR_BAND_NOTE = 'Sin stop ni salida por tiempo: si no se alcanza el objetivo, la opción se mantiene hasta su vencimiento y puede perderse toda la prima.';
+export const ATR_BAND_SWITCH_WARNING = 'Las posiciones abiertas calcularán su objetivo con el precio actual, no con el de su compra.';
 
 export const ON_OPPOSITE = [
   { value: 'reverse', label: 'Girar', help: 'Cierra y abre en la nueva dirección' },
@@ -116,7 +149,22 @@ export function normalizeAlert(raw = {}) {
     direction: normalizeDirection(raw.direction),
     assetList: Array.isArray(assets) ? assets : String(assets || '').split(',').map((s) => s.trim()).filter(Boolean),
     thresholdPercent: toNumber(pick(raw, 'thresholdPercent', 'threshold_percent')),
+    coveredUnderlyings: Array.isArray(raw.coveredUnderlyings) ? raw.coveredUnderlyings : null,
   };
+}
+
+// Subyacentes que opera un bot: `underlyings` del listado, `params.underlyings`
+// o, en un bot de siempre, solo su `underlying`.
+export function rawBotUnderlyings(raw = {}) {
+  const list = [raw.underlyings, raw.params?.underlyings].find((l) => Array.isArray(l) && l.length);
+  if (list) return list.map((u) => String(u).toUpperCase());
+  return raw.underlying ? [String(raw.underlying).toUpperCase()] : [];
+}
+
+// Subyacentes de `underlyings` que vigila la alerta (por BTCUSDT → BTC).
+export function coveredList(alert, underlyings = []) {
+  if (Array.isArray(alert.coveredUnderlyings)) return underlyings.filter((u) => alert.coveredUnderlyings.includes(u));
+  return underlyings.filter((u) => (alert.assetList || []).some((a) => String(a).toUpperCase().startsWith(u)));
 }
 
 export function alertMeta(alert) {
@@ -138,7 +186,9 @@ export function normalizeBot(raw = {}) {
     name: raw.name || `Bot ${raw.id ?? ''}`.trim(),
     alerts,
     alertIds,
+    underlyings: rawBotUnderlyings(raw),
     structure: normalizeStructure(params.structure),
+    statusLabel: statusLabel(base.status),
     lastSignal: raw.lastSignal || raw.last_signal ? normalizeSignal(raw.lastSignal || raw.last_signal) : null,
   };
 }
@@ -179,6 +229,7 @@ export function normalizeSignal(raw = {}, i = 0) {
     decisionLabel: DECISION_LABEL[decision] || decision || '—',
     tone: DECISION_TONE[decision] || 'skip',
     detail: raw.detail || '',
+    simulated: raw.simulated === true,
     at: toMs(pick(raw, 'createdAt', 'created_at', 'at', 't')),
   };
 }
@@ -189,9 +240,10 @@ export function normalizeSignals(list) {
     .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
 }
 
-// Defensa en el cliente por si el servidor ignora `filter`.
+// Defensa en el cliente por si el servidor ignora `filter`. Las simuladas
+// solo aparecen en «Todas» (con su etiqueta «Simulada»).
 export function filterSignals(signals, filter) {
-  if (filter === 'traded') return signals.filter(isTraded);
+  if (filter === 'traded') return signals.filter((s) => isTraded(s) && !s.simulated);
   if (filter === 'ignored') return signals.filter((s) => s.decision === 'ignored');
   return signals;
 }
@@ -203,7 +255,7 @@ export function latestSignal(bots) {
   let best = null;
   for (const b of bots || []) {
     const s = b.lastSignal;
-    if (!s) continue;
+    if (!s || s.simulated) continue;
     if (!best || (s.at ?? 0) > (best.signal.at ?? 0)) best = { bot: b, signal: s };
   }
   return best;
@@ -215,7 +267,7 @@ const usdtSigned = (v) => (Number.isFinite(v) ? formatUsdt(v, { sign: true }) : 
 const toneOfPnl = (v) => (!Number.isFinite(v) || v === 0 ? 'neutral' : v > 0 ? 'pos' : 'neg');
 
 export function signalStats(signals, now = Date.now()) {
-  const recent = (signals || []).filter((s) => s.at === null || now - s.at <= 30 * DAY_MS);
+  const recent = (signals || []).filter((s) => !s.simulated).filter((s) => s.at === null || now - s.at <= 30 * DAY_MS);
   return {
     total: recent.length,
     bullish: recent.filter((s) => s.direction === 'bullish').length,
@@ -223,6 +275,8 @@ export function signalStats(signals, now = Date.now()) {
     traded: recent.filter(isTraded).length,
   };
 }
+
+export const MIN_TRADES_FOR_WIN_RATE = 5;
 
 // El detalle (GET /options/strategies/:id) trae los KPIs por libro:
 // { shadow: { pnl30dUsdt, cycles, winRatePct }, live: {...} }.
@@ -233,9 +287,18 @@ export function buildBotKpis(bot, stats) {
   const pnlShadow = toNumber(shadow.pnl30dUsdt) ?? bot?.pnlShadow ?? null;
   const pnlLive = toNumber(live.pnl30dUsdt) ?? bot?.pnlLive ?? null;
   const active = bot?.mode === 'live' ? live : shadow;
+  // closedTrades / avgPnlUsdt / maxDrawdownUsdt / longestLosingStreak los
+  // calcula el servidor sobre todas las operaciones cerradas del libro activo.
+  const closedTrades = toNumber(active.closedTrades);
   const cycles = toNumber(active.cycles);
   const winRate = toNumber(active.winRatePct);
   const wins = cycles !== null && winRate !== null ? Math.round((cycles * winRate) / 100) : null;
+  const few = closedTrades !== null && closedTrades < MIN_TRADES_FOR_WIN_RATE;
+  const winsValue = few ? `n/a (${closedTrades} ${closedTrades === 1 ? 'op' : 'ops'})`
+    : wins !== null ? `${wins} / ${cycles}` : formatPct(winRate, { decimals: 0 });
+  const avg = toNumber(active.avgPnlUsdt);
+  const dd = toNumber(active.maxDrawdownUsdt);
+  const streak = toNumber(active.longestLosingStreak) ?? 0;
   return [
     {
       key: 'signals',
@@ -256,9 +319,25 @@ export function buildBotKpis(bot, stats) {
     {
       key: 'wins',
       label: 'Acierto',
-      value: wins !== null ? `${wins} / ${cycles}` : formatPct(winRate, { decimals: 0 }),
+      value: winsValue,
       tone: 'neutral',
-      hint: 'operaciones ganadoras',
+      hint: few ? `mínimo ${MIN_TRADES_FOR_WIN_RATE} operaciones cerradas` : 'operaciones ganadoras',
+    },
+    {
+      key: 'avgPnl',
+      label: 'P&L medio por operación',
+      value: avg !== null ? usdtSigned(avg) : '—',
+      tone: avg !== null ? toneOfPnl(avg) : 'neutral',
+      hint: 'USDT · operaciones cerradas',
+    },
+    {
+      key: 'drawdown',
+      label: 'Peor racha / drawdown',
+      value: dd !== null
+        ? `${dd > 0 ? usdtSigned(-dd) : formatUsdt(0)} · ${streak} ${streak === 1 ? 'seguida' : 'seguidas'}`
+        : '—',
+      tone: dd !== null && dd > 0 ? 'neg' : 'neutral',
+      hint: 'caída máx. y pérdidas seguidas (USDT)',
     },
   ];
 }
@@ -274,7 +353,7 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
     const val = (key) => toNumber(p[key]) ?? defs[key];
     return {
       name: bot.name || '',
-      underlying: bot.underlying || underlying,
+      underlyings: rawBotUnderlyings(bot).length ? rawBotUnderlyings(bot) : [underlying],
       alertIds: [...(bot.alertIds || [])],
       structure,
       targetDelta: Math.abs(val('targetDelta')),
@@ -284,44 +363,96 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       quantity: val('quantity'),
       contractCount: val('contractCount'),
       capitalUsdt: toNumber(p.capitalUsdt),
+      budgetUsdt: toNumber(p.budgetUsdt),
+      budgetFractions: val('budgetFractions'),
       onOpposite: ON_OPPOSITE.some((o) => o.value === p.onOpposite) ? p.onOpposite : defs.onOpposite,
       takeProfitPct: val('takeProfitPct'),
-      takeProfitMode: TAKE_PROFIT_MODES.some((m) => m.value === p.takeProfitMode) ? p.takeProfitMode : 'fixed',
+      takeProfitMode: takeProfitModesFor(structure).some((m) => m.value === p.takeProfitMode) ? p.takeProfitMode : 'fixed',
       tpAtrMultiplier: val('tpAtrMultiplier'),
       tpHorizonHours: val('tpHorizonHours'),
+      atrBandInterval: ATR_BAND_INTERVALS.includes(p.atrBandInterval) ? p.atrBandInterval : COMMON_DEFAULTS.atrBandInterval,
+      atrBandLength: val('atrBandLength'),
+      atrBandMultiplier: val('atrBandMultiplier'),
+      tpMaxGainPct: val('tpMaxGainPct'),
       stopLossPct: val('stopLossPct'),
       exitHoursBeforeExpiry: val('exitHoursBeforeExpiry'),
       maxOpenPositions: val('maxOpenPositions'),
       maxTradesPerDay: val('maxTradesPerDay'),
+      notifyTrades: p.notify?.trades !== false,
+      notifyErrors: p.notify?.errors !== false,
       maxPremiumUsdt: structure === 'buy_with' ? (toNumber(p.maxPremiumUsdt) ?? null) : defs.maxPremiumUsdt,
+      maxSpreadPct: toNumber(p.maxSpreadPct) ?? null,
+      minLeverage: structure === 'buy_with' ? (toNumber(p.minLeverage) ?? null) : null,
       maxMarginUsdt: structure === 'sell_against' ? (toNumber(bot.limits?.maxMarginUsdt) ?? null) : null,
     };
   }
   return {
     name: '',
-    underlying,
+    underlyings: [underlying],
     alertIds: [],
     structure: 'buy_with',
     ...COMMON_DEFAULTS,
     ...STRUCTURE_DEFAULTS.buy_with,
+    // Los bots nuevos que compran a favor nacen con la banda ATR.
+    takeProfitMode: 'atr_band',
   };
 }
 
+// Al salir de «Banda ATR» el servidor había sobrescrito señal contraria,
+// salida por tiempo y stop (ignore / 0): se restauran los valores de la estructura.
+function leaveAtrBand(form, structure) {
+  return {
+    ...form,
+    onOpposite: COMMON_DEFAULTS.onOpposite,
+    exitHoursBeforeExpiry: COMMON_DEFAULTS.exitHoursBeforeExpiry,
+    stopLossPct: STRUCTURE_DEFAULTS[structure].stopLossPct,
+  };
+}
+
+export function withTakeProfitMode(form, mode) {
+  if (mode === form.takeProfitMode) return form;
+  const base = form.takeProfitMode === 'atr_band' ? leaveAtrBand(form, normalizeStructure(form.structure)) : form;
+  return { ...base, takeProfitMode: mode };
+}
+
 // Cambiar de estructura aplica sus valores por defecto (delta, salidas y riesgo).
-export function withStructure(form, structure) {
+// Al pasar a vender se abandona la banda ATR; al editar, comprar no la activa.
+export function withStructure(form, structure, { editing = false } = {}) {
   const s = normalizeStructure(structure);
-  return { ...form, structure: s, ...STRUCTURE_DEFAULTS[s] };
+  let next = form;
+  if (s !== 'buy_with' && form.takeProfitMode === 'atr_band') {
+    next = { ...leaveAtrBand(form, s), takeProfitMode: 'fixed' };
+  } else if (s === 'buy_with' && !editing && form.takeProfitMode === 'fixed') {
+    next = { ...form, takeProfitMode: 'atr_band' };
+  }
+  return { ...next, structure: s, ...STRUCTURE_DEFAULTS[s] };
 }
 
 const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
-export function validateBotForm(form) {
+// Presupuesto total: cada señal compromete como máximo una fracción.
+// null sin presupuesto o con fracciones inválidas.
+export function perSignalBudget({ budgetUsdt, budgetFractions } = {}) {
+  const budget = Number(budgetUsdt);
+  const fractions = Number(budgetFractions);
+  if (!isNum(budgetUsdt) || !(budget > 0) || !Number.isInteger(fractions) || fractions < 1 || fractions > 20) return null;
+  return budget / fractions;
+}
+
+// `alerts`: las alertas elegibles (con su cobertura); si vienen, cada subyacente
+// elegido tiene que estar cubierto por alguna alerta marcada.
+export function validateBotForm(form, { alerts } = {}) {
   const errors = {};
   const name = String(form.name || '').trim();
   if (!name) errors.name = 'Ponle un nombre';
   else if (name.length > NAME_MAX) errors.name = `Máximo ${NAME_MAX} caracteres`;
-  if (!form.underlying) errors.underlying = 'Elige un subyacente';
+  if (!form.underlyings?.length) errors.underlyings = 'Elige un subyacente';
   if (!form.alertIds?.length) errors.alertIds = 'Elige al menos una alerta';
+  else if (alerts && form.underlyings?.length) {
+    const picked = alerts.filter((a) => form.alertIds.includes(a.id));
+    const missing = form.underlyings.find((u) => !picked.some((a) => coveredList(a, [u]).length));
+    if (missing) errors.alertIds = `Ninguna alerta marcada cubre ${missing}`;
+  }
   if (!STRUCTURES.includes(form.structure)) errors.structure = 'Elige qué hacer con la señal';
 
   const range = (key, min, max, { integer = false, minLabel } = {}) => {
@@ -347,23 +478,37 @@ export function validateBotForm(form) {
   }
   range('quantity', 0.0001, 1000000, { minLabel: 'Debe ser mayor que 0' });
   range('contractCount', 1, 10, { integer: true });
-  if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
+  const hasBudget = isNum(form.budgetUsdt);
+  if (hasBudget) {
+    if (Number(form.budgetUsdt) <= 0) errors.budgetUsdt = 'El presupuesto debe ser mayor a 0';
+    range('budgetFractions', 1, 20, { integer: true });
+  } else if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
   if (Number(form.maxOpenPositions) < Number(form.contractCount)) errors.maxOpenPositions = 'Debe cubrir todos los contratos seleccionados';
-  range('takeProfitPct', 1, 1000);
-  if (!TAKE_PROFIT_MODES.some((m) => m.value === form.takeProfitMode)) errors.takeProfitMode = 'Modo de Take Profit inválido';
-  range('tpAtrMultiplier', 0.25, 4);
-  range('tpHorizonHours', 1, 24, { integer: true });
-  range('stopLossPct', 1, 1000);
-  range('exitHoursBeforeExpiry', 0, 168);
+  if (!takeProfitModesFor(form.structure).some((m) => m.value === form.takeProfitMode)) errors.takeProfitMode = 'Modo de Take Profit inválido';
+  if (form.takeProfitMode === 'atr_band') {
+    // Stop, salida por tiempo y señal contraria no existen en este modo.
+    if (!ATR_BAND_INTERVALS.includes(form.atrBandInterval)) errors.atrBandInterval = 'Elige una temporalidad';
+    range('atrBandLength', 2, 100, { integer: true });
+    range('atrBandMultiplier', 0.25, 10);
+    range('tpMaxGainPct', 10, 2000);
+  } else {
+    range('takeProfitPct', 1, 1000);
+    range('tpAtrMultiplier', 0.25, 4);
+    range('tpHorizonHours', 1, 24, { integer: true });
+    range('stopLossPct', 1, 1000);
+    range('exitHoursBeforeExpiry', 0, 168);
+  }
   range('maxOpenPositions', 1, 20, { integer: true });
   range('maxTradesPerDay', 1, 100, { integer: true });
   const riskKey = form.structure === 'sell_against' ? 'maxMarginUsdt' : 'maxPremiumUsdt';
   if (isNum(form[riskKey]) && Number(form[riskKey]) < 0) errors[riskKey] = 'No puede ser negativo';
+  if (isNum(form.maxSpreadPct) && !(Number(form.maxSpreadPct) > 0 && Number(form.maxSpreadPct) <= 200)) errors.maxSpreadPct = 'Entre 0 y 200 (vacío = sin filtro)';
+  if (form.structure === 'buy_with' && isNum(form.minLeverage) && !(Number(form.minLeverage) > 0 && Number(form.minLeverage) <= 1000)) errors.minLeverage = 'Entre 0 y 1000 (vacío = sin filtro)';
   return errors;
 }
 
 // POST /options/auto-bots: { name, underlying, alertIds, params, limits? }.
-// PUT /:id no admite cambiar el subyacente.
+// PUT /:id acepta `underlyings` (quitar uno con posiciones abiertas da 409).
 export function buildBotPayload(form, { editing = false, baseLimits = {} } = {}) {
   const buy = form.structure === 'buy_with';
   const params = {
@@ -374,7 +519,14 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     expiryMaxDays: isNum(form.expiryMaxDays) ? Number(form.expiryMaxDays) : null,
     quantity: Number(form.quantity),
     contractCount: Number(form.contractCount),
-    capitalUsdt: Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
+    // Con presupuesto total el capital por entrada se ignora: no se envía.
+    capitalUsdt: !(Number(form.budgetUsdt) > 0) && Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
+    budgetUsdt: Number(form.budgetUsdt) > 0 ? Number(form.budgetUsdt) : null,
+    // Sin presupuesto el campo de fracciones está oculto: un valor fuera de
+    // rango daría un 400 invisible. Se envía el valor por defecto.
+    budgetFractions: Number(form.budgetFractions) > 0 && Number(form.budgetUsdt) > 0 &&
+      Number.isInteger(Number(form.budgetFractions)) && isNum(form.budgetFractions)
+      ? Number(form.budgetFractions) : COMMON_DEFAULTS.budgetFractions,
     onOpposite: form.onOpposite,
     takeProfitPct: Number(form.takeProfitPct),
     takeProfitMode: form.takeProfitMode,
@@ -384,8 +536,23 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     exitHoursBeforeExpiry: Number(form.exitHoursBeforeExpiry),
     maxOpenPositions: Number(form.maxOpenPositions),
     maxTradesPerDay: Number(form.maxTradesPerDay),
+    notify: { trades: form.notifyTrades !== false, errors: form.notifyErrors !== false },
   };
-  if (buy && Number(form.maxPremiumUsdt) > 0) params.maxPremiumUsdt = Number(form.maxPremiumUsdt);
+  if (buy && form.takeProfitMode === 'atr_band') {
+    // Sin stop: el servidor fuerza onOpposite=ignore y sin salida por tiempo.
+    delete params.stopLossPct;
+    params.onOpposite = 'ignore';
+    params.exitHoursBeforeExpiry = 0;
+    params.atrBandInterval = form.atrBandInterval;
+    params.atrBandLength = Number(form.atrBandLength);
+    params.atrBandMultiplier = Number(form.atrBandMultiplier);
+    params.tpMaxGainPct = Number(form.tpMaxGainPct);
+  }
+  // Opcionales: vacío/0 = apagado → null. Siempre se envían: el servidor
+  // fusiona params al editar y una clave omitida conservaría el valor viejo.
+  params.maxPremiumUsdt = buy && Number(form.maxPremiumUsdt) > 0 ? Number(form.maxPremiumUsdt) : null;
+  params.maxSpreadPct = Number(form.maxSpreadPct) > 0 ? Number(form.maxSpreadPct) : null;
+  params.minLeverage = buy && Number(form.minLeverage) > 0 ? Number(form.minLeverage) : null;
   // 0 o vacío = sin margen propio (sólo el límite global).
   const limits = { ...(baseLimits || {}) };
   if (!buy && Number(form.maxMarginUsdt) > 0) limits.maxMarginUsdt = Number(form.maxMarginUsdt);
@@ -396,8 +563,9 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     alertIds: [...form.alertIds],
     params,
     limits,
+    underlyings: [...form.underlyings],
   };
-  if (!editing) payload.underlying = form.underlying;
+  if (!editing) payload.underlying = form.underlyings[0];
   return payload;
 }
 
@@ -412,6 +580,26 @@ export function describeParams(bot) {
   const opposite = ON_OPPOSITE.find((o) => o.value === p.onOpposite) || ON_OPPOSITE[0];
   const premium = toNumber(p.maxPremiumUsdt);
   const margin = toNumber(bot.limits?.maxMarginUsdt);
+  const capital = toNumber(p.capitalUsdt);
+  const budget = toNumber(p.budgetUsdt);
+  const fractions = v('budgetFractions');
+  const maxSpread = toNumber(p.maxSpreadPct);
+  const minLeverage = toNumber(p.minLeverage);
+  const atr = p.takeProfitMode === 'atr_band' && buy;
+  const exits = atr
+    ? [
+      { key: 'takeProfitPct', label: 'Venta por banda ATR',
+        value: `${p.atrBandInterval || COMMON_DEFAULTS.atrBandInterval} ${formatNumber(v('atrBandLength'), { decimals: 0 })}/${formatNumber(v('atrBandMultiplier'), { decimals: 2, minDecimals: 0 })} · tope +${formatNumber(v('tpMaxGainPct'), { decimals: 0 })} %` },
+      { key: 'stopLossPct', label: 'Sin stop', value: 'se mantiene hasta vencer' },
+    ]
+    : [
+      { key: 'takeProfitPct', label: labels.takeProfit,
+        value: p.takeProfitMode === 'volatility'
+          ? `ATR × ${formatNumber(v('tpAtrMultiplier'), { decimals: 2, minDecimals: 0 })} + IV · horizonte ${formatNumber(v('tpHorizonHours'), { decimals: 0 })} h`
+          : `${buy ? '+' : ''}${formatNumber(v('takeProfitPct'), { decimals: 0 })} % de la prima` },
+      { key: 'stopLossPct', label: labels.stopLoss, value: `${buy ? '−' : ''}${formatNumber(v('stopLossPct'), { decimals: 0 })} % de la prima` },
+      { key: 'exitHoursBeforeExpiry', label: 'Cerrar antes del venc.', value: `${formatNumber(v('exitHoursBeforeExpiry'), { decimals: 0 })} h` },
+    ];
   return {
     entry: [
       { key: 'targetDelta', label: 'Delta objetivo', value: formatNumber(Math.abs(v('targetDelta')), { decimals: 2 }) },
@@ -424,16 +612,19 @@ export function describeParams(bot) {
           : 'Sin límite',
       },
       { key: 'quantity', label: 'Cantidad', value: `${formatNumber(v('quantity'), { decimals: 4, minDecimals: 0 })} ${bot.underlying || ''}`.trim() },
-      { key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true },
+      { key: 'contractCount', label: 'Contratos distintos', value: formatNumber(v('contractCount'), { decimals: 0 }) },
+      budget
+        ? { key: 'budgetUsdt', label: 'Presupuesto total',
+          value: `${formatUsdt(budget, { decimals: 2, minDecimals: 0 })} USDT · ${formatNumber(fractions, { decimals: 0 })} fracciones · hasta ${formatUsdt(budget / fractions, { decimals: 2, minDecimals: 0 })} USDT por señal`,
+          text: true }
+        : { key: 'capitalUsdt', label: 'Capital máx. por entrada', value: capital ? `${formatUsdt(capital, { decimals: 0 })} USDT` : 'sin límite', text: !capital },
+      ...(buy ? [{ key: 'maxPremiumUsdt', label: 'Prima máx.', value: premium ? `${formatUsdt(premium, { decimals: 0 })} USDT` : 'sin límite', text: !premium }] : []),
+      ...(maxSpread > 0 ? [{ key: 'maxSpreadPct', label: 'Spread máx.', value: `${formatNumber(maxSpread, { decimals: 2, minDecimals: 0 })} %` }] : []),
+      ...(buy && minLeverage > 0 ? [{ key: 'minLeverage', label: 'Apalancamiento mín.', value: `${formatNumber(minLeverage, { decimals: 2, minDecimals: 0 })}×` }] : []),
+      // La banda ATR fuerza «ignorar» y ya declara que no hay otras salidas.
+      ...(atr ? [] : [{ key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true }]),
     ],
-    exits: [
-      { key: 'takeProfitPct', label: labels.takeProfit,
-        value: p.takeProfitMode === 'volatility'
-          ? `ATR × ${formatNumber(v('tpAtrMultiplier'), { decimals: 2 })} + IV · ${formatNumber(v('tpHorizonHours'), { decimals: 0 })} h`
-          : `${buy ? '+' : ''}${formatNumber(v('takeProfitPct'), { decimals: 0 })} % de la prima` },
-      { key: 'stopLossPct', label: labels.stopLoss, value: `${buy ? '−' : ''}${formatNumber(v('stopLossPct'), { decimals: 0 })} % de la prima` },
-      { key: 'exitHoursBeforeExpiry', label: 'Cerrar antes del venc.', value: `${formatNumber(v('exitHoursBeforeExpiry'), { decimals: 0 })} h` },
-    ],
+    exits,
     risk: [
       { key: 'maxOpenPositions', label: 'Posiciones abiertas máx.', value: formatNumber(v('maxOpenPositions'), { decimals: 0 }) },
       { key: 'maxTradesPerDay', label: 'Operaciones por día', value: formatNumber(v('maxTradesPerDay'), { decimals: 0 }) },

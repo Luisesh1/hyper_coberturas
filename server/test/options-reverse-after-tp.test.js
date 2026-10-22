@@ -87,3 +87,37 @@ test('bot desactivado o cambio de modo no reabre exposición', async () => {
   });
   assert.equal((await runner.executeDeferredReentry(4, SIGNAL)).status, 'disabled');
 });
+
+test('reentrada de un bot multi-subyacente: abre en el subyacente de la señal; solo bloquean sus posiciones', async () => {
+  const multi = { ...STRATEGY, params: { ...STRATEGY.params, underlyings: ['BTC', 'ETH'], maxOpenPositions: 1 } };
+  let open = [{ id: 1, symbol: 'BTC-261030-63000-C', side: 'BUY', quantity: 0.01, entryPrice: 100 }];
+  const repo = {
+    async getStrategyById() { return multi; },
+    async listOpenPositions() { return open; },
+    async lastOpenedAt() { return null; },
+    async countEventsSince() { return 0; },
+  };
+  const asked = [];
+  const ethChain = { underlying: 'ETH', expiry: '261030', spot: 3000,
+    expiries: [{ code: '261030', dte: 14 }],
+    rows: [{ strike: 3200,
+      call: { symbol: 'ETH-261030-3200-C', ask: 10, bid: 9, delta: 0.35, minQty: 0.01, stepSize: 0.01, maxQty: 10 },
+      put: { symbol: 'ETH-261030-3200-P', ask: 5, bid: 4, delta: -0.6 } }],
+  };
+  const runner = new OptionsStrategyRunner({
+    repo, market: { async getChain(u) { asked.push(u); return ethChain; } },
+    liveExecutor: { enabled: true }, now: () => NOW, logger: silent,
+  });
+  let action = null;
+  runner.executeLive = async (_s, a) => { action = a; return { status: 'submitted' }; };
+  const signal = { ...SIGNAL, underlying: 'ETH' };
+  // maxOpenPositions 1 y una BTC abierta: el máximo es del bot entero.
+  assert.equal((await runner.executeDeferredReentry(4, signal)).status, 'no_valid_entry');
+  multi.params.maxOpenPositions = 2;
+  assert.equal((await runner.executeDeferredReentry(4, signal)).status, 'submitted');
+  assert.deepEqual([...new Set(asked)], ['ETH']);
+  assert.equal(action.legs[0].symbol, 'ETH-261030-3200-C');
+  // Una posición ETH aún abierta sí bloquea la reentrada ETH.
+  open = [...open, { id: 2, symbol: 'ETH-261030-3200-P', side: 'BUY', quantity: 0.01, entryPrice: 5 }];
+  assert.equal((await runner.executeDeferredReentry(4, signal)).status, 'positions_still_open');
+});

@@ -26,10 +26,19 @@ const {
   num,
 } = require('./options-utils');
 const { intrinsic } = require('./options-pricing');
+const { closeLegs } = require('./templates/helpers');
 const { projectTakeProfit } = require('./options-take-profit');
 const { fullSizeFokLimit } = require('./options-fok-depth');
 const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
+const { ensureAtrBandTarget } = require('./options-atr-band-target');
+const { estimateMargin, committedUsdt } = require('./options-committed-capital');
+const { botUnderlyings } = require('./bot-underlyings');
+
+// Cierres por toma de ganancia: con un TP LIMIT residente no se cancela ni
+// se compite con él; deben alcanzar su objetivo con la cotización fresca.
+const TAKE_PROFIT_REASONS = ['take_profit', 'take_profit_volatility', 'take_profit_atr_band'];
+const TARGET_TP_REASONS = ['take_profit_volatility', 'take_profit_atr_band'];
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const RECONCILE_INTERVAL_MS = 60_000;
@@ -40,7 +49,15 @@ function lazyMarket() {
   return {
     getChain: (...args) => load().getChain(...args),
     getQuote: (...args) => load().getQuote(...args),
+    getVolatilityInputs: (...args) => load().getVolatilityInputs(...args),
+    getAtrBand: (...args) => load().getAtrBand(...args),
   };
+}
+
+function lazyLiveOrders() {
+  // eslint-disable-next-line global-require
+  const load = () => require('../../repositories/options-live-orders.repository');
+  return { listByStrategy: (...args) => load().listByStrategy(...args) };
 }
 
 function lazyCredentials() {
@@ -66,23 +83,14 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;');
 }
 
+/** Subyacente de una posición según su símbolo (o `fallback`). */
+function positionUnderlying(position, fallback) {
+  return parseSymbol(position.symbol)?.underlying || String(fallback || '').toUpperCase();
+}
+
 function utcDayStart(ms) {
   const d = new Date(ms);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
-/**
- * Margen estimado de una pata (USDT). Vendida: prima + máx(15 % del spot −
- * lo que esté OTM, 10 % del spot), por unidad. Comprada: la prima pagada.
- */
-function estimateMargin({ side, type, strike, price, quantity, spot }) {
-  const qty = Number(quantity);
-  if (side === 'BUY') return Number(price) * qty;
-  // Sin spot el margen de una venta es desconocido: NaN obliga a bloquear
-  // en vez de quedarse solo con la prima.
-  if (!(Number(spot) > 0)) return NaN;
-  const otm = type === 'C' ? Math.max(strike - spot, 0) : Math.max(spot - strike, 0);
-  return qty * (Number(price) + Math.max(0.15 * spot - otm, 0.1 * spot));
 }
 
 /** Delta neta en unidades del subyacente (vender una call resta delta). */
@@ -96,6 +104,11 @@ class OptionsStrategyRunner {
     this.repo = deps.repo || defaultRepo;
     this.market = deps.market || lazyMarket();
     this.credentials = deps.credentials || lazyCredentials();
+    // Órdenes de entrada pendientes (reserva del presupuesto). Con un repo
+    // inyectado (pruebas) no se abre el ledger PostgreSQL salvo que se pase.
+    this.liveOrders = deps.liveOrders || (this.repo === defaultRepo
+      ? lazyLiveOrders()
+      : { listByStrategy: async () => [] });
     this.notify = deps.notify || notifyTelegram;
     this.logger = deps.logger || logger;
     this.now = deps.now || Date.now;
@@ -181,10 +194,42 @@ class OptionsStrategyRunner {
    * mismo contexto que el tick. Devuelve las acciones del template por modo y
    * lo que produjeron: llenados (`booked`) y motivos de skip/hold/error.
    */
-  async runForSignal(strategy, signal) {
+  async runForSignal(strategy, signal, { shadowOnly = false } = {}) {
     const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
-    const actions = await this.withLock(strategy.id, () => this.runStrategy(strategy, tickCtx));
+    const actions = await this.withLock(strategy.id,
+      () => this.runStrategy(strategy, tickCtx, { shadowOnly }));
     return { actions, produced: tickCtx.produced };
+  }
+
+  /**
+   * Cierre manual (desde la UI) de las posiciones abiertas de un modo, o
+   * solo de `positionIds`. Pasa por el mismo ejecutor que un cierre del
+   * template: en sombra se llena contra el libro; en real aplica el camino
+   * de TP residente (`requestProtectedExit`) igual que un stop.
+   * Las posiciones se leen DENTRO del lock: una segunda llamada concurrente
+   * ve lo que dejó la primera y no cierra dos veces.
+   */
+  async closeManually(strategy, { mode, positionIds } = {}) {
+    if (mode !== 'shadow' && mode !== 'live') throw new Error(`Modo de cierre inválido: ${mode}`);
+    const tickCtx = { now: this.now(), chains: new Map(), signal: null, produced: [] };
+    return this.withLock(strategy.id, async () => {
+      const wanted = Array.isArray(positionIds) ? new Set(positionIds.map(Number)) : null;
+      const open = await this.repo.listOpenPositions(strategy.id, mode);
+      const targets = wanted ? open.filter((p) => wanted.has(Number(p.id))) : open;
+      if (!targets.length) return { status: 'nothing_to_close', produced: tickCtx.produced };
+      const market = await this.strategyMarket(strategy, tickCtx);
+      const ctx = await this.modeContext(strategy, mode, tickCtx, market, open);
+      const ids = new Set(targets.map((p) => Number(p.id)));
+      const positions = ctx.positions.filter((p) => ids.has(Number(p.id)));
+      const action = { type: 'close', reason: 'manual', detail: 'Cierre manual', legs: closeLegs(positions) };
+      if (mode === 'shadow') {
+        const event = await this.executeShadow(strategy, action, ctx);
+        return { status: event ? 'closed' : 'not_submitted', produced: tickCtx.produced };
+      }
+      const result = await this.executeLive(strategy, action, ctx);
+      const pending = ['submitted', 'tp_cancel_requested', 'attention'].includes(result?.status);
+      return { status: pending ? 'pending' : 'not_submitted', produced: tickCtx.produced };
+    });
   }
 
   /**
@@ -201,21 +246,32 @@ class OptionsStrategyRunner {
       const template = templates.getTemplate(strategy.template);
       const params = templates.validateParams(strategy.template, strategy.params);
       if (params.onOpposite !== 'reverse') return { status: 'mode_changed' };
-      const positions = await this.repo.listOpenPositions(strategy.id, 'live');
-      if (positions.length) return { status: 'positions_still_open' };
-      const { base, chain } = await this.targetChain(strategy, params, tickCtx);
+      let underlying;
+      try {
+        underlying = this.signalUnderlying(strategy, template, signal);
+      } catch {
+        return { status: 'underlying_removed' };
+      }
+      // Solo bloquean las posiciones del subyacente que gira; las de otros
+      // subyacentes del bot cuentan para el máximo y el presupuesto.
+      const all = await this.repo.listOpenPositions(strategy.id, 'live');
+      if (all.some((p) => positionUnderlying(p, strategy.underlying) === underlying)) {
+        return { status: 'positions_still_open' };
+      }
+      const { base, chain } = await this.targetChain(strategy, params, tickCtx, underlying);
       const spot = num(chain?.spot) ?? num(base?.spot);
       const actions = template.evaluate({
-        now: tickCtx.now, signal, spot, chain, positions: [],
+        now: tickCtx.now, signal, spot, chain, positions: [], openCountAll: all.length,
         params, mode: 'live',
         lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
         tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
           utcDayStart(tickCtx.now)),
+        committedUsdt: await this.committedFor(strategy, 'live', params, all, { spot, underlying, tickCtx }),
       });
       const open = actions.find((a) => a.type === 'open');
       if (!open) return { status: 'no_valid_entry' };
       return await this.executeLive(strategy, open, {
-        ...tickCtx, spot, params, positions: [], mode: 'live',
+        ...tickCtx, spot, underlying, params, positions: [], mode: 'live',
       }) || { status: 'not_submitted' };
     });
   }
@@ -235,8 +291,8 @@ class OptionsStrategyRunner {
     return num(chain?.spot);
   }
 
-  async targetChain(strategy, params, tickCtx) {
-    const base = await this.chainFor(strategy.underlying, null, tickCtx);
+  async targetChain(strategy, params, tickCtx, underlying = strategy.underlying) {
+    const base = await this.chainFor(underlying, null, tickCtx);
     // El rango pertenece al bot por señales: no se amplía para forzar entradas.
     // Sin rango la selección sigue igual (el más cercano a expiryDays).
     const minDays = params.expiryMinDays;
@@ -246,7 +302,7 @@ class OptionsStrategyRunner {
       : base?.expiries;
     const pick = templates.pickExpiry(expiries, params.expiryDays);
     if (!pick) return { base, chain: null };
-    const chain = pick.code === base.expiry ? base : await this.chainFor(strategy.underlying, pick.code, tickCtx);
+    const chain = pick.code === base.expiry ? base : await this.chainFor(underlying, pick.code, tickCtx);
     return { base, chain };
   }
 
@@ -302,22 +358,136 @@ class OptionsStrategyRunner {
     }));
   }
 
+  /**
+   * Banda ATR: fija el objetivo de venta UNA vez (al llenarse) y lo persiste.
+   * Si faltan velas, tick o spot queda pendiente y se reintenta en el
+   * siguiente ciclo; un fallo nunca impide registrar la posición.
+   */
+  async ensureAtrBandTarget(position, params, spot, now) {
+    try {
+      return await ensureAtrBandTarget(position, params, { market: this.market, repo: this.repo, spot, now });
+    } catch (err) {
+      this.logger.warn('options_atr_band_tp_unavailable', { positionId: position.id, symbol: position.symbol, error: err.message });
+      return position;
+    }
+  }
+
   // ---------- evaluación ----------
 
-  async runStrategy(strategy, tickCtx) {
+  /**
+   * Subyacente con el que se evalúa: el de la señal en un bot por alertas
+   * (multi-subyacente); si no, el de la estrategia.
+   */
+  signalUnderlying(strategy, template, signal) {
+    const fromSignal = template.signalDriven && signal?.underlying ? String(signal.underlying).toUpperCase() : null;
+    if (fromSignal && !botUnderlyings(strategy).includes(fromSignal)) {
+      throw new Error(`El bot no opera ${fromSignal}`);
+    }
+    return fromSignal || String(strategy.underlying).toUpperCase();
+  }
+
+  /** Template, parámetros, subyacente, cadena y spot de una estrategia para esta pasada. */
+  async strategyMarket(strategy, tickCtx) {
     const template = templates.getTemplate(strategy.template);
     const params = templates.validateParams(strategy.template, strategy.params);
-    const { base, chain } = await this.targetChain(strategy, params, tickCtx);
+    const underlying = this.signalUnderlying(strategy, template, tickCtx.signal);
+    const { base, chain } = await this.targetChain(strategy, params, tickCtx, underlying);
     const spot = num(chain?.spot) ?? num(base?.spot);
-    const modes = strategy.mode === 'live' ? ['shadow', 'live'] : ['shadow'];
+    return { template, params, chain, spot, underlying };
+  }
+
+  /**
+   * Agrupa posiciones abiertas por subyacente (de su símbolo) con la cadena y
+   * el spot de cada uno: `[{ underlying, chain, spot, positions }]`. El del
+   * mercado de la pasada reutiliza su cadena. Solo los bots por alertas pueden
+   * tener varios; el resto de estrategias forman un único grupo, como siempre.
+   */
+  async positionGroups(strategy, market, rows, tickCtx) {
+    const { template, params, chain, spot, underlying } = market;
+    if (template.id !== 'alert_signal') return [{ underlying, chain, spot, positions: rows }];
+    const byUnderlying = new Map();
+    for (const row of rows) {
+      const key = positionUnderlying(row, underlying);
+      if (!byUnderlying.has(key)) byUnderlying.set(key, []);
+      byUnderlying.get(key).push(row);
+    }
+    const groups = [];
+    for (const [key, positions] of byUnderlying) {
+      if (key === underlying) {
+        groups.push({ underlying: key, chain, spot, positions });
+        continue;
+      }
+      // Sin el rango de vencimientos de la señal: es otro subyacente.
+      const other = await this.targetChain(strategy, params, { chains: tickCtx.chains }, key);
+      groups.push({ underlying: key, chain: other.chain, spot: num(other.chain?.spot) ?? num(other.base?.spot), positions });
+    }
+    return groups;
+  }
+
+  /**
+   * Capital comprometido de un modo para el presupuesto total del bot:
+   * posiciones abiertas y, solo en Real, órdenes de entrada no finales.
+   * Cada pata se valora con el spot de su subyacente (`spot` es el de
+   * `underlying`; los demás se piden a la caché de la pasada).
+   * undefined si el bot no tiene presupuesto (no hace falta consultarlo).
+   */
+  async committedFor(strategy, mode, params, positions, { spot, underlying = strategy.underlying, tickCtx } = {}) {
+    if (params?.budgetUsdt == null) return undefined;
+    const orders = mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : [];
+    const spots = { [String(underlying).toUpperCase()]: spot };
+    for (const item of [...positions, ...orders]) {
+      const key = parseSymbol(item.symbol)?.underlying;
+      if (!key || key in spots) continue;
+      try {
+        spots[key] = await this.spotFor(key, tickCtx || { chains: new Map() });
+      } catch (err) {
+        this.logger.warn('options_committed_spot_failed', { underlying: key, error: err.message });
+        spots[key] = null;
+      }
+    }
+    return committedUsdt({ positions, orders, spot, spots });
+  }
+
+  /**
+   * Contexto de ejecución de un modo: posiciones abiertas enriquecidas con
+   * cotización (y objetivos de volatilidad en bots por alertas), spot y
+   * parámetros. Lo comparten la evaluación del template y el cierre manual.
+   */
+  async modeContext(strategy, mode, tickCtx, market, open = null) {
+    const { template, params, spot, underlying } = market;
+    const rows = open || await this.repo.listOpenPositions(strategy.id, mode);
+    const enrichedByRow = new Map();
+    // Cada subyacente con su cadena y su spot (objetivos ATR/volatilidad incluidos).
+    for (const group of await this.positionGroups(strategy, market, rows, tickCtx)) {
+      const enriched = await this.enrichPositions(group.positions, group.chain);
+      let positions = template.id === 'alert_signal'
+        ? await this.attachVolatilityTargets(enriched, params, group.spot, tickCtx.now)
+        : enriched;
+      // Sombra: reintento del objetivo ATR que no pudo fijarse al abrir. En
+      // real lo fija el ejecutor al armar el TP residente en Binance.
+      if (template.id === 'alert_signal' && mode === 'shadow' && params.takeProfitMode === 'atr_band') {
+        positions = await Promise.all(positions.map((p) => this.ensureAtrBandTarget(p, params, group.spot, tickCtx.now)));
+      }
+      group.positions.forEach((row, i) => enrichedByRow.set(row, positions[i]));
+    }
+    const allPositions = rows.map((row) => enrichedByRow.get(row));
+    // Con señal, un bot solo ve (señal contraria) las posiciones de su subyacente.
+    const positions = tickCtx.signal && template.id === 'alert_signal'
+      ? allPositions.filter((p) => positionUnderlying(p, underlying) === underlying)
+      : allPositions;
+    return { ...tickCtx, spot, underlying, positions, allPositions, params, mode };
+  }
+
+  async runStrategy(strategy, tickCtx, { shadowOnly = false } = {}) {
+    const market = await this.strategyMarket(strategy, tickCtx);
+    const { template, params, chain, spot } = market;
+    const modes = strategy.mode === 'live' && !shadowOnly ? ['shadow', 'live'] : ['shadow'];
     const byMode = {};
 
     for (const mode of modes) {
-      const open = await this.repo.listOpenPositions(strategy.id, mode);
-      const enriched = await this.enrichPositions(open, chain);
-      const positions = template.id === 'alert_signal'
-        ? await this.attachVolatilityTargets(enriched, params, spot, tickCtx.now)
-        : enriched;
+      const ctx = await this.modeContext(strategy, mode, tickCtx, market);
+      const { positions, allPositions } = ctx;
+      const botSignal = tickCtx.signal && template.id === 'alert_signal';
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
       // Solo los bots por alertas limitan operaciones por día.
       const tradesToday = template.signalDriven
@@ -325,18 +495,22 @@ class OptionsStrategyRunner {
         : undefined;
       const actions = template.evaluate({
         now: tickCtx.now,
-        underlying: strategy.underlying,
+        underlying: market.underlying,
         spot,
         chain,
         positions,
+        // Límites compartidos por todos los subyacentes del bot.
+        ...(botSignal ? { openCountAll: allPositions.length } : {}),
         params,
         lastOpenedAt,
         mode,
         signal: tickCtx.signal || null,
         tradesToday,
+        committedUsdt: tickCtx.signal
+          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx })
+          : undefined,
       });
       byMode[mode] = actions;
-      const ctx = { ...tickCtx, spot, positions, params, mode };
       // Una alerta opuesta con onOpposite=reverse registra CIERRE + REENTRADA
       // en una sola transacción. El reconciliador abrirá la nueva dirección
       // únicamente al confirmar todos los cierres, nunca en el mismo tick.
@@ -364,7 +538,7 @@ class OptionsStrategyRunner {
         } catch (err) {
           this.logger.warn('options_action_failed', { strategyId: strategy.id, mode, error: err.message });
           await this.recordOutcome(strategy, mode, { type: 'error', reason: 'exec_error', detail: err.message }, tickCtx);
-          if (mode === 'live') await this.maybeNotify(strategy, `Error en modo real: ${err.message}`);
+          if (mode === 'live') await this.maybeNotify(strategy, `Error en modo real: ${err.message}`, 'error');
         }
       }
     }
@@ -424,7 +598,7 @@ class OptionsStrategyRunner {
     const filled = action.legs.map((leg, i) => {
       const { quote, price } = quotes[i];
       const spot = num(quote.spot) ?? ctx.spot;
-      return { ...leg, price, fee: tradeFee({ spot, quantity: leg.quantity, price }) };
+      return { ...leg, price, spot, fee: tradeFee({ spot, quantity: leg.quantity, price }) };
     });
     return this.book(strategy, 'shadow', action, filled, ctx);
   }
@@ -436,7 +610,7 @@ class OptionsStrategyRunner {
     for (const leg of filled) {
       premium += signedPremium(leg.side, leg.price, leg.quantity);
       if (action.type === 'open') {
-        await this.repo.insertPosition({
+        const position = await this.repo.insertPosition({
           strategyId: strategy.id,
           userId: strategy.userId,
           mode,
@@ -447,12 +621,16 @@ class OptionsStrategyRunner {
           openedAt: ctx.now,
           feesUsdt: leg.fee,
         });
+        // Banda ATR: el objetivo se fija con el spot del fill.
+        if (strategy.template === 'alert_signal' && ctx.params?.takeProfitMode === 'atr_band' && position) {
+          await this.ensureAtrBandTarget(position, ctx.params, leg.spot ?? ctx.spot, ctx.now);
+        }
       } else {
         const position = openById.get(leg.positionId);
         if (!position) continue;
         const fees = position.feesUsdt + leg.fee;
         const pnl = grossPnl({ side: position.side, entryPrice: position.entryPrice, exitPrice: leg.price, quantity: position.quantity }) - fees;
-        await this.repo.closePosition(position.id, { exitPrice: leg.price, closedAt: ctx.now, pnlUsdt: pnl, feesUsdt: fees });
+        await this.repo.closePosition(position.id, { exitPrice: leg.price, closedAt: ctx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: action.reason || null });
       }
     }
     const event = await this.repo.insertEvent({
@@ -519,7 +697,7 @@ class OptionsStrategyRunner {
     for (const p of userOpen) {
       const meta = parseSymbol(p.symbol);
       if (!meta) continue;
-      const spot = meta.underlying === String(strategy.underlying).toUpperCase() ? ctx.spot : await this.spotFor(meta.underlying, ctx);
+      const spot = meta.underlying === String(ctx.underlying || strategy.underlying).toUpperCase() ? ctx.spot : await this.spotFor(meta.underlying, ctx);
       // Lo comprado ya está pagado: solo las ventas consumen margen.
       const margin = p.side === 'SELL' ? estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot }) : 0;
       userMargin += margin;
@@ -563,7 +741,7 @@ class OptionsStrategyRunner {
     }
     // Un TP LIMIT residente ya está encargado al exchange. No cancelarlo
     // ni competir con él cuando el tick vuelve a detectar la misma ganancia.
-    if (action.type === 'close' && ['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+    if (action.type === 'close' && TAKE_PROFIT_REASONS.includes(action.reason) &&
         typeof this.liveExecutor.repo?.hasStandingTp === 'function' &&
         await this.liveExecutor.repo.hasStandingTp(action.legs.map((l) => l.positionId))) {
       ctx.produced?.push({ mode: 'live', type: 'hold', pending: true,
@@ -573,7 +751,7 @@ class OptionsStrategyRunner {
     // Stops, señales contrarias y salidas por tiempo no dependen de que
     // haya liquidez para SOLICITAR la cancelación durable de un TP resting.
     if (action.type === 'close' &&
-        !['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+        !TAKE_PROFIT_REASONS.includes(action.reason) &&
         typeof this.liveExecutor.requestProtectedExit === 'function' &&
         await this.liveExecutor.requestProtectedExit(strategy, action)) {
       ctx.produced?.push({ mode: 'live', type: 'close', pending: true,
@@ -636,7 +814,7 @@ class OptionsStrategyRunner {
     }
     // Un TP basado en volatilidad no puede ejecutar a peor precio por
     // movimientos entre el tick y el preflight de cotización fresca.
-    if (action.reason === 'take_profit_volatility') {
+    if (TARGET_TP_REASONS.includes(action.reason)) {
       const stale = action.legs.some((leg, i) => {
         const price = quotes[i].price;
         const target = Number(leg.targetPrice);
@@ -646,7 +824,7 @@ class OptionsStrategyRunner {
       if (stale) {
         await this.recordOutcome(strategy, 'live', {
           type: 'skip', reason: 'tp_price_moved',
-          detail: 'TP por volatilidad: el precio ejecutable cambió; no se envió la orden',
+          detail: 'TP por objetivo: el precio ejecutable cambió; no se envió la orden',
         }, ctx);
         return null;
       }
@@ -665,8 +843,12 @@ class OptionsStrategyRunner {
         type: leg.optionType || parseSymbol(leg.symbol)?.type,
         spot: ctx.spot,
       }), 0);
+      // Con presupuesto total, el tope es la parte de la señal (capitalUsdt se ignora).
+      const cap = ctx.params.budgetUsdt != null
+        ? (action.signalBudgetUsdt ?? ctx.params.budgetUsdt / (ctx.params.budgetFractions || 4))
+        : ctx.params.capitalUsdt;
       if (!Number.isFinite(capital) || capital <= 0 ||
-          (ctx.params.capitalUsdt != null && capital > Number(ctx.params.capitalUsdt) + 1e-8)) {
+          (cap != null && capital > Number(cap) + 1e-8)) {
         await this.recordOutcome(strategy, 'live', {
           type: 'skip', reason: 'capital_limit',
           detail: 'Entrada real bloqueada: capital requerido excede el presupuesto o no pudo verificarse',
@@ -688,13 +870,13 @@ class OptionsStrategyRunner {
         await this.recordOutcome(strategy, 'live', {
           type: 'skip', reason: 'live_risk_limit', detail: `Bloqueada por límite: ${limits.reason}`,
         }, ctx);
-        await this.maybeNotify(strategy, `Orden real bloqueada: ${limits.reason}`);
+        await this.maybeNotify(strategy, `Orden real bloqueada: ${limits.reason}`, 'error');
         return null;
       }
     }
     const result = await this.liveExecutor.submit(strategy, { ...action, legs: quoted }, ctx);
     if (result.status === 'submitted' || result.status === 'attention') {
-      await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`);
+      await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`, 'trade');
     }
     ctx.produced?.push({ mode: 'live', type: action.type,
       pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
@@ -702,8 +884,11 @@ class OptionsStrategyRunner {
     return result;
   }
 
-  async maybeNotify(strategy, message) {
+  /** `kind`: 'trade' | 'error'. Respeta `params.notify` del bot (activo si falta). */
+  async maybeNotify(strategy, message, kind = 'trade') {
     try {
+      const flag = kind === 'error' ? 'errors' : 'trades';
+      if (strategy.params?.notify?.[flag] === false) return;
       const limits = await this.credentials.getLimits(strategy.userId);
       if (!limits?.notifyTelegram) return;
       await this.notify(
@@ -731,7 +916,8 @@ class OptionsStrategyRunner {
 
     const groups = new Map();
     for (const p of expired) {
-      const key = `${p.strategyId}:${p.mode}`;
+      // Un bot puede tener posiciones de varios subyacentes: cada uno con su índice.
+      const key = `${p.strategyId}:${p.mode}:${p.meta.underlying}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(p);
     }
@@ -761,7 +947,7 @@ class OptionsStrategyRunner {
         const fee = exerciseFee({ spot: indexPrice, quantity: p.quantity, intrinsicValue: value });
         const fees = p.feesUsdt + fee;
         const pnl = grossPnl({ side: p.side, entryPrice: p.entryPrice, exitPrice: value, quantity: p.quantity }) - fees;
-        await this.repo.closePosition(p.id, { exitPrice: value, closedAt: tickCtx.now, pnlUsdt: pnl, feesUsdt: fees });
+        await this.repo.closePosition(p.id, { exitPrice: value, closedAt: tickCtx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: 'expiry' });
         premium += signedPremium(p.side === 'SELL' ? 'BUY' : 'SELL', value, p.quantity);
         legs.push({ symbol: p.symbol, side: p.side === 'SELL' ? 'BUY' : 'SELL', quantity: p.quantity, price: value, fee });
         settled += 1;
