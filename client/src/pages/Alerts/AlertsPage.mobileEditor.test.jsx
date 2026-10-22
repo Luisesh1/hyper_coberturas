@@ -1,0 +1,198 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import AlertsPage from './AlertsPage';
+import { alertsApi, request } from '../../services/api';
+
+vi.mock('../../services/api', () => ({
+  alertsApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), test: vi.fn() },
+  request: vi.fn(),
+}));
+const addNotification = vi.fn();
+vi.mock('../../context/TradingContext', () => ({
+  useTradingContext: () => ({ addNotification }),
+}));
+
+const ALERT = {
+  id: 1, name: 'RSI bajo', direction: 'bullish', isActive: true, thresholdPercent: 70,
+  cooldownSeconds: 900, telegramEnabled: true, datasource: 'binance', assetList: ['BTCUSDT'],
+  rules: [{ label: 'sobreventa', weight: 1, joiners: [], conditions: [{ indicatorType: 'rsi', indicatorParams: { length: 14 }, timeframe: '15m', operandSeries: 'line', operator: '<', operand: { kind: 'constant', value: 30 } }] }],
+};
+
+const originalMatchMedia = window.matchMedia;
+beforeEach(() => {
+  window.matchMedia = vi.fn().mockImplementation((query) => ({
+    matches: true, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  }));
+  vi.clearAllMocks();
+  alertsApi.list.mockResolvedValue([ALERT]);
+  alertsApi.update.mockImplementation(async (id, payload) => ({ id, ...payload }));
+  request.mockResolvedValue([]);
+});
+afterEach(() => { window.matchMedia = originalMatchMedia; });
+
+const renderPage = () => render(<MemoryRouter><AlertsPage /></MemoryRouter>);
+
+async function openEditor() {
+  renderPage();
+  fireEvent.click(await screen.findByText('RSI bajo'));
+}
+
+describe('AlertsPage · editor móvil', () => {
+  it('abre el editor móvil con las reglas como tarjetas', async () => {
+    await openEditor();
+    expect(screen.getByRole('heading', { name: 'Editar alerta' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Reglas (1)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Regla 1/ }).textContent).toContain('«sobreventa» · peso 1');
+    expect(document.body.classList.contains('tv-mobile-chrome')).toBe(true);
+  });
+
+  it('tocar el umbral marca cambios sin guardar y habilita Guardar', async () => {
+    await openEditor();
+    const save = screen.getByRole('button', { name: 'Guardar cambios' });
+    expect(save.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Subir umbral' }));
+    expect(screen.getByText('75 %')).toBeTruthy();
+    expect(screen.getByText(/Cambios sin guardar/)).toBeTruthy();
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    expect(alertsApi.update).toHaveBeenCalledWith(1, expect.objectContaining({ thresholdPercent: 75 }));
+  });
+
+  it('tocar una regla abre su hoja; «Aplicar regla» guarda la copia en el formulario', async () => {
+    await openEditor();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Regla 1' });
+    fireEvent.change(within(sheet).getByLabelText('Etiqueta en Telegram'), { target: { value: 'rebote' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Aplicar regla' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: /Regla 1/ }).textContent).toContain('«rebote» · peso 1');
+    expect(screen.getByText(/Cambios sin guardar/)).toBeTruthy();
+  });
+
+  it('la ✕ de la hoja descarta los cambios', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    const sheet = screen.getByRole('dialog', { name: 'Regla 1' });
+    fireEvent.change(within(sheet).getByLabelText('Etiqueta en Telegram'), { target: { value: 'rebote' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Descartar cambios' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: /Regla 1/ }).textContent).toContain('«sobreventa» · peso 1');
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+  });
+
+  it('«+ Añadir regla» abre la nueva; descartarla la quita y aplicarla la deja', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: '+ Añadir regla' }));
+    let sheet = screen.getByRole('dialog', { name: 'Regla 2' });
+    expect(screen.getByRole('heading', { name: 'Reglas (2)' })).toBeTruthy();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Descartar cambios' }));
+    expect(screen.getByRole('heading', { name: 'Reglas (1)' })).toBeTruthy();
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Añadir regla' }));
+    sheet = screen.getByRole('dialog', { name: 'Regla 2' });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Aplicar regla' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Reglas (2)' })).toBeTruthy();
+    // Ya no es nueva: reabrirla y descartar no la quita.
+    fireEvent.click(screen.getByRole('button', { name: /Regla 2/ }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 2' })).getByRole('button', { name: 'Descartar cambios' }));
+    expect(screen.getByRole('heading', { name: 'Reglas (2)' })).toBeTruthy();
+  });
+
+  it('la papelera elimina la regla, salvo si es la única', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    expect(within(screen.getByRole('dialog', { name: 'Regla 1' })).getByRole('button', { name: 'Eliminar regla' }).disabled).toBe(true);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 1' })).getByRole('button', { name: 'Descartar cambios' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Añadir regla' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 2' })).getByRole('button', { name: 'Aplicar regla' }));
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Regla 1' })).getByRole('button', { name: 'Eliminar regla' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Reglas (1)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Regla 1/ }).textContent).not.toContain('sobreventa');
+  });
+
+  it('Probar usa dryRun y abre la hoja del resultado', async () => {
+    alertsApi.test.mockResolvedValue({ results: [{ asset: 'BTCUSDT', lowestTimeframe: '15m', score: 55, threshold: 70, wouldTrigger: false, rules: [] }] });
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Probar' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(alertsApi.test).toHaveBeenCalledWith(1, { dryRun: true });
+    expect(within(dialog).getByText(/55\.0% \/ 70%/)).toBeTruthy();
+    // El resultado solo va en la hoja, no también en línea.
+    expect(screen.queryByText('Resultado del test')).toBeNull();
+    expect(screen.getAllByText(/55\.0% \/ 70%/)).toHaveLength(1);
+  });
+
+  it('«Probar y enviar Telegram» del menú «⋯» usa dryRun: false', async () => {
+    alertsApi.test.mockResolvedValue({ results: [{ asset: 'BTCUSDT', lowestTimeframe: '15m', score: 82, threshold: 70, wouldTrigger: true, triggered: true, telegramSent: true, rules: [] }] });
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Acciones' })).getByRole('button', { name: 'Probar y enviar Telegram' }));
+    const dialog = await screen.findByRole('dialog', { name: /Prueba/ });
+    expect(alertsApi.test).toHaveBeenCalledWith(1, { dryRun: false });
+    expect(within(dialog).getByText(/Enviado a Telegram/)).toBeTruthy();
+    expect(addNotification).toHaveBeenCalledWith('success', expect.stringContaining('Telegram'));
+  });
+
+  // Comportamiento de antes de la rama (escritorio: elegir una alerta de la
+  // lista recarga el formulario desde el servidor): «←» y reabrir la misma
+  // alerta descarta las ediciones sin guardar. Así el formulario nunca queda
+  // desfasado si, por ejemplo, el interruptor de la lista la pausa.
+  it('«←» y reabrir la misma alerta recarga el formulario (descarta lo no guardado)', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Subir umbral' }));
+    expect(screen.getByText('75 %')).toBeTruthy();
+    expect(screen.getByText(/Cambios sin guardar/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Volver a alertas' }));
+    fireEvent.click(await screen.findByText('RSI bajo'));
+    expect(screen.getByRole('heading', { name: 'Editar alerta' })).toBeTruthy();
+    expect(screen.getByText('70 %')).toBeTruthy();
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+    expect(alertsApi.update).not.toHaveBeenCalled();
+  });
+
+  it('el interruptor Activa de una alerta guardada guarda al momento', async () => {
+    await openEditor();
+    const sw = screen.getByRole('switch', { name: 'Activa' });
+    fireEvent.click(sw);
+    await waitFor(() => expect(alertsApi.update).toHaveBeenCalledWith(1, expect.objectContaining({ isActive: false, name: 'RSI bajo' })));
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Activa' }).getAttribute('aria-checked')).toBe('false'));
+    expect(screen.queryByText(/Cambios sin guardar/)).toBeNull();
+  });
+
+  it('si falla el interruptor, sigue Activa y avisa', async () => {
+    alertsApi.update.mockRejectedValue(new Error('boom'));
+    await openEditor();
+    fireEvent.click(screen.getByRole('switch', { name: 'Activa' }));
+    await waitFor(() => expect(addNotification).toHaveBeenCalledWith('error', expect.stringContaining('boom')));
+    expect(screen.getByRole('switch', { name: 'Activa' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('en una alerta nueva, el interruptor Activa no guarda', async () => {
+    renderPage();
+    await screen.findByText('RSI bajo');
+    fireEvent.click(screen.getByRole('button', { name: '+ Nueva alerta' }));
+    const sw = screen.getByRole('switch', { name: 'Activa' });
+    fireEvent.click(sw);
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+    expect(alertsApi.update).not.toHaveBeenCalled();
+    expect(alertsApi.create).not.toHaveBeenCalled();
+  });
+
+  it('cambiar a modo JSON y volver cierra la regla abierta', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /Regla 1/ }));
+    expect(screen.getByRole('dialog', { name: 'Regla 1' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Acciones' })).getByRole('button', { name: 'Modo JSON' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Más acciones' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Acciones' })).getByRole('button', { name: 'Modo visual' }));
+    expect(screen.queryByRole('dialog', { name: 'Regla 1' })).toBeNull();
+  });
+});

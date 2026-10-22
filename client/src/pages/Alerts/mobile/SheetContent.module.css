@@ -1,0 +1,35 @@
+/* Contenido de las hojas inferiores de Alertas.
+   BottomSheet (TradingView) es siempre oscura (#171a1f, texto #e6e8ec) en
+   los dos temas, y no se toca porque la usa TradingView. El contenido de
+   las hojas de Alertas usa tokens del tema (TestResultView, menú «⋯»), que
+   en tema claro son texto oscuro sobre esa hoja oscura. Aquí se fijan,
+   solo dentro de las hojas de Alertas, tokens claros‑sobre‑oscuro a juego
+   con la hoja. Contraste WCAG sobre el fondo real: nota 9,3:1, ítems del
+   menú 12,7:1 (peligro 5,6:1), regla no cumplida 7,5:1. */
+.content {
+  color-scheme: dark;
+  --text-primary: #e6e8ec;
+  --text-secondary: #b6bec9;
+  --text-tertiary: #a3acb9;
+  --bg-card: #20242b;
+  --bg-hover: #20242b;
+  --surface-2: #1d2128;
+  --border: #353b45;
+  --border-strong: #4a515c;
+  --red-light: #f87171;
+  --red-border: rgba(248, 113, 113, 0.45);
+  --green: #22c55e;
+  --status-warn: #fde68a;
+  --blue: #8cc2ff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}

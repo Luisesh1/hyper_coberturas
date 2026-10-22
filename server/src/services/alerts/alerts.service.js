@@ -61,6 +61,7 @@ const conditionSchema = z.object({
     'above_upper', 'below_lower', 'above_middle', 'below_middle',
     'squeeze_on', 'squeeze_off',
     'momentum_positive', 'momentum_negative',
+    'momentum_rising', 'momentum_falling',
     'momentum_redirect_bullish', 'momentum_redirect_bearish',
   ]),
   operand: operandSchema,
@@ -120,6 +121,7 @@ const OPERATOR_OPERAND_KIND = {
   'above_middle': ['none'], 'below_middle': ['none'],
   'squeeze_on': ['none'], 'squeeze_off': ['none'],
   'momentum_positive': ['none'], 'momentum_negative': ['none'],
+  'momentum_rising': ['none'], 'momentum_falling': ['none'],
   'momentum_redirect_bullish': ['none'], 'momentum_redirect_bearish': ['none'],
 };
 

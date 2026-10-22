@@ -3,8 +3,12 @@ import { Link } from 'react-router-dom';
 import { alertsApi } from '../../services/api';
 import { useTradingContext } from '../../context/TradingContext';
 import { MOBILE_QUERY, useMediaQuery } from '../TradingView/useMediaQuery';
-import { AlertRuleRow, emptyCondition } from './components/AlertRuleRow';
+import { AlertRuleRow } from './components/AlertRuleRow';
 import AssetPickerModal from './components/AssetPickerModal';
+import MobileAlertEditor from './mobile/MobileAlertEditor';
+import MobileAlertList from './mobile/MobileAlertList';
+import TestResultView from './components/TestResultView';
+import { alertToPayload, baseTimeframe, emptyRule, formToPayload, normalizeLoadedRule } from './lib/alertView';
 import { DirectionChip, DirectionIcon, DirectionSelector } from './components/Direction';
 import { fetchAlertBotUsage } from './lib/autoBots';
 import {
@@ -22,64 +26,13 @@ import { PRESETS } from './lib/presets';
 import styles from './AlertsPage.module.css';
 
 const NO_BOTS = [];
-const TF_ORDER = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M'];
-
-function BackIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M15 18l-6-6 6-6" />
-    </svg>
-  );
-}
+export { normalizeLoadedRule };
 
 const DATASOURCES = [
-  { value: 'binance',     label: 'Binance (ej. BTCUSDT)' },
-  { value: 'hyperliquid', label: 'Hyperliquid (ej. BTC)' },
-  { value: 'yahoo',       label: 'Yahoo Finance' },
+  { value: 'binance',     label: 'Binance (ej. BTCUSDT)', short: 'Binance' },
+  { value: 'hyperliquid', label: 'Hyperliquid (ej. BTC)', short: 'Hyperliquid' },
+  { value: 'yahoo',       label: 'Yahoo Finance',         short: 'Yahoo' },
 ];
-
-function emptyRule() {
-  return {
-    id: `r-${Math.random().toString(36).slice(2, 9)}`,
-    label: '',
-    conditions: [emptyCondition()],
-    joiners: [],
-    weight: 1,
-  };
-}
-
-// Normaliza una regla cargada desde el server (que puede ser legacy plana o
-// la nueva forma con conditions/joiners) a la forma que espera el editor.
-function normalizeRuleWeight(value) {
-  if (value == null || value === '') return 1;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 1;
-}
-
-export function normalizeLoadedRule(raw) {
-  const base = { ...emptyRule() };
-  if (raw && Array.isArray(raw.conditions) && raw.conditions.length > 0) {
-    return {
-      ...base,
-      label: String(raw.label || ''),
-      conditions: raw.conditions.map((c) => ({ ...emptyCondition(), ...c })),
-      joiners: Array.isArray(raw.joiners) ? raw.joiners.slice() : [],
-      weight: normalizeRuleWeight(raw.weight),
-    };
-  }
-  if (raw && raw.indicatorType) {
-    const cond = {
-      indicatorType: raw.indicatorType,
-      indicatorParams: { ...(raw.indicatorParams || {}) },
-      timeframe: raw.timeframe,
-      operandSeries: raw.operandSeries,
-      operator: raw.operator,
-      operand: raw.operand ? { ...raw.operand } : { kind: 'constant', value: 0 },
-    };
-    return { ...base, label: String(raw.label || ''), conditions: [cond], joiners: [], weight: normalizeRuleWeight(raw.weight) };
-  }
-  return base;
-}
 
 function emptyForm() {
   return {
@@ -109,32 +62,6 @@ function getFormValidationError(value) {
   return null;
 }
 
-function formToPayload(value) {
-  return {
-    name: value.name.trim(),
-    isActive: value.isActive,
-    thresholdPercent: Number(value.thresholdPercent),
-    cooldownSeconds: Number(value.cooldownSeconds),
-    telegramEnabled: value.telegramEnabled,
-    datasource: value.datasource,
-    direction: normalizeDirection(value.direction),
-    assetList: value.assetList.slice(),
-    rules: value.rules.map((r) => ({
-      label: String(r.label || '').trim(),
-      conditions: (r.conditions || []).map((c) => ({
-        indicatorType: c.indicatorType,
-        indicatorParams: c.indicatorParams || {},
-        timeframe: c.timeframe,
-        operandSeries: c.operandSeries,
-        operator: c.operator,
-        operand: c.operand,
-      })),
-      joiners: r.joiners || [],
-      weight: Number(r.weight) || 0,
-    })),
-  };
-}
-
 export default function AlertsPage() {
   const { addNotification } = useTradingContext();
   const [alerts, setAlerts] = useState([]);
@@ -149,6 +76,10 @@ export default function AlertsPage() {
   const isMobile = useMediaQuery(MOBILE_QUERY);
   // En móvil se ve la lista o el editor a pantalla completa, no ambos.
   const [mobileView, setMobileView] = useState('list');
+  // Regla abierta en la hoja de regla móvil (null = ninguna). `openRuleIsNew`:
+  // la abrió «+ Añadir regla», así que descartarla la quita del formulario.
+  const [openRuleIndex, setOpenRuleIndex] = useState(null);
+  const [openRuleIsNew, setOpenRuleIsNew] = useState(false);
   const [directionFilter, setDirectionFilter] = useState('all');
   // Map alertId → bots que la usan. null = no disponible (se oculta sin error).
   const [botUsage, setBotUsage] = useState(null);
@@ -316,6 +247,7 @@ export default function AlertsPage() {
   const formatRaw = (payload = buildPayload()) => JSON.stringify(payload, null, 2);
 
   const openRawMode = () => {
+    setOpenRuleIndex(null);
     setRawText(formatRaw());
     setRawError('');
     setRawTextDirty(false);
@@ -329,6 +261,7 @@ export default function AlertsPage() {
   };
 
   const openVisualMode = () => {
+    setOpenRuleIndex(null);
     setEditorMode('visual');
     setRawError('');
   };
@@ -338,6 +271,7 @@ export default function AlertsPage() {
       const parsed = JSON.parse(rawText);
       const next = payloadToForm(parsed);
       setForm(next);
+      setOpenRuleIndex(null);
       setRawText(formatRaw(formToPayload(next)));
       setRawError('');
       setRawTextDirty(false);
@@ -349,6 +283,12 @@ export default function AlertsPage() {
       if (!quiet) addNotification?.('error', `Raw text inválido: ${err.message}`);
       return null;
     }
+  };
+
+  const onRawTextChange = (text) => {
+    setRawText(text);
+    setRawTextDirty(true);
+    setRawError('');
   };
 
   const copyRawText = async () => {
@@ -450,8 +390,37 @@ export default function AlertsPage() {
       const data = await alertsApi.test(selectedId, { dryRun });
       setTestResult(data);
       if (!dryRun) addNotification?.('success', 'Test enviado a Telegram para los activos que cumplen');
+      return data;
     } catch (err) {
       addNotification?.('error', `Error al probar: ${err.message}`);
+      return null;
+    }
+  };
+
+  // Interruptor de la lista móvil: optimista, con reversión y aviso si falla.
+  const toggleAlertFromList = async (alert) => {
+    const next = !alert.isActive;
+    const setActive = (value) => setAlerts((prev) => prev.map((a) => (a.id === alert.id ? { ...a, isActive: value } : a)));
+    setActive(next);
+    try {
+      const updated = await alertsApi.update(alert.id, { ...alertToPayload(alert), isActive: next });
+      if (updated && updated.id === alert.id) {
+        setAlerts((prev) => prev.map((a) => (a.id === alert.id ? { ...a, ...updated } : a)));
+      }
+    } catch (err) {
+      setActive(alert.isActive);
+      addNotification?.('error', `Error al ${next ? 'activar' : 'pausar'}: ${err.message}`);
+      throw err;
+    }
+  };
+
+  // «Probar» desde la lista: siempre dryRun, nunca envía Telegram.
+  const testAlertFromList = async (alert) => {
+    try {
+      return await alertsApi.test(alert.id, { dryRun: true });
+    } catch (err) {
+      addNotification?.('error', `Error al probar: ${err.message}`);
+      throw err;
     }
   };
 
@@ -468,6 +437,7 @@ export default function AlertsPage() {
 
   const openAlert = (alert) => {
     selectAlert(alert);
+    setOpenRuleIndex(null);
     setMobileView('editor');
   };
 
@@ -485,11 +455,7 @@ export default function AlertsPage() {
 
   const previewAsset = form.assetList[0] || '—';
   // Mismo criterio que el servidor: la temporalidad más baja de las reglas.
-  const previewTf = form.rules
-    .flatMap((r) => r.conditions || [])
-    .flatMap((c) => [c.timeframe, c.operand?.kind === 'series' ? c.operand.timeframe : null])
-    .filter((tf) => TF_ORDER.includes(tf))
-    .sort((a, b) => TF_ORDER.indexOf(a) - TF_ORDER.indexOf(b))[0] || '?';
+  const previewTf = baseTimeframe(form.rules) || '?';
   const telegramPreview = [
     telegramTitle(direction, form.name.trim()),
     `Activo: ${previewAsset} · TF: ${previewTf}`,
@@ -499,40 +465,108 @@ export default function AlertsPage() {
   const totalWeight = form.rules.reduce((acc, r) => acc + (Number(r.weight) || 0), 0);
   const requiredWeight = (totalWeight * Number(form.thresholdPercent)) / 100;
 
+  const assetPicker = (
+    <AssetPickerModal
+      open={pickerOpen}
+      currentAssets={form.assetList}
+      currentDatasource={form.datasource}
+      onAdd={addAssetsBulk}
+      onClose={() => setPickerOpen(false)}
+    />
+  );
+
+  if (mobileEditor) {
+    return (
+      <div className={styles.page}>
+        <MobileAlertEditor
+          form={form}
+          selectedId={selectedId}
+          isSaving={isSaving}
+          effectiveDirty={effectiveDirty}
+          saveValidationError={saveValidationError}
+          updateField={updateField}
+          onBack={() => { setOpenRuleIndex(null); setMobileView('list'); }}
+          onSave={save}
+          onRemove={remove}
+          onTest={({ dryRun = true } = {}) => testNow({ dryRun })}
+          onToggleActive={toggleActive}
+          isTogglingActive={isTogglingActive}
+          editorMode={editorMode}
+          rawText={rawText}
+          rawError={rawError}
+          onRawTextChange={onRawTextChange}
+          onOpenRaw={openRawMode}
+          onOpenVisual={openVisualMode}
+          onRefreshRaw={refreshRawFromVisual}
+          onApplyRaw={applyRawText}
+          onCopyConfig={copyRawText}
+          showPresets={editorMode === 'visual' && !selectedId && !isDirty}
+          presets={PRESETS}
+          onApplyPreset={(p) => { setOpenRuleIndex(null); applyPreset(p); }}
+          datasources={DATASOURCES}
+          telegramPreview={telegramPreview}
+          showUsedBy={!!botUsage && selectedId != null}
+          usedByBots={usedByBots}
+          directionNote={directionNote}
+          showNeutralWarning={showNeutralWarning}
+          assetInput={assetInput}
+          onAssetInput={setAssetInput}
+          onAddAsset={addAsset}
+          onRemoveAsset={removeAsset}
+          onOpenPicker={() => setPickerOpen(true)}
+          onOpenRule={(i) => { setOpenRuleIsNew(false); setOpenRuleIndex(i); }}
+          onAddRule={() => { setOpenRuleIsNew(true); setOpenRuleIndex(form.rules.length); addRule(); }}
+          openRuleIndex={openRuleIndex != null && form.rules[openRuleIndex] ? openRuleIndex : null}
+          openRuleIsNew={openRuleIsNew}
+          onApplyRule={(i, next) => { setOpenRuleIndex(null); updateRule(i, next); }}
+          onDiscardRule={() => {
+            if (openRuleIsNew && openRuleIndex != null) removeRule(openRuleIndex);
+            setOpenRuleIndex(null);
+          }}
+          onDeleteRule={(i) => { setOpenRuleIndex(null); removeRule(i); }}
+        />
+        {assetPicker}
+      </div>
+    );
+  }
+
+  if (isMobile && mobileView === 'list') {
+    return (
+      <div className={styles.page}>
+        <MobileAlertList
+          alerts={alerts}
+          botUsage={botUsage}
+          directionFilter={directionFilter}
+          onDirectionFilter={setDirectionFilter}
+          onOpen={openAlert}
+          onNew={() => openAlert(null)}
+          onToggleActive={toggleAlertFromList}
+          onTest={testAlertFromList}
+          isLoading={isLoading}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className={`${styles.page} ${mobileEditor ? styles.pageMobileEditor : ''}`}>
-      {mobileEditor ? (
-        <div className={styles.mobileHeader}>
-          <button
-            type="button"
-            className={styles.backBtn}
-            onClick={() => setMobileView('list')}
-            aria-label="Volver a alertas"
-          >
-            <BackIcon />
-          </button>
-          <h1 className={styles.mobileTitle}>{selectedId ? 'Editar alerta' : 'Nueva alerta'}</h1>
-        </div>
-      ) : (
-        <div className={styles.hero}>
-          <div className={styles.heroLeft}>
-            <div>
-              <span className={styles.eyebrow}>🔔 Alertas</span>
-              <h1 className={styles.title}>Alertas con reglas y peso</h1>
-            </div>
-          </div>
-          <div className={styles.stats}>
-            <div className={styles.stat}><strong>{totals.count}</strong><span>total</span></div>
-            <div className={styles.stat}><strong>{totals.active}</strong><span>activas</span></div>
-            {totals.usedByBots != null && (
-              <div className={styles.stat}><strong>{totals.usedByBots}</strong><span>usadas por bots</span></div>
-            )}
+    <div className={styles.page}>
+      <div className={styles.hero}>
+        <div className={styles.heroLeft}>
+          <div>
+            <span className={styles.eyebrow}>🔔 Alertas</span>
+            <h1 className={styles.title}>Alertas con reglas y peso</h1>
           </div>
         </div>
-      )}
+        <div className={styles.stats}>
+          <div className={styles.stat}><strong>{totals.count}</strong><span>total</span></div>
+          <div className={styles.stat}><strong>{totals.active}</strong><span>activas</span></div>
+          {totals.usedByBots != null && (
+            <div className={styles.stat}><strong>{totals.usedByBots}</strong><span>usadas por bots</span></div>
+          )}
+        </div>
+      </div>
 
       <div className={styles.layout}>
-        {(!isMobile || mobileView === 'list') && (
         <div className={styles.sidebarWrap}>
           <div className={styles.sidebar}>
             <button className={styles.newBtn} onClick={() => openAlert(null)}>
@@ -586,9 +620,7 @@ export default function AlertsPage() {
             })}
           </div>
         </div>
-        )}
 
-        {(!isMobile || mobileView === 'editor') && (
         <div className={styles.editor}>
           {/* Banner contextual: presets si es alerta nueva sin tocar, o
               indicador "sin guardar" si el form está dirty. */}
@@ -673,11 +705,7 @@ export default function AlertsPage() {
                 className={styles.rawTextarea}
                 value={rawText}
                 spellCheck={false}
-                onChange={(e) => {
-                  setRawText(e.target.value);
-                  setRawTextDirty(true);
-                  setRawError('');
-                }}
+                onChange={(e) => onRawTextChange(e.target.value)}
               />
               {rawError && <div className={styles.rawError}>{rawError}</div>}
             </div>
@@ -753,12 +781,11 @@ export default function AlertsPage() {
               </div>
             </div>
 
-            <fieldset className={`${styles.dirFieldset} ${isMobile ? styles.dirFieldsetMobile : ''}`}>
+            <fieldset className={styles.dirFieldset}>
               <legend className={styles.dirLegend}>Dirección de la señal</legend>
               <DirectionSelector
                 value={direction}
                 onChange={(next) => updateField('direction', next)}
-                mobile={isMobile}
               />
               <p
                 className={`${styles.dirNote} ${showNeutralWarning ? styles.dirNoteWarning : ''}`}
@@ -857,35 +884,7 @@ export default function AlertsPage() {
           {testResult && (
             <div className={styles.section}>
               <h3 className={styles.sectionTitle}>Resultado del test</h3>
-              <div className={styles.testResult}>
-                {testResult.results.map((r) => (
-                  <div key={r.asset} className={styles.testAsset}>
-                    <div className={styles.testAssetHead}>
-                      <span className={styles.testAssetName}>{r.asset} · TF {r.lowestTimeframe}</span>
-                      <span className={r.wouldTrigger ? styles.scoreOk : styles.scoreNo}>
-                        {Number(r.score).toFixed(1)}% / {Number(r.threshold).toFixed(0)}%
-                        {r.wouldTrigger ? ' ✓' : ' ✗'}
-                      </span>
-                    </div>
-                    {r.suppressedBy === 'cooldown' && (
-                      <span style={{ fontSize: 11, color: '#f59e0b' }}>
-                        En cooldown — restan {Math.round(r.cooldownLeftMs / 1000)} s
-                      </span>
-                    )}
-                    {r.triggered && r.telegramSent && (
-                      <span style={{ fontSize: 11, color: '#22c55e' }}>📨 Enviado a Telegram</span>
-                    )}
-                    {r.rules?.map((rr, i) => (
-                      <div
-                        key={i}
-                        className={`${styles.testRule} ${rr.matched ? styles.testRuleMatched : styles.testRuleUnmatched}`}
-                      >
-                        {rr.matched ? '✓' : '·'} {rr.matched && rr.rule?.label ? `${rr.rule.label}: ` : ''}{rr.reason}
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
+              <TestResultView result={testResult} />
             </div>
           )}
             </>
@@ -939,11 +938,10 @@ export default function AlertsPage() {
                 </button>
               </>
             )}
-            {/* En móvil el guardado es un CTA fijo abajo, siempre a mano. */}
-            <div className={mobileEditor ? styles.mobileCtaBar : styles.saveWrap}>
+            <div className={styles.saveWrap}>
               <button
                 type="button"
-                className={`${styles.btn} ${styles.btnPrimary} ${mobileEditor ? styles.mobileCta : ''}`}
+                className={`${styles.btn} ${styles.btnPrimary}`}
                 onClick={save}
                 disabled={isSaving || !!saveValidationError || (!effectiveDirty && !!selectedId)}
                 title={saveValidationError || (!effectiveDirty && selectedId ? 'No hay cambios para guardar' : '')}
@@ -953,16 +951,9 @@ export default function AlertsPage() {
             </div>
           </div>
         </div>
-        )}
       </div>
 
-      <AssetPickerModal
-        open={pickerOpen}
-        currentAssets={form.assetList}
-        currentDatasource={form.datasource}
-        onAdd={addAssetsBulk}
-        onClose={() => setPickerOpen(false)}
-      />
+      {assetPicker}
     </div>
   );
 }

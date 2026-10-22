@@ -1,0 +1,481 @@
+.root { min-width: 0; }
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Cabecera fija ---------- */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 8px 4px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.iconBtn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.iconBtnBorder { border: 1px solid var(--border); }
+.iconBtn:focus-visible { outline: 2px solid var(--blue); }
+.headText { flex: 1; min-width: 0; }
+.headTitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dirty { font-size: 12px; color: var(--status-warn); }
+
+/* ---------- Contenido ---------- */
+/* Hueco inferior para que la barra fija no tape nada: --cta-bar-h es la
+   altura medida de la barra (incluye el aviso de validación y el área
+   segura); sin medir, un valor holgado que cubre barra + aviso de 2 líneas. */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px calc(var(--cta-bar-h, calc(150px + env(safe-area-inset-bottom, 0px))) + 16px);
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.cardTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.hint { margin: 0; font-size: 12px; color: var(--text-tertiary); }
+
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.label { font-size: 12.5px; color: var(--text-secondary); }
+.input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+}
+.input:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+/* Interruptor Activa en la cabecera de la tarjeta. */
+.switchBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.switchTrack {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  transition: background 160ms ease, border-color 160ms ease;
+}
+.switchThumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--text-tertiary);
+  transition: transform 160ms ease, background 160ms ease;
+}
+.switchOn { color: var(--green); }
+.switchOn .switchTrack { border-color: var(--green); background: var(--green-bg); }
+.switchOn .switchThumb { background: var(--green); transform: translateX(18px); }
+.switchBtn:disabled { opacity: 0.5; cursor: default; }
+.switchBtn:focus-visible { outline: 2px solid var(--blue); border-radius: 10px; }
+
+/* Umbral − valor + */
+.stepper {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+.stepBtn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 20px;
+  cursor: pointer;
+}
+.stepBtn:disabled { opacity: 0.35; cursor: default; }
+.stepBtn:focus-visible { outline: 2px solid var(--blue); border-radius: 10px; }
+.stepValue {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Dirección: el selector de siempre, en una rejilla de 3 botones. */
+.dirGrid > [role='radiogroup'] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.dirGrid [role='radio'] {
+  min-height: 44px;
+  min-width: 0;
+  padding: 6px;
+  gap: 6px;
+  justify-content: center;
+  border-radius: 10px;
+}
+.dirGrid [role='radio'] > span:first-child { width: 22px; height: 22px; border-radius: 6px; }
+.dirGrid [role='radio'] > span:last-child { align-items: center; }
+.dirGrid [role='radio'] > span:last-child > span:first-child { font-size: 13.5px; }
+/* El selector compartido trae colores fijos oscuros (AlertsPage.module.css,
+   deuda de escritorio): aquí se pasan a tokens para que siga al tema.
+   Cada opción lleva data-direction (DirectionSelector). */
+.dirGrid [role='radio'] {
+  background: var(--bg-input);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+.dirGrid [role='radio'][data-direction='bullish'][aria-checked='true'] { background: var(--green-bg); border-color: var(--green); color: var(--green-light); }
+.dirGrid [role='radio'][data-direction='bearish'][aria-checked='true'] { background: var(--red-bg); border-color: var(--red); color: var(--red-light); }
+.dirGrid [role='radio'][data-direction='neutral'][aria-checked='true'] { background: var(--bg-hover); border-color: var(--text-tertiary); color: var(--text-primary); }
+.dirGrid [role='radio'][data-direction='neutral'] > span:first-child { color: var(--text-secondary); }
+/* La nota de abajo explica la dirección; la pista no cabe en 3 columnas. */
+.dirGrid [role='radio'] > span:last-child > span:last-child { display: none; }
+
+.dirNote {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.dirNoteWarning { background: var(--amber-bg); color: var(--status-warn); }
+
+.moreLink {
+  align-self: flex-start;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.moreLink:focus-visible { outline: 2px solid var(--blue); border-radius: 6px; }
+.more {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.checkRow input { width: 20px; height: 20px; flex: none; }
+.preview {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+.botLink {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  text-decoration: none;
+  color: var(--text-primary);
+}
+.botName { font-size: 14px; font-weight: 600; }
+.botMeta { font-size: 12px; color: var(--text-secondary); }
+
+.secondaryBtn {
+  flex: none;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.secondaryBtn:disabled { opacity: 0.45; cursor: default; }
+.symbolRow { display: flex; gap: 8px; min-width: 0; }
+.secondaryBtn:focus-visible { outline: 2px solid var(--blue); }
+
+/* ---------- Activos ---------- */
+.assets { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.asset {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 36px;
+  padding-left: 12px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+/* Zona táctil de 44 px aunque el chip mida 36. */
+.assetRemove {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin: -4px 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+}
+.assetRemove:focus-visible { outline: 2px solid var(--blue); }
+
+/* ---------- Reglas ---------- */
+.rulesHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.ruleCard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 56px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ruleCard:focus-visible { outline: 2px solid var(--blue); }
+.ruleNum {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--blue-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+.ruleBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ruleSummary {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.ruleJoiner { color: var(--blue); font-weight: 700; }
+.ruleMeta { font-size: 12px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.ruleChevron { flex: none; color: var(--text-tertiary); }
+.addRule {
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.addRule:focus-visible { outline: 2px solid var(--blue); }
+
+/* ---------- Plantillas (una columna) ---------- */
+.presets { display: flex; flex-direction: column; gap: 8px; }
+.preset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 44px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.presetHead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.presetTitle { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.presetDesc { font-size: 12.5px; color: var(--text-secondary); }
+
+/* ---------- JSON ---------- */
+.raw {
+  width: 100%;
+  min-height: 320px;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.rawActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.error { font-size: 13px; color: var(--red-light); }
+
+/* ---------- Barra inferior fija ---------- */
+.mobileCtaBar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+.barError { grid-column: 1 / -1; font-size: 12.5px; color: var(--status-warn); }
+.testBtn,
+.saveBtn {
+  min-height: 48px;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.testBtn {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
+}
+.saveBtn {
+  grid-column: span 2;
+  border: 0;
+  background: var(--blue);
+  color: #fff;
+}
+.testBtn:disabled,
+.saveBtn:disabled { opacity: 0.45; cursor: default; }
+.testBtn:focus-visible,
+.saveBtn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* ---------- Menú «⋯» ---------- */
+.menu { display: flex; flex-direction: column; gap: 8px; }
+.menuItem {
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.menuDanger { color: var(--red-light); border-color: var(--red-border); }
+.menuItem:disabled { opacity: 0.5; }

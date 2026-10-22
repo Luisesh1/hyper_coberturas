@@ -127,13 +127,21 @@ test.describe('Alertas con dirección en móvil (390px)', () => {
     const selector = page.getByRole('radiogroup', { name: 'Dirección de la señal' });
     const radios = selector.getByRole('radio');
     await expect(radios).toHaveCount(3);
+    // Cuadrícula de 3 columnas: las tres opciones en una sola fila.
+    const boxes = [];
     for (let i = 0; i < 3; i += 1) {
       const box = await radios.nth(i).boundingBox();
       expect(box.height).toBeGreaterThanOrEqual(44);
-      expect(box.width).toBeGreaterThan(300);
+      boxes.push(box);
     }
+    expect(Math.max(...boxes.map((b) => b.y)) - Math.min(...boxes.map((b) => b.y))).toBeLessThan(4);
+    expect(boxes[0].x).toBeLessThan(boxes[1].x);
+    expect(boxes[1].x).toBeLessThan(boxes[2].x);
+    expect(await horizontalOverflow(page)).toBe(0);
     await expect(selector.getByRole('radio', { name: /Bajista/ })).toHaveAttribute('aria-checked', 'true');
     await selector.getByRole('radio', { name: /Alcista/ }).tap();
+    // La vista previa de Telegram vive dentro de «Más opciones».
+    await page.getByRole('button', { name: /^Más opciones/ }).tap();
     await expect(page.getByTestId('telegram-preview')).toContainText('🟢 ALCISTA');
 
     const cta = page.getByRole('button', { name: 'Guardar cambios' });

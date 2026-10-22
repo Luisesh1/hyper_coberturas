@@ -59,6 +59,8 @@ const SQZ_OPS = [
   { value: 'squeeze_off',       label: 'squeeze OFF' },
   { value: 'momentum_positive', label: 'momentum +' },
   { value: 'momentum_negative', label: 'momentum −' },
+  { value: 'momentum_rising', label: 'momentum subiendo ↗' },
+  { value: 'momentum_falling', label: 'momentum bajando ↘' },
   { value: 'momentum_redirect_bullish', label: 'redirección alcista' },
   { value: 'momentum_redirect_bearish', label: 'redirección bajista' },
 ];
@@ -125,6 +127,8 @@ const OP_STATE = {
   squeeze_off: 'squeeze OFF',
   momentum_positive: 'momentum +',
   momentum_negative: 'momentum −',
+  momentum_rising: 'momentum subiendo',
+  momentum_falling: 'momentum bajando',
   momentum_redirect_bullish: 'redirección alcista',
   momentum_redirect_bearish: 'redirección bajista',
 };

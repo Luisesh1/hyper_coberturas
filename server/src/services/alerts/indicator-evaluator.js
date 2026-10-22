@@ -293,6 +293,22 @@ function evaluateCondition(rule, candlesByTf) {
     const matched = op === 'momentum_positive' ? v > 0 : v < 0;
     return { matched, value: v, threshold: 0, reason: `momentum=${fmt(v)}` };
   }
+  if (op === 'momentum_rising' || op === 'momentum_falling') {
+    const mom = baseRoles.sqzMomentum;
+    if (!Array.isArray(mom)) return { matched: false, value: null, threshold: null, reason: 'sqzmom requerido' };
+    const cur = mom[idx];
+    const prev = idx > 0 ? mom[idx - 1] : null;
+    if (!Number.isFinite(cur) || !Number.isFinite(prev)) {
+      return { matched: false, value: Number.isFinite(cur) ? cur : null, threshold: null, reason: 'momentum no disponible' };
+    }
+    const rising = op === 'momentum_rising';
+    return {
+      matched: rising ? cur > prev : cur < prev,
+      value: cur,
+      threshold: prev,
+      reason: `momentum ${rising ? 'subiendo' : 'bajando'}: ${fmt(prev)} -> ${fmt(cur)}`,
+    };
+  }
   if (op === 'momentum_redirect_bullish' || op === 'momentum_redirect_bearish') {
     const mom = baseRoles.sqzMomentum;
     if (!Array.isArray(mom)) return { matched: false, value: null, threshold: null, reason: 'sqzmom requerido' };

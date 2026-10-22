@@ -1,0 +1,90 @@
+/* Presentación móvil (layout="mobile") de los campos de condición:
+   todo a una columna, a todo el ancho y con zonas táctiles de 44 px. */
+
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.label { padding: 0; font-size: 12.5px; color: var(--text-secondary); }
+
+.control {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  text-overflow: ellipsis;
+}
+.control:disabled { opacity: 0.6; }
+.control:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+
+.fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+/* La leyenda no se presta bien al flex: ocupa su línea. */
+.fieldset > legend { float: left; width: 100%; margin-bottom: 6px; }
+
+.chips,
+.chipsExtra {
+  clear: both;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+.chipsExtra { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.chip {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.chipOn {
+  border-color: var(--blue);
+  background: var(--blue-bg);
+  font-weight: 700;
+}
+.chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; }
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.check input { flex: none; width: 20px; height: 20px; }
+
+.static { margin: 0; font-size: 13px; color: var(--text-secondary); }
+
+.rhs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+}
