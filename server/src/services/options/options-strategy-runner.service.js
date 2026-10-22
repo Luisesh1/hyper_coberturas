@@ -88,6 +88,13 @@ function positionUnderlying(position, fallback) {
   return parseSymbol(position.symbol)?.underlying || String(fallback || '').toUpperCase();
 }
 
+/** Órdenes de entrada no finales y con cantidad por ejecutar en `underlying`. */
+function pendingOpenCount(orders, underlying) {
+  return orders.filter((o) => o.action === 'open' && o.status !== 'final'
+    && Number(o.quantity) - Number(o.processedQty || 0) > 0
+    && positionUnderlying(o) === underlying).length;
+}
+
 function utcDayStart(ms) {
   const d = new Date(ms);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
@@ -260,13 +267,15 @@ class OptionsStrategyRunner {
       }
       const { base, chain } = await this.targetChain(strategy, params, tickCtx, underlying);
       const spot = num(chain?.spot) ?? num(base?.spot);
+      const orders = await this.liveOrders.listByStrategy(strategy.id);
       const actions = template.evaluate({
-        now: tickCtx.now, signal, spot, chain, positions: [], openCountAll: all.length,
+        now: tickCtx.now, underlying, signal, spot, chain, positions: [], openCountAll: all.length,
+        pendingOpens: pendingOpenCount(orders, underlying),
         params, mode: 'live',
         lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
         tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
           utcDayStart(tickCtx.now)),
-        committedUsdt: await this.committedFor(strategy, 'live', params, all, { spot, underlying, tickCtx }),
+        committedUsdt: await this.committedFor(strategy, 'live', params, all, { spot, underlying, tickCtx, orders }),
       });
       const open = actions.find((a) => a.type === 'open');
       if (!open) return { status: 'no_valid_entry' };
@@ -431,9 +440,9 @@ class OptionsStrategyRunner {
    * `underlying`; los demás se piden a la caché de la pasada).
    * undefined si el bot no tiene presupuesto (no hace falta consultarlo).
    */
-  async committedFor(strategy, mode, params, positions, { spot, underlying = strategy.underlying, tickCtx } = {}) {
+  async committedFor(strategy, mode, params, positions, { spot, underlying = strategy.underlying, tickCtx, orders: loaded } = {}) {
     if (params?.budgetUsdt == null) return undefined;
-    const orders = mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : [];
+    const orders = mode === 'live' ? loaded || await this.liveOrders.listByStrategy(strategy.id) : [];
     const spots = { [String(underlying).toUpperCase()]: spot };
     for (const item of [...positions, ...orders]) {
       const key = parseSymbol(item.symbol)?.underlying;
@@ -493,6 +502,8 @@ class OptionsStrategyRunner {
       const tradesToday = template.signalDriven
         ? await this.repo.countEventsSince(strategy.id, mode, 'open', utcDayStart(tickCtx.now))
         : undefined;
+      // Real: las entradas aún sin ejecutar también ocupan el subyacente.
+      const orders = botSignal && mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : null;
       const actions = template.evaluate({
         now: tickCtx.now,
         underlying: market.underlying,
@@ -501,13 +512,14 @@ class OptionsStrategyRunner {
         positions,
         // Límites compartidos por todos los subyacentes del bot.
         ...(botSignal ? { openCountAll: allPositions.length } : {}),
+        ...(orders ? { pendingOpens: pendingOpenCount(orders, market.underlying) } : {}),
         params,
         lastOpenedAt,
         mode,
         signal: tickCtx.signal || null,
         tradesToday,
         committedUsdt: tickCtx.signal
-          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx })
+          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx, orders })
           : undefined,
       });
       byMode[mode] = actions;

@@ -477,13 +477,11 @@ export function validateBotForm(form, { alerts } = {}) {
     }
   }
   range('quantity', 0.0001, 1000000, { minLabel: 'Debe ser mayor que 0' });
-  range('contractCount', 1, 10, { integer: true });
   const hasBudget = isNum(form.budgetUsdt);
   if (hasBudget) {
     if (Number(form.budgetUsdt) <= 0) errors.budgetUsdt = 'El presupuesto debe ser mayor a 0';
     range('budgetFractions', 1, 20, { integer: true });
   } else if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
-  if (Number(form.maxOpenPositions) < Number(form.contractCount)) errors.maxOpenPositions = 'Debe cubrir todos los contratos seleccionados';
   if (!takeProfitModesFor(form.structure).some((m) => m.value === form.takeProfitMode)) errors.takeProfitMode = 'Modo de Take Profit inválido';
   if (form.takeProfitMode === 'atr_band') {
     // Stop, salida por tiempo y señal contraria no existen en este modo.
@@ -518,7 +516,8 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     expiryMinDays: isNum(form.expiryMinDays) ? Number(form.expiryMinDays) : null,
     expiryMaxDays: isNum(form.expiryMaxDays) ? Number(form.expiryMaxDays) : null,
     quantity: Number(form.quantity),
-    contractCount: Number(form.contractCount),
+    // Una sola opción por señal: los bots viejos con más se guardan con 1.
+    contractCount: 1,
     // Con presupuesto total el capital por entrada se ignora: no se envía.
     capitalUsdt: !(Number(form.budgetUsdt) > 0) && Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
     budgetUsdt: Number(form.budgetUsdt) > 0 ? Number(form.budgetUsdt) : null,
@@ -612,7 +611,6 @@ export function describeParams(bot) {
           : 'Sin límite',
       },
       { key: 'quantity', label: 'Cantidad', value: `${formatNumber(v('quantity'), { decimals: 4, minDecimals: 0 })} ${bot.underlying || ''}`.trim() },
-      { key: 'contractCount', label: 'Contratos distintos', value: formatNumber(v('contractCount'), { decimals: 0 }) },
       budget
         ? { key: 'budgetUsdt', label: 'Presupuesto total',
           value: `${formatUsdt(budget, { decimals: 2, minDecimals: 0 })} USDT · ${formatNumber(fractions, { decimals: 0 })} fracciones · hasta ${formatUsdt(budget / fractions, { decimals: 2, minDecimals: 0 })} USDT por señal`,

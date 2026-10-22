@@ -133,10 +133,10 @@ test('handleAlertTriggered: abre, registra la decisión y no procesa dos veces e
   assert.equal(repo.signals.length, 1);
   assert.equal(repo.positions.length, 1);
 
-  // Otro disparo alcista: ya hay una posición (máx. 1) → ignorada con motivo.
+  // Otro disparo alcista: el subyacente ya tiene su opción → ignorada con motivo.
   const [capped] = await service.handleAlertTriggered(signal({ eventId: 502 }));
   assert.equal(capped.decision, 'ignored');
-  assert.match(capped.detail, /Máximo de 1 posición/);
+  assert.match(capped.detail, /Ya hay una opción abierta en BTC/);
 
   // Bajista con reverse: cierra la call y compra put.
   const [rev] = await service.handleAlertTriggered(signal({ eventId: 503, direction: 'bearish' }));

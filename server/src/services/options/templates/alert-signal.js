@@ -92,7 +92,6 @@ const NUMERIC_FIELDS = [
 ];
 
 const paramSchema = [
-  { key: 'contractCount', label: 'Contratos distintos', type: 'number', integer: true, min: 1, max: 10, step: 1 },
   { key: 'capitalUsdt', label: 'Capital máximo de entrada', type: 'number', min: 0.01, max: 1e7, nullable: true, unit: 'USDT' },
   { key: 'budgetUsdt', label: 'Presupuesto total', type: 'number', min: 0.01, max: 1e7, nullable: true, unit: 'USDT' },
   { key: 'budgetFractions', label: 'Fracciones del presupuesto', type: 'number', integer: true, min: 1, max: 20, step: 1 },
@@ -171,9 +170,10 @@ function validateParams(raw = {}) {
     onOpposite = 'ignore';
     numeric.exitHoursBeforeExpiry = 0;
   }
-  const contractCount = input.contractCount == null ? 1 : Number(input.contractCount);
+  // Una sola opción por señal (y por subyacente). Los bots guardados con más
+  // contratos se normalizan a 1 en vez de fallar la validación.
+  const contractCount = 1;
   const capitalUsdt = input.capitalUsdt == null || input.capitalUsdt === '' ? null : Number(input.capitalUsdt);
-  if (!Number.isInteger(contractCount) || contractCount < 1 || contractCount > 10) throw new ValidationError('contractCount debe estar entre 1 y 10');
   if (capitalUsdt !== null && (!Number.isFinite(capitalUsdt) || capitalUsdt <= 0 || capitalUsdt > 1e7)) throw new ValidationError('capitalUsdt inválido');
   const budgetUsdt = input.budgetUsdt == null || input.budgetUsdt === '' ? null : Number(input.budgetUsdt);
   const budgetFractions = input.budgetFractions == null || input.budgetFractions === '' ? defaultParams.budgetFractions : Number(input.budgetFractions);
@@ -427,7 +427,19 @@ function evaluate(ctx) {
     if (params.budgetUsdt != null) released = opposite.reduce((sum, p) => sum + positionCommittedUsdt(p, ctx.spot), 0);
   }
 
-  // 2 y 3. Límites y apertura.
+  // 2. Una sola opción por subyacente: hasta que la abierta se cierre o
+  // expire (y la orden de entrada pendiente se resuelva) no se abre otra.
+  const label = ctx.underlying || 'este subyacente';
+  if (positions.length > opposite.length) {
+    actions.push(skip('underlying_busy', `Ya hay una opción abierta en ${label}: se espera a que se cierre o expire`));
+    return actions;
+  }
+  if (ctx.pendingOpens > 0) {
+    actions.push(skip('underlying_busy', `Hay una orden de entrada pendiente en ${label}`));
+    return actions;
+  }
+
+  // 3 y 4. Límites y apertura.
   actions.push(openFor(ctx, direction, openCount, released));
   return actions;
 }

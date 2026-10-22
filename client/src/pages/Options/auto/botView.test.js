@@ -33,9 +33,9 @@ describe('configuración completa del bot', () => {
     expect(tp.value).not.toContain('%');
   });
 
-  it('entrada: contratos, capital y prima máx.', () => {
+  it('entrada: capital y prima máx.; sin fila de contratos (siempre 1)', () => {
     const d = describeParams(normalizeBot({ ...base, params: { ...base.params, contractCount: 3, capitalUsdt: null, maxPremiumUsdt: 150 } }));
-    expect(row(d.entry, 'contractCount').value).toBe('3');
+    expect(row(d.entry, 'contractCount')).toBeUndefined();
     expect(row(d.entry, 'capitalUsdt').value).toBe('sin límite');
     expect(row(d.entry, 'maxPremiumUsdt').value).toContain('150');
     const c = describeParams(normalizeBot({ ...base, params: { ...base.params, capitalUsdt: 500 } }));
