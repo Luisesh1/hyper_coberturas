@@ -517,3 +517,13 @@
   flex-shrink: 0;
   accent-color: var(--indigo);
 }
+
+.underlyingTag {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}

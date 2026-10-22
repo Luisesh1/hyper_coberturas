@@ -6,6 +6,7 @@ import Sheet from '../strategies/common/Sheet';
 import { formatPct, formatUsdt, toNumber } from '../strategies/common/format';
 import { HistoryIcon, RunIcon, SlidersIcon } from '../strategies/common/icons';
 import { normalizeStrategy } from '../strategies/strategyView';
+import { rawBotUnderlyings } from '../auto/botView';
 import BacktestForm from './BacktestForm';
 import BacktestResults, { RunProgress, SourceNote } from './BacktestResults';
 import {
@@ -107,7 +108,7 @@ export default function BacktestingTab({ underlying, initialStrategyId = null } 
       .then((data) => { if (mounted.current) setStrategies((Array.isArray(data) ? data : []).map(normalizeStrategy)); })
       .catch(() => {});
     autoBotsApi.list()
-      .then((data) => { if (mounted.current) setBots((Array.isArray(data) ? data : []).map(normalizeStrategy)); })
+      .then((data) => { if (mounted.current) setBots((Array.isArray(data) ? data : []).map((r) => ({ ...normalizeStrategy(r), underlyings: rawBotUnderlyings(r) }))); })
       .catch(() => {});
     optionsStrategiesApi.listTemplates()
       .then((data) => { if (mounted.current) setTemplates(Array.isArray(data) ? data : []); })

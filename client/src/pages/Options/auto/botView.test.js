@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
-  describeParams, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  describeParams, coveredList, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 
 describe('buildMapping', () => {
@@ -75,7 +75,7 @@ describe('configuración completa del bot', () => {
 describe('formulario de bot', () => {
   it('valores por defecto según la estructura', () => {
     const f = initialBotForm({ underlying: 'ETH' });
-    expect(f).toMatchObject({ underlying: 'ETH', structure: 'buy_with', targetDelta: 0.35, takeProfitPct: 80, stopLossPct: 50, maxPremiumUsdt: 150, expiryDays: 7, onOpposite: 'reverse', exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4 });
+    expect(f).toMatchObject({ underlyings: ['ETH'], structure: 'buy_with', targetDelta: 0.35, takeProfitPct: 80, stopLossPct: 50, maxPremiumUsdt: 150, expiryDays: 7, onOpposite: 'reverse', exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4 });
     const s = withStructure(f, 'sell_against');
     expect(s).toMatchObject({ structure: 'sell_against', targetDelta: 0.25, takeProfitPct: 50, stopLossPct: 200, maxPremiumUsdt: null, maxMarginUsdt: 1000 });
   });
@@ -95,6 +95,7 @@ describe('formulario de bot', () => {
     expect(buy).toEqual({
       name: 'Bot',
       underlying: 'BTC',
+      underlyings: ['BTC'],
       alertIds: [3],
       params: {
         structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, quantity: 0.01, onOpposite: 'reverse',
@@ -107,6 +108,7 @@ describe('formulario de bot', () => {
     });
     const sell = buildBotPayload({ ...withStructure(initialBotForm(), 'sell_against'), name: 'S', alertIds: [1] }, { editing: true, baseLimits: { maxDailyLossUsdt: 50 } });
     expect(sell.underlying).toBeUndefined();
+    expect(sell.underlyings).toEqual(['BTC']);
     expect(sell.params.maxPremiumUsdt).toBeUndefined();
     expect(sell.limits).toEqual({ maxDailyLossUsdt: 50, maxMarginUsdt: 1000 });
   });
@@ -173,7 +175,7 @@ describe('formulario de bot', () => {
       limits: { maxMarginUsdt: 500 },
     });
     expect(initialBotForm({ bot })).toMatchObject({
-      name: 'X', underlying: 'SOL', alertIds: [4, 5], structure: 'sell_against', targetDelta: 0.3, quantity: 2, onOpposite: 'close', takeProfitPct: 50, maxMarginUsdt: 500,
+      name: 'X', underlyings: ['SOL'], alertIds: [4, 5], structure: 'sell_against', targetDelta: 0.3, quantity: 2, onOpposite: 'close', takeProfitPct: 50, maxMarginUsdt: 500,
     });
   });
 });
@@ -346,5 +348,35 @@ describe('filtros de entrada: spread y apalancamiento', () => {
     const d = describeParams(bot);
     expect(row(d.entry, 'maxSpreadPct').value).toBe('8 %');
     expect(row(d.entry, 'minLeverage').value).toBe('5×');
+  });
+});
+
+describe('varios subyacentes', () => {
+  it('payload: underlyings y underlying = el primero', () => {
+    const p = buildBotPayload({ ...initialBotForm({ underlying: 'BTC' }), name: 'M', alertIds: [3], underlyings: ['ETH', 'BTC'] });
+    expect(p.underlyings).toEqual(['ETH', 'BTC']);
+    expect(p.underlying).toBe('ETH');
+  });
+
+  it('un bot antiguo (sin params.underlyings) se edita con su único subyacente', () => {
+    expect(initialBotForm({ bot: { id: 1, underlying: 'SOL', params: {} } }).underlyings).toEqual(['SOL']);
+    expect(initialBotForm({ bot: { id: 1, underlying: 'BTC', underlyings: ['BTC', 'ETH'], params: {} } }).underlyings).toEqual(['BTC', 'ETH']);
+    expect(normalizeBot({ id: 1, underlying: 'BTC', params: { underlyings: ['BTC', 'XRP'] } }).underlyings).toEqual(['BTC', 'XRP']);
+    expect(normalizeBot({ id: 1, underlying: 'BTC', params: {} }).underlyings).toEqual(['BTC']);
+  });
+
+  it('valida al menos un subyacente y que cada uno lo cubra una alerta marcada', () => {
+    const base = { ...initialBotForm(), name: 'M', alertIds: [3] };
+    expect(validateBotForm({ ...base, underlyings: [] }).underlyings).toBe('Elige un subyacente');
+    const alerts = [normalizeAlert({ id: 3, name: 'A', direction: 'bullish', assetList: ['BTCUSDT'] })];
+    expect(validateBotForm({ ...base, underlyings: ['BTC', 'ETH'] }, { alerts }).alertIds).toBe('Ninguna alerta marcada cubre ETH');
+    const both = [normalizeAlert({ id: 3, name: 'A', direction: 'bullish', assetList: ['BTCUSDT', 'ETHUSDT'] })];
+    expect(validateBotForm({ ...base, underlyings: ['BTC', 'ETH'] }, { alerts: both }).alertIds).toBeUndefined();
+  });
+
+  it('muestra qué subyacentes elegidos cubre cada alerta', () => {
+    const a = normalizeAlert({ id: 3, name: 'A', direction: 'bullish', assetList: ['BTCUSDT', 'ETHUSDT'] });
+    expect(coveredList(a, ['BTC', 'ETH', 'SOL'])).toEqual(['BTC', 'ETH']);
+    expect(coveredList({ ...a, coveredUnderlyings: ['ETH'] }, ['BTC', 'ETH'])).toEqual(['ETH']);
   });
 });

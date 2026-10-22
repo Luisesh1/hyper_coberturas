@@ -28,7 +28,7 @@ export default function BotList({ bots, selectedId, onSelect, mobile = false }) 
                 {dirs.length
                   ? dirs.map((d) => <DirectionChip key={d} direction={d} />)
                   : <span className={styles.cardMeta}>Sin alertas vinculadas</span>}
-                <span className={styles.cardMeta}>{b.underlying}</span>
+                <span className={styles.cardMeta}>{(b.underlyings?.length ? b.underlyings : [b.underlying]).join(' · ')}</span>
               </span>
               <span className={styles.cardBottom}>
                 {mobile ? (

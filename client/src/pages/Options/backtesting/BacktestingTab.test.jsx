@@ -209,4 +209,17 @@ describe('BacktestingTab · móvil', () => {
     render(<BacktestingTab />);
     expect(await screen.findByText(/Señales: 12 recibidas · 9 operadas/)).toBeTruthy();
   });
+
+  it('con un bot multi-subyacente el selector solo ofrece los del bot y avisa', async () => {
+    autoBotsApi.list.mockResolvedValue([{ ...BOTS[0], underlying: 'BTC', params: { underlyings: ['BTC', 'ETH'] } }]);
+    render(<BacktestingTab initialStrategyId="7" />);
+    await waitFor(() => expect((screen.getByLabelText('Estrategia')).value).toBe('s:7'));
+    const group = screen.getByRole('radiogroup', { name: 'Subyacente' });
+    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['BTC', 'ETH']);
+    expect(screen.getByText('Se prueba un subyacente a la vez; los límites se aplican solo a él')).toBeTruthy();
+    fireEvent.click(within(group).getByRole('radio', { name: 'ETH' }));
+    fireEvent.click(screen.getByRole('button', { name: /Ejecutar backtest/ }));
+    await waitFor(() => expect(optionsBacktestsApi.create).toHaveBeenCalled());
+    expect(optionsBacktestsApi.create.mock.calls[0][0]).toMatchObject({ strategyId: 7, underlying: 'ETH' });
+  });
 });

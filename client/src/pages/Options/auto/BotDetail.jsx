@@ -38,14 +38,19 @@ function ParamRows({ rows }) {
   );
 }
 
+const underlyingsText = (bot) => (bot.underlyings?.length ? bot.underlyings : [bot.underlying]).join(' · ');
+
 // Menú «Probar señal ▾»: simula una señal alcista o bajista solo en sombra.
+// Con varios subyacentes cada entrada lleva el suyo («Alcista · ETH»).
 function SimulateMenu({ bot, onSimulate, busy, mobile }) {
   const [open, setOpen] = useState(false);
   if (!onSimulate) return null;
   const paused = bot.mode === 'paused';
-  const choose = (direction) => {
+  const multi = bot.underlyings?.length > 1;
+  const choose = (direction, underlying) => {
     setOpen(false);
-    onSimulate(direction);
+    if (multi) onSimulate(direction, underlying);
+    else onSimulate(direction);
   };
   return (
     <div className={styles.simMenu} onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}>
@@ -62,8 +67,17 @@ function SimulateMenu({ bot, onSimulate, busy, mobile }) {
       </button>
       {open && !paused && (
         <div role="menu" aria-label="Probar señal" className={styles.simMenuList}>
-          <button type="button" role="menuitem" className={`${ui.btn} ${styles.touchBtn}`} onClick={() => choose('bullish')}>Alcista</button>
-          <button type="button" role="menuitem" className={`${ui.btn} ${styles.touchBtn}`} onClick={() => choose('bearish')}>Bajista</button>
+          {(multi ? bot.underlyings : [null]).flatMap((u) => [['bullish', 'Alcista'], ['bearish', 'Bajista']].map(([dir, text]) => (
+            <button
+              key={`${dir}-${u}`}
+              type="button"
+              role="menuitem"
+              className={`${ui.btn} ${styles.touchBtn}`}
+              onClick={() => choose(dir, u)}
+            >
+              {u ? `${text} · ${u}` : text}
+            </button>
+          )))}
         </div>
       )}
     </div>
@@ -172,7 +186,7 @@ export default function BotDetail({
           </button>
           <div className={styles.mobileDetailTitle}>
             <span className={styles.mobileDetailName}>{bot.name}</span>
-            <span className={styles.mobileDetailSub}>{bot.underlying} · {info.shorter}</span>
+            <span className={styles.mobileDetailSub}>{underlyingsText(bot)} · {info.shorter}</span>
           </div>
           <Link to={backtestHref} className={`${ui.iconBtn} ${styles.touchBtn}`} aria-label="Backtestear este bot">
             <BacktestIcon size={20} />
@@ -233,7 +247,7 @@ export default function BotDetail({
         <div className={styles.detailTitle}>
           <h2 className={styles.h2}>{bot.name}</h2>
           <span className={ui.muted} style={{ fontSize: 13 }}>
-            Opera {bot.underlying} cuando se dispara una de sus alertas · {info.short}
+            Opera {underlyingsText(bot)} cuando se dispara una de sus alertas · {info.short}
             {bot.status ? ` · ${bot.statusLabel}` : ''}
           </span>
         </div>

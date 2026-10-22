@@ -225,6 +225,7 @@ describe('AutoTradingTab · escritorio', () => {
     expect(autoBotsApi.create.mock.calls[0][0]).toEqual({
       name: 'Contra BTC',
       underlying: 'BTC',
+      underlyings: ['BTC'],
       alertIds: [12],
       params: {
         structure: 'sell_against', targetDelta: 0.3, expiryDays: 7, quantity: 0.01, onOpposite: 'close',
@@ -243,7 +244,8 @@ describe('AutoTradingTab · escritorio', () => {
     await screen.findByRole('heading', { name: 'Momentum BTC' });
     fireEvent.click(screen.getByRole('button', { name: 'Nuevo bot' }));
     const dialog = await screen.findByRole('dialog', { name: 'Nuevo bot' });
-    fireEvent.click(within(dialog).getByRole('radio', { name: 'ETH' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ETH' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'BTC' }));
     await waitFor(() => expect(autoBotsApi.eligibleAlerts).toHaveBeenCalledWith('ETH'));
     expect(await within(dialog).findByText(/No tienes alertas alcistas o bajistas de ETH/)).toBeTruthy();
     expect(within(dialog).getByRole('link', { name: 'Crear o editar alertas' }).getAttribute('href')).toBe('/alertas');

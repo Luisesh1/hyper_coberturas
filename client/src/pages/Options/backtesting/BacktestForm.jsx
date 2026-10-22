@@ -13,7 +13,10 @@ export default function BacktestForm({ form, onChange, strategies, bots = [], te
   const template = sel?.kind === 'template' ? templates.find((t) => t.id === sel.id) : null;
   const schema = useMemo(() => normalizeSchema(template?.paramSchema), [template]);
 
-  const isBot = sel?.kind === 'strategy' && bots.some((b) => String(b.id) === sel.id);
+  const selectedBot = sel?.kind === 'strategy' ? bots.find((b) => String(b.id) === sel.id) : null;
+  const isBot = !!selectedBot;
+  // Un bot multi-subyacente se prueba con un subyacente a la vez, de los suyos.
+  const botUnderlyings = selectedBot?.underlyings?.length > 1 ? selectedBot.underlyings : null;
 
   const set = (patch) => {
     const next = { ...form, ...patch };
@@ -34,6 +37,7 @@ export default function BacktestForm({ form, onChange, strategies, bots = [], te
     if (parsed?.kind === 'strategy') {
       const s = [...strategies, ...bots].find((x) => String(x.id) === parsed.id);
       if (s?.underlying) patch.underlying = s.underlying;
+      if (s?.underlyings?.length > 1 && !s.underlyings.includes(patch.underlying)) patch.underlying = s.underlyings[0];
       patch.params = {};
     } else if (parsed?.kind === 'template') {
       patch.params = initialParams(templates.find((t) => t.id === parsed.id));
@@ -96,7 +100,8 @@ export default function BacktestForm({ form, onChange, strategies, bots = [], te
       <FieldGroup title="Mercado y periodo">
         <ChoiceField
           label="Subyacente"
-          options={UNDERLYINGS.map((u) => ({ value: u, label: u }))}
+          help={botUnderlyings ? 'Se prueba un subyacente a la vez; los límites se aplican solo a él' : undefined}
+          options={(botUnderlyings || UNDERLYINGS).map((u) => ({ value: u, label: u }))}
           value={form.underlying}
           onChange={(u) => set({ underlying: u })}
           error={errors.underlying}

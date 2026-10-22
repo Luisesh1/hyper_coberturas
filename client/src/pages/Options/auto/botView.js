@@ -164,9 +164,24 @@ export function normalizeAlert(raw = {}) {
     direction: normalizeDirection(raw.direction),
     assetList: Array.isArray(assets) ? assets : String(assets || '').split(',').map((s) => s.trim()).filter(Boolean),
     thresholdPercent: toNumber(pick(raw, 'thresholdPercent', 'threshold_percent')),
+    coveredUnderlyings: Array.isArray(raw.coveredUnderlyings) ? raw.coveredUnderlyings : null,
     optionExpiryMinDays: toNumber(pick(raw, 'optionExpiryMinDays', 'option_expiry_min_days')),
     optionExpiryMaxDays: toNumber(pick(raw, 'optionExpiryMaxDays', 'option_expiry_max_days')),
   };
+}
+
+// Subyacentes que opera un bot: `underlyings` del listado, `params.underlyings`
+// o, en un bot de siempre, solo su `underlying`.
+export function rawBotUnderlyings(raw = {}) {
+  const list = [raw.underlyings, raw.params?.underlyings].find((l) => Array.isArray(l) && l.length);
+  if (list) return list.map((u) => String(u).toUpperCase());
+  return raw.underlying ? [String(raw.underlying).toUpperCase()] : [];
+}
+
+// Subyacentes de `underlyings` que vigila la alerta (por BTCUSDT → BTC).
+export function coveredList(alert, underlyings = []) {
+  if (Array.isArray(alert.coveredUnderlyings)) return underlyings.filter((u) => alert.coveredUnderlyings.includes(u));
+  return underlyings.filter((u) => (alert.assetList || []).some((a) => String(a).toUpperCase().startsWith(u)));
 }
 
 export function alertMeta(alert) {
@@ -188,6 +203,7 @@ export function normalizeBot(raw = {}) {
     name: raw.name || `Bot ${raw.id ?? ''}`.trim(),
     alerts,
     alertIds,
+    underlyings: rawBotUnderlyings(raw),
     structure: normalizeStructure(params.structure),
     statusLabel: statusLabel(base.status),
     lastSignal: raw.lastSignal || raw.last_signal ? normalizeSignal(raw.lastSignal || raw.last_signal) : null,
@@ -353,7 +369,7 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
     const val = (key) => toNumber(p[key]) ?? defs[key];
     return {
       name: bot.name || '',
-      underlying: bot.underlying || underlying,
+      underlyings: rawBotUnderlyings(bot).length ? rawBotUnderlyings(bot) : [underlying],
       alertIds: [...(bot.alertIds || [])],
       structure,
       targetDelta: Math.abs(val('targetDelta')),
@@ -386,7 +402,7 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
   }
   return {
     name: '',
-    underlying,
+    underlyings: [underlying],
     alertIds: [],
     structure: 'buy_with',
     ...COMMON_DEFAULTS,
@@ -437,13 +453,20 @@ export function perSignalBudget({ budgetUsdt, budgetFractions } = {}) {
   return budget / fractions;
 }
 
-export function validateBotForm(form) {
+// `alerts`: las alertas elegibles (con su cobertura); si vienen, cada subyacente
+// elegido tiene que estar cubierto por alguna alerta marcada.
+export function validateBotForm(form, { alerts } = {}) {
   const errors = {};
   const name = String(form.name || '').trim();
   if (!name) errors.name = 'Ponle un nombre';
   else if (name.length > NAME_MAX) errors.name = `Máximo ${NAME_MAX} caracteres`;
-  if (!form.underlying) errors.underlying = 'Elige un subyacente';
+  if (!form.underlyings?.length) errors.underlyings = 'Elige un subyacente';
   if (!form.alertIds?.length) errors.alertIds = 'Elige al menos una alerta';
+  else if (alerts && form.underlyings?.length) {
+    const picked = alerts.filter((a) => form.alertIds.includes(a.id));
+    const missing = form.underlyings.find((u) => !picked.some((a) => coveredList(a, [u]).length));
+    if (missing) errors.alertIds = `Ninguna alerta marcada cubre ${missing}`;
+  }
   if (!STRUCTURES.includes(form.structure)) errors.structure = 'Elige qué hacer con la señal';
 
   const range = (key, min, max, { integer = false, minLabel } = {}) => {
@@ -488,7 +511,7 @@ export function validateBotForm(form) {
 }
 
 // POST /options/auto-bots: { name, underlying, alertIds, params, limits? }.
-// PUT /:id no admite cambiar el subyacente.
+// PUT /:id acepta `underlyings` (quitar uno con posiciones abiertas da 409).
 export function buildBotPayload(form, { editing = false, baseLimits = {} } = {}) {
   const buy = form.structure === 'buy_with';
   const params = {
@@ -537,8 +560,9 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     alertIds: [...form.alertIds],
     params,
     limits,
+    underlyings: [...form.underlyings],
   };
-  if (!editing) payload.underlying = form.underlying;
+  if (!editing) payload.underlying = form.underlyings[0];
   return payload;
 }
 

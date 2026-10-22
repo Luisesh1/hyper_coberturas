@@ -366,13 +366,13 @@ export default function AutoTradingTab({ underlying } = {}) {
     }
   };
 
-  const simulate = async (direction) => {
+  const simulate = async (direction, simUnderlying) => {
     if (!shown || actionInFlight.current) return;
     const id = shown.id;
     actionInFlight.current = true;
     setSim({ pending: true, notice: null });
     try {
-      const res = await autoBotsApi.simulate(id, { direction });
+      const res = await autoBotsApi.simulate(id, simUnderlying ? { direction, underlying: simUnderlying } : { direction });
       if (mounted.current) {
         const label = DECISION_LABEL[res?.decision] || res?.decision || '—';
         setSim({ pending: false, notice: { message: `Simulación enviada: ${label}${res?.detail ? ` · ${res.detail}` : ''}` } });

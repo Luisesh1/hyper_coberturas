@@ -77,7 +77,7 @@ function CloseBtn({ row, onClosePosition, busy }) {
   );
 }
 
-function Positions({ rows, mobile, onClosePosition, onCloseAll, busy }) {
+function Positions({ rows, mobile, multi, onClosePosition, onCloseAll, busy }) {
   const closeAll = onCloseAll && rows.length > 0 && (
     <button type="button" className={`${ICON_BTN} ${styles.touchBtn}`} onClick={() => onCloseAll()} disabled={busy}>Cerrar todo</button>
   );
@@ -90,6 +90,7 @@ function Positions({ rows, mobile, onClosePosition, onCloseAll, busy }) {
             <li key={r.id} className={styles.activityCard}>
               <div className={styles.activityCardHead}>
                 <span className={`${ui.mono} ${styles.activitySymbol}`}>{r.symbol}</span>
+                {multi && <span className={styles.underlyingTag}>{String(r.symbol).split('-')[0]}</span>}
                 <span className={ui.muted}>{r.sideLabel} · {formatNumber(r.quantity, { decimals: 4, minDecimals: 0 })}</span>
               </div>
               <div className={`${styles.activityPnl} ${toneClass(r.tone)}`}>
@@ -316,7 +317,7 @@ export default function BotActivity({ bot, mobile = false, part = 'top', onClose
   }
   return (
     <>
-      <Positions rows={positions} mobile={mobile} onClosePosition={onClosePosition} onCloseAll={onCloseAll} busy={busy} />
+      <Positions rows={positions} mobile={mobile} multi={bot.underlyings?.length > 1} onClosePosition={onClosePosition} onCloseAll={onCloseAll} busy={busy} />
       <PendingOrders rows={orders} mobile={mobile} onCancelOrder={onCancelOrder} busy={busy} />
       <Usage rows={usage} mobile={mobile} />
     </>

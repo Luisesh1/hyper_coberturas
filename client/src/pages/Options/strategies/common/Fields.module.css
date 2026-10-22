@@ -168,6 +168,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.segmentTall { min-height: 44px; }
 .segment:hover:not(:disabled) { color: var(--text-bright); background: var(--overlay-soft); }
 .segment:focus-visible { outline: 2px solid var(--indigo); outline-offset: -2px; }
 .segment:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -211,6 +212,7 @@
   .stepValue { height: 36px; }
   .stepInput { font-size: var(--fs-sm); }
   .segment { min-height: 36px; }
+  .segment.segmentTall { min-height: 44px; }
   .select, .textInput { min-height: 38px; font-size: var(--fs-sm); }
 }
 

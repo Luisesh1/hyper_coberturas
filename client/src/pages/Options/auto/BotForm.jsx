@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Sheet from '../strategies/common/Sheet';
-import { ChoiceField, FieldGroup, NumberField, TextField } from '../strategies/common/Fields';
+import { ChoiceField, FieldGroup, MultiChoiceField, NumberField, TextField } from '../strategies/common/Fields';
 import { UNDERLYINGS } from '../strategies/strategyView';
 import { autoBotsApi } from '../autoTradingApi';
 import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import {
   NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, ATR_BAND_INTERVALS, ATR_BAND_NOTE, ATR_BAND_SWITCH_WARNING, alertMeta, buildBotPayload,
-  initialBotForm, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  coveredList, initialBotForm, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 import { formatNumber } from '../strategies/common/format';
 import ui from '../strategies/common/ui.module.css';
@@ -23,8 +23,8 @@ function CheckGlyph() {
 }
 
 // Alertas elegibles (no neutrales y del subyacente) como casillas grandes.
-function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, onRetry, invalid }) {
-  if (loading && !alerts.length) return <p className={ui.empty}>Cargando alertas de {underlying}…</p>;
+function AlertPicker({ underlyings, alerts, loading, error, selected, onToggle, onRetry, invalid }) {
+  if (loading && !alerts.length) return <p className={ui.empty}>Cargando alertas de {underlyings.join(', ')}…</p>;
   if (error && !alerts.length) {
     return (
       <div className={`${ui.alert} ${ui.alertError}`} role="alert">
@@ -37,16 +37,17 @@ function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, o
     return (
       <div className={styles.alertEmpty}>
         <p>
-          No tienes alertas alcistas o bajistas de {underlying}. Las neutrales no operan.
+          No tienes alertas alcistas o bajistas de {underlyings.join(', ')}. Las neutrales no operan.
         </p>
         <Link to="/alertas" className={`${ui.btn} ${ui.btnSmall}`}>Crear o editar alertas</Link>
       </div>
     );
   }
   return (
-    <ul className={`${styles.alertPick} ${invalid ? styles.alertPickInvalid : ''}`} aria-label={`Alertas de ${underlying}`}>
+    <ul className={`${styles.alertPick} ${invalid ? styles.alertPickInvalid : ''}`} aria-label={`Alertas de ${underlyings.join(', ')}`}>
       {alerts.map((a) => {
         const on = selected.includes(a.id);
+        const covers = coveredList(a, underlyings);
         return (
           <li key={a.id}>
             <button
@@ -60,6 +61,9 @@ function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, o
               <span className={styles.alertPickText}>
                 <span className={styles.alertPickName}>{a.name}</span>
                 {alertMeta(a) && <span className={styles.alertPickMeta}>{alertMeta(a)}</span>}
+                {underlyings.length > 1 && covers.length > 0 && (
+                  <span className={styles.alertPickMeta}>Cubre {covers.join(', ')}</span>
+                )}
               </span>
               <DirectionChip direction={a.direction} />
             </button>
@@ -70,8 +74,8 @@ function AlertPicker({ underlying, alerts, loading, error, selected, onToggle, o
   );
 }
 
-// Crear o editar un bot. Al crear se elige el subyacente; al editar no
-// (PUT /options/auto-bots/:id no lo admite).
+// Crear o editar un bot. Los subyacentes son de selección múltiple; quitar
+// uno con posiciones abiertas lo rechaza el servidor (409) y se muestra aquí.
 export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel, onSubmit }) {
   const editing = !!bot;
   const [form, setForm] = useState(() => initialBotForm({ bot, underlying }));
@@ -79,8 +83,9 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState(null);
-  const [eligible, setEligible] = useState({ loading: false, error: null, list: [], underlying: null });
+  const [eligible, setEligible] = useState({ loading: false, error: null, list: [], key: null });
   const reqId = useRef(0);
+  const underlyingsKey = form.underlyings.join(',');
 
   useEffect(() => {
     if (!open) return;
@@ -95,22 +100,22 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
 
   const loadEligible = (u) => {
     const id = ++reqId.current;
-    setEligible((e) => ({ ...e, loading: true, error: null, underlying: u, list: e.underlying === u ? e.list : [] }));
+    setEligible((e) => ({ ...e, loading: true, error: null, key: u, list: e.key === u ? e.list : [] }));
     autoBotsApi.eligibleAlerts(u)
       .then((data) => {
         if (id !== reqId.current) return;
-        setEligible({ loading: false, error: null, underlying: u, list: (Array.isArray(data) ? data : []).map(normalizeAlert) });
+        setEligible({ loading: false, error: null, key: u, list: (Array.isArray(data) ? data : []).map(normalizeAlert) });
       })
       .catch((err) => {
-        if (id === reqId.current) setEligible({ loading: false, error: err, underlying: u, list: [] });
+        if (id === reqId.current) setEligible({ loading: false, error: err, key: u, list: [] });
       });
   };
 
   useEffect(() => {
-    if (!open || !form.underlying) return;
-    loadEligible(form.underlying);
+    if (!open || !underlyingsKey) return;
+    loadEligible(underlyingsKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, form.underlying]);
+  }, [open, underlyingsKey]);
 
   // Al editar se muestran también las alertas ya vinculadas aunque hayan
   // dejado de ser elegibles (para poder desvincularlas).
@@ -124,16 +129,26 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
     return list;
   })();
 
+  const validate = (f) => validateBotForm(f, { alerts: alertOptions });
+
   const update = (patch) => {
     const next = { ...form, ...patch };
     setForm(next);
-    if (submitted) setErrors(validateBotForm(next));
+    if (submitted) setErrors(validate(next));
   };
 
-  const pickUnderlying = (u) => {
-    if (u === form.underlying) return;
-    // Las alertas son de un activo concreto: al cambiar de subyacente se vacían.
-    update({ underlying: u, alertIds: [] });
+  const toggleUnderlying = (u) => {
+    const on = form.underlyings.includes(u);
+    if (on && form.underlyings.length === 1) return; // al menos uno
+    const underlyings = on ? form.underlyings.filter((x) => x !== u) : [...form.underlyings, u];
+    // Se sueltan las alertas marcadas que ya no cubren ninguno de los elegidos.
+    const alertIds = on
+      ? form.alertIds.filter((id) => {
+        const a = alertOptions.find((x) => x.id === id);
+        return !a || coveredList(a, underlyings).length > 0;
+      })
+      : form.alertIds;
+    update({ underlyings, alertIds });
   };
 
   const toggleAlert = (id) => {
@@ -145,19 +160,19 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
     if (s === form.structure) return;
     const next = withStructure(form, s, { editing });
     setForm(next);
-    if (submitted) setErrors(validateBotForm(next));
+    if (submitted) setErrors(validate(next));
   };
 
   const pickTakeProfitMode = (mode) => {
     const next = withTakeProfitMode(form, mode);
     setForm(next);
-    if (submitted) setErrors(validateBotForm(next));
+    if (submitted) setErrors(validate(next));
   };
 
   const submit = async (e) => {
     e?.preventDefault?.();
     setSubmitted(true);
-    const found = validateBotForm(form);
+    const found = validate(form);
     setErrors(found);
     if (Object.keys(found).length) return;
     setSaving(true);
@@ -189,7 +204,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
       open={open}
       title={editing ? 'Editar bot' : 'Nuevo bot'}
       description={editing
-        ? `${bot.underlying} · los cambios se aplican a la próxima señal.`
+        ? `${(bot.underlyings?.length ? bot.underlyings : [bot.underlying]).join(' · ')} · los cambios se aplican a la próxima señal.`
         : 'Se crea en modo sombra: opera con llenados simulados hasta que lo pases a Real.'}
       onClose={onCancel}
       closeDisabled={saving}
@@ -213,33 +228,27 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             placeholder="p. ej. Momentum BTC (MACD 15m)"
             maxLength={NAME_MAX + 20}
           />
-          {editing ? (
-            <div className={styles.staticRow}>
-              <span>Subyacente</span>
-              <span className={ui.mono}>{form.underlying}</span>
-            </div>
-          ) : (
-            <ChoiceField
-              label="Subyacente"
-              options={UNDERLYINGS.map((u) => ({ value: u, label: u }))}
-              value={form.underlying}
-              onChange={pickUnderlying}
-              error={errors.underlying}
-              columns={3}
-            />
-          )}
+          <MultiChoiceField
+            label="Subyacentes"
+            help="Puedes elegir varios: el bot opera cada uno cuando la alerta lo incluye"
+            options={UNDERLYINGS.map((u) => ({ value: u, label: u }))}
+            value={form.underlyings}
+            onToggle={toggleUnderlying}
+            error={errors.underlyings}
+            columns={3}
+          />
         </FieldGroup>
 
         <fieldset className={styles.fieldset}>
           <legend className={styles.legend}>1 · Señales (alertas)</legend>
           <AlertPicker
-            underlying={form.underlying}
+            underlyings={form.underlyings}
             alerts={alertOptions}
             loading={eligible.loading}
             error={eligible.error}
             selected={form.alertIds}
             onToggle={toggleAlert}
-            onRetry={() => loadEligible(form.underlying)}
+            onRetry={() => loadEligible(underlyingsKey)}
             invalid={!!errors.alertIds}
           />
           {errors.alertIds && <span className={styles.fieldError} role="alert">{errors.alertIds}</span>}
@@ -368,7 +377,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
           )}
           <NumberField
             label="Cantidad máxima por contrato"
-            unit={form.underlying}
+            unit={form.underlyings.join(' · ')}
             value={form.quantity}
             min={0.0001}
             step={0.01}
