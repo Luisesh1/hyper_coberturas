@@ -337,6 +337,11 @@ test('backtest bot multi-subyacente: un subyacente del bot a la vez; fuera del b
     service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'SOL', from: FROM, to: TO }),
     (err) => err.name === 'ValidationError' && /no opera SOL/.test(err.message)
   );
+  // params del input no amplían los subyacentes del bot guardado.
+  await assert.rejects(
+    service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'SOL', params: { underlyings: ['BTC', 'ETH', 'SOL'] }, from: FROM, to: TO }),
+    (err) => err.name === 'ValidationError' && /no opera SOL/.test(err.message)
+  );
   // Un bot de un solo subyacente tampoco acepta otro.
   const single = botService({ signals });
   await assert.rejects(single.service.normalizeConfig(3, { strategyId: BOT_ID, underlying: 'ETH', from: FROM, to: TO }), (err) => err.name === 'ValidationError');

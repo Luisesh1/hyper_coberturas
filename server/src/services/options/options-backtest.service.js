@@ -490,9 +490,10 @@ function createOptionsBacktestService(deps = {}) {
     params = templates.validateParams(template, params);
     if (!underlying) throw new ValidationError('underlying es obligatorio');
     // Bot multi-subyacente: se backtestea un subyacente del bot a la vez
-    // (por defecto el primero, que es la columna `underlying`).
+    // (por defecto el primero, que es la columna `underlying`). El conjunto
+    // sale del bot guardado: los params del input no lo amplían.
     if (signalDriven) {
-      const own = botUnderlyings({ underlying: strategy.underlying, params });
+      const own = botUnderlyings(strategy);
       if (!own.includes(underlying)) {
         throw new ValidationError(`El bot no opera ${underlying}. Opciones: ${own.join(', ')}`);
       }

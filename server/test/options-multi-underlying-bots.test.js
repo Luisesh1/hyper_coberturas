@@ -219,3 +219,46 @@ test('simular: underlying opcional (por defecto el primero) y debe ser del bot',
   await service.simulateSignal(USER, bot.id, { direction: 'bearish' });
   assert.equal(repo.signals.at(-1).asset, 'BTC');
 });
+
+test('updateBot: no se puede quitar un subyacente con posiciones u órdenes abiertas (409 OPEN_POSITIONS)', async () => {
+  const { createOptionsStrategiesService } = require('../src/services/options/options-strategies.service');
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  const orders = [];
+  const liveOrders = { async listByStrategy(id) { return orders.filter((o) => o.strategyId === id); } };
+  const strategies = createOptionsStrategiesService({ repo, liveOrders, market: fakeMarket(), credentials: {}, now: () => NOW });
+  const alerts = [{ id: 11, name: 'Cruce', direction: 'bullish', assetList: ['BTCUSDT', 'ETHUSDT'] }];
+  const service = createOptionsAutoTradingService({ repo, strategies, liveOrders, logger: silent, now: () => NOW,
+    runner: { async runForSignal() { return { produced: [] }; } }, alerts: { listAlerts: async () => alerts } });
+  const create = () => repo.createStrategy({ userId: USER, name: 'Multi', template: 'alert_signal', underlying: 'BTC',
+    params: { alertIds: [11], underlyings: ['BTC', 'ETH'] }, limits: {}, mode: 'shadow' });
+  const position = (bot, mode, symbol) => repo.insertPosition({ strategyId: bot.id, userId: USER, mode, symbol, side: 'BUY', quantity: 0.01, entryPrice: 10, openedAt: NOW, feesUsdt: 0 });
+  const expect409 = async (bot, body = { underlyings: ['BTC'] }) => {
+    await assert.rejects(service.updateBot(USER, bot.id, body),
+      (err) => err.status === 409 && err.code === 'OPEN_POSITIONS' && err.message === 'No puedes quitar ETH: tiene posiciones u órdenes abiertas');
+    assert.deepEqual((await repo.getStrategy(USER, bot.id)).params.underlyings, ['BTC', 'ETH']);
+  };
+
+  const shadow = await create();
+  await position(shadow, 'shadow', 'ETH-261030-3200-C');
+  await expect409(shadow);
+  await expect409(shadow, { params: { underlyings: null } });
+  // Reordenar sin quitar nada sigue permitido.
+  assert.deepEqual((await service.updateBot(USER, shadow.id, { underlyings: ['ETH', 'BTC'] })).underlyings, ['BTC', 'ETH']);
+
+  const live = await create();
+  await position(live, 'live', 'ETH-261030-3200-C');
+  await expect409(live);
+
+  const pending = await create();
+  orders.push({ id: 70, strategyId: pending.id, symbol: 'ETH-261030-3200-C', action: 'open', status: 'submitted' });
+  await expect409(pending);
+  orders.at(-1).status = 'final';
+  assert.deepEqual((await service.updateBot(USER, pending.id, { underlyings: ['BTC'] })).underlyings, ['BTC']);
+
+  // Solo posiciones BTC: ETH se puede quitar.
+  const clean = await create();
+  await position(clean, 'shadow', 'BTC-261030-70000-C');
+  const ok = await service.updateBot(USER, clean.id, { underlyings: ['BTC'] });
+  assert.deepEqual(ok.underlyings, ['BTC']);
+  assert.deepEqual(ok.params.underlyings, ['BTC']);
+});

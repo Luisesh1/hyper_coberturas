@@ -18,6 +18,7 @@ const { AppError, ValidationError, NotFoundError } = require('../../errors/app-e
 const defaultRepo = require('../../repositories/options-strategies.repository');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const { botUnderlyings, normalizeUnderlyings } = require('./bot-underlyings');
+const { parseSymbol } = require('./options-utils');
 
 const TEMPLATE_ID = 'alert_signal';
 const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
@@ -384,6 +385,29 @@ function createOptionsAutoTradingService(deps = {}) {
     return (await botSummary(userId, created.id)) || created;
   }
 
+  /**
+   * Quitar un subyacente con posiciones abiertas (sombra o real) u órdenes
+   * reales sin finalizar dejaría esas patas sin poder cerrarse (el ledger
+   * real solo acepta símbolos de los subyacentes del bot): 409.
+   */
+  async function assertRemovableUnderlyings(bot, next) {
+    const removed = botUnderlyings(bot).filter((u) => !next.includes(u));
+    if (!removed.length) return;
+    const [shadow, live, orders] = await Promise.all([
+      repo.listOpenPositions(bot.id, 'shadow'),
+      repo.listOpenPositions(bot.id, 'live'),
+      liveOrders.listByStrategy(bot.id),
+    ]);
+    const busy = new Set([
+      ...[...shadow, ...live].map((p) => parseSymbol(p.symbol)?.underlying),
+      ...orders.filter((o) => o.status !== 'final').map((o) => parseSymbol(o.symbol)?.underlying),
+    ]);
+    const blocked = removed.find((u) => busy.has(u));
+    if (blocked) {
+      throw new AppError(`No puedes quitar ${blocked}: tiene posiciones u órdenes abiertas`, { status: 409, code: 'OPEN_POSITIONS' });
+    }
+  }
+
   async function updateBot(userId, id, body = {}) {
     const bot = await requireBot(userId, id);
     const patch = {};
@@ -397,6 +421,9 @@ function createOptionsAutoTradingService(deps = {}) {
       if (underlyings.includes(bot.underlying)) underlyings = [bot.underlying, ...underlyings.filter((u) => u !== bot.underlying)];
       patch.underlying = underlyings[0];
     }
+    // `params.underlyings: null` vuelve al bot de un solo subyacente.
+    const clearsList = !underlyings && body.params && 'underlyings' in body.params && body.params.underlyings == null;
+    if (underlyings || clearsList) await assertRemovableUnderlyings(bot, underlyings || [bot.underlying]);
     const effective = underlyings || botUnderlyings(bot);
     const rawIds = body.alertIds !== undefined ? body.alertIds : (params?.alertIds ?? (underlyings ? bot.params?.alertIds : undefined));
     if (rawIds !== undefined) {
