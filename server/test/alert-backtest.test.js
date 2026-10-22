@@ -235,3 +235,60 @@ test('constantes exportadas', () => {
   assert.equal(backtest.MAX_COOLDOWN_LOOKBACK_FACTOR, 32);
   assert.equal(typeof backtest.run, 'function');
 });
+
+const H1 = 60 * 60_000;
+const M1 = 60_000;
+
+test('velas horarias que abren en :30 (Yahoo) se evalúan en las horas del epoch', () => {
+  const candles = makeCandles(H1, BASE + 30 * 60_000, 600, () => 100);
+  const alert = makeAlert({ cooldownSeconds: 0, rules: [volumeRule('1h', 50)] });
+  const fromMs = BASE + 300 * H1;
+  const toMs = BASE + 320 * H1;
+  const out = simulate({ alert, candlesByTf: { '1h': candles }, fromMs, toMs });
+  assert.equal(out.baseTimeframe, '1h');
+  assert.equal(out.insufficient, 0);
+  assert.equal(out.events.length, 20);
+  for (const e of out.events) {
+    assert.equal(e.evalTime % H1, 0);
+    assert.equal(e.time, e.evalTime - 30 * 60_000);
+    assert.equal(e.suppressed, false);
+  }
+});
+
+test('dos boundaries sobre la misma última vela: el segundo sale suprimido', () => {
+  // Falta la vela 301: en el boundary closeOf(301) la última cerrada sigue siendo la 300.
+  const candles = makeCandles(M15, BASE, 400, (i) => (i === 300 ? 100 : 10))
+    .filter((_, i) => i !== 301);
+  const out = simulate({
+    alert: makeAlert({ cooldownSeconds: 900 }),
+    candlesByTf: { '15m': candles },
+    fromMs: closeOf(280),
+    toMs: closeOf(320),
+  });
+  assert.deepEqual(out.events.map((e) => e.evalTime), [closeOf(300), closeOf(301)]);
+  assert.deepEqual(out.events.map((e) => e.time), [closeOf(300), closeOf(300)]);
+  assert.deepEqual(out.events.map((e) => e.suppressed), [false, true]);
+});
+
+test('cooldown de 1 día en 1m: el calentamiento se limita a 2000 boundaries', async () => {
+  // Racha continua de 3900 velas: sin el tope, el lookback de 32 días llegaría
+  // a la zona sin datos y encontraría un reinicio; con el tope es aproximado.
+  const candles = makeCandles(M1, BASE, 5000, (i) => (i >= 100 ? 100 : 10));
+  const alert = makeAlert({ cooldownSeconds: 86_400, rules: [volumeRule('1m', 50)] });
+  const fromMs = BASE + 4000 * M1;
+  const toMs = BASE + 4010 * M1;
+  const out = simulate({ alert, candlesByTf: { '1m': candles }, fromMs, toMs });
+  assert.equal(out.cooldownApprox, true);
+  assert.equal(out.events.length, 10);
+
+  const getCandles = async () => candles;
+  const calls = [];
+  const svc = createAlertBacktest({
+    getAlert: async () => alert,
+    getCandles: async (...args) => { calls.push(args); return getCandles(); },
+    now: () => toMs,
+  });
+  const res = await svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: fromMs, endTime: toMs });
+  assert.equal(res.cooldownApprox, true);
+  assert.equal(calls[0][2].startTime, fromMs - 2000 * M1 - 250 * M1);
+});

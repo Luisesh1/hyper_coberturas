@@ -30,6 +30,12 @@ const SEND_DELAY_MS = 1000;
 const MAX_EVALS_PER_REQUEST = 2000;
 const MAX_COOLDOWN_LOOKBACK_FACTOR = 32;
 
+// Calentamiento del cooldown: 32·cd, pero nunca más de MAX_EVALS_PER_REQUEST
+// boundaries extra (cd = 1 día en 1m serían 46 080 evaluaciones).
+function cooldownLookbackMs(cooldownMs, baseMs) {
+  return Math.min(MAX_COOLDOWN_LOOKBACK_FACTOR * cooldownMs, MAX_EVALS_PER_REQUEST * baseMs);
+}
+
 // ------------------------------------------------------------------
 // Ventana en el instante T
 // ------------------------------------------------------------------
@@ -86,12 +92,14 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
   const threshold = Number(alert.thresholdPercent);
   const cooldownMs = Math.max(0, Number(alert.cooldownSeconds || 0) * 1000);
 
-  // Cache por cierre: { insufficient } | { score, ruleResults, wouldTrigger }.
+  // Cache por boundary: { insufficient } | { score, ruleResults, wouldTrigger, closeMs }.
+  // Como en vivo, se evalúa lo que esté cerrado en T = boundary + 3 s, aunque
+  // ninguna vela base cierre justo en el boundary (Yahoo, 1w en jueves…).
   const cache = new Map();
-  function evaluateAt(closeMs) {
-    let ev = cache.get(closeMs);
+  function evaluateAt(boundary) {
+    let ev = cache.get(boundary);
     if (ev) return ev;
-    const T = closeMs + POST_CLOSE_BUFFER_MS;
+    const T = boundary + POST_CLOSE_BUFFER_MS;
     const windows = {};
     let insufficient = false;
     for (const tf of tfs) {
@@ -105,44 +113,41 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
       }
       windows[tf] = win;
     }
-    if (!insufficient) {
-      // La vela base que cierra en este cierre tiene que existir.
-      const base = windows[baseTimeframe];
-      const lastClose = candleCloseTimeMs(base[base.length - 1], baseTimeframe);
-      if (!(lastClose > closeMs - baseMs && lastClose <= closeMs)) insufficient = true;
-    }
     if (insufficient) {
       ev = { insufficient: true, wouldTrigger: false };
     } else {
       const { ruleResults, score } = scoreAlert(rules, windows);
-      ev = { insufficient: false, score, ruleResults, wouldTrigger: score >= threshold };
+      const base = windows[baseTimeframe];
+      // Lo que el motor registra como candleCloseTime.
+      const closeMs = candleCloseTimeMs(base[base.length - 1], baseTimeframe);
+      ev = { insufficient: false, score, ruleResults, wouldTrigger: score >= threshold, closeMs };
     }
-    cache.set(closeMs, ev);
+    cache.set(boundary, ev);
     return ev;
   }
 
-  // Rejilla de cierres base, igual que el boundary del scheduler.
+  // Boundaries del scheduler: múltiplos de tf alineados al epoch.
   const lastBefore = (ms) => Math.floor(ms / baseMs) * baseMs;
-  const firstClose = lastBefore(fromMs) + baseMs; // primer cierre > fromMs
-  const lastClose = lastBefore(toMs);
+  const firstBoundary = lastBefore(fromMs) + baseMs; // primer boundary > fromMs
+  const lastBoundary = lastBefore(toMs);
 
-  // Punto de reinicio: último cierre p ≤ fromMs sin ningún wouldTrigger en
-  // (p − cd, p]. En los cierres > p ningún envío anterior pesa: el último
+  // Punto de reinicio: último boundary p ≤ fromMs sin ningún wouldTrigger en
+  // (p − cd, p]. En los boundaries > p ningún envío anterior pesa: el último
   // posible cae en ≤ p − cd, y cd + tf ≥ cd + SEND_DELAY_MS.
   // Recorrer hacia atrás de forma perezosa equivale a duplicar W hasta el tope.
-  let simStart = firstClose; // primer cierre que se simula
+  let simStart = firstBoundary; // primer boundary que se simula
   let cooldownApprox = false;
   if (cooldownMs > 0) {
-    const lowest = fromMs - MAX_COOLDOWN_LOOKBACK_FACTOR * cooldownMs;
+    const lowest = fromMs - cooldownLookbackMs(cooldownMs, baseMs);
     let candidate = null;
     let found = null;
-    for (let c = lastBefore(fromMs); c >= lowest; c -= baseMs) {
-      if (evaluateAt(c).wouldTrigger) {
+    for (let b = lastBefore(fromMs); b >= lowest; b -= baseMs) {
+      if (evaluateAt(b).wouldTrigger) {
         candidate = null;
         continue;
       }
-      if (candidate == null) candidate = c;
-      if (c - baseMs <= candidate - cooldownMs) {
+      if (candidate == null) candidate = b;
+      if (b - baseMs <= candidate - cooldownMs) {
         found = candidate;
         break;
       }
@@ -158,20 +163,21 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
   const events = [];
   let insufficientCount = 0;
   let lastSentAt = null;
-  for (let c = simStart; c <= lastClose; c += baseMs) {
-    const ev = evaluateAt(c);
-    const inRange = c > fromMs;
+  for (let b = simStart; b <= lastBoundary; b += baseMs) {
+    const ev = evaluateAt(b);
+    const inRange = b > fromMs;
     if (ev.insufficient) {
       if (inRange) insufficientCount += 1;
       continue;
     }
     if (!ev.wouldTrigger) continue;
-    const evalTime = c + POST_CLOSE_BUFFER_MS;
-    const suppressed = lastSentAt != null && cooldownMs - (evalTime - lastSentAt) > 0;
-    if (!suppressed) lastSentAt = evalTime + SEND_DELAY_MS;
+    const evalAt = b + POST_CLOSE_BUFFER_MS;
+    const suppressed = lastSentAt != null && cooldownMs - (evalAt - lastSentAt) > 0;
+    if (!suppressed) lastSentAt = evalAt + SEND_DELAY_MS;
     if (inRange) {
       events.push({
-        time: c,
+        time: ev.closeMs,
+        evalTime: b,
         score: ev.score,
         threshold,
         suppressed,
@@ -207,7 +213,7 @@ function createAlertBacktest({ getAlert, getCandles, now = Date.now }) {
 
     const ds = datasource || alert.datasource;
     const cooldownMs = Math.max(0, Number(alert.cooldownSeconds || 0) * 1000);
-    const lookbackMs = MAX_COOLDOWN_LOOKBACK_FACTOR * cooldownMs;
+    const lookbackMs = cooldownLookbackMs(cooldownMs, baseMs);
     const candlesByTf = {};
     await Promise.all(distinctTimeframes(rules).map(async (tf) => {
       candlesByTf[tf] = await getCandles(asset, tf, {
