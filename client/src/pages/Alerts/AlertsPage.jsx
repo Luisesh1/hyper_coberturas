@@ -5,6 +5,7 @@ import { useTradingContext } from '../../context/TradingContext';
 import { MOBILE_QUERY, useMediaQuery } from '../TradingView/useMediaQuery';
 import { AlertRuleRow, emptyCondition } from './components/AlertRuleRow';
 import AssetPickerModal from './components/AssetPickerModal';
+import MobileAlertEditor from './mobile/MobileAlertEditor';
 import MobileAlertList from './mobile/MobileAlertList';
 import TestResultView from './components/TestResultView';
 import { alertToPayload, baseTimeframe, emptyRule, formToPayload, normalizeLoadedRule } from './lib/alertView';
@@ -27,18 +28,10 @@ import styles from './AlertsPage.module.css';
 const NO_BOTS = [];
 export { normalizeLoadedRule };
 
-function BackIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M15 18l-6-6 6-6" />
-    </svg>
-  );
-}
-
 const DATASOURCES = [
-  { value: 'binance',     label: 'Binance (ej. BTCUSDT)' },
-  { value: 'hyperliquid', label: 'Hyperliquid (ej. BTC)' },
-  { value: 'yahoo',       label: 'Yahoo Finance' },
+  { value: 'binance',     label: 'Binance (ej. BTCUSDT)', short: 'Binance' },
+  { value: 'hyperliquid', label: 'Hyperliquid (ej. BTC)', short: 'Hyperliquid' },
+  { value: 'yahoo',       label: 'Yahoo Finance',         short: 'Yahoo' },
 ];
 
 function emptyForm() {
@@ -83,6 +76,8 @@ export default function AlertsPage() {
   const isMobile = useMediaQuery(MOBILE_QUERY);
   // En móvil se ve la lista o el editor a pantalla completa, no ambos.
   const [mobileView, setMobileView] = useState('list');
+  // Regla abierta en el editor móvil (null = ninguna).
+  const [openRuleIndex, setOpenRuleIndex] = useState(null);
   const [directionFilter, setDirectionFilter] = useState('all');
   // Map alertId → bots que la usan. null = no disponible (se oculta sin error).
   const [botUsage, setBotUsage] = useState(null);
@@ -285,6 +280,12 @@ export default function AlertsPage() {
     }
   };
 
+  const onRawTextChange = (text) => {
+    setRawText(text);
+    setRawTextDirty(true);
+    setRawError('');
+  };
+
   const copyRawText = async () => {
     const text = editorMode === 'raw' ? rawText : formatRaw();
     try {
@@ -384,8 +385,10 @@ export default function AlertsPage() {
       const data = await alertsApi.test(selectedId, { dryRun });
       setTestResult(data);
       if (!dryRun) addNotification?.('success', 'Test enviado a Telegram para los activos que cumplen');
+      return data;
     } catch (err) {
       addNotification?.('error', `Error al probar: ${err.message}`);
+      return null;
     }
   };
 
@@ -429,6 +432,7 @@ export default function AlertsPage() {
 
   const openAlert = (alert) => {
     selectAlert(alert);
+    setOpenRuleIndex(null);
     setMobileView('editor');
   };
 
@@ -456,6 +460,66 @@ export default function AlertsPage() {
   const totalWeight = form.rules.reduce((acc, r) => acc + (Number(r.weight) || 0), 0);
   const requiredWeight = (totalWeight * Number(form.thresholdPercent)) / 100;
 
+  const assetPicker = (
+    <AssetPickerModal
+      open={pickerOpen}
+      currentAssets={form.assetList}
+      currentDatasource={form.datasource}
+      onAdd={addAssetsBulk}
+      onClose={() => setPickerOpen(false)}
+    />
+  );
+
+  if (mobileEditor) {
+    return (
+      <div className={styles.page}>
+        <MobileAlertEditor
+          form={form}
+          selectedId={selectedId}
+          isSaving={isSaving}
+          effectiveDirty={effectiveDirty}
+          saveValidationError={saveValidationError}
+          updateField={updateField}
+          onBack={() => { setOpenRuleIndex(null); setMobileView('list'); }}
+          onSave={save}
+          onRemove={remove}
+          onTest={() => testNow({ dryRun: true })}
+          testResult={testResult}
+          editorMode={editorMode}
+          rawText={rawText}
+          rawError={rawError}
+          onRawTextChange={onRawTextChange}
+          onOpenRaw={openRawMode}
+          onOpenVisual={openVisualMode}
+          onRefreshRaw={refreshRawFromVisual}
+          onApplyRaw={applyRawText}
+          onCopyConfig={copyRawText}
+          showPresets={editorMode === 'visual' && !selectedId && !isDirty}
+          presets={PRESETS}
+          onApplyPreset={(p) => { setOpenRuleIndex(null); applyPreset(p); }}
+          datasources={DATASOURCES}
+          telegramPreview={telegramPreview}
+          showUsedBy={!!botUsage && selectedId != null}
+          usedByBots={usedByBots}
+          directionNote={directionNote}
+          showNeutralWarning={showNeutralWarning}
+          assetInput={assetInput}
+          onAssetInput={setAssetInput}
+          onAddAsset={addAsset}
+          onRemoveAsset={removeAsset}
+          onOpenPicker={() => setPickerOpen(true)}
+          // Provisional hasta la hoja de regla: tocar alterna el editor en línea.
+          onOpenRule={(i) => setOpenRuleIndex((cur) => (cur === i ? null : i))}
+          onAddRule={() => { setOpenRuleIndex(form.rules.length); addRule(); }}
+          openRuleIndex={openRuleIndex}
+          updateRule={updateRule}
+          removeRule={(i) => { setOpenRuleIndex(null); removeRule(i); }}
+        />
+        {assetPicker}
+      </div>
+    );
+  }
+
   if (isMobile && mobileView === 'list') {
     return (
       <div className={styles.page}>
@@ -475,39 +539,24 @@ export default function AlertsPage() {
   }
 
   return (
-    <div className={`${styles.page} ${mobileEditor ? styles.pageMobileEditor : ''}`}>
-      {mobileEditor ? (
-        <div className={styles.mobileHeader}>
-          <button
-            type="button"
-            className={styles.backBtn}
-            onClick={() => setMobileView('list')}
-            aria-label="Volver a alertas"
-          >
-            <BackIcon />
-          </button>
-          <h1 className={styles.mobileTitle}>{selectedId ? 'Editar alerta' : 'Nueva alerta'}</h1>
-        </div>
-      ) : (
-        <div className={styles.hero}>
-          <div className={styles.heroLeft}>
-            <div>
-              <span className={styles.eyebrow}>🔔 Alertas</span>
-              <h1 className={styles.title}>Alertas con reglas y peso</h1>
-            </div>
-          </div>
-          <div className={styles.stats}>
-            <div className={styles.stat}><strong>{totals.count}</strong><span>total</span></div>
-            <div className={styles.stat}><strong>{totals.active}</strong><span>activas</span></div>
-            {totals.usedByBots != null && (
-              <div className={styles.stat}><strong>{totals.usedByBots}</strong><span>usadas por bots</span></div>
-            )}
+    <div className={styles.page}>
+      <div className={styles.hero}>
+        <div className={styles.heroLeft}>
+          <div>
+            <span className={styles.eyebrow}>🔔 Alertas</span>
+            <h1 className={styles.title}>Alertas con reglas y peso</h1>
           </div>
         </div>
-      )}
+        <div className={styles.stats}>
+          <div className={styles.stat}><strong>{totals.count}</strong><span>total</span></div>
+          <div className={styles.stat}><strong>{totals.active}</strong><span>activas</span></div>
+          {totals.usedByBots != null && (
+            <div className={styles.stat}><strong>{totals.usedByBots}</strong><span>usadas por bots</span></div>
+          )}
+        </div>
+      </div>
 
       <div className={styles.layout}>
-        {(!isMobile || mobileView === 'list') && (
         <div className={styles.sidebarWrap}>
           <div className={styles.sidebar}>
             <button className={styles.newBtn} onClick={() => openAlert(null)}>
@@ -561,9 +610,7 @@ export default function AlertsPage() {
             })}
           </div>
         </div>
-        )}
 
-        {(!isMobile || mobileView === 'editor') && (
         <div className={styles.editor}>
           {/* Banner contextual: presets si es alerta nueva sin tocar, o
               indicador "sin guardar" si el form está dirty. */}
@@ -648,11 +695,7 @@ export default function AlertsPage() {
                 className={styles.rawTextarea}
                 value={rawText}
                 spellCheck={false}
-                onChange={(e) => {
-                  setRawText(e.target.value);
-                  setRawTextDirty(true);
-                  setRawError('');
-                }}
+                onChange={(e) => onRawTextChange(e.target.value)}
               />
               {rawError && <div className={styles.rawError}>{rawError}</div>}
             </div>
@@ -728,12 +771,11 @@ export default function AlertsPage() {
               </div>
             </div>
 
-            <fieldset className={`${styles.dirFieldset} ${isMobile ? styles.dirFieldsetMobile : ''}`}>
+            <fieldset className={styles.dirFieldset}>
               <legend className={styles.dirLegend}>Dirección de la señal</legend>
               <DirectionSelector
                 value={direction}
                 onChange={(next) => updateField('direction', next)}
-                mobile={isMobile}
               />
               <p
                 className={`${styles.dirNote} ${showNeutralWarning ? styles.dirNoteWarning : ''}`}
@@ -886,11 +928,10 @@ export default function AlertsPage() {
                 </button>
               </>
             )}
-            {/* En móvil el guardado es un CTA fijo abajo, siempre a mano. */}
-            <div className={mobileEditor ? styles.mobileCtaBar : styles.saveWrap}>
+            <div className={styles.saveWrap}>
               <button
                 type="button"
-                className={`${styles.btn} ${styles.btnPrimary} ${mobileEditor ? styles.mobileCta : ''}`}
+                className={`${styles.btn} ${styles.btnPrimary}`}
                 onClick={save}
                 disabled={isSaving || !!saveValidationError || (!effectiveDirty && !!selectedId)}
                 title={saveValidationError || (!effectiveDirty && selectedId ? 'No hay cambios para guardar' : '')}
@@ -900,16 +941,9 @@ export default function AlertsPage() {
             </div>
           </div>
         </div>
-        )}
       </div>
 
-      <AssetPickerModal
-        open={pickerOpen}
-        currentAssets={form.assetList}
-        currentDatasource={form.datasource}
-        onAdd={addAssetsBulk}
-        onClose={() => setPickerOpen(false)}
-      />
+      {assetPicker}
     </div>
   );
 }
