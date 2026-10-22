@@ -125,16 +125,70 @@ describe('useAlertBacktest', () => {
     expect(hook.result.current.statusByAlert.a1).toMatchObject({ insufficient: 3, approx: true, sourceMismatch: 'deribit' });
   });
 
-  it('al retroceder fromMs tras llegar al tope se renueva el presupuesto de tramos', async () => {
+  it('tras llegar al tope, retroceder fromMs no pide más y conserva «desde»', async () => {
     const alert = { ...A1, rules: [rule('1m')] };
     alertsApi.backtest.mockResolvedValue(resp([], { baseTimeframe: '1m' }));
     const { hook, props } = setup({ alertsById: { a1: alert }, ranges: [{ fromMs: NOW - 365 * DAY, toMs: NOW }] });
     await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(10));
     await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
-    expect(hook.result.current.statusByAlert.a1.partialFromMs).toBeDefined();
+    const partial = hook.result.current.statusByAlert.a1.partialFromMs;
+    expect(partial).toBe(NOW - 10 * 2000 * MIN);
     hook.rerender({ ...props, alertsById: { a1: alert }, ranges: [{ fromMs: NOW - 400 * DAY, toMs: NOW }] });
-    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(20));
-    expect(hook.result.current.statusByAlert.a1.partialFromMs).toBe(NOW - 20 * 2000 * MIN);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(alertsApi.backtest).toHaveBeenCalledTimes(10);
+    expect(hook.result.current.statusByAlert.a1).toMatchObject({ state: 'ready', partialFromMs: partial });
+  });
+
+  it('sin tope, retroceder fromMs renueva el presupuesto de tramos', async () => {
+    const alert = { ...A1, rules: [rule('1m')] };
+    alertsApi.backtest.mockResolvedValue(resp([], { baseTimeframe: '1m' }));
+    const CH = 2000 * MIN;
+    const { hook, props } = setup({ alertsById: { a1: alert }, ranges: [{ fromMs: NOW - 6 * CH, toMs: NOW }] });
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(6));
+    await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
+    hook.rerender({ ...props, alertsById: { a1: alert }, ranges: [{ fromMs: NOW - 14 * CH, toMs: NOW }] });
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(14));
+    await waitFor(() => expect(hook.result.current.statusByAlert.a1?.state).toBe('ready'));
+    expect(hook.result.current.statusByAlert.a1.partialFromMs).toBeUndefined();
+  });
+
+  it('gráfico 1w con alerta 1m: el borde derecho nunca queda en el futuro', async () => {
+    const alert = { ...A1, rules: [rule('1m')] };
+    alertsApi.backtest.mockResolvedValue(resp([], { baseTimeframe: '1m' }));
+    const now = Date.now();
+    // Última vela semanal abierta hace 2 días: apertura + 1w cae 5 días en el futuro.
+    const { hook } = setup({ alertsById: { a1: alert }, ranges: [{ fromMs: now - DAY, toMs: now - 2 * DAY + 7 * DAY }] });
+    await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalled());
+    const body = alertsApi.backtest.mock.calls[0][1];
+    expect(body.endTime).toBeLessThanOrEqual(Date.now());
+    expect(body.endTime).toBeGreaterThanOrEqual(now);
+    hook.unmount();
+  });
+
+  it('con 3 alertas nunca hay más de 1 petición en vuelo', async () => {
+    const ids = ['a1', 'a2', 'a3'];
+    const byId = Object.fromEntries(ids.map((id) => [id, { ...A1, id }]));
+    const items = ids.map((alertId) => ({ alertId, color: '#fff', hidden: false }));
+    let pending = 0;
+    let maxPending = 0;
+    alertsApi.backtest.mockImplementation((id) => {
+      pending += 1;
+      maxPending = Math.max(maxPending, pending);
+      return new Promise((r) => setTimeout(() => { pending -= 1; r(resp([ev(NOW - DAY)], { alertId: id })); }, 5));
+    });
+    const CH = 2000 * 60 * MIN;
+    const { hook } = setup({ items, alertsById: byId, ranges: [{ fromMs: NOW - 2 * CH, toMs: NOW }] });
+    await waitFor(() => {
+      for (const id of ids) expect(hook.result.current.statusByAlert[id]?.state).toBe('ready');
+    });
+    expect(alertsApi.backtest).toHaveBeenCalledTimes(6);
+    expect(maxPending).toBe(1);
+    for (const id of ids) expect(hook.result.current.eventsByAlert[id]).toHaveLength(1);
+    // Cada alerta pide sus tramos del más nuevo al más viejo.
+    for (const id of ids) {
+      const ends = alertsApi.backtest.mock.calls.filter(([x]) => x === id).map(([, b]) => b.endTime);
+      expect(ends).toEqual([NOW, NOW - CH]);
+    }
   });
 
   it('desmontar a mitad de carga detiene las peticiones', async () => {

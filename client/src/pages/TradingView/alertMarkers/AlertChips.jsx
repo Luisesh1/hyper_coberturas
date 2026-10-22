@@ -9,6 +9,9 @@ import styles from './AlertChips.module.css';
 const dateFmt = (ms) =>
   new Date(ms).toLocaleDateString('es', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
+// Yahoo entrega la vela final aunque en vivo la alerta la vio a medio formar.
+const YAHOO_NOTE = 'Yahoo: aproximada — se evalúa con la vela final, en vivo se vio a medio formar';
+
 // Líneas de aviso de un chip según su estado.
 function notes(st, chartDatasource) {
   const out = [];
@@ -17,6 +20,7 @@ function notes(st, chartDatasource) {
   if (st.partialFromMs != null) out.push(`desde ${dateFmt(st.partialFromMs)}`);
   if (st.sourceMismatch) out.push(`evaluada con ${chartDatasource}; la alerta usa ${st.sourceMismatch}`);
   if (st.insufficient > 0) out.push('sin historia suficiente en parte del rango');
+  if (chartDatasource === 'yahoo' && st.state !== 'deleted') out.push(YAHOO_NOTE);
   return out;
 }
 

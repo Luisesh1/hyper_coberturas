@@ -81,7 +81,9 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
   const [out, setOut] = useState({ events: {}, status: {} });
   const cachesRef = useRef(new Map()); // `${id}:${updatedAt}:${ds}:${symbol}` -> cache
   const edgesRef = useRef(new Map()); // `${id}:${ds}:${symbol}` -> borde derecho fijo
-  const runningRef = useRef(new Set());
+  const runningRef = useRef(new Set()); // claves con petición en vuelo
+  const queueRef = useRef([]); // alertIds pendientes de un paso
+  const busyRef = useRef(false);
   const aliveRef = useRef(true);
 
   const fromMs = ranges?.length ? Math.min(...ranges.map((r) => r.fromMs)) : null;
@@ -135,57 +137,76 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
   const errorSnapshot = (alertId, cache) => snapshot(alertId, cache, 'error', { error: cache.lastError || 'error' });
   const eventList = (cache) => [...cache.events.values()].sort((x, y) => x.evalTime - y.evalTime);
 
-  const run = async (alertId) => {
+  // Un paso de carga de una alerta: como mucho una petición. Devuelve true si
+  // la alerta puede tener más trabajo (se vuelve a encolar).
+  const step = async (alertId) => {
+    // Todo se relee en cada paso: las props pueden haber cambiado mientras esperaba en la cola.
     const key0 = keyOf(alertId);
-    if (!key0 || runningRef.current.has(key0)) return;
-    const cache = cachesRef.current.get(key0);
+    const cache = key0 && cachesRef.current.get(key0);
+    if (!cache || !aliveRef.current) return false;
+    const { asset: a, alertsById: byId, fromMs: f, enabled: en } = propsRef.current;
+    const alert = byId[alertId];
+    if (!en || f == null || cache.errorUntil > Date.now()) return false;
+    if (cache.edge == null) {
+      const ek = `${alertId}:${a.datasource}:${a.symbol}`;
+      // Borde = apertura de la última vela + tf: en 1w/1M cae en el futuro y el servidor lo recorta.
+      if (!edgesRef.current.has(ek)) edgesRef.current.set(ek, Math.min(propsRef.current.toMs, Date.now()));
+      cache.edge = edgesRef.current.get(ek);
+    }
+    const gap = newestGap(cache.covered, f, cache.edge);
+    if (!gap) { cache.capped = false; merge(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready')); return false; }
+    if (cache.chunks >= MAX_CHUNKS_PER_ALERT) {
+      cache.capped = true;
+      merge(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready'));
+      return false;
+    }
+    const baseMs = cache.baseMs || clientBaseTfMs(alert);
+    const s = Math.max(gap[0], gap[1] - MAX_EVALS_PER_REQUEST * baseMs);
+    const e = gap[1];
+    cache.chunks += 1;
+    merge(alertId, key0, null, snapshot(alertId, cache, 'loading'));
+    let res;
     runningRef.current.add(key0);
     try {
-      for (;;) {
-        // Todo se relee en cada vuelta: las props pueden haber cambiado durante la petición.
-        if (!aliveRef.current || keyOf(alertId) !== key0) return;
-        const { asset: a, alertsById: byId, fromMs: f, enabled: en } = propsRef.current;
-        const alert = byId[alertId];
-        if (!en || f == null || cache.errorUntil > Date.now()) return;
-        if (cache.edge == null) {
-          const ek = `${alertId}:${a.datasource}:${a.symbol}`;
-          if (!edgesRef.current.has(ek)) edgesRef.current.set(ek, propsRef.current.toMs);
-          cache.edge = edgesRef.current.get(ek);
-        }
-        const gap = newestGap(cache.covered, f, cache.edge);
-        if (!gap) { cache.capped = false; merge(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready')); return; }
-        if (cache.chunks >= MAX_CHUNKS_PER_ALERT) {
-          cache.capped = true;
-          merge(alertId, key0, eventList(cache), snapshot(alertId, cache, 'ready'));
-          return;
-        }
-        const baseMs = cache.baseMs || clientBaseTfMs(alert);
-        const s = Math.max(gap[0], gap[1] - MAX_EVALS_PER_REQUEST * baseMs);
-        const e = gap[1];
-        cache.chunks += 1;
-        merge(alertId, key0, null, snapshot(alertId, cache, 'loading'));
-        let res;
-        try {
-          res = await alertsApi.backtest(alertId, {
-            asset: a.symbol, datasource: a.datasource, startTime: s, endTime: e,
-          });
-        } catch (err) {
-          cache.chunks -= 1;
-          cache.errorUntil = Date.now() + ERROR_BACKOFF_MS;
-          cache.lastError = err?.message || 'error';
-          if (keyOf(alertId) === key0) merge(alertId, key0, null, errorSnapshot(alertId, cache));
-          return;
-        }
-        cache.lastError = null;
-        if (OVERLAY_TF_MS[res?.baseTimeframe]) cache.baseMs = OVERLAY_TF_MS[res.baseTimeframe];
-        for (const ev of res?.events || []) cache.events.set(ev.evalTime, ev);
-        cache.insufficient += Number(res?.insufficient) || 0;
-        if (res?.cooldownApprox) cache.approx = true;
-        cache.covered = addCovered(cache.covered, s, e);
-      }
+      res = await alertsApi.backtest(alertId, {
+        asset: a.symbol, datasource: a.datasource, startTime: s, endTime: e,
+      });
+    } catch (err) {
+      cache.chunks -= 1;
+      cache.errorUntil = Date.now() + ERROR_BACKOFF_MS;
+      cache.lastError = err?.message || 'error';
+      if (keyOf(alertId) === key0) merge(alertId, key0, null, errorSnapshot(alertId, cache));
+      return false;
     } finally {
       runningRef.current.delete(key0);
     }
+    cache.lastError = null;
+    if (OVERLAY_TF_MS[res?.baseTimeframe]) cache.baseMs = OVERLAY_TF_MS[res.baseTimeframe];
+    for (const ev of res?.events || []) cache.events.set(ev.evalTime, ev);
+    cache.insufficient += Number(res?.insufficient) || 0;
+    if (res?.cooldownApprox) cache.approx = true;
+    cache.covered = addCovered(cache.covered, s, e);
+    return true;
+  };
+
+  // Cola round-robin: como mucho una petición en vuelo por instancia, entre todas las alertas.
+  const pump = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      while (aliveRef.current && queueRef.current.length) {
+        const id = queueRef.current.shift();
+        const more = await step(id);
+        if (more && !queueRef.current.includes(id)) queueRef.current.push(id);
+      }
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
+  const schedule = (alertId) => {
+    if (!queueRef.current.includes(alertId)) queueRef.current.push(alertId);
+    pump();
   };
 
   // Dispara las cargas necesarias cuando cambian activo, selección, alertas o el rango "hacia atrás".
@@ -205,18 +226,19 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
         };
         cachesRef.current.set(key, cache);
       }
-      // Cada vez que el usuario retrocede más que la petición anterior, el presupuesto de tramos se renueva.
-      if (cache.lastFrom != null && fromMs != null && fromMs < cache.lastFrom) {
+      // Si el usuario retrocede más que la petición anterior, el presupuesto de tramos se renueva,
+      // salvo que ya se haya agotado: entonces se queda parcial («desde …») para acotar la carga.
+      if (!cache.capped && cache.lastFrom != null && fromMs != null && fromMs < cache.lastFrom) {
         cache.chunks = 0;
-        cache.capped = false;
       }
       cache.lastFrom = fromMs;
       if (cache.errorUntil > Date.now()) {
         merge(item.alertId, key, null, errorSnapshot(item.alertId, cache));
         continue;
       }
-      run(item.alertId);
-      const state = runningRef.current.has(key) || (!cache.covered.length && fromMs != null) ? 'loading' : 'ready';
+      schedule(item.alertId);
+      const busy = runningRef.current.has(key) || queueRef.current.includes(item.alertId);
+      const state = busy || (!cache.covered.length && fromMs != null) ? 'loading' : 'ready';
       merge(item.alertId, key, null, snapshot(item.alertId, cache, state));
     }
   }, [enabled, assetKey, items, alertsById, alertsStatus, fromMs]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -226,7 +248,7 @@ export function useAlertBacktest({ asset, items, alertsById, ranges, enabled = t
     const cache = key && cachesRef.current.get(key);
     if (!cache) return;
     cache.errorUntil = 0;
-    run(alertId);
+    schedule(alertId);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sólo se exponen las alertas elegidas del activo actual.

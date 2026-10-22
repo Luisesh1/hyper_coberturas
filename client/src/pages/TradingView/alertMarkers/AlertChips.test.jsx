@@ -93,6 +93,24 @@ describe('AlertChips', () => {
     expect(screen.getByTitle('cooldown aproximado en el borde')).toBeTruthy();
   });
 
+  it('yahoo avisa de que la evaluación es aproximada (escritorio y hoja móvil)', () => {
+    const YAHOO = 'Yahoo: aproximada — se evalúa con la vela final, en vivo se vio a medio formar';
+    const { unmount } = render(
+      <AlertChips mobile={false} items={items} alertsById={alertsById} chartDatasource="yahoo"
+        statusByAlert={{ 1: { state: 'ready' }, 2: { state: 'ready' } }} countsByAlert={{}} />,
+    );
+    expect(screen.getAllByText(YAHOO)).toHaveLength(2);
+    unmount();
+    setup({ mobile: true, chartDatasource: 'yahoo' });
+    fireEvent.click(screen.getByRole('button', { name: /Cruce RSI/ }));
+    expect(screen.getByText(YAHOO)).toBeTruthy();
+  });
+
+  it('sin yahoo no hay aviso de aproximada', () => {
+    setup();
+    expect(screen.queryByText(/^Yahoo: aproximada/)).toBeNull();
+  });
+
   it('móvil: chips como botones y acciones en hoja', () => {
     const h = setup({ mobile: true });
     fireEvent.click(screen.getByRole('button', { name: /Cruce RSI/ }));
