@@ -13,7 +13,7 @@ import MobileTabBar from './components/MobileTabBar';
 import MobileDrawingBar, { MobileDrawingBanner } from './components/MobileDrawingBar';
 import MobileSettingsSheet from './components/MobileSettingsSheet';
 import {
-  ChevronDownIcon, CollapseIcon, ExpandIcon, EyeIcon, EyeOffIcon,
+  BellIcon, ChevronDownIcon, CollapseIcon, ExpandIcon, EyeIcon, EyeOffIcon,
   GridIcon, IndicatorsIcon, MoreIcon, PlusIcon, RefreshIcon, ReplayIcon, SlidersIcon, StarIcon,
 } from './components/icons';
 import BottomSheet from './components/BottomSheet';
@@ -35,6 +35,12 @@ import OverlayChips from './overlays/OverlayChips';
 import OverlayTooltip from './overlays/OverlayTooltip';
 import OverlayLegend, { optionLegendColor } from './overlays/OverlayLegend';
 import OverlayPicker from './overlays/OverlayPicker';
+import { useChartAlertMarkers } from './alertMarkers/useChartAlertMarkers';
+import { useAlertMarkerCard } from './alertMarkers/useAlertMarkerCard';
+import { MAX_ALERT_MARKERS } from './alertMarkers/markerModel';
+import AlertPicker from './alertMarkers/AlertPicker';
+import AlertChips from './alertMarkers/AlertChips';
+import AlertMarkerCard from './alertMarkers/AlertMarkerCard';
 import styles from './TradingViewPage.module.css';
 
 const ASSET_STORAGE_KEY = 'tv_selected_asset_v1';
@@ -307,6 +313,7 @@ export default function TradingViewPage() {
   // histórica es el "salto a la vida" de una opción vencida.
   const [overlayPickerOpen, setOverlayPickerOpen] = useState(false);
   const [historicalView, setHistoricalView] = useState(false);
+  const [alertPickerOpen, setAlertPickerOpen] = useState(false);
   const isMobile = useMediaQuery(MOBILE_QUERY);
   // Móvil: modo dibujo explícito (la barra de pestañas pasa a ser la de
   // herramientas), hoja de ajustes y leyenda OHLC plegable.
@@ -597,6 +604,16 @@ export default function TradingViewPage() {
     candleColors: THEME,
   });
   syncOverlaysRef.current = overlays.syncMain;
+
+  // --- Marcas de backtest de alertas (en replay, solo hasta el instante actual) ---
+  const alertMarks = useChartAlertMarkers({
+    asset, timeframe, candlesRef, candleSeriesRef, candleCount, replay, notify: addNotification,
+  });
+  const alertSel = alertMarks.selection;
+  const alertCard = useAlertMarkerCard({
+    chartRef, mobile: isMobile, timeline: alertMarks.timeline, disabled: drawMode || !!activeTool,
+  });
+  const closeAlertPicker = useCallback(() => setAlertPickerOpen(false), []);
 
   // --- 4) Polling en tiempo real del último candle ---
   // Si el modo replay está activo, suspendemos el polling para no pisar la
@@ -1118,6 +1135,19 @@ export default function TradingViewPage() {
         </button>
         <button
           type="button"
+          className={`${styles.refreshBtn} ${styles.overlayBtn}`}
+          onClick={() => setAlertPickerOpen(true)}
+          title="Marcar en el gráfico cuándo habrían saltado tus alertas"
+          aria-haspopup="dialog"
+        >
+          <span className={styles.btnIcon}><BellIcon size={14} /></span>
+          <span>Alertas</span>
+          {alertSel.items.length > 0 && (
+            <span className={styles.overlayCount}>{alertSel.items.length}/{MAX_ALERT_MARKERS}</span>
+          )}
+        </button>
+        <button
+          type="button"
           className={`${styles.refreshBtn} ${replayActive || replayPanelOpen ? styles.replayBtnActive : ''}`}
           onClick={() => setReplayPanelOpen((v) => !v)}
           title={replayActive ? 'Replay activo — abrir panel' : 'Modo Replay (simular formación de vela)'}
@@ -1266,6 +1296,21 @@ export default function TradingViewPage() {
           onColor={overlays.setColor}
           onAdd={() => setOverlayPickerOpen(true)}
           onRetry={overlays.retry}
+        />
+      )}
+
+      {alertSel.items.length > 0 && (
+        <AlertChips
+          mobile={isMobile}
+          items={alertSel.items}
+          alertsById={alertSel.alertsById}
+          statusByAlert={alertMarks.statusByAlert}
+          countsByAlert={alertMarks.countsByAlert}
+          chartDatasource={asset.datasource}
+          onToggleHidden={alertSel.toggleHidden}
+          onRemove={alertSel.remove}
+          onAdd={() => setAlertPickerOpen(true)}
+          onRetry={alertMarks.retry}
         />
       )}
 
@@ -1483,6 +1528,16 @@ export default function TradingViewPage() {
           </div>
         )}
 
+        {!isMobile && alertCard.card && (
+          <div ref={alertCard.cardRef} style={alertCard.pinned ? undefined : { pointerEvents: 'none' }}>
+            <AlertMarkerCard
+              {...alertCard.card}
+              alertsById={alertSel.alertsById}
+              colorsById={alertMarks.colorsById}
+            />
+          </div>
+        )}
+
         <ReplayPanel
           open={replayPanelOpen}
           onClose={() => setReplayPanelOpen(false)}
@@ -1531,6 +1586,8 @@ export default function TradingViewPage() {
           onDraw={() => { setReplayPanelOpen(false); setDrawMode(true); }}
           overlaysCount={overlayCount}
           onOverlays={() => setOverlayPickerOpen(true)}
+          alertsCount={alertSel.items.length}
+          onAlerts={() => setAlertPickerOpen(true)}
           onReplay={() => setReplayPanelOpen((v) => !v)}
           onSettings={() => setSettingsSheetOpen(true)}
         />
@@ -1614,6 +1671,25 @@ export default function TradingViewPage() {
         onRemove={overlays.remove}
         onClose={closeOverlayPicker}
       />
+
+      <AlertPicker
+        open={alertPickerOpen}
+        mobile={isMobile}
+        alerts={alertSel.alerts}
+        items={alertSel.items}
+        onAdd={alertSel.add}
+        onRemove={alertSel.remove}
+        onClose={closeAlertPicker}
+      />
+
+      {isMobile && alertCard.card && (
+        <AlertMarkerCard
+          mobile
+          {...alertCard.card}
+          alertsById={alertSel.alertsById}
+          colorsById={alertMarks.colorsById}
+        />
+      )}
 
       <AssetPickerModal
         open={assetPickerOpen}

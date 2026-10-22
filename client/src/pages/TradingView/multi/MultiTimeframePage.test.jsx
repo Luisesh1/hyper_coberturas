@@ -2,8 +2,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-vi.mock('./SyncedChart', () => ({
-  default: (props) => (
+// Rango que cada panel falso informa al montar (igual en todos).
+// `auto = false`: los paneles solo informan al pulsar report-i (rango LOADED.ranges[i]).
+const LOADED = vi.hoisted(() => ({
+  range: { fromMs: Date.UTC(2026, 9, 19), toMs: Date.UTC(2026, 9, 20) },
+  auto: true,
+  ranges: [],
+}));
+
+vi.mock('./SyncedChart', async () => {
+  const { useEffect } = await import('react');
+  function FakeSyncedChart(props) {
+    const { onLoadedRange, index, timeframe, asset } = props;
+    const assetKey = `${asset.datasource}:${asset.symbol}`;
+    const report = (range, tf = timeframe) => onLoadedRange?.(index, { ...range, timeframe: tf, assetKey });
+    useEffect(() => {
+      if (LOADED.auto) onLoadedRange?.(index, { ...LOADED.range, timeframe, assetKey });
+    }, [onLoadedRange, index, timeframe, assetKey]);
+    return (
     <div
       data-testid={`synced-chart-${props.index}`}
       data-tf={props.timeframe}
@@ -15,6 +31,9 @@ vi.mock('./SyncedChart', () => ({
       data-name={props.asset.name}
       data-indicators={JSON.stringify(props.indicators ?? null)}
       data-sync-price={String(props.syncPrice ?? true)}
+      data-alert-markers={props.alertMarkers ? JSON.stringify({
+        events: props.alertMarkers.eventsByAlert, items: props.alertMarkers.items.map((i) => i.alertId),
+      }) : ''}
     >
       {props.onAssetClick && (
         <button type="button" data-testid={`asset-btn-${props.index}`} onClick={() => props.onAssetClick(props.index)}>
@@ -29,13 +48,22 @@ vi.mock('./SyncedChart', () => ({
       <button type="button" data-testid={`pointer-clear-${props.index}`} onClick={() => props.onPointer(props.index, null)} />
       <button type="button" data-testid={`price-${props.index}`} onClick={() => props.onLastPrice?.(props.index, 2345.5 + props.index)} />
       <button type="button" data-testid={`tf-${props.index}`} onClick={() => props.onTimeframeChange('1m')} />
+      <button type="button" data-testid={`report-${props.index}`} onClick={() => report(LOADED.ranges[index])} />
+      <button type="button" data-testid={`report-stale-${props.index}`} onClick={() => report(LOADED.ranges[index], LOADED.staleTf)} />
     </div>
-  ),
-}));
+    );
+  }
+  return { default: FakeSyncedChart };
+});
 
 const api = vi.hoisted(() => ({ getChartIndicators: null, pick: null }));
 vi.mock('../../../services/api', () => ({
-  settingsApi: { getChartIndicators: (...a) => api.getChartIndicators(...a) },
+  settingsApi: {
+    getChartIndicators: (...a) => api.getChartIndicators(...a),
+    getChartAlertMarkers: vi.fn(),
+    saveChartAlertMarkers: vi.fn(),
+  },
+  alertsApi: { list: vi.fn(), backtest: vi.fn() },
 }));
 
 vi.mock('../../../context/TradingContext', () => ({
@@ -56,6 +84,7 @@ vi.mock('../components/AssetPickerModal', () => ({
 }));
 
 import { waitFor } from '@testing-library/react';
+import { alertsApi, settingsApi } from '../../../services/api';
 import MultiTimeframePage from './MultiTimeframePage';
 import { getDefaultChartIndicators } from '../indicators/defaults';
 
@@ -83,6 +112,12 @@ describe('MultiTimeframePage', () => {
     localStorage.clear();
     api.getChartIndicators = vi.fn().mockResolvedValue({ indicators: [] });
     api.pick = null;
+    LOADED.auto = true;
+    LOADED.ranges = [];
+    alertsApi.list.mockReset().mockResolvedValue([]);
+    alertsApi.backtest.mockReset().mockResolvedValue({ events: [], insufficient: 0 });
+    settingsApi.getChartAlertMarkers.mockReset().mockResolvedValue({ items: [] });
+    settingsApi.saveChartAlertMarkers.mockReset().mockResolvedValue({});
     vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { cb(0); return 1; }));
     vi.stubGlobal('cancelAnimationFrame', () => {});
     setMobile(false);
@@ -502,6 +537,129 @@ describe('MultiTimeframePage', () => {
       expect(modeBtn('Multi‑TF').getAttribute('aria-pressed')).toBe('true');
       fireEvent.click(modeBtn('Multi‑activo'));
       expect(symbols()).toEqual(['BTC', 'ETH']);
+    });
+  });
+
+  describe('marcas de alertas (Multi‑TF)', () => {
+    const ALERT = {
+      id: 'a1', name: 'RSI rebote', direction: 'bullish', datasource: 'binance', updatedAt: 1,
+      rules: [{ conditions: [{ indicatorType: 'rsi', timeframe: '1h', operand: { kind: 'value', value: 30 } }] }],
+    };
+    const EVENT = { evalTime: Date.UTC(2026, 9, 19, 14, 15), time: Date.UTC(2026, 9, 19, 14), score: 1, threshold: 1, suppressed: false, rules: [] };
+    beforeEach(() => {
+      alertsApi.list.mockResolvedValue([ALERT]);
+      settingsApi.getChartAlertMarkers.mockResolvedValue({ items: [{ alertId: 'a1', color: '#facc15', hidden: false }] });
+      alertsApi.backtest.mockResolvedValue({ alertId: 'a1', baseTimeframe: '1h', events: [EVENT], insufficient: 0 });
+    });
+
+    it('un único backtest por tramo con 4 paneles; los eventos llegan a todos los paneles', async () => {
+      renderPage('/trading-view/multi?symbol=ETH&datasource=binance');
+      expect(tfs()).toHaveLength(4);
+      await waitFor(() => {
+        for (let i = 0; i < 4; i += 1) {
+          const am = JSON.parse(screen.getByTestId(`synced-chart-${i}`).dataset.alertMarkers);
+          expect(am.events.a1).toHaveLength(1);
+        }
+      });
+      expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+      expect(alertsApi.backtest).toHaveBeenCalledWith('a1', expect.objectContaining({
+        asset: 'ETH', datasource: 'binance', startTime: LOADED.range.fromMs, endTime: LOADED.range.toMs,
+      }));
+      // Chips sobre la rejilla con el contador de disparos.
+      const chips = screen.getByRole('toolbar', { name: 'Alertas en el gráfico' });
+      expect(chips.textContent).toContain('RSI rebote');
+      expect(chips.textContent).toContain('1');
+    });
+
+    it('el botón Alertas abre el selector', async () => {
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('toolbar', { name: 'Alertas en el gráfico' })).toBeTruthy());
+      fireEvent.click(screen.getByRole('button', { name: /^Alertas/ }));
+      expect(await screen.findByRole('dialog', { name: /alertas/i })).toBeTruthy();
+    });
+
+    it('móvil: chips y botón Alertas de 44 px en la fila de modo', async () => {
+      setMobile(true);
+      renderPage();
+      await waitFor(() => expect(screen.getByRole('group', { name: 'Alertas en el gráfico' })).toBeTruthy());
+      expect(screen.getByRole('button', { name: /^Alertas/ }).className).toMatch(/mIconBtn/);
+    });
+
+    it('Multi‑activo: sin chips, sin marcas, sin backtest y sin cargar alertas', async () => {
+      renderPage('/trading-view/multi?mode=assets');
+      await act(async () => { await Promise.resolve(); });
+      expect(alertsApi.list).not.toHaveBeenCalled();
+      expect(settingsApi.getChartAlertMarkers).not.toHaveBeenCalled();
+      expect(screen.queryByRole('toolbar', { name: 'Alertas en el gráfico' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Alertas/ })).toBeNull();
+      expect(alertsApi.backtest).not.toHaveBeenCalled();
+      // Al pasar a Multi‑TF se carga la selección.
+      fireEvent.click(screen.getByRole('button', { name: /^Multi‑TF$/ }));
+      await waitFor(() => expect(screen.getByRole('toolbar', { name: 'Alertas en el gráfico' })).toBeTruthy());
+      expect(alertsApi.list).toHaveBeenCalledTimes(1);
+    });
+
+    describe('informes escalonados', () => {
+      const D = Date.UTC(2026, 9, 20);
+      const flush = () => act(async () => { for (let i = 0; i < 5; i += 1) await Promise.resolve(); });
+      const report = async (i) => { fireEvent.click(screen.getByTestId(`report-${i}`)); await flush(); };
+      beforeEach(() => {
+        LOADED.auto = false;
+        // 5m, 15m, 1h, 4h: cada uno más atrás; el 4h llega más a la derecha.
+        LOADED.ranges = [
+          { fromMs: D - 2 * H, toMs: D },
+          { fromMs: D - 6 * H, toMs: D },
+          { fromMs: D - 24 * H, toMs: D },
+          { fromMs: D - 96 * H, toMs: D + 4 * H },
+        ];
+      });
+      const H = 3_600_000;
+
+      it('no hay backtest hasta que informa el último panel; luego uno con la unión', async () => {
+        renderPage('/trading-view/multi?symbol=ETH&datasource=binance');
+        await waitFor(() => expect(settingsApi.getChartAlertMarkers).toHaveBeenCalled());
+        await flush();
+        for (const i of [2, 0, 1]) {
+          await report(i);
+          expect(alertsApi.backtest).not.toHaveBeenCalled();
+        }
+        await report(3);
+        await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(1));
+        expect(alertsApi.backtest).toHaveBeenCalledWith('a1', expect.objectContaining({
+          startTime: D - 96 * H, endTime: D + 4 * H,
+        }));
+        await flush();
+        expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+      });
+
+      it('al cambiar la temporalidad de un panel su rango viejo sale de la unión hasta la nueva carga', async () => {
+        LOADED.ranges = LOADED.ranges.map(() => ({ fromMs: D - 24 * H, toMs: D }));
+        renderPage('/trading-view/multi?symbol=ETH&datasource=binance');
+        await waitFor(() => expect(settingsApi.getChartAlertMarkers).toHaveBeenCalled());
+        await flush();
+        for (const i of [0, 1, 2, 3]) await report(i);
+        await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(1));
+
+        fireEvent.click(screen.getByTestId('tf-1')); // 15m → 1m
+        await flush();
+        // Otro panel retrocede, pero el 1 aún no tiene rango válido: nada.
+        LOADED.ranges[0] = { fromMs: D - 48 * H, toMs: D };
+        await report(0);
+        // Un informe tardío de la carga vieja (15m) tampoco cuenta.
+        LOADED.staleTf = '15m';
+        LOADED.ranges[1] = { fromMs: D - 72 * H, toMs: D };
+        fireEvent.click(screen.getByTestId('report-stale-1'));
+        await flush();
+        expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+
+        // La carga nueva (1m) informa: se pide solo el hueco hacia atrás.
+        LOADED.ranges[1] = { fromMs: D - 2 * H, toMs: D };
+        await report(1);
+        await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(2));
+        expect(alertsApi.backtest).toHaveBeenLastCalledWith('a1', expect.objectContaining({
+          startTime: D - 48 * H, endTime: D - 24 * H,
+        }));
+      });
     });
   });
 });

@@ -92,6 +92,32 @@ function normalizeChartIndicators(value) {
 }
 
 // ------------------------------------------------------------------
+// Chart alert markers (alertas elegidas para dibujar disparos en el gráfico)
+// ------------------------------------------------------------------
+const CHART_ALERT_MARKERS_KEY = 'chart_alert_markers';
+const MAX_ALERT_MARKERS = 6;
+
+function normalizeChartAlertMarkers(value) {
+  const raw = value && Array.isArray(value.items) ? value.items : [];
+  const seen = new Set();
+  const items = [];
+  for (const it of raw) {
+    if (!it || typeof it !== 'object') continue;
+    const alertId = Number(it.alertId);
+    if (typeof it.alertId === 'boolean' || it.alertId === null || !Number.isInteger(alertId) || alertId <= 0) continue;
+    if (seen.has(alertId)) continue;
+    seen.add(alertId);
+    items.push({
+      alertId,
+      color: typeof it.color === 'string' ? it.color.slice(0, 32) : '',
+      hidden: it.hidden === true,
+    });
+    if (items.length >= MAX_ALERT_MARKERS) break;
+  }
+  return { items };
+}
+
+// ------------------------------------------------------------------
 // Chart drawings (trend lines, horizontal, rectangles, fib) — per symbol
 // ------------------------------------------------------------------
 const CHART_DRAWINGS_KEY = 'chart_drawings';
@@ -440,6 +466,17 @@ async function setChartIndicators(userId, config) {
   return normalized;
 }
 
+async function getChartAlertMarkers(userId) {
+  const stored = await getSetting(userId, CHART_ALERT_MARKERS_KEY);
+  return normalizeChartAlertMarkers(stored);
+}
+
+async function setChartAlertMarkers(userId, config) {
+  const normalized = normalizeChartAlertMarkers(config);
+  await setSetting(userId, CHART_ALERT_MARKERS_KEY, normalized);
+  return normalized;
+}
+
 async function getChartDrawingsAll(userId) {
   const stored = await getSetting(userId, CHART_DRAWINGS_KEY);
   return normalizeChartDrawingsAll(stored);
@@ -505,6 +542,9 @@ module.exports = {
   setChartIndicators,
   getDefaultChartIndicators,
   normalizeChartIndicators,
+  getChartAlertMarkers,
+  setChartAlertMarkers,
+  normalizeChartAlertMarkers,
   CHART_INDICATOR_TYPES,
   getChartDrawingsAll,
   getChartDrawingsForSymbol,

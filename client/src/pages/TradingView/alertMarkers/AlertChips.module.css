@@ -1,0 +1,195 @@
+/* Chips de alertas sobre el gráfico. Mismos tokens que OverlayChips. */
+.wrap { position: relative; flex-shrink: 0; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  border-bottom: 1px solid rgba(120, 130, 145, 0.12);
+}
+
+.chip {
+  --c: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px 4px 2px 2px;
+  background: var(--bg-surface, #13161e);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: var(--radius-md, 8px);
+  font-size: 13px;
+}
+.chipHidden { background: transparent; border-style: dashed; opacity: 0.6; }
+.chipHidden .name { text-decoration: line-through; color: var(--text-secondary, #94a3b8); }
+
+.body {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 3px 6px 3px 8px;
+}
+
+.dot {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.dotHollow { background: transparent; border: 2px solid var(--c); }
+
+.name { color: var(--text-bright, #f8fafc); font-weight: 600; white-space: nowrap; }
+.count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+  color: var(--text-bright, #f8fafc);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.note { color: var(--text-tertiary, #64748b); font-size: 12px; white-space: nowrap; }
+.noteBad { color: var(--red-light, #f87171); }
+.approx { color: var(--text-tertiary, #64748b); font-size: 12px; cursor: help; }
+.errorMark { color: var(--red-light, #f87171); font-weight: 700; }
+
+.retry {
+  padding: 2px 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--red-light, #f87171);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.retry:hover { background: var(--red-bg, rgba(239, 68, 68, 0.12)); }
+
+.spinner { display: inline-block; color: #60a5fa; animation: alertSpin 1s linear infinite; }
+@keyframes alertSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+}
+.iconBtn:hover { background: var(--border, #2a2d35); color: var(--text-bright, #f8fafc); }
+.iconBtn:focus-visible,
+.retry:focus-visible,
+.add:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.75);
+  outline-offset: 1px;
+}
+
+.add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px dashed var(--border-strong, #3a3d45);
+  border-radius: var(--radius-md, 8px);
+  color: var(--text-secondary, #94a3b8);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.add:hover:not(:disabled) { color: var(--text-bright, #f8fafc); border-color: #4a4d55; }
+.add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Móvil: pastillas de 40 px dentro de botones de 44 px ───────── */
+.mWrap { flex-shrink: 0; }
+.mRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  border-bottom: 1px solid rgba(120, 130, 145, 0.12);
+}
+.mRow::-webkit-scrollbar { display: none; }
+
+.pill,
+.mAdd {
+  --c: #94a3b8;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 2px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pill:focus-visible,
+.mAdd:focus-visible { outline: none; }
+.pill:focus-visible .pillInner,
+.mAdd:focus-visible .mAddInner { outline: 2px solid rgba(99, 102, 241, 0.75); outline-offset: 1px; }
+
+.pillInner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  box-sizing: border-box;
+  max-width: 220px;
+  padding: 0 12px;
+  background: var(--bg-surface, #13161e);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 999px;
+  color: #e2e8f0;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.pillName { overflow: hidden; text-overflow: ellipsis; }
+.pillHidden .pillInner { background: transparent; border-style: dashed; color: var(--text-tertiary, #64748b); }
+.pillHidden .pillName { text-decoration: line-through; }
+
+.mAddInner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  box-sizing: border-box;
+  border: 1px dashed var(--border-strong, #3a3d45);
+  border-radius: 999px;
+  color: var(--text-secondary, #94a3b8);
+}
+.mAdd:disabled { cursor: not-allowed; opacity: 0.45; }
+
+.mSheetHead {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+.mSheetName { color: var(--text-bright, #f8fafc); font-weight: 600; font-size: 0.95rem; overflow-wrap: anywhere; }
+.mSheetSub { grid-column: 2; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.mSheetSub .note { white-space: normal; font-size: 0.8rem; color: #9aa3b0; }
+.mDanger { color: var(--red-light, #f87171); }

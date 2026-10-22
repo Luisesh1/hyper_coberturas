@@ -170,6 +170,10 @@ export const settingsApi = {
     request('GET', '/settings/chart-indicators'),
   saveChartIndicators: (config) =>
     request('PUT', '/settings/chart-indicators', config),
+  getChartAlertMarkers: () =>
+    request('GET', '/settings/chart-alert-markers'),
+  saveChartAlertMarkers: ({ items }) =>
+    request('PUT', '/settings/chart-alert-markers', { items }),
   getChartDrawings: (symbol) =>
     request('GET', `/settings/chart-drawings/${encodeURIComponent(symbol)}`),
   saveChartDrawings: (symbol, drawings) =>
@@ -474,6 +478,7 @@ export const alertsApi = {
   remove:  (id)            => request('DELETE', `/alerts/${id}`),
   test:    (id, { dryRun = true } = {}) =>
                               request('POST',   `/alerts/${id}/test`, { dryRun }),
+  backtest: (id, body)     => request('POST',   `/alerts/${id}/backtest`, body),
   events:  (id, { limit = 50 } = {}) =>
                               request('GET',    `/alerts/${id}/events${buildQueryString({ limit })}`),
 };
