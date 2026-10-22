@@ -23,6 +23,7 @@ export const IndicatorsIcon = (p) => <Svg {...p}><path d="M3 17l5-6 4 4 8-9" /><
 export const OverlayIcon = (p) => <Svg {...p}><path d="M3 17l6-6 4 4 8-8" /><path d="M3 12l6-4 4 3 8-6" /></Svg>;
 export const PencilIcon = (p) => <Svg {...p}><path d="M4 20l4-1 11-11-3-3L5 16l-1 4z" /><path d="M14 7l3 3" /></Svg>;
 export const ReplayIcon = (p) => <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M10 8.5v7l6-3.5z" /></Svg>;
+export const BellIcon = (p) => <Svg {...p}><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" /><path d="M10 20.5a2 2 0 0 0 4 0" /></Svg>;
 export const SlidersIcon = (p) => <Svg {...p}><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></Svg>;
 export const ExpandIcon = (p) => <Svg {...p}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></Svg>;
 export const CollapseIcon = (p) => <Svg {...p}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></Svg>;

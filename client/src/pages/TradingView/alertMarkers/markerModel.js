@@ -80,3 +80,42 @@ export function eventsInBucket(eventsByAlert, items, chartTf, chartCandles, buck
   }
   return out;
 }
+
+// Disparos efectivos (no suprimidos) por alerta, hasta el cutoff de replay.
+export function countFirings(eventsByAlert, cutoffMs = Infinity) {
+  const out = {};
+  for (const [id, list] of Object.entries(eventsByAlert || {})) {
+    out[id] = (list || []).filter((e) => !e.suppressed && e.evalTime <= cutoffMs).length;
+  }
+  return out;
+}
+
+// Rango a evaluar: de la primera vela del gráfico (ms) al cierre de la última.
+export function alertRanges(chartCandles, chartTf) {
+  const tfMs = OVERLAY_TF_MS[chartTf];
+  if (!tfMs || !chartCandles?.length) return [];
+  return [{ fromMs: chartCandles[0].time, toMs: chartCandles[chartCandles.length - 1].time + tfMs }];
+}
+
+// Instante actual del replay (fin de la sub-vela en curso); Infinity fuera de replay.
+export function replayCutoffMs(replay) {
+  if (!replay?.active) return Infinity;
+  const ltf = replay.progress?.ltfTime;
+  if (ltf == null) return replay.anchor ?? Infinity;
+  return ltf + (OVERLAY_TF_MS[replay.subTf] || 0);
+}
+
+// Eventos dibujables (items visibles, ≤ cutoff, dentro de alguna vela) con su vela, en orden temporal.
+export function markerTimeline(eventsByAlert, items, chartTf, chartCandles, cutoffMs = Infinity) {
+  const out = [];
+  (items || []).forEach((item, order) => {
+    if (item.hidden) return;
+    for (const event of eventsByAlert?.[item.alertId] || []) {
+      if (event.evalTime > cutoffMs) continue;
+      const sec = chartBucketSec(event.evalTime, chartTf, chartCandles);
+      if (sec != null) out.push({ alertId: item.alertId, event, sec, order });
+    }
+  });
+  out.sort((x, y) => x.event.evalTime - y.event.evalTime || x.order - y.order);
+  return out.map(({ order, ...rest }) => rest); // eslint-disable-line no-unused-vars
+}

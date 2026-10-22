@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ALERT_COLORS, MAX_ALERT_MARKERS, nextColor, addAlert, removeAlert, toggleAlertHidden,
   setAlertColor, chartBucketSec, buildMarkers, eventsInBucket,
+  countFirings, alertRanges, replayCutoffMs, markerTimeline,
 } from './markerModel.js';
 
 const H = 3_600_000;
@@ -117,5 +118,49 @@ describe('items', () => {
     expect(t[0].hidden).toBe(true);
     expect(items[0].hidden).toBe(false);
     expect(setAlertColor(items, 'a', '#123456')[0].color).toBe('#123456');
+  });
+});
+
+describe('countFirings', () => {
+  it('cuenta solo los no suprimidos, respetando el cutoff', () => {
+    const out = countFirings({ a: [ev(T(1)), ev(T(2), true), ev(T(3))], b: [] }, T(2));
+    expect(out).toEqual({ a: 1, b: 0 });
+    expect(countFirings({ a: [ev(T(1)), ev(T(3))] })).toEqual({ a: 2 });
+    expect(countFirings(undefined)).toEqual({});
+  });
+});
+
+describe('alertRanges', () => {
+  it('de la primera vela al cierre de la última', () => {
+    expect(alertRanges(candles(H, T(0), 3), '1h')).toEqual([{ fromMs: T(0), toMs: T(3) }]);
+  });
+  it('sin velas o TF desconocida → []', () => {
+    expect(alertRanges([], '1h')).toEqual([]);
+    expect(alertRanges(candles(H, T(0), 3), 'xx')).toEqual([]);
+  });
+});
+
+describe('replayCutoffMs', () => {
+  it('fuera de replay → Infinity', () => {
+    expect(replayCutoffMs({ active: false, progress: { ltfTime: T(1) }, subTf: '1m', anchor: T(0) })).toBe(Infinity);
+  });
+  it('ltfTime + duración de la sub-TF', () => {
+    expect(replayCutoffMs({ active: true, progress: { ltfTime: T(1) }, subTf: '15m', anchor: T(0) })).toBe(T(1, 15));
+  });
+  it('sin ltfTime usa el anchor', () => {
+    expect(replayCutoffMs({ active: true, progress: { ltfTime: null }, subTf: '15m', anchor: T(0) })).toBe(T(0));
+  });
+});
+
+describe('markerTimeline', () => {
+  it('eventos visibles, con su vela, ordenados por evalTime', () => {
+    const c = candles(4 * H, T(0), 6);
+    const items = [{ alertId: 'a', hidden: false }, { alertId: 'b', hidden: false }, { alertId: 'h', hidden: true }];
+    const a1 = ev(T(9)); const b1 = ev(T(5)); const late = ev(T(30));
+    const out = markerTimeline({ a: [a1, ev(T(20))], b: [b1, late], h: [ev(T(6))] }, items, '4h', c, T(19));
+    expect(out).toEqual([
+      { alertId: 'b', event: b1, sec: T(4) / 1000 },
+      { alertId: 'a', event: a1, sec: T(8) / 1000 },
+    ]);
   });
 });
