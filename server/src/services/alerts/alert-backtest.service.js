@@ -29,6 +29,10 @@ const TF_MS = marketData.TIMEFRAME_TO_MS;
 const SEND_DELAY_MS = 1000;
 const MAX_EVALS_PER_REQUEST = 2000;
 const MAX_COOLDOWN_LOOKBACK_FACTOR = 32;
+// run cede el event loop cada tantas evaluaciones (una petición puede rondar
+// las 4000 entre calentamiento y rango).
+const YIELD_EVERY_EVALS = 250;
+const RESULT_CACHE_SIZE = 50;
 
 // Calentamiento del cooldown: 32·cd, pero nunca más de MAX_EVALS_PER_REQUEST
 // boundaries extra (cd = 1 día en 1m serían 46 080 evaluaciones). Redondeado
@@ -85,7 +89,10 @@ function ruleSummary(result) {
   };
 }
 
-function simulate({ alert, candlesByTf, fromMs, toMs }) {
+// Núcleo de la simulación como generador: hace `yield` tras cada evaluación
+// nueva (no cacheada) y devuelve el resultado. `simulate` lo consume de forma
+// síncrona y `simulateAsync` cede el event loop cada YIELD_EVERY_EVALS.
+function* simulateSteps({ alert, candlesByTf, fromMs, toMs }) {
   const rules = Array.isArray(alert?.rules) ? alert.rules : [];
   const baseTimeframe = lowestTimeframe(rules);
   const empty = { baseTimeframe, events: [], insufficient: 0, cooldownApprox: false };
@@ -100,7 +107,7 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
   // Como en vivo, se evalúa lo que esté cerrado en T = boundary + 3 s, aunque
   // ninguna vela base cierre justo en el boundary (Yahoo, 1w en jueves…).
   const cache = new Map();
-  function evaluateAt(boundary) {
+  function* evaluateAt(boundary) {
     let ev = cache.get(boundary);
     if (ev) return ev;
     const T = boundary + POST_CLOSE_BUFFER_MS;
@@ -127,6 +134,7 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
       ev = { insufficient: false, score, ruleResults, wouldTrigger: score >= threshold, closeMs };
     }
     cache.set(boundary, ev);
+    yield;
     return ev;
   }
 
@@ -152,7 +160,7 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
     while (found == null && p - reach * baseMs >= lowest) {
       let blocker = null;
       for (let k = 1; k <= reach; k += 1) {
-        if (evaluateAt(p - k * baseMs).wouldTrigger) { blocker = p - k * baseMs; break; }
+        if ((yield* evaluateAt(p - k * baseMs)).wouldTrigger) { blocker = p - k * baseMs; break; }
       }
       if (blocker == null) found = p;
       // Todo p' en (blocker, p] también tiene ese disparo a su alcance.
@@ -170,7 +178,7 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
   let insufficientCount = 0;
   let lastSentAt = null;
   for (let b = simStart; b <= lastBoundary; b += baseMs) {
-    const ev = evaluateAt(b);
+    const ev = yield* evaluateAt(b);
     const inRange = b > fromMs;
     if (ev.insufficient) {
       if (inRange) insufficientCount += 1;
@@ -195,11 +203,38 @@ function simulate({ alert, candlesByTf, fromMs, toMs }) {
   return { baseTimeframe, events, insufficient: insufficientCount, cooldownApprox };
 }
 
+function simulate(args) {
+  const steps = simulateSteps(args);
+  let r = steps.next();
+  while (!r.done) r = steps.next();
+  return r.value;
+}
+
+async function simulateAsync(args) {
+  const steps = simulateSteps(args);
+  let evals = 0;
+  let r = steps.next();
+  while (!r.done) {
+    evals += 1;
+    if (evals % YIELD_EVERY_EVALS === 0) await new Promise(setImmediate);
+    r = steps.next();
+  }
+  return r.value;
+}
+
 // ------------------------------------------------------------------
 // Orquestación
 // ------------------------------------------------------------------
 
 function createAlertBacktest({ getAlert, getCandles, now = Date.now }) {
+  // LRU (orden de inserción del Map) de resultados ya calculados.
+  const results = new Map();
+  function remember(key, value) {
+    results.delete(key);
+    results.set(key, value);
+    while (results.size > RESULT_CACHE_SIZE) results.delete(results.keys().next().value);
+  }
+
   async function run(userId, alertId, { asset, datasource, startTime, endTime } = {}) {
     const alert = await getAlert(userId, alertId);
     const rules = Array.isArray(alert.rules) ? alert.rules : [];
@@ -209,29 +244,14 @@ function createAlertBacktest({ getAlert, getCandles, now = Date.now }) {
     if (!asset) throw new ValidationError('asset requerido');
 
     const from = Number(startTime);
-    // Ningún boundary que el scheduler aún no habría evaluado (b + 3 s ≤ now).
-    const to = Math.min(Number(endTime), now() - POST_CLOSE_BUFFER_MS);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) {
+    const end = Number(endTime);
+    if (!Number.isFinite(from) || !Number.isFinite(end) || from >= end) {
       throw new ValidationError('rango inválido: startTime debe ser menor que endTime');
     }
-    if ((to - from) / baseMs > MAX_EVALS_PER_REQUEST) {
-      throw new ValidationError(`rango demasiado grande: máximo ${MAX_EVALS_PER_REQUEST} velas de ${baseTimeframe}`);
-    }
-
+    // Ningún boundary que el scheduler aún no habría evaluado (b + 3 s ≤ now).
+    const to = Math.min(end, now() - POST_CLOSE_BUFFER_MS);
     const ds = datasource || alert.datasource;
-    const cooldownMs = Math.max(0, Number(alert.cooldownSeconds || 0) * 1000);
-    const lookbackMs = cooldownLookbackMs(cooldownMs, baseMs);
-    const candlesByTf = {};
-    await Promise.all(distinctTimeframes(rules).map(async (tf) => {
-      candlesByTf[tf] = await getCandles(asset, tf, {
-        datasource: ds,
-        startTime: Math.floor(from / baseMs) * baseMs - lookbackMs - CANDLE_FETCH_LIMIT * TF_MS[tf],
-        endTime: to,
-      });
-    }));
-
-    const result = simulate({ alert, candlesByTf, fromMs: from, toMs: to });
-    return {
+    const out = (result) => ({
       alertId: alert.id,
       alertUpdatedAt: alert.updatedAt,
       asset,
@@ -243,7 +263,34 @@ function createAlertBacktest({ getAlert, getCandles, now = Date.now }) {
       events: result.events,
       insufficient: result.insufficient,
       cooldownApprox: result.cooldownApprox,
-    };
+    });
+    // Rango entero en el futuro (borde derecho de un gráfico 1w/1M): nada que evaluar.
+    if (from >= to) return out({ baseTimeframe, events: [], insufficient: 0, cooldownApprox: false });
+    if ((to - from) / baseMs > MAX_EVALS_PER_REQUEST) {
+      throw new ValidationError(`rango demasiado grande: máximo ${MAX_EVALS_PER_REQUEST} velas de ${baseTimeframe}`);
+    }
+
+    const cacheKey = `${alert.id}:${alert.updatedAt}:${ds}:${asset}:${from}:${to}`;
+    const hit = results.get(cacheKey);
+    if (hit) {
+      remember(cacheKey, hit);
+      return hit;
+    }
+
+    const cooldownMs = Math.max(0, Number(alert.cooldownSeconds || 0) * 1000);
+    const lookbackMs = cooldownLookbackMs(cooldownMs, baseMs);
+    const candlesByTf = {};
+    await Promise.all(distinctTimeframes(rules).map(async (tf) => {
+      candlesByTf[tf] = await getCandles(asset, tf, {
+        datasource: ds,
+        startTime: Math.floor(from / baseMs) * baseMs - lookbackMs - CANDLE_FETCH_LIMIT * TF_MS[tf],
+        endTime: to,
+      });
+    }));
+
+    const value = out(await simulateAsync({ alert, candlesByTf, fromMs: from, toMs: to }));
+    remember(cacheKey, value);
+    return value;
   }
   return { run };
 }
@@ -256,9 +303,12 @@ const defaultInstance = createAlertBacktest({
 module.exports = {
   MAX_COOLDOWN_LOOKBACK_FACTOR,
   MAX_EVALS_PER_REQUEST,
+  RESULT_CACHE_SIZE,
   SEND_DELAY_MS,
+  YIELD_EVERY_EVALS,
   createAlertBacktest,
   run: defaultInstance.run,
   simulate,
+  simulateAsync,
   windowAt,
 };

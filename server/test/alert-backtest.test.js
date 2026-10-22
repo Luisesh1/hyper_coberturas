@@ -391,3 +391,68 @@ test('rama aproximada con 32·cd fuera de rejilla: todos los evalTime son bounda
   for (const e of res.events) assert.equal(e.evalTime % M15, 0);
   assert.equal(calls[0][2].startTime, closeOf(500) - 36 * M15 - 250 * M15);
 });
+
+test('rango vacío tras recortar a now − 3 s: resultado vacío, sin 400 ni velas', async () => {
+  const alert = makeAlert({ cooldownSeconds: 0 });
+  let calls = 0;
+  const svc = createAlertBacktest({
+    getAlert: async () => alert,
+    getCandles: async () => { calls += 1; return []; },
+    now: () => closeOf(500) + 3000,
+  });
+  // Borde derecho de un gráfico 1w: el rango entero cae en el futuro.
+  const res = await svc.run(1, 7, {
+    asset: 'BTCUSDT', datasource: 'binance', startTime: closeOf(500) + 60_000, endTime: closeOf(600),
+  });
+  assert.deepEqual(res.events, []);
+  assert.equal(res.insufficient, 0);
+  assert.equal(res.cooldownApprox, false);
+  assert.equal(res.baseTimeframe, '15m');
+  assert.equal(calls, 0);
+  // Un rango invertido de entrada sigue siendo un error.
+  await assert.rejects(
+    svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: closeOf(10), endTime: closeOf(5) }),
+    (err) => err.name === 'ValidationError',
+  );
+});
+
+test('run cachea resultados (LRU): una segunda petición idéntica no pide velas', async () => {
+  const candles = makeCandles(M15, BASE, 600, (i) => (i % 5 === 0 ? 100 : 10));
+  let alert = makeAlert();
+  let calls = 0;
+  const svc = createAlertBacktest({
+    getAlert: async () => alert,
+    getCandles: async () => { calls += 1; return candles; },
+    now: () => closeOf(599) + 3000,
+  });
+  const req = { asset: 'BTCUSDT', datasource: 'binance', startTime: closeOf(400), endTime: closeOf(599) };
+  const a = await svc.run(1, 7, req);
+  const b = await svc.run(1, 7, req);
+  assert.equal(calls, 1);
+  assert.deepEqual(b, a);
+  // Otro updatedAt invalida.
+  alert = { ...alert, updatedAt: 124 };
+  await svc.run(1, 7, req);
+  assert.equal(calls, 2);
+});
+
+test('run da resultados idénticos a simulate y cede el event loop durante la evaluación', async () => {
+  const candles = makeCandles(M15, BASE, 1200, (i) => (i % 7 === 0 || i % 11 === 0 ? 100 : 10));
+  const alert = makeAlert({ cooldownSeconds: 2700 });
+  const fromMs = closeOf(400) + 5 * 60_000;
+  const toMs = closeOf(1199);
+  const svc = createAlertBacktest({ getAlert: async () => alert, getCandles: async () => candles, now: () => toMs + 3000 });
+  const pending = svc.run(1, 7, { asset: 'BTCUSDT', datasource: 'binance', startTime: fromMs, endTime: toMs });
+  let immediates = 0;
+  const spin = () => { immediates += 1; if (immediates < 1000) setImmediate(spin); };
+  setImmediate(spin);
+  const res = await pending;
+  const sync = simulate({ alert, candlesByTf: { '15m': candles }, fromMs, toMs });
+  assert.equal(
+    JSON.stringify({ baseTimeframe: res.baseTimeframe, events: res.events, insufficient: res.insufficient, cooldownApprox: res.cooldownApprox }),
+    JSON.stringify(sync),
+  );
+  assert.ok(sync.events.length > 0);
+  // ~800 evaluaciones → al menos 3 cesiones al event loop.
+  assert.ok(immediates >= 3, `immediates=${immediates}`);
+});

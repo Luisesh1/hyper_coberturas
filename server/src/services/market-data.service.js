@@ -13,6 +13,20 @@ const DEFAULT_DATASOURCE = 'hyperliquid';
 const cache = new Map();
 const pairCache = new Map();
 const CACHE_TTL_MS = 10_000;
+const CACHE_MAX_ENTRIES = 500;
+
+// Cada set barre lo caducado y recorta a CACHE_MAX_ENTRIES (las más antiguas
+// primero: el Map conserva el orden de inserción).
+function setCached(key, entry) {
+  const now = Date.now();
+  for (const [k, v] of cache) {
+    if (now - v.createdAt < CACHE_TTL_MS) break;
+    cache.delete(k);
+  }
+  cache.delete(key);
+  cache.set(key, entry);
+  while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value);
+}
 
 const TIMEFRAME_TO_MS = {
   '1m': 60_000,
@@ -86,7 +100,7 @@ async function getCandles(asset, timeframe, {
   });
 
   const value = Array.isArray(rows) ? rows.slice().sort((a, b) => a.time - b.time) : [];
-  cache.set(cacheKey, { createdAt: Date.now(), value });
+  setCached(cacheKey, { createdAt: Date.now(), value });
   pairCache.set(buildPairKey(normalizedDs, normalizedAsset, normalizedTimeframe), {
     createdAt: Date.now(),
     value,
@@ -121,4 +135,7 @@ module.exports = {
   normalizeAsset,
   normalizeTimeframe,
   normalizeDatasource,
+  // Solo para tests.
+  _cacheSize: () => cache.size,
+  _clearCache: () => cache.clear(),
 };

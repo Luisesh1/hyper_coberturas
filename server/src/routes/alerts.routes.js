@@ -5,6 +5,7 @@ const { z } = require('zod');
 const alertsService = require('../services/alerts/alerts.service');
 const alertBacktest = require('../services/alerts/alert-backtest.service');
 const { AppError, ValidationError, ExternalServiceError } = require('../errors/app-error');
+const logger = require('../services/logger.service');
 
 const backtestBodySchema = z.object({
   asset: z.string().trim().min(1),
@@ -19,6 +20,20 @@ function parseBacktestBody(body) {
     throw new ValidationError(`Body inválido: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(' | ')}`);
   }
   return parsed.data;
+}
+
+// Fallos ajenos a la validación (proveedor de velas caído…) salen como 502,
+// pero antes se registra el error original para poder diagnosticarlo.
+async function runBacktest(userId, alertId, body) {
+  try {
+    return await alertBacktest.run(userId, alertId, body);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.warn('alerts_backtest_failed', {
+      alertId, asset: body?.asset, datasource: body?.datasource, error: err?.message, stack: err?.stack,
+    });
+    throw new ExternalServiceError(`No se pudieron obtener las velas: ${err?.message}`);
+  }
 }
 
 const router = Router();
@@ -63,15 +78,10 @@ router.get('/:id/events', asyncHandler(async (req, res) => {
 
 router.post('/:id/backtest', asyncHandler(async (req, res) => {
   const body = parseBacktestBody(req.body);
-  let data;
-  try {
-    data = await alertBacktest.run(req.user.userId, Number(req.params.id), body);
-  } catch (err) {
-    if (err instanceof AppError) throw err;
-    throw new ExternalServiceError(`No se pudieron obtener las velas: ${err.message}`);
-  }
+  const data = await runBacktest(req.user.userId, Number(req.params.id), body);
   res.json({ success: true, data });
 }));
 
 module.exports = router;
 module.exports.parseBacktestBody = parseBacktestBody;
+module.exports.runBacktest = runBacktest;
