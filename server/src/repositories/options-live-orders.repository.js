@@ -331,6 +331,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   async function listMissingTpPositions(limit = 100) {
     const { rows } = await db.query(
       "SELECT p.id,p.strategy_id,p.user_id,p.symbol,p.side,p.quantity,p.entry_price," +
+      "p.tp_target_price,p.tp_target_meta," +
       "s.params,s.underlying FROM options_strategy_positions p " +
       "JOIN options_strategies s ON s.id=p.strategy_id " +
       "WHERE p.mode='live' AND p.closed_at IS NULL AND p.quantity > 0 " +
@@ -348,6 +349,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       entryPrice: Number(p.entry_price),
       params: typeof p.params === 'string' ? JSON.parse(p.params) : p.params,
       underlying: p.underlying,
+      tpTargetPrice: p.tp_target_price == null ? null : Number(p.tp_target_price),
+      tpTargetMeta: typeof p.tp_target_meta === 'string' ? JSON.parse(p.tp_target_meta) : (p.tp_target_meta ?? null),
     }));
   }
 
@@ -415,7 +418,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
    */
   async function listUnprotectedLivePositions(olderThan, limit = 100) {
     const { rows } = await db.query(
-      "SELECT p.id,p.user_id,p.strategy_id,p.opened_at FROM options_strategy_positions p " +
+      "SELECT p.id,p.user_id,p.strategy_id,p.opened_at,p.symbol,s.params FROM options_strategy_positions p " +
       "JOIN options_strategies s ON s.id=p.strategy_id " +
       "WHERE p.mode='live' AND p.closed_at IS NULL AND p.quantity > 0 " +
       "AND s.mode='live' AND s.template='alert_signal' AND p.opened_at <= $1 " +
@@ -428,6 +431,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.map((r) => ({
       positionId: Number(r.id), userId: Number(r.user_id),
       strategyId: Number(r.strategy_id), openedAt: Number(r.opened_at),
+      symbol: r.symbol,
+      params: typeof r.params === 'string' ? JSON.parse(r.params) : (r.params ?? null),
     }));
   }
 
@@ -498,16 +503,21 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
 
   /** El plazo del TP obliga a dejar constancia de una salida por tiempo,
    * incluso si falla la lectura de la cadena de opciones del runner.
+   * Excepción: en 'atr_band' no hay salida por tiempo (se mantiene hasta la
+   * liquidación); el TP se cancela en su plazo pero no se pide cierre.
    */
   async function requestDeadlineExit(order) {
     if (order.purpose !== 'take_profit') return false;
     return db.transaction(async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [order.userId]);
       const { rows: [held] } = await tx.query(
-        "SELECT id,user_id,strategy_id,symbol FROM options_strategy_positions " +
-        "WHERE id=$1 AND mode='live' AND closed_at IS NULL FOR UPDATE", [order.positionId]
+        "SELECT p.id,p.user_id,p.strategy_id,p.symbol,s.params FROM options_strategy_positions p " +
+        "JOIN options_strategies s ON s.id=p.strategy_id " +
+        "WHERE p.id=$1 AND p.mode='live' AND p.closed_at IS NULL FOR UPDATE OF p", [order.positionId]
       );
       if (!held) return false;
+      const params = typeof held.params === 'string' ? JSON.parse(held.params) : held.params;
+      if (params?.takeProfitMode === 'atr_band') return false;
       if (Number(held.user_id) !== order.userId ||
           Number(held.strategy_id) !== order.strategyId ||
           held.symbol !== order.symbol) {

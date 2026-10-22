@@ -49,6 +49,8 @@ function mapPosition(row) {
     pnlUsdt: numberOrNull(row.pnl_usdt),
     feesUsdt: Number(row.fees_usdt || 0),
     closeReason: row.close_reason || null,
+    tpTargetPrice: numberOrNull(row.tp_target_price),
+    tpTargetMeta: parseJson(row.tp_target_meta, null),
   };
 }
 
@@ -191,6 +193,23 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
       [strategyId, userId, mode, symbol, side, quantity, entryPrice, openedAt ?? now(), feesUsdt]
     );
     return mapPosition(rows[0]);
+  }
+
+  /**
+   * Fija el objetivo de venta (banda ATR) SOLO si sigue vacío: una vez
+   * escrito no se recalcula. Devuelve la fila guardada (la de quien ganó).
+   */
+  async function setTpTarget(id, price, meta) {
+    const { rows } = await db.query(
+      `UPDATE options_strategy_positions
+          SET tp_target_price = $2, tp_target_meta = $3::jsonb
+        WHERE id = $1 AND tp_target_price IS NULL
+        RETURNING *`,
+      [id, price, JSON.stringify(meta ?? null)]
+    );
+    if (rows[0]) return mapPosition(rows[0]);
+    const { rows: current } = await db.query('SELECT * FROM options_strategy_positions WHERE id = $1', [id]);
+    return current[0] ? mapPosition(current[0]) : null;
   }
 
   /** Cierra una posición abierta. `feesUsdt` es el total (entrada + salida). */
@@ -419,6 +438,7 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     setState,
     deleteStrategy,
     insertPosition,
+    setTpTarget,
     closePosition,
     listOpenPositions,
     listOpenPositionsByUser,

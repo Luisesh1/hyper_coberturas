@@ -9,6 +9,11 @@
  * runner). Con señal: (1) posición contraria según `onOpposite`, (2) límites
  * de posiciones abiertas y operaciones del día, (3) apertura por delta en el
  * vencimiento más cercano a `expiryDays` (la cadena la elige el runner).
+ *
+ * `takeProfitMode = 'atr_band'` (solo `buy_with`): el precio de venta se fija
+ * una vez al llenarse (banda ATR, ver options-atr-band-target) y queda como
+ * LIMIT GTC en Binance. No hay otras salidas: ni stop, ni por tiempo, ni por
+ * señal contraria; si no se vende, se mantiene hasta la liquidación.
  */
 
 const { ValidationError } = require('../../../errors/app-error');
@@ -21,7 +26,8 @@ const id = 'alert_signal';
 
 const STRUCTURES = ['buy_with', 'sell_against'];
 const ON_OPPOSITE = ['reverse', 'close', 'ignore'];
-const TAKE_PROFIT_MODES = ['fixed', 'volatility'];
+const TAKE_PROFIT_MODES = ['fixed', 'volatility', 'atr_band'];
+const ATR_BAND_INTERVALS = ['5m', '15m', '1h', '4h', '1d'];
 const DIRECTIONS = ['bullish', 'bearish'];
 const DIRECTION_LABEL = { bullish: 'alcista', bearish: 'bajista', neutral: 'neutral' };
 
@@ -46,6 +52,10 @@ const defaultParams = {
   takeProfitMode: 'fixed',
   tpAtrMultiplier: 1,
   tpHorizonHours: 4,
+  atrBandInterval: '1h',
+  atrBandLength: 14,
+  atrBandMultiplier: 2,
+  tpMaxGainPct: 200,
 };
 
 const NUMERIC_FIELDS = [
@@ -60,6 +70,9 @@ const NUMERIC_FIELDS = [
   { key: 'maxPremiumUsdt', label: 'Prima máxima por operación', type: 'number', min: 0, max: 1e7, step: 1, unit: 'USDT', nullable: true },
   { key: 'tpAtrMultiplier', label: 'Multiplicador ATR del TP', type: 'number', min: 0.25, max: 4, step: 0.25 },
   { key: 'tpHorizonHours', label: 'Horizonte TP por volatilidad', type: 'number', min: 1, max: 24, step: 1, integer: true, unit: 'horas' },
+  { key: 'atrBandLength', label: 'Longitud de la banda ATR', type: 'number', integer: true, min: 2, max: 100, step: 1, unit: 'velas' },
+  { key: 'atrBandMultiplier', label: 'Multiplicador de la banda ATR', type: 'number', min: 0.25, max: 10, step: 0.25 },
+  { key: 'tpMaxGainPct', label: 'Tope de ganancia del TP', type: 'number', min: 10, max: 2000, step: 10, unit: '% de la prima' },
 ];
 
 const paramSchema = [
@@ -67,6 +80,7 @@ const paramSchema = [
   { key: 'capitalUsdt', label: 'Capital máximo de entrada', type: 'number', min: 0.01, max: 1e7, nullable: true, unit: 'USDT' },
   { key: 'alertIds', label: 'Alertas', type: 'alerts' },
   { key: 'takeProfitMode', label: 'Tipo de Take Profit', type: 'enum', options: TAKE_PROFIT_MODES },
+  { key: 'atrBandInterval', label: 'Temporalidad de la banda ATR', type: 'enum', options: ATR_BAND_INTERVALS },
   { key: 'structure', label: 'Estructura', type: 'enum', options: STRUCTURES },
   { key: 'onOpposite', label: 'Señal contraria', type: 'enum', options: ON_OPPOSITE },
   ...NUMERIC_FIELDS,
@@ -93,19 +107,30 @@ function pickEnum(value, options, fallback, label) {
 function validateParams(raw = {}) {
   const input = raw && typeof raw === 'object' ? raw : {};
   const structure = pickEnum(input.structure, STRUCTURES, defaultParams.structure, 'Estructura');
-  const onOpposite = pickEnum(input.onOpposite, ON_OPPOSITE, defaultParams.onOpposite, 'Señal contraria');
+  let onOpposite = pickEnum(input.onOpposite, ON_OPPOSITE, defaultParams.onOpposite, 'Señal contraria');
   const takeProfitMode = pickEnum(input.takeProfitMode, TAKE_PROFIT_MODES, defaultParams.takeProfitMode, 'Tipo de Take Profit');
+  const atrBandInterval = pickEnum(input.atrBandInterval, ATR_BAND_INTERVALS, defaultParams.atrBandInterval, 'Temporalidad de la banda ATR');
+  if (takeProfitMode === 'atr_band' && structure !== 'buy_with') {
+    throw new ValidationError('Tipo de Take Profit: la banda ATR solo existe con «Comprar a favor»');
+  }
   const numeric = validateNumericParams(
     { paramSchema: NUMERIC_FIELDS, defaultParams: { ...defaultParams, ...STRUCTURE_DEFAULTS[structure] } },
     input
   );
   // La prima máxima solo aplica al comprar.
   if (structure !== 'buy_with') numeric.maxPremiumUsdt = null;
+  // Banda ATR: la única salida es el objetivo (o el vencimiento). La señal
+  // contraria se ignora y no hay salida por tiempo; el plazo de la LIMIT en
+  // Binance queda en vencimiento − 1 h (Math.max(1, 0) del ejecutor).
+  if (takeProfitMode === 'atr_band') {
+    onOpposite = 'ignore';
+    numeric.exitHoursBeforeExpiry = 0;
+  }
   const contractCount = input.contractCount == null ? 1 : Number(input.contractCount);
   const capitalUsdt = input.capitalUsdt == null || input.capitalUsdt === '' ? null : Number(input.capitalUsdt);
   if (!Number.isInteger(contractCount) || contractCount < 1 || contractCount > 10) throw new ValidationError('contractCount debe estar entre 1 y 10');
   if (capitalUsdt !== null && (!Number.isFinite(capitalUsdt) || capitalUsdt <= 0 || capitalUsdt > 1e7)) throw new ValidationError('capitalUsdt inválido');
-  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, ...numeric, contractCount, capitalUsdt };
+  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt };
 }
 
 /** Pata que abre una señal según la estructura. */
@@ -140,9 +165,39 @@ function pnlPct(position) {
   return (diff / premium) * 100;
 }
 
+/**
+ * Banda ATR: emula la LIMIT en reposo. Cierra solo cuando el precio
+ * ejecutable (bid al vender lo comprado) alcanza el objetivo fijado al
+ * llenarse. Ninguna otra salida; el vencimiento lo liquida el runner.
+ */
+function atrBandExits(positions) {
+  const actions = [];
+  let pending = false;
+  for (const p of positions) {
+    const target = Number(p.tpTargetPrice);
+    if (!(target > 0)) {
+      pending = true;
+      continue;
+    }
+    const executable = Number(p.quote?.[p.side === 'BUY' ? 'bid' : 'ask']);
+    const reached = Number.isFinite(executable) && executable > 0 &&
+      (p.side === 'BUY' ? executable >= target : executable <= target);
+    if (reached) {
+      actions.push({ type: 'close', reason: 'take_profit_atr_band',
+        detail: `TP banda ATR en ${p.symbol}: objetivo ${target} USDT, cotización ${executable} USDT`,
+        legs: closeLegs([p]).map((l) => ({ ...l, targetPrice: target })) });
+    }
+  }
+  if (actions.length) return actions;
+  if (!positions.length) return [hold('waiting_signal', 'Esperando señal')];
+  if (pending) return [hold('atr_band_tp_pending', 'Objetivo por banda ATR pendiente: faltan velas, tick o spot de Binance')];
+  return [hold('in_position', `En posición: ${positions.length} pata(s) abierta(s), objetivo fijo por banda ATR`)];
+}
+
 /** Salidas por tiempo, toma de ganancia y stop, una por posición. */
 function exits(ctx) {
   const { now, positions = [], params } = ctx;
+  if (params.takeProfitMode === 'atr_band') return atrBandExits(positions);
   const actions = [];
   let missingQuote = false;
   let missingVolatility = false;
@@ -282,6 +337,7 @@ module.exports = {
   ON_OPPOSITE,
   STRUCTURE_DEFAULTS,
   TAKE_PROFIT_MODES,
+  ATR_BAND_INTERVALS,
   legFor,
   positionDirection,
 };

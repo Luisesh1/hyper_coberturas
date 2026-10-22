@@ -31,6 +31,12 @@ const { projectTakeProfit } = require('./options-take-profit');
 const { fullSizeFokLimit } = require('./options-fok-depth');
 const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
+const { ensureAtrBandTarget } = require('./options-atr-band-target');
+
+// Cierres por toma de ganancia: con un TP LIMIT residente no se cancela ni
+// se compite con él; deben alcanzar su objetivo con la cotización fresca.
+const TAKE_PROFIT_REASONS = ['take_profit', 'take_profit_volatility', 'take_profit_atr_band'];
+const TARGET_TP_REASONS = ['take_profit_volatility', 'take_profit_atr_band'];
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const RECONCILE_INTERVAL_MS = 60_000;
@@ -41,6 +47,8 @@ function lazyMarket() {
   return {
     getChain: (...args) => load().getChain(...args),
     getQuote: (...args) => load().getQuote(...args),
+    getVolatilityInputs: (...args) => load().getVolatilityInputs(...args),
+    getAtrBand: (...args) => load().getAtrBand(...args),
   };
 }
 
@@ -335,6 +343,20 @@ class OptionsStrategyRunner {
     }));
   }
 
+  /**
+   * Banda ATR: fija el objetivo de venta UNA vez (al llenarse) y lo persiste.
+   * Si faltan velas, tick o spot queda pendiente y se reintenta en el
+   * siguiente ciclo; un fallo nunca impide registrar la posición.
+   */
+  async ensureAtrBandTarget(position, params, spot, now) {
+    try {
+      return await ensureAtrBandTarget(position, params, { market: this.market, repo: this.repo, spot, now });
+    } catch (err) {
+      this.logger.warn('options_atr_band_tp_unavailable', { positionId: position.id, symbol: position.symbol, error: err.message });
+      return position;
+    }
+  }
+
   // ---------- evaluación ----------
 
   /** Template, parámetros, cadena y spot de una estrategia para esta pasada. */
@@ -354,9 +376,14 @@ class OptionsStrategyRunner {
   async modeContext(strategy, mode, tickCtx, { template, params, chain, spot }, open = null) {
     const rows = open || await this.repo.listOpenPositions(strategy.id, mode);
     const enriched = await this.enrichPositions(rows, chain);
-    const positions = template.id === 'alert_signal'
+    let positions = template.id === 'alert_signal'
       ? await this.attachVolatilityTargets(enriched, params, spot, tickCtx.now)
       : enriched;
+    // Sombra: reintento del objetivo ATR que no pudo fijarse al abrir. En
+    // real lo fija el ejecutor al armar el TP residente en Binance.
+    if (template.id === 'alert_signal' && mode === 'shadow' && params.takeProfitMode === 'atr_band') {
+      positions = await Promise.all(positions.map((p) => this.ensureAtrBandTarget(p, params, spot, tickCtx.now)));
+    }
     return { ...tickCtx, spot, positions, params, mode };
   }
 
@@ -474,7 +501,7 @@ class OptionsStrategyRunner {
     const filled = action.legs.map((leg, i) => {
       const { quote, price } = quotes[i];
       const spot = num(quote.spot) ?? ctx.spot;
-      return { ...leg, price, fee: tradeFee({ spot, quantity: leg.quantity, price }) };
+      return { ...leg, price, spot, fee: tradeFee({ spot, quantity: leg.quantity, price }) };
     });
     return this.book(strategy, 'shadow', action, filled, ctx);
   }
@@ -486,7 +513,7 @@ class OptionsStrategyRunner {
     for (const leg of filled) {
       premium += signedPremium(leg.side, leg.price, leg.quantity);
       if (action.type === 'open') {
-        await this.repo.insertPosition({
+        const position = await this.repo.insertPosition({
           strategyId: strategy.id,
           userId: strategy.userId,
           mode,
@@ -497,6 +524,10 @@ class OptionsStrategyRunner {
           openedAt: ctx.now,
           feesUsdt: leg.fee,
         });
+        // Banda ATR: el objetivo se fija con el spot del fill.
+        if (strategy.template === 'alert_signal' && ctx.params?.takeProfitMode === 'atr_band' && position) {
+          await this.ensureAtrBandTarget(position, ctx.params, leg.spot ?? ctx.spot, ctx.now);
+        }
       } else {
         const position = openById.get(leg.positionId);
         if (!position) continue;
@@ -613,7 +644,7 @@ class OptionsStrategyRunner {
     }
     // Un TP LIMIT residente ya está encargado al exchange. No cancelarlo
     // ni competir con él cuando el tick vuelve a detectar la misma ganancia.
-    if (action.type === 'close' && ['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+    if (action.type === 'close' && TAKE_PROFIT_REASONS.includes(action.reason) &&
         typeof this.liveExecutor.repo?.hasStandingTp === 'function' &&
         await this.liveExecutor.repo.hasStandingTp(action.legs.map((l) => l.positionId))) {
       ctx.produced?.push({ mode: 'live', type: 'hold', pending: true,
@@ -623,7 +654,7 @@ class OptionsStrategyRunner {
     // Stops, señales contrarias y salidas por tiempo no dependen de que
     // haya liquidez para SOLICITAR la cancelación durable de un TP resting.
     if (action.type === 'close' &&
-        !['take_profit', 'take_profit_volatility'].includes(action.reason) &&
+        !TAKE_PROFIT_REASONS.includes(action.reason) &&
         typeof this.liveExecutor.requestProtectedExit === 'function' &&
         await this.liveExecutor.requestProtectedExit(strategy, action)) {
       ctx.produced?.push({ mode: 'live', type: 'close', pending: true,
@@ -686,7 +717,7 @@ class OptionsStrategyRunner {
     }
     // Un TP basado en volatilidad no puede ejecutar a peor precio por
     // movimientos entre el tick y el preflight de cotización fresca.
-    if (action.reason === 'take_profit_volatility') {
+    if (TARGET_TP_REASONS.includes(action.reason)) {
       const stale = action.legs.some((leg, i) => {
         const price = quotes[i].price;
         const target = Number(leg.targetPrice);
@@ -696,7 +727,7 @@ class OptionsStrategyRunner {
       if (stale) {
         await this.recordOutcome(strategy, 'live', {
           type: 'skip', reason: 'tp_price_moved',
-          detail: 'TP por volatilidad: el precio ejecutable cambió; no se envió la orden',
+          detail: 'TP por objetivo: el precio ejecutable cambió; no se envió la orden',
         }, ctx);
         return null;
       }

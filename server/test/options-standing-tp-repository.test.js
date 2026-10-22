@@ -86,12 +86,13 @@ test('watchdog selecciona solo posiciones live maduras sin TP activo y no cuenta
     db: { async query(sql, params) {
       calls.push({ sql, params });
       return { rows: [
-        { id: '100', user_id: '7', strategy_id: '4', opened_at: '120000' },
+        { id: '100', user_id: '7', strategy_id: '4', opened_at: '120000', symbol: SYMBOL, params: '{"takeProfitMode":"atr_band"}' },
       ] };
     } },
   });
   const result = await repo.listUnprotectedLivePositions(400000, 100);
-  assert.deepEqual(result, [{ positionId: 100, userId: 7, strategyId: 4, openedAt: 120000 }]);
+  assert.deepEqual(result, [{ positionId: 100, userId: 7, strategyId: 4, openedAt: 120000,
+    symbol: SYMBOL, params: { takeProfitMode: 'atr_band' } }]);
   assert.deepEqual(calls[0].params, [400000, 100]);
   const sql = calls[0].sql;
   assert.match(sql, /p\.closed_at IS NULL/);

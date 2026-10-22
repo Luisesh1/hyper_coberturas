@@ -14,11 +14,39 @@ const { enforcePilotEntry } = require('./options-live-pilot-policy');
 const { parseSymbol } = require('./options-utils');
 const { projectTakeProfit } = require('./options-take-profit');
 const alertSignal = require('./templates/alert-signal');
+const { ensureAtrBandTarget } = require('./options-atr-band-target');
 
 const WINDOW_MS = 10 * 60_000;
 const TERMINAL = new Set(['FILLED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'REJECTED']);
 const ACTIVE = new Set(['NEW', 'PARTIALLY_FILLED', 'ACCEPTED']);
 const clean = (value) => String(value ?? '');
+const HOUR_MS = 3600000;
+// Margen mínimo antes del plazo para registrar un TP residente.
+const TP_MIN_LEAD_MS = 60000;
+
+/** Plazo de la LIMIT TP: vencimiento menos máx(1, exitHoursBeforeExpiry) h. */
+function tpDeadline(expiryMs, params) {
+  return expiryMs - Math.max(1, Number(params.exitHoursBeforeExpiry) || 0) * HOUR_MS;
+}
+
+/** Parámetros validados o null: el vigilante nunca debe caer por ellos. */
+function safeParams(raw) {
+  if (!raw) return null;
+  try {
+    return alertSignal.validateParams(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Banda ATR sin hueco para un TP residente (última hora): por diseño la
+ * posición se mantiene hasta la liquidación, sin salida por tiempo.
+ */
+function holdsToExpiryWithoutTp(params, expiryMs, now) {
+  return params?.takeProfitMode === 'atr_band' && Number.isFinite(expiryMs) &&
+    tpDeadline(expiryMs, params) <= now + TP_MIN_LEAD_MS;
+}
 
 // En ETH, las entradas y los cierres estándar usan FOK para evitar
 // residuos por ejecuciones parciales. El TP residente necesita GTC:
@@ -57,6 +85,14 @@ function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly,
   const origin = Number(minPrice);
   const tick = Number(tickSize);
   if (!Number.isFinite(origin) || origin < 0 || !(tick > 0)) return null;
+  if (params.takeProfitMode === 'atr_band') {
+    // Fijado una vez al llenarse (ensureAtrBandTarget); nunca se recalcula.
+    const target = Number(position.tpTargetPrice);
+    if (!(target > 0) ||
+        (side === 'BUY' && target <= position.entryPrice) ||
+        (side === 'SELL' && target >= position.entryPrice)) return null;
+    return target;
+  }
   if (params.takeProfitMode === 'volatility') {
     const meta = parseSymbol(position.symbol);
     if (!meta || !quote) return null;
@@ -143,6 +179,8 @@ class OptionsLiveExecution {
     this.credentials = deps.credentials || credentialsDefault;
     this.logger = deps.logger || loggerDefault;
     this.market = deps.market || require('./options-market.service');
+    // Posiciones de estrategia: persistir el objetivo de la banda ATR.
+    this.targetRepo = deps.targetRepo || require('../../repositories/options-strategies.repository');
     this.runner = deps.runner || null;
     this.now = deps.now || Date.now;
     this.lastExternalScanAt = null;
@@ -598,6 +636,9 @@ class OptionsLiveExecution {
     const positions = await this.repo.listUnprotectedLivePositions(this.now() - 2 * 60_000, 100);
     let alerts = 0;
     for (const position of positions) {
+      // Banda ATR en su última hora: sin TP por diseño, se mantiene al vencimiento.
+      if (holdsToExpiryWithoutTp(safeParams(position.params),
+        parseSymbol(position.symbol)?.expiryMs, this.now())) continue;
       try {
         if (await this.sendIncidentAlert(
           position.userId, 'UNPROTECTED_TP', String(position.positionId),
@@ -689,8 +730,12 @@ class OptionsLiveExecution {
         const meta = parseSymbol(position.symbol);
         if (!meta?.expiryMs || meta.expiryMs <= this.now()) throw new Error('Invalid or expired TP contract');
         const params = alertSignal.validateParams(position.params || {});
-        const deadlineAt = meta.expiryMs - Math.max(1, Number(params.exitHoursBeforeExpiry)) * 3600000;
-        if (deadlineAt <= this.now() + 60000) {
+        const deadlineAt = tpDeadline(meta.expiryMs, params);
+        if (holdsToExpiryWithoutTp(params, meta.expiryMs, this.now())) {
+          // Banda ATR: sin salida por tiempo; se mantiene hasta la liquidación.
+          continue;
+        }
+        if (deadlineAt <= this.now() + TP_MIN_LEAD_MS) {
           throw new Error('Option too close to exit time for standing TP');
         }
         if (!exchangeByUser.has(position.userId)) {
@@ -717,13 +762,28 @@ class OptionsLiveExecution {
         const minPrice = filter?.minPrice == null ? null : Number(filter.minPrice);
         let quote = null;
         let atrHourly = null;
+        let target = position;
+        if (params.takeProfitMode === 'atr_band') {
+          // Se fija una vez con el spot actual (segundos después del fill) y
+          // se persiste; si ya existe, nunca se recalcula ni se pide la banda.
+          if (!(Number(position.tpTargetPrice) > 0)) {
+            quote = await this.market.getQuote(position.symbol);
+            target = await ensureAtrBandTarget(position, params, {
+              market: this.market, repo: this.targetRepo, spot: quote?.spot,
+              tickSize, minPrice, now: this.now(),
+            });
+          }
+          if (!(Number(target.tpTargetPrice) > 0)) {
+            throw new Error('ATR band take-profit target pending (candles, tick or spot unavailable)');
+          }
+        }
         if (params.takeProfitMode === 'volatility') {
           quote = await this.market.getQuote(position.symbol);
           const inputs = await this.market.getVolatilityInputs(position.symbol);
           atrHourly = inputs.atrHourly;
         }
         const price = standingPrice({
-          position, params, tickSize, minPrice, quote, atrHourly, now: this.now(),
+          position: target, params, tickSize, minPrice, quote, atrHourly, now: this.now(),
         });
         if (!Number.isFinite(price) || price <= 0) {
           throw new Error('Unable to compute verified take-profit price');
@@ -1024,3 +1084,4 @@ module.exports.actionKey = actionKey;
 module.exports.orderTimeInForce = orderTimeInForce;
 module.exports.WINDOW_MS = WINDOW_MS;
 module.exports.isOrderableRemainder = isOrderableRemainder;
+module.exports.standingPrice = standingPrice;

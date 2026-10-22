@@ -73,6 +73,12 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       positions.push(row);
       return clone(row);
     },
+    async setTpTarget(id, price, meta) {
+      const p = positions.find((x) => x.id === id);
+      if (!p) return null;
+      if (p.tpTargetPrice == null) Object.assign(p, { tpTargetPrice: price, tpTargetMeta: clone(meta) });
+      return clone(p);
+    },
     async closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
       const p = positions.find((x) => x.id === id && x.closedAt == null);
       if (!p) return null;

@@ -442,3 +442,102 @@ test('runForSignal sin shadowOnly en un bot real sigue evaluando el modo real', 
   assert.equal(submits, 1);
   assert.deepEqual(Object.keys(actions), ['shadow', 'live']);
 });
+
+// ---------- bot por alertas en modo atr_band (sombra) ----------
+
+function withAtrBand(market, { band = { close: SPOT - 100, atr: 400, upper: SPOT + 700, lower: SPOT - 900, multiplier: 2 } } = {}) {
+  market.state.calls.band = 0;
+  market.getAtrBand = async () => {
+    market.state.calls.band += 1;
+    if (band instanceof Error) throw band;
+    return band;
+  };
+  market.getVolatilityInputs = async () => ({ atrHourly: 300, tickSize: 5, minPrice: 5 });
+  return market;
+}
+
+test('sombra atr_band: la apertura fija y persiste el objetivo una vez; un segundo tick no recalcula', async () => {
+  const { repo, runner, market, strategy, clock } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band', tpMaxGainPct: 200 },
+  });
+  withAtrBand(market);
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  const [p] = repo.positions;
+  assert.equal(repo.positions.length, 1);
+  assert.equal(p.side, 'BUY');
+  assert.ok(p.tpTargetPrice > p.entryPrice, `objetivo ${p.tpTargetPrice} > prima ${p.entryPrice}`);
+  assert.equal(p.tpTargetMeta.spot, SPOT);
+  assert.equal(p.tpTargetMeta.interval, '1h');
+  assert.equal(p.tpTargetMeta.length, 14);
+  assert.equal(p.tpTargetMeta.multiplier, 2);
+  assert.equal(p.tpTargetMeta.computedAt, FRIDAY_9);
+  assert.equal(market.state.calls.band, 1);
+  const target = p.tpTargetPrice;
+
+  clock.now = FRIDAY_9 + HOUR_MS;
+  await runner.tick();
+  assert.equal(market.state.calls.band, 1, 'el segundo tick no vuelve a llamar a getAtrBand');
+  assert.equal(repo.positions[0].tpTargetPrice, target);
+  assert.equal(repo.positions[0].closedAt, null, 'sin stop ni salida por tiempo');
+});
+
+test('sombra atr_band: sin banda al abrir, el objetivo queda pendiente y se reintenta en el siguiente tick', async () => {
+  const { repo, runner, market, strategy, clock } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' },
+  });
+  withAtrBand(market, { band: new Error('sin velas') });
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(repo.positions.length, 1, 'la posición se registra aunque falle la banda');
+  assert.equal(repo.positions[0].tpTargetPrice ?? null, null);
+  withAtrBand(market);
+  clock.now = FRIDAY_9 + 5 * 60_000;
+  await runner.tick();
+  assert.ok(repo.positions[0].tpTargetPrice > 0);
+  assert.equal(market.state.calls.band, 1);
+});
+
+test('sombra atr_band: el bid en el objetivo cierra con take_profit_atr_band', async () => {
+  const { repo, runner, market, strategy, clock } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' },
+  });
+  withAtrBand(market);
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  const target = repo.positions[0].tpTargetPrice;
+  const original = market.getQuote;
+  market.getQuote = async (symbol) => ({ ...(await original(symbol)), bid: target, ask: target + 10 });
+  market.getChain = async () => ({ underlying: 'BTC', spot: SPOT, expiry: null, expiries: [], rows: [] });
+  clock.now = FRIDAY_9 + HOUR_MS;
+  await runner.tick();
+  const [p] = repo.positions;
+  assert.equal(p.closeReason, 'take_profit_atr_band');
+  assert.equal(p.exitPrice, target);
+});
+
+test('atr_band: el cierre manual sigue funcionando (acción explícita del usuario)', async () => {
+  const { repo, runner, market, strategy } = await setup({
+    template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' },
+  });
+  withAtrBand(market);
+  await runner.runForSignal(strategy, { direction: 'bullish' });
+  const out = await runner.closeManually(strategy, { mode: 'shadow' });
+  assert.equal(out.status, 'closed');
+  assert.equal(repo.positions[0].closeReason, 'manual');
+});
+
+test('real atr_band: con TP residente en Binance el tick no cancela ni compite con él', async () => {
+  const runner = new OptionsStrategyRunner({
+    repo: createFakeOptionsRepo({ now: () => FRIDAY_9 }), market: fakeMarket(), logger: silent, now: () => FRIDAY_9,
+    liveExecutor: {
+      enabled: true,
+      repo: { async hasStandingTp() { return true; } },
+      async requestProtectedExit() { throw new Error('no debe cancelar el TP residente'); },
+      async submit() { throw new Error('no debe enviar'); },
+    },
+  });
+  const produced = [];
+  const action = { type: 'close', reason: 'take_profit_atr_band',
+    legs: [{ positionId: 3, symbol: 'BTC-261030-65000-C', side: 'SELL', quantity: 0.01, targetPrice: 300 }] };
+  const result = await runner.executeLive({ id: 1, userId: 7 }, action, { now: FRIDAY_9, produced, positions: [], params: {} });
+  assert.equal(result, null);
+  assert.equal(produced[0].reason, 'tp_resting');
+});

@@ -157,3 +157,82 @@ test('alert_signal: sin spot no abre (no puede distinguir strikes OTM ni dimensi
   assert.ok(!actions.some((a) => a.type === 'open'));
   assert.ok(actions.some((a) => a.reason === 'no_spot'));
 });
+
+// ---------- modo atr_band (objetivo fijo al llenarse, sin otras salidas) ----------
+
+test('alert_signal atr_band: valores por defecto, rangos y combinaciones', () => {
+  const p = params({ takeProfitMode: 'atr_band', onOpposite: 'reverse', exitHoursBeforeExpiry: 12 });
+  assert.equal(p.takeProfitMode, 'atr_band');
+  assert.equal(p.atrBandInterval, '1h');
+  assert.equal(p.atrBandLength, 14);
+  assert.equal(p.atrBandMultiplier, 2);
+  assert.equal(p.tpMaxGainPct, 200);
+  assert.equal(p.onOpposite, 'ignore', 'atr_band fuerza ignorar la señal contraria');
+  assert.equal(p.exitHoursBeforeExpiry, 0, 'atr_band no tiene salida por tiempo');
+  assert.equal(params({ takeProfitMode: 'atr_band', exitHoursBeforeExpiry: 0 }).exitHoursBeforeExpiry, 0);
+
+  const custom = params({ takeProfitMode: 'atr_band', atrBandInterval: '4h', atrBandLength: 20, atrBandMultiplier: 1.5, tpMaxGainPct: 500 });
+  assert.deepEqual([custom.atrBandInterval, custom.atrBandLength, custom.atrBandMultiplier, custom.tpMaxGainPct], ['4h', 20, 1.5, 500]);
+
+  assert.throws(() => params({ takeProfitMode: 'atr_band', structure: 'sell_against' }), (err) => err.name === 'ValidationError');
+  assert.throws(() => params({ takeProfitMode: 'atr_band', atrBandInterval: '2h' }), /Temporalidad/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', atrBandLength: 1 }), /mínimo 2/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', atrBandLength: 101 }), /máximo 100/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', atrBandLength: 14.5 }), /entero/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', atrBandMultiplier: 0.1 }), /mínimo 0.25/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', atrBandMultiplier: 11 }), /máximo 10/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', tpMaxGainPct: 5 }), /mínimo 10/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', tpMaxGainPct: 2001 }), /máximo 2000/);
+
+  // Los bots existentes sin la clave siguen en 'fixed' con sus salidas.
+  const legacy = params({});
+  assert.equal(legacy.takeProfitMode, 'fixed');
+  assert.equal(legacy.onOpposite, 'reverse');
+  assert.equal(legacy.exitHoursBeforeExpiry, 12);
+  // sell_against sigue igual en los demás modos.
+  assert.equal(params({ structure: 'sell_against' }).takeProfitMode, 'fixed');
+});
+
+test('alert_signal atr_band: señal contraria con posición abierta se ignora sin cerrar', () => {
+  const p = params({ takeProfitMode: 'atr_band', onOpposite: 'reverse' });
+  const call = { ...position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 50, ask: 55 } }), tpTargetPrice: 300 };
+  const actions = run(p, { signal: { direction: 'bearish' }, positions: [call] });
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].type, 'skip');
+  assert.equal(actions[0].reason, 'opposite_ignored');
+  assert.ok(!actions.some((a) => a.type === 'close'));
+});
+
+test('alert_signal atr_band: ni stop ni salida por tiempo, aun con pérdida del 90 % y a 2 h del vencimiento', () => {
+  const p = params({ takeProfitMode: 'atr_band', stopLossPct: 50 });
+  const losing = { ...position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 10, ask: 12 }, hoursLeft: 2 }), tpTargetPrice: 300 };
+  const actions = run(p, { positions: [losing] });
+  assert.ok(!actions.some((a) => a.type === 'close'), JSON.stringify(actions));
+  assert.equal(actions[0].type, 'hold');
+  assert.equal(actions[0].reason, 'in_position');
+  // Sin cotización tampoco cierra.
+  const noQuote = { ...losing, quote: null };
+  assert.ok(!run(p, { positions: [noQuote] }).some((a) => a.type === 'close'));
+});
+
+test('alert_signal atr_band: cierra con take_profit_atr_band cuando el bid alcanza el objetivo', () => {
+  const p = params({ takeProfitMode: 'atr_band' });
+  const base = position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 299.9, ask: 310, mark: 400 } });
+  const below = run(p, { positions: [{ ...base, tpTargetPrice: 300 }] });
+  assert.equal(below[0].type, 'hold', 'el mark no cuenta: solo el bid');
+  const hit = run(p, { positions: [{ ...base, quote: { bid: 300, ask: 310 }, tpTargetPrice: 300 }] });
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].type, 'close');
+  assert.equal(hit[0].reason, 'take_profit_atr_band');
+  assert.equal(hit[0].legs[0].side, 'SELL');
+  assert.equal(hit[0].legs[0].targetPrice, 300);
+  assert.equal(hit[0].legs[0].positionId, base.id);
+});
+
+test('alert_signal atr_band: sin objetivo guardado espera (hold) y no inventa salida', () => {
+  const p = params({ takeProfitMode: 'atr_band' });
+  const pending = position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 900, ask: 950 } });
+  const actions = run(p, { positions: [{ ...pending, tpTargetPrice: null }] });
+  assert.equal(actions[0].type, 'hold');
+  assert.equal(actions[0].reason, 'atr_band_tp_pending');
+});
