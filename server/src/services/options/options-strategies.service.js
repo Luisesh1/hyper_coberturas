@@ -156,6 +156,8 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
     marginUsedUsdt = Number.isFinite(marginUsedUsdt) ? round2(marginUsedUsdt) : null;
   } catch { marginUsedUsdt = null; }
   try {
+    // Delta en unidades del subyacente: sumar BTC con ETH no tiene sentido.
+    if (new Set(open.map((p) => parseSymbol(p.symbol)?.underlying)).size > 1) throw new Error('varios subyacentes');
     if (open.some((p) => !quotes.get(p.id))) throw new Error('cotización no disponible');
     netDelta = round2(open.reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: quotes.get(p.id)?.delta, quantity: p.quantity }), 0));
   } catch { netDelta = null; }
@@ -299,6 +301,13 @@ function createOptionsStrategiesService(deps = {}) {
     }
     if (body.params !== undefined) {
       patch.params = templates.validateParams(strategy.template, { ...strategy.params, ...(body.params || {}) });
+      // La banda ATR anula stop y salida por tiempo, y el runner no calcula
+      // objetivo para posiciones reales ya abiertas: quedarían sin salida.
+      if (patch.params.takeProfitMode === 'atr_band' && strategy.params?.takeProfitMode !== 'atr_band' &&
+          (await repo.listOpenPositions(strategy.id, 'live')).length) {
+        throw new AppError('Cierra las posiciones reales abiertas antes de cambiar a venta por banda ATR',
+          { status: 409, code: 'OPEN_LIVE_POSITIONS' });
+      }
     }
     if (body.limits !== undefined) patch.limits = normalizeLimits(body.limits || {}, { ...DEFAULT_LIMITS, ...strategy.limits });
     if (body.underlying !== undefined) {

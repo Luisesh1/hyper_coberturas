@@ -199,3 +199,18 @@ test('usage de un bot multi-subyacente: margen y comprometido con el spot del su
   assert.equal(detail.usage.committedUsdt, 114);
   assert.deepEqual([...new Set(asked)].sort(), ['BTC', 'ETH']);
 });
+
+test('netDelta es null si las posiciones abiertas abarcan varios subyacentes (unidades distintas)', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'm', template: 'alert_signal', underlying: 'BTC', mode: 'live',
+    params: { alertIds: [1], underlyings: ['BTC', 'ETH'] } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 100, openedAt: NOW - 3600e3 });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
+  assert.equal((await service.get(USER, s.id)).usage.netDelta, null);
+
+  // Un solo subyacente (aunque el bot opere varios): sí se suma.
+  const one = await repo.createStrategy({ userId: USER, name: 'o', template: 'alert_signal', underlying: 'BTC', mode: 'live',
+    params: { alertIds: [1], underlyings: ['BTC', 'ETH'] } });
+  await repo.insertPosition({ strategyId: one.id, userId: USER, mode: 'live', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
+  assert.equal((await service.get(USER, one.id)).usage.netDelta, 0.03);
+});
