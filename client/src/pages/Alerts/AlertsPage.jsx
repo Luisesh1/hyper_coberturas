@@ -5,6 +5,9 @@ import { useTradingContext } from '../../context/TradingContext';
 import { MOBILE_QUERY, useMediaQuery } from '../TradingView/useMediaQuery';
 import { AlertRuleRow, emptyCondition } from './components/AlertRuleRow';
 import AssetPickerModal from './components/AssetPickerModal';
+import MobileAlertList from './mobile/MobileAlertList';
+import TestResultView from './components/TestResultView';
+import { alertToPayload, baseTimeframe, emptyRule, formToPayload, normalizeLoadedRule } from './lib/alertView';
 import { DirectionChip, DirectionIcon, DirectionSelector } from './components/Direction';
 import { fetchAlertBotUsage } from './lib/autoBots';
 import {
@@ -22,7 +25,7 @@ import { PRESETS } from './lib/presets';
 import styles from './AlertsPage.module.css';
 
 const NO_BOTS = [];
-const TF_ORDER = ['1m', '5m', '15m', '1h', '4h', '1d', '1w', '1M'];
+export { normalizeLoadedRule };
 
 function BackIcon() {
   return (
@@ -37,49 +40,6 @@ const DATASOURCES = [
   { value: 'hyperliquid', label: 'Hyperliquid (ej. BTC)' },
   { value: 'yahoo',       label: 'Yahoo Finance' },
 ];
-
-function emptyRule() {
-  return {
-    id: `r-${Math.random().toString(36).slice(2, 9)}`,
-    label: '',
-    conditions: [emptyCondition()],
-    joiners: [],
-    weight: 1,
-  };
-}
-
-// Normaliza una regla cargada desde el server (que puede ser legacy plana o
-// la nueva forma con conditions/joiners) a la forma que espera el editor.
-function normalizeRuleWeight(value) {
-  if (value == null || value === '') return 1;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 1;
-}
-
-export function normalizeLoadedRule(raw) {
-  const base = { ...emptyRule() };
-  if (raw && Array.isArray(raw.conditions) && raw.conditions.length > 0) {
-    return {
-      ...base,
-      label: String(raw.label || ''),
-      conditions: raw.conditions.map((c) => ({ ...emptyCondition(), ...c })),
-      joiners: Array.isArray(raw.joiners) ? raw.joiners.slice() : [],
-      weight: normalizeRuleWeight(raw.weight),
-    };
-  }
-  if (raw && raw.indicatorType) {
-    const cond = {
-      indicatorType: raw.indicatorType,
-      indicatorParams: { ...(raw.indicatorParams || {}) },
-      timeframe: raw.timeframe,
-      operandSeries: raw.operandSeries,
-      operator: raw.operator,
-      operand: raw.operand ? { ...raw.operand } : { kind: 'constant', value: 0 },
-    };
-    return { ...base, label: String(raw.label || ''), conditions: [cond], joiners: [], weight: normalizeRuleWeight(raw.weight) };
-  }
-  return base;
-}
 
 function emptyForm() {
   return {
@@ -107,32 +67,6 @@ function getFormValidationError(value) {
     }
   }
   return null;
-}
-
-function formToPayload(value) {
-  return {
-    name: value.name.trim(),
-    isActive: value.isActive,
-    thresholdPercent: Number(value.thresholdPercent),
-    cooldownSeconds: Number(value.cooldownSeconds),
-    telegramEnabled: value.telegramEnabled,
-    datasource: value.datasource,
-    direction: normalizeDirection(value.direction),
-    assetList: value.assetList.slice(),
-    rules: value.rules.map((r) => ({
-      label: String(r.label || '').trim(),
-      conditions: (r.conditions || []).map((c) => ({
-        indicatorType: c.indicatorType,
-        indicatorParams: c.indicatorParams || {},
-        timeframe: c.timeframe,
-        operandSeries: c.operandSeries,
-        operator: c.operator,
-        operand: c.operand,
-      })),
-      joiners: r.joiners || [],
-      weight: Number(r.weight) || 0,
-    })),
-  };
 }
 
 export default function AlertsPage() {
@@ -455,6 +389,33 @@ export default function AlertsPage() {
     }
   };
 
+  // Interruptor de la lista móvil: optimista, con reversión y aviso si falla.
+  const toggleAlertFromList = async (alert) => {
+    const next = !alert.isActive;
+    const setActive = (value) => setAlerts((prev) => prev.map((a) => (a.id === alert.id ? { ...a, isActive: value } : a)));
+    setActive(next);
+    try {
+      const updated = await alertsApi.update(alert.id, { ...alertToPayload(alert), isActive: next });
+      if (updated && updated.id === alert.id) {
+        setAlerts((prev) => prev.map((a) => (a.id === alert.id ? { ...a, ...updated } : a)));
+      }
+    } catch (err) {
+      setActive(alert.isActive);
+      addNotification?.('error', `Error al ${next ? 'activar' : 'pausar'}: ${err.message}`);
+      throw err;
+    }
+  };
+
+  // «Probar» desde la lista: siempre dryRun, nunca envía Telegram.
+  const testAlertFromList = async (alert) => {
+    try {
+      return await alertsApi.test(alert.id, { dryRun: true });
+    } catch (err) {
+      addNotification?.('error', `Error al probar: ${err.message}`);
+      throw err;
+    }
+  };
+
   const totals = useMemo(() => ({
     count: alerts.length,
     active: alerts.filter((a) => a.isActive).length,
@@ -485,11 +446,7 @@ export default function AlertsPage() {
 
   const previewAsset = form.assetList[0] || '—';
   // Mismo criterio que el servidor: la temporalidad más baja de las reglas.
-  const previewTf = form.rules
-    .flatMap((r) => r.conditions || [])
-    .flatMap((c) => [c.timeframe, c.operand?.kind === 'series' ? c.operand.timeframe : null])
-    .filter((tf) => TF_ORDER.includes(tf))
-    .sort((a, b) => TF_ORDER.indexOf(a) - TF_ORDER.indexOf(b))[0] || '?';
+  const previewTf = baseTimeframe(form.rules) || '?';
   const telegramPreview = [
     telegramTitle(direction, form.name.trim()),
     `Activo: ${previewAsset} · TF: ${previewTf}`,
@@ -498,6 +455,24 @@ export default function AlertsPage() {
 
   const totalWeight = form.rules.reduce((acc, r) => acc + (Number(r.weight) || 0), 0);
   const requiredWeight = (totalWeight * Number(form.thresholdPercent)) / 100;
+
+  if (isMobile && mobileView === 'list') {
+    return (
+      <div className={styles.page}>
+        <MobileAlertList
+          alerts={alerts}
+          botUsage={botUsage}
+          directionFilter={directionFilter}
+          onDirectionFilter={setDirectionFilter}
+          onOpen={openAlert}
+          onNew={() => openAlert(null)}
+          onToggleActive={toggleAlertFromList}
+          onTest={testAlertFromList}
+          isLoading={isLoading}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={`${styles.page} ${mobileEditor ? styles.pageMobileEditor : ''}`}>
@@ -857,35 +832,7 @@ export default function AlertsPage() {
           {testResult && (
             <div className={styles.section}>
               <h3 className={styles.sectionTitle}>Resultado del test</h3>
-              <div className={styles.testResult}>
-                {testResult.results.map((r) => (
-                  <div key={r.asset} className={styles.testAsset}>
-                    <div className={styles.testAssetHead}>
-                      <span className={styles.testAssetName}>{r.asset} · TF {r.lowestTimeframe}</span>
-                      <span className={r.wouldTrigger ? styles.scoreOk : styles.scoreNo}>
-                        {Number(r.score).toFixed(1)}% / {Number(r.threshold).toFixed(0)}%
-                        {r.wouldTrigger ? ' ✓' : ' ✗'}
-                      </span>
-                    </div>
-                    {r.suppressedBy === 'cooldown' && (
-                      <span style={{ fontSize: 11, color: '#f59e0b' }}>
-                        En cooldown — restan {Math.round(r.cooldownLeftMs / 1000)} s
-                      </span>
-                    )}
-                    {r.triggered && r.telegramSent && (
-                      <span style={{ fontSize: 11, color: '#22c55e' }}>📨 Enviado a Telegram</span>
-                    )}
-                    {r.rules?.map((rr, i) => (
-                      <div
-                        key={i}
-                        className={`${styles.testRule} ${rr.matched ? styles.testRuleMatched : styles.testRuleUnmatched}`}
-                      >
-                        {rr.matched ? '✓' : '·'} {rr.matched && rr.rule?.label ? `${rr.rule.label}: ` : ''}{rr.reason}
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
+              <TestResultView result={testResult} />
             </div>
           )}
             </>
