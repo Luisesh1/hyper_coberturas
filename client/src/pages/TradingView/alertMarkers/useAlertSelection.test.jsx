@@ -24,6 +24,21 @@ describe('useAlertSelection', () => {
     expect(result.current.items).toHaveLength(1);
   });
 
+  it('enabled = false no carga nada; al activarse carga una vez', async () => {
+    const { result, rerender } = renderHook((p) => useAlertSelection(p), { initialProps: { enabled: false } });
+    await act(async () => { await Promise.resolve(); });
+    expect(alertsApi.list).not.toHaveBeenCalled();
+    expect(settingsApi.getChartAlertMarkers).not.toHaveBeenCalled();
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.items).toHaveLength(1);
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    await act(async () => { await Promise.resolve(); });
+    expect(alertsApi.list).toHaveBeenCalledTimes(1);
+    expect(result.current.items).toHaveLength(1);
+  });
+
   it('aplica al momento y guarda', async () => {
     const { result } = renderHook(() => useAlertSelection());
     await waitFor(() => expect(result.current.loading).toBe(false));

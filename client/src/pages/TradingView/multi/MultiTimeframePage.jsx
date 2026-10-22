@@ -149,26 +149,27 @@ export default function MultiTimeframePage() {
   const shownPrice = lastPrice && lastPrice.key === priceKey ? formatPrice(lastPrice.price) : null;
 
   // --- Marcas de backtest de alertas (solo Multi‑TF) ---
-  // Un único backtest para todos los paneles: el rango es la unión de lo
-  // cargado en cada uno. Cada rango se guarda con su par+temporalidad para no
-  // mezclar el de una carga anterior.
+  // Un único backtest para todos los paneles con la unión de lo cargado en
+  // cada uno. Cada panel informa su rango con el par+temporalidad de esa carga;
+  // la unión solo se emite cuando TODOS los paneles actuales tienen un rango
+  // válido. Así los informes escalonados no cuentan como «retroceder» (no
+  // renuevan el presupuesto de tramos) y el borde derecho es el de la unión real.
   const assetKey = `${asset.datasource}:${asset.symbol}`;
-  const assetKeyRef = useRef(assetKey);
-  assetKeyRef.current = assetKey;
-  const panelTfsRef = useRef(panelTimeframes);
-  panelTfsRef.current = panelTimeframes;
   const [loadedRanges, setLoadedRanges] = useState({});
   const onLoadedRange = useCallback((index, range) => {
-    const key = `${assetKeyRef.current}|${panelTfsRef.current[index]}`;
-    setLoadedRanges((prev) => ({ ...prev, [index]: { ...range, key } }));
+    setLoadedRanges((prev) => ({ ...prev, [index]: range }));
   }, []);
-  const alertRangesList = useMemo(
-    () => panelTimeframes
-      .map((tf, i) => loadedRanges[i])
-      .filter((r, i) => r && r.key === `${assetKey}|${panelTimeframes[i]}`)
-      .map(({ fromMs, toMs }) => ({ fromMs, toMs })),
-    [panelTimeframes, loadedRanges, assetKey],
-  );
+  const alertRangesList = useMemo(() => {
+    const list = panelTimeframes.map((tf, i) => {
+      const r = loadedRanges[i];
+      return r && r.assetKey === assetKey && r.timeframe === tf ? r : null;
+    });
+    if (!list.length || list.some((r) => !r)) return [];
+    return [{
+      fromMs: Math.min(...list.map((r) => r.fromMs)),
+      toMs: Math.max(...list.map((r) => r.toMs)),
+    }];
+  }, [panelTimeframes, loadedRanges, assetKey]);
   const alertsEnabled = mode === 'tf';
   const alertData = useAlertMarkerData({
     asset, ranges: alertRangesList, enabled: alertsEnabled, notify: addNotification,

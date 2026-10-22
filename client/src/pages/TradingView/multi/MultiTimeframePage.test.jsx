@@ -3,13 +3,22 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Rango que cada panel falso informa al montar (igual en todos).
-const LOADED = vi.hoisted(() => ({ range: { fromMs: Date.UTC(2026, 9, 19), toMs: Date.UTC(2026, 9, 20) } }));
+// `auto = false`: los paneles solo informan al pulsar report-i (rango LOADED.ranges[i]).
+const LOADED = vi.hoisted(() => ({
+  range: { fromMs: Date.UTC(2026, 9, 19), toMs: Date.UTC(2026, 9, 20) },
+  auto: true,
+  ranges: [],
+}));
 
 vi.mock('./SyncedChart', async () => {
   const { useEffect } = await import('react');
   function FakeSyncedChart(props) {
-    const { onLoadedRange, index, timeframe } = props;
-    useEffect(() => { onLoadedRange?.(index, LOADED.range); }, [onLoadedRange, index, timeframe]);
+    const { onLoadedRange, index, timeframe, asset } = props;
+    const assetKey = `${asset.datasource}:${asset.symbol}`;
+    const report = (range, tf = timeframe) => onLoadedRange?.(index, { ...range, timeframe: tf, assetKey });
+    useEffect(() => {
+      if (LOADED.auto) onLoadedRange?.(index, { ...LOADED.range, timeframe, assetKey });
+    }, [onLoadedRange, index, timeframe, assetKey]);
     return (
     <div
       data-testid={`synced-chart-${props.index}`}
@@ -39,6 +48,8 @@ vi.mock('./SyncedChart', async () => {
       <button type="button" data-testid={`pointer-clear-${props.index}`} onClick={() => props.onPointer(props.index, null)} />
       <button type="button" data-testid={`price-${props.index}`} onClick={() => props.onLastPrice?.(props.index, 2345.5 + props.index)} />
       <button type="button" data-testid={`tf-${props.index}`} onClick={() => props.onTimeframeChange('1m')} />
+      <button type="button" data-testid={`report-${props.index}`} onClick={() => report(LOADED.ranges[index])} />
+      <button type="button" data-testid={`report-stale-${props.index}`} onClick={() => report(LOADED.ranges[index], LOADED.staleTf)} />
     </div>
     );
   }
@@ -101,6 +112,8 @@ describe('MultiTimeframePage', () => {
     localStorage.clear();
     api.getChartIndicators = vi.fn().mockResolvedValue({ indicators: [] });
     api.pick = null;
+    LOADED.auto = true;
+    LOADED.ranges = [];
     alertsApi.list.mockReset().mockResolvedValue([]);
     alertsApi.backtest.mockReset().mockResolvedValue({ events: [], insufficient: 0 });
     settingsApi.getChartAlertMarkers.mockReset().mockResolvedValue({ items: [] });
@@ -572,13 +585,81 @@ describe('MultiTimeframePage', () => {
       expect(screen.getByRole('button', { name: /^Alertas/ }).className).toMatch(/mIconBtn/);
     });
 
-    it('Multi‑activo: sin chips, sin marcas y sin backtest', async () => {
+    it('Multi‑activo: sin chips, sin marcas, sin backtest y sin cargar alertas', async () => {
       renderPage('/trading-view/multi?mode=assets');
-      await waitFor(() => expect(alertsApi.list).toHaveBeenCalled());
       await act(async () => { await Promise.resolve(); });
+      expect(alertsApi.list).not.toHaveBeenCalled();
+      expect(settingsApi.getChartAlertMarkers).not.toHaveBeenCalled();
       expect(screen.queryByRole('toolbar', { name: 'Alertas en el gráfico' })).toBeNull();
       expect(screen.queryByRole('button', { name: /^Alertas/ })).toBeNull();
       expect(alertsApi.backtest).not.toHaveBeenCalled();
+      // Al pasar a Multi‑TF se carga la selección.
+      fireEvent.click(screen.getByRole('button', { name: /^Multi‑TF$/ }));
+      await waitFor(() => expect(screen.getByRole('toolbar', { name: 'Alertas en el gráfico' })).toBeTruthy());
+      expect(alertsApi.list).toHaveBeenCalledTimes(1);
+    });
+
+    describe('informes escalonados', () => {
+      const D = Date.UTC(2026, 9, 20);
+      const flush = () => act(async () => { for (let i = 0; i < 5; i += 1) await Promise.resolve(); });
+      const report = async (i) => { fireEvent.click(screen.getByTestId(`report-${i}`)); await flush(); };
+      beforeEach(() => {
+        LOADED.auto = false;
+        // 5m, 15m, 1h, 4h: cada uno más atrás; el 4h llega más a la derecha.
+        LOADED.ranges = [
+          { fromMs: D - 2 * H, toMs: D },
+          { fromMs: D - 6 * H, toMs: D },
+          { fromMs: D - 24 * H, toMs: D },
+          { fromMs: D - 96 * H, toMs: D + 4 * H },
+        ];
+      });
+      const H = 3_600_000;
+
+      it('no hay backtest hasta que informa el último panel; luego uno con la unión', async () => {
+        renderPage('/trading-view/multi?symbol=ETH&datasource=binance');
+        await waitFor(() => expect(settingsApi.getChartAlertMarkers).toHaveBeenCalled());
+        await flush();
+        for (const i of [2, 0, 1]) {
+          await report(i);
+          expect(alertsApi.backtest).not.toHaveBeenCalled();
+        }
+        await report(3);
+        await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(1));
+        expect(alertsApi.backtest).toHaveBeenCalledWith('a1', expect.objectContaining({
+          startTime: D - 96 * H, endTime: D + 4 * H,
+        }));
+        await flush();
+        expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+      });
+
+      it('al cambiar la temporalidad de un panel su rango viejo sale de la unión hasta la nueva carga', async () => {
+        LOADED.ranges = LOADED.ranges.map(() => ({ fromMs: D - 24 * H, toMs: D }));
+        renderPage('/trading-view/multi?symbol=ETH&datasource=binance');
+        await waitFor(() => expect(settingsApi.getChartAlertMarkers).toHaveBeenCalled());
+        await flush();
+        for (const i of [0, 1, 2, 3]) await report(i);
+        await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(1));
+
+        fireEvent.click(screen.getByTestId('tf-1')); // 15m → 1m
+        await flush();
+        // Otro panel retrocede, pero el 1 aún no tiene rango válido: nada.
+        LOADED.ranges[0] = { fromMs: D - 48 * H, toMs: D };
+        await report(0);
+        // Un informe tardío de la carga vieja (15m) tampoco cuenta.
+        LOADED.staleTf = '15m';
+        LOADED.ranges[1] = { fromMs: D - 72 * H, toMs: D };
+        fireEvent.click(screen.getByTestId('report-stale-1'));
+        await flush();
+        expect(alertsApi.backtest).toHaveBeenCalledTimes(1);
+
+        // La carga nueva (1m) informa: se pide solo el hueco hacia atrás.
+        LOADED.ranges[1] = { fromMs: D - 2 * H, toMs: D };
+        await report(1);
+        await waitFor(() => expect(alertsApi.backtest).toHaveBeenCalledTimes(2));
+        expect(alertsApi.backtest).toHaveBeenLastCalledWith('a1', expect.objectContaining({
+          startTime: D - 48 * H, endTime: D - 24 * H,
+        }));
+      });
     });
   });
 });

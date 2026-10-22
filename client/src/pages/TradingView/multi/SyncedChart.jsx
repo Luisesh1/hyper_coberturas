@@ -90,7 +90,8 @@ export default function SyncedChart({
   compact = false,
   // Marcas de backtest de alertas (solo Multi‑TF): { eventsByAlert, items, alertsById, cutoffMs? }.
   alertMarkers = null,
-  // (index, { fromMs, toMs }) tras cada carga de velas: rango a evaluar.
+  // (index, { fromMs, toMs, timeframe, assetKey }) tras cada carga de velas:
+  // rango a evaluar, con el par («datasource:symbol») y la temporalidad de esa carga.
   onLoadedRange,
 }) {
   const selectId = useId();
@@ -247,7 +248,11 @@ export default function SyncedChart({
         setPrecision(nextPrecision);
         setCandles(next);
         const range = alertRanges(next, timeframe)[0];
-        if (range) onLoadedRangeRef.current?.(indexRef.current, range);
+        if (range) {
+          onLoadedRangeRef.current?.(indexRef.current, {
+            ...range, timeframe, assetKey: `${asset.datasource || 'hyperliquid'}:${asset.symbol}`,
+          });
+        }
       } catch (err) {
         if (!cancelled) setError(err?.message || 'Error cargando datos de mercado.');
       } finally {

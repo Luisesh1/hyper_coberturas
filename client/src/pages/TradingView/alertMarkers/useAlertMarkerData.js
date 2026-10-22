@@ -7,7 +7,7 @@ import { countFirings } from './markerModel';
 // guardada, backtest del rango `ranges`, contadores, colores y avisos.
 // El dibujo por gráfico lo hace useAlertMarkerLayer.
 export function useAlertMarkerData({ asset, ranges, enabled = true, cutoffMs = Infinity, notify }) {
-  const selection = useAlertSelection();
+  const selection = useAlertSelection({ enabled });
   const { items, alertsById, alertsStatus, saveError, loadError } = selection;
 
   const backtest = useAlertBacktest({ asset, items, alertsById, ranges, enabled, alertsStatus });

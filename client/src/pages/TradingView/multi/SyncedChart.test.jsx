@@ -578,9 +578,13 @@ describe('SyncedChart · marcas de alertas', () => {
     const { rerender } = render(
       <SyncedChart asset={ASSET} timeframe="1h" index={2} alertMarkers={MARKS} onLoadedRange={onLoadedRange} />,
     );
-    await waitFor(() => expect(onLoadedRange).toHaveBeenCalledWith(2, { fromMs: BASE_MS, toMs: BASE_MS + 24 * HOUR_MS }));
+    await waitFor(() => expect(onLoadedRange).toHaveBeenCalledWith(2, {
+      fromMs: BASE_MS, toMs: BASE_MS + 24 * HOUR_MS, timeframe: '1h', assetKey: 'binance:ETH',
+    }));
     rerender(<SyncedChart asset={ASSET} timeframe="15m" index={2} alertMarkers={MARKS} onLoadedRange={onLoadedRange} />);
-    await waitFor(() => expect(onLoadedRange).toHaveBeenLastCalledWith(2, { fromMs: BASE_MS, toMs: BASE_MS + 96 * MIN15 }));
+    await waitFor(() => expect(onLoadedRange).toHaveBeenLastCalledWith(2, {
+      fromMs: BASE_MS, toMs: BASE_MS + 96 * MIN15, timeframe: '15m', assetKey: 'binance:ETH',
+    }));
   });
 
   it('sin alertMarkers no crea el plugin de marcas ni escucha clics', async () => {

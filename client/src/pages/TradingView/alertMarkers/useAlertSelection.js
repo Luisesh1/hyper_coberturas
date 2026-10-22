@@ -10,7 +10,8 @@ const asList = (res) => (Array.isArray(res) ? res : Array.isArray(res?.alerts) ?
 // conservan (el backtest los marca `deleted`).
 // Si la selección guardada no pudo cargarse (`loadError`), los cambios son no-ops
 // para no pisarla.
-export function useAlertSelection() {
+// `enabled = false` no carga nada (p. ej. Multi‑activo); se carga al activarse.
+export function useAlertSelection({ enabled = true } = {}) {
   const [items, setItems] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -26,11 +27,19 @@ export function useAlertSelection() {
 
   useEffect(() => {
     aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+
+  // Una carga por activación (o por reload); desactivar no descarta lo cargado.
+  const fetchedTickRef = useRef(null);
+  useEffect(() => {
+    if (!enabled || fetchedTickRef.current === reloadTick) return undefined;
     let cancelled = false;
     setLoading(true);
     (async () => {
       const [a, s] = await Promise.allSettled([alertsApi.list(), settingsApi.getChartAlertMarkers()]);
       if (cancelled) return;
+      fetchedTickRef.current = reloadTick;
       if (a.status === 'fulfilled') { setAlerts(asList(a.value)); setAlertsError(null); } else setAlertsError(a.reason?.message || 'error');
       if (s.status === 'fulfilled') {
         const list = Array.isArray(s.value?.items) ? s.value.items : [];
@@ -45,8 +54,8 @@ export function useAlertSelection() {
       }
       setLoading(false);
     })();
-    return () => { cancelled = true; aliveRef.current = false; };
-  }, [reloadTick]);
+    return () => { cancelled = true; };
+  }, [reloadTick, enabled]);
 
   const alertsById = useMemo(() => {
     const out = {};
