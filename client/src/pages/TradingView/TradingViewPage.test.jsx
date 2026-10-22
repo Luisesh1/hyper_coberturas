@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // ---- lightweight-charts falso -------------------------------------------
@@ -27,7 +27,8 @@ vi.mock('lightweight-charts', () => {
         addSeries: series, removeSeries: () => {}, remove: () => {}, applyOptions: () => {},
         timeScale: () => timeScale, priceScale: () => ({ applyOptions: () => {} }),
         subscribeCrosshairMove: () => {}, unsubscribeCrosshairMove: () => {},
-        subscribeClick: () => {}, unsubscribeClick: () => {},
+        clicks: new Set(),
+        subscribeClick: (fn) => chart.clicks.add(fn), unsubscribeClick: (fn) => chart.clicks.delete(fn),
         chartElement: () => document.createElement('div'), panes: () => [],
       };
       lw.charts.push(chart);
@@ -50,7 +51,7 @@ const ALERT = {
   id: 'a1', name: 'RSI sobreventa', updatedAt: 1, datasource: 'binance', direction: 'bullish',
   rules: [{ conditions: [{ indicatorType: 'rsi', timeframe: '1h', operand: { kind: 'value', value: 30 } }] }],
 };
-const EVENT = { evalTime: T0 + 5 * H + 3000, time: T0 + 4 * H, score: 1, threshold: 1, suppressed: false, rules: [] };
+const EVENT = { evalTime: T0 + 5 * H + 3000, time: T0 + 4 * H, score: 72, threshold: 60, suppressed: false, rules: [] };
 
 vi.mock('../../services/api', () => ({
   marketApi: { getCandles: vi.fn() },
@@ -154,5 +155,16 @@ describe('TradingViewPage · marcas de alertas', () => {
     renderPage();
     const nav = await screen.findByRole('navigation', { name: 'Herramientas del gráfico' });
     await waitFor(() => expect(within(nav).getByRole('button', { name: 'Alertas, 1 en el gráfico' })).toBeTruthy());
+  });
+
+  it('móvil: tocar una vela con disparos abre la hoja del disparo con su puntuación', async () => {
+    media.mobile = true;
+    renderPage();
+    await waitFor(() => expect(lastMarkers()).toHaveLength(1));
+    const chart = lw.charts[lw.charts.length - 1];
+    act(() => { chart.clicks.forEach((fn) => fn({ time: (T0 + 5 * H) / 1000, point: { x: 10, y: 10 } })); });
+    expect(await screen.findByText('Disparo de alerta')).toBeTruthy();
+    const entry = screen.getByText('Puntuación 72% (umbral 60%)').closest('section');
+    expect(within(entry).getByText('RSI sobreventa')).toBeTruthy();
   });
 });

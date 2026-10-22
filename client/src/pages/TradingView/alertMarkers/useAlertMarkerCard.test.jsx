@@ -86,23 +86,24 @@ describe('useAlertMarkerCard (escritorio)', () => {
 });
 
 describe('useAlertMarkerCard (móvil)', () => {
-  it('tocar una vela abre el primer disparo y ‹ › recorren todos en orden temporal', () => {
+  it('tocar una vela abre su primer disparo y ‹ › recorren solo los de esa alerta, en orden temporal', () => {
     const { h, hook, ts } = setup({ mobile: true });
     act(() => h.move({ time: 100, point: P }));
     expect(hook.result.current.card).toBeNull();
     act(() => h.click({ time: 100, point: P }));
     let card = hook.result.current.card;
-    expect(card.entries).toEqual(TIMELINE);
+    // B1 comparte vela con A1 pero es de otra alerta: no entra en la navegación.
+    expect(card.entries).toEqual([A1, A2]);
     expect(card.index).toBe(0);
     act(() => card.onNext());
-    expect(hook.result.current.card.index).toBe(1);
-    act(() => hook.result.current.card.onNext());
     card = hook.result.current.card;
-    expect(card.index).toBe(2);
+    expect(card.index).toBe(1);
+    expect(card.entries[card.index]).toBe(A2);
     // El siguiente disparo cae fuera de la vista: el gráfico se desplaza hasta él.
     expect(ts.setVisibleRange).toHaveBeenCalledWith({ from: 4500, to: 5500 });
     act(() => card.onPrev());
-    expect(hook.result.current.card.index).toBe(1);
+    expect(hook.result.current.card.index).toBe(0);
+    expect(hook.result.current.card.entries[0]).toBe(A1);
     act(() => hook.result.current.card.onClose());
     expect(hook.result.current.card).toBeNull();
   });

@@ -5,8 +5,9 @@ const timeOf = (param) => (typeof param?.time === 'number' ? param.time : null);
 // Estado de la tarjeta de detalle de las marcas de alertas.
 // Escritorio: pasar por una vela con disparos la muestra (todos los de la vela);
 //   un clic la fija; clic fuera, clic en una vela sin disparos o Esc la cierran.
-// Móvil: tocar una vela abre su primer disparo en una hoja; ‹ › recorren todos
-//   los disparos dibujados en orden temporal y desplazan el gráfico si hace falta.
+// Móvil: tocar una vela abre su primer disparo en una hoja; ‹ › recorren los
+//   disparos dibujados de esa misma alerta en orden temporal y desplazan el
+//   gráfico si hace falta.
 // `timeline` = markerTimeline(...): [{ alertId, event, sec }] ordenado.
 export function useAlertMarkerCard({ chartRef, mobile, timeline, disabled = false }) {
   const [desk, setDesk] = useState(null); // { sec, anchor, pinned }
@@ -81,13 +82,16 @@ export function useAlertMarkerCard({ chartRef, mobile, timeline, disabled = fals
     };
   }, [pinned, chartRef]);
 
-  const mobileIndex = useMemo(() => {
-    if (!sel) return -1;
-    return (timeline || []).findIndex((en) => en.alertId === sel.alertId && en.event.evalTime === sel.evalTime);
-  }, [sel, timeline]);
+  // Móvil: disparos de la alerta elegida (timeline ya viene en orden temporal).
+  const selAlertId = sel?.alertId ?? null;
+  const mobileEntries = useMemo(
+    () => (selAlertId == null ? [] : (timeline || []).filter((en) => en.alertId === selAlertId)),
+    [selAlertId, timeline],
+  );
+  const mobileIndex = sel ? mobileEntries.findIndex((en) => en.event.evalTime === sel.evalTime) : -1;
 
   const goTo = useCallback((idx) => {
-    const en = timeline?.[idx];
+    const en = mobileEntries[idx];
     if (!en) return;
     setSel({ alertId: en.alertId, evalTime: en.event.evalTime });
     try {
@@ -98,12 +102,12 @@ export function useAlertMarkerCard({ chartRef, mobile, timeline, disabled = fals
         ts.setVisibleRange({ from: en.sec - half, to: en.sec + half });
       }
     } catch { /* gráfico sin datos */ }
-  }, [timeline, chartRef]);
+  }, [mobileEntries, chartRef]);
 
   let card = null;
   if (mobile && mobileIndex >= 0) {
     card = {
-      entries: timeline,
+      entries: mobileEntries,
       index: mobileIndex,
       onPrev: () => goTo(mobileIndex - 1),
       onNext: () => goTo(mobileIndex + 1),

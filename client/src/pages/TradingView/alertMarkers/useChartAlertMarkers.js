@@ -19,13 +19,21 @@ export function useChartAlertMarkers({ asset, timeframe, candlesRef, candleSerie
 
   // En replay el rango baja hasta las velas del replay pero el borde derecho
   // sigue siendo el de la vista en vivo: el replay avanza hacia él.
+  // El borde en vivo se recuerda en un efecto (no durante el render); el replay
+  // siempre arranca después de haber pintado la vista en vivo.
+  const chartRanges = useMemo(
+    () => alertRanges(chartCandles, timeframe),
+    [chartCandles, candleCount, timeframe, replayActive, replayAnchor], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const liveToRef = useRef(null);
+  useEffect(() => {
+    if (!replayActive && chartRanges.length) liveToRef.current = chartRanges[0].toMs;
+  }, [chartRanges, replayActive]);
   const ranges = useMemo(() => {
-    const r = alertRanges(chartCandles, timeframe);
-    if (!r.length) return r;
-    if (!replayActive) { liveToRef.current = r[0].toMs; return r; }
-    return [{ fromMs: r[0].fromMs, toMs: Math.max(r[0].toMs, liveToRef.current ?? r[0].toMs) }];
-  }, [chartCandles, candleCount, timeframe, replayActive, replayAnchor]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!replayActive || !chartRanges.length) return chartRanges;
+    const r = chartRanges[0];
+    return [{ fromMs: r.fromMs, toMs: Math.max(r.toMs, liveToRef.current ?? r.toMs) }];
+  }, [chartRanges, replayActive]);
 
   const backtest = useAlertBacktest({ asset, items, alertsById, ranges, enabled: true, alertsStatus });
   const { eventsByAlert } = backtest;
