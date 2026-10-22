@@ -280,6 +280,7 @@ describe('AutoTradingTab · escritorio', () => {
 
 const POSITION = { id: 5, mode: 'shadow', symbol: 'BTC-261024-70000-C', side: 'BUY', quantity: 0.05, entryPrice: 900, mark: 950, closedAt: null };
 const ENTRY_ORDER = { id: 9, purpose: 'standard', action: 'open', symbol: 'BTC-261024-72000-C', side: 'BUY', price: 500, quantity: 0.05, executedQty: 0, status: 'active', cancelRequested: false, deadlineAt: NOW + 3600e3 };
+const EXIT_ORDER = { id: 12, purpose: 'standard', action: 'close', symbol: 'BTC-261024-70000-C', side: 'SELL', price: 940, quantity: 0.05, executedQty: 0, status: 'active', cancelRequested: false, deadlineAt: NOW + 3600e3 };
 const TP_ORDER = { id: 10, purpose: 'take_profit', action: 'close', symbol: 'BTC-261024-70000-C', side: 'SELL', price: 1600, quantity: 0.05, executedQty: 0, status: 'active', cancelRequested: false, deadlineAt: NOW + 3600e3 };
 
 function withActivity(extra = {}) {
@@ -340,15 +341,16 @@ describe('AutoTradingTab · cierre manual y cancelación', () => {
     expect((await within(dialog).findByRole('alert')).textContent).toMatch(/cierre en curso/);
   });
 
-  it('«Cancelar» pide la cancelación de una orden pendiente; el TP no tiene botón', async () => {
+  it('«Cancelar» pide la cancelación de una entrada pendiente; ni el TP ni las salidas tienen botón', async () => {
     serverModes[1] = 'live';
-    withActivity({ pendingOrders: [ENTRY_ORDER, TP_ORDER] });
+    withActivity({ pendingOrders: [ENTRY_ORDER, TP_ORDER, EXIT_ORDER] });
     let resolveCancel;
     autoBotsApi.cancelOrder.mockImplementation(() => new Promise((r) => { resolveCancel = r; }));
     renderTab();
     await screen.findByRole('heading', { name: 'Momentum BTC' });
     const btn = await screen.findByRole('button', { name: 'Cancelar orden 9' });
     expect(screen.queryByRole('button', { name: 'Cancelar orden 10' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Cancelar orden 12' })).toBeNull();
     fireEvent.click(btn);
     fireEvent.click(btn);
     await waitFor(() => expect(autoBotsApi.cancelOrder).toHaveBeenCalledTimes(1));

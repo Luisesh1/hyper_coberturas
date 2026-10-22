@@ -277,7 +277,7 @@ function fakeLiveOrders({ orders = [], pendingClose = false } = {}) {
     async hasPendingClose(args) { pendingChecks.push(args); return pendingClose; },
     async requestCancel({ userId, strategyId, orderId }) {
       const o = orders.find((x) => x.id === orderId && x.userId === userId && x.strategyId === strategyId
-        && x.status !== 'final' && x.purpose !== 'take_profit');
+        && x.status !== 'final' && x.purpose !== 'take_profit' && x.action === 'open');
       if (!o) return null;
       cancels.push(orderId);
       o.cancelRequested = true;
@@ -364,7 +364,13 @@ test('POST /options/auto-bots/:id/orders/:orderId/cancel solo cancela órdenes p
         { id: 502, strategyId: bot.id, userId: USER, action: 'close', purpose: 'standard', status: 'final', cancelRequested: false },
         { id: 503, strategyId: bot.id, userId: USER, action: 'close', purpose: 'take_profit', status: 'active', cancelRequested: false },
         { id: 504, strategyId: other.id, userId: 2, action: 'open', purpose: 'standard', status: 'active', cancelRequested: false },
+        { id: 505, strategyId: bot.id, userId: USER, action: 'close', purpose: 'standard', status: 'active', cancelRequested: false },
       );
+      const exit = await call('POST', `/auto-bots/${bot.id}/orders/505/cancel`);
+      assert.equal(exit.status, 409);
+      assert.equal(exit.json.code, 'EXIT_NOT_CANCELLABLE');
+      assert.match(JSON.stringify(exit.json), /salidas no se pueden cancelar/);
+      assert.equal(liveOrders.orders.find((o) => o.id === 505).cancelRequested, false);
       const final = await call('POST', `/auto-bots/${bot.id}/orders/502/cancel`);
       assert.equal(final.status, 409);
       const tp = await call('POST', `/auto-bots/${bot.id}/orders/503/cancel`);

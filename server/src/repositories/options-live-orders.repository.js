@@ -566,9 +566,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
 
   /**
-   * Cancelación pedida desde la UI: solo una orden del propio bot y usuario,
-   * no final y que no sea el TP residente (ese se cancela vía cierre).
-   * El reconciliador hace la cancelación real en Binance.
+   * Cancelación pedida desde la UI: solo una ENTRADA del propio bot y
+   * usuario, no final. Las salidas (incluido el TP residente) no se cancelan:
+   * se reintentan solas. El reconciliador hace la cancelación en Binance.
    */
   async function requestCancel({ userId, strategyId, orderId }) {
     const ids = [orderId, userId, strategyId].map(Number);
@@ -576,7 +576,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     const { rows } = await db.query(
       "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$4 " +
       "WHERE id=$1 AND user_id=$2 AND strategy_id=$3 AND status<>'final' " +
-      "AND purpose<>'take_profit' RETURNING *",
+      "AND purpose<>'take_profit' AND action='open' RETURNING *",
       [ids[0], ids[1], ids[2], now()]
     );
     return rows[0] ? map(rows[0]) : null;

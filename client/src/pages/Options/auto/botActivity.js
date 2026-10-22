@@ -95,9 +95,10 @@ export function pendingOrderRows(detail = {}, now = Date.now()) {
       statusTone: attention ? 'neg' : 'neutral',
       expiresIn: expiresIn(o.deadlineAt, now),
       needsAttention: attention,
-      // El TP residente solo se cancela cerrando la posición.
+      // Solo se cancelan entradas: las salidas se reintentan solas y el TP
+      // residente se cancela cerrando la posición.
       cancelRequested: o.cancelRequested === true,
-      cancellable: o.purpose !== 'take_profit' && o.cancelRequested !== true,
+      cancellable: o.action === 'open' && o.purpose !== 'take_profit' && o.cancelRequested !== true,
     };
   });
 }

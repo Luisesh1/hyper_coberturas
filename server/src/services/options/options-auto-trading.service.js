@@ -391,7 +391,7 @@ function createOptionsAutoTradingService(deps = {}) {
     return { status, detail };
   }
 
-  /** Pide cancelar una orden real pendiente del bot (no el TP residente). */
+  /** Pide cancelar una entrada real pendiente del bot (ni TP ni salidas). */
   async function cancelOrder(userId, id, orderId) {
     const bot = await requireBot(userId, id);
     const order = (await liveOrders.listByStrategy(bot.id))
@@ -399,6 +399,9 @@ function createOptionsAutoTradingService(deps = {}) {
     if (!order) throw new NotFoundError('Orden no encontrada');
     if (order.purpose === 'take_profit') {
       throw new AppError('El TP residente se cancela cerrando la posición', { status: 409, code: 'ORDER_NOT_CANCELLABLE' });
+    }
+    if (order.action !== 'open') {
+      throw new AppError('Las salidas no se pueden cancelar: se reintentan solas hasta ejecutarse', { status: 409, code: 'EXIT_NOT_CANCELLABLE' });
     }
     if (order.status === 'final') {
       throw new AppError('La orden ya terminó y no se puede cancelar', { status: 409, code: 'ORDER_FINAL' });

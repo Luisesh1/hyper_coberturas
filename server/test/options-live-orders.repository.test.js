@@ -160,6 +160,7 @@ test('requestCancel solo marca una orden propia del bot, no final y no TP', asyn
   assert.match(sql, /strategy_id=\$3/);
   assert.match(sql, /status<>'final'/);
   assert.match(sql, /purpose<>'take_profit'/);
+  assert.match(sql, /action='open'/);
   assert.deepEqual(params, [9, 7, 5, 1234]);
   rows = [];
   assert.equal(await repo.requestCancel({ userId: 7, strategyId: 5, orderId: 9 }), null);
