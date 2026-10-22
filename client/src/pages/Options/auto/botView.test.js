@@ -231,37 +231,35 @@ describe('señales y KPIs', () => {
   });
 });
 
-describe('KPIs de operaciones cerradas', () => {
-  const closed = (pnls, mode = 'shadow') => pnls.map((pnlUsdt, i) => ({ id: i + 1, mode, pnlUsdt, closedAt: 1000 + i }));
+describe('KPIs de operaciones cerradas (del servidor)', () => {
+  const book = (o) => ({ cycles: 3, winRatePct: 66.67, ...o });
   const byKey = (bot) => Object.fromEntries(buildBotKpis(bot, null).map((k) => [k.key, k]));
 
-  it('con 3 cierres el acierto es «n/a (3 ops)»', () => {
-    const k = byKey({ mode: 'shadow', closedPositions: closed([10, -5, 4]) });
+  it('con menos de 5 operaciones cerradas el acierto es «n/a (3 ops)»', () => {
+    const k = byKey({ mode: 'shadow', kpis: { shadow: book({ closedTrades: 3, avgPnlUsdt: 3 }) } });
     expect(k.wins.value).toBe('n/a (3 ops)');
     expect(k.avgPnl.value).toBe('+3,00');
   });
 
-  it('con 5 o más cierres muestra aciertos, media, drawdown y peor racha del libro activo', () => {
-    // acumulado: 10, 5, 0, -3, 7, 2  → pico 10, mínimo -3 → drawdown 13; racha perdedora 3
-    const k = byKey({ mode: 'shadow', closedPositions: [...closed([10, -5, -5, -3, 10, -5]), ...closed([999], 'live')] });
+  it('con 5 o más muestra aciertos, media, drawdown y racha del libro activo', () => {
+    const shadow = book({ cycles: 6, winRatePct: 33.33, closedTrades: 6, avgPnlUsdt: 0.33, maxDrawdownUsdt: 13, longestLosingStreak: 3 });
+    const k = byKey({ mode: 'shadow', kpis: { shadow, live: book({ closedTrades: 1, avgPnlUsdt: 99 }) } });
     expect(k.wins.value).toBe('2 / 6');
     expect(k.drawdown.value).toBe('−13,00 · 3 seguidas');
     expect(k.avgPnl.value).toBe('+0,33');
   });
 
-  it('usa el libro real si el bot está en Real y ordena por cierre', () => {
-    const live = [
-      { mode: 'live', pnlUsdt: -4, closedAt: 30 }, { mode: 'live', pnlUsdt: 6, closedAt: 10 },
-      { mode: 'live', pnlUsdt: 1, closedAt: 20 }, { mode: 'live', pnlUsdt: 1, closedAt: 40 }, { mode: 'live', pnlUsdt: 1, closedAt: 50 },
-      { mode: 'shadow', pnlUsdt: -100, closedAt: 5 },
-    ];
-    const k = byKey({ mode: 'live', closedPositions: live });
+  it('usa el libro real si el bot está en Real', () => {
+    const k = byKey({ mode: 'live', kpis: {
+      shadow: book({ closedTrades: 50, avgPnlUsdt: 9 }),
+      live: book({ cycles: 5, winRatePct: 80, closedTrades: 5, avgPnlUsdt: 1.6, maxDrawdownUsdt: 4, longestLosingStreak: 1 }),
+    } });
     expect(k.wins.value).toBe('4 / 5');
     expect(k.drawdown.value).toBe('−4,00 · 1 seguida');
   });
 
   it('sin operaciones cerradas: «—»', () => {
-    const k = byKey({ mode: 'shadow', closedPositions: [] });
+    const k = byKey({ mode: 'shadow', kpis: { shadow: book({ cycles: 0, winRatePct: null, closedTrades: 0, avgPnlUsdt: null, maxDrawdownUsdt: null, longestLosingStreak: 0 }) } });
     expect(k.avgPnl.value).toBe('—');
     expect(k.drawdown.value).toBe('—');
     expect(k.wins.value).toBe('n/a (0 ops)');

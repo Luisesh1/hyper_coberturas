@@ -283,6 +283,16 @@ describe('AutoTradingTab · escritorio', () => {
     await screen.findByRole('heading', { name: 'Momentum BTC (copia)' });
   });
 
+  it('clonar falla: muestra el error y desaparece al elegir otro bot', async () => {
+    autoBotsApi.clone.mockRejectedValue(new Error('boom'));
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    fireEvent.click(screen.getByRole('button', { name: 'Clonar bot' }));
+    expect(await screen.findByText(/No se pudo clonar el bot: boom/)).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('complementary', { name: 'Bots por alertas' })).getByText('Breakout SOL'));
+    await waitFor(() => expect(screen.queryByText(/No se pudo clonar el bot/)).toBeNull());
+  });
+
   it('eliminar pide confirmación y llama a DELETE', async () => {
     renderTab();
     await screen.findByRole('heading', { name: 'Momentum BTC' });

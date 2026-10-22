@@ -166,6 +166,9 @@ export default function AutoTradingTab({ underlying } = {}) {
     return () => { document.body.style.overflow = prev; };
   }, [isMobile, mobileDetailOpen]);
 
+  // El aviso de un clonado fallido es del bot que se clonó: se limpia al cambiar de selección.
+  useEffect(() => { setCloneError(null); }, [selectedId]);
+
   const selected = bots.find((b) => b.id === selectedId) || null;
   // Lo que trae la lista (alertas, estado) + el detalle (kpis, params, límites).
   const shown = useMemo(() => {
@@ -268,6 +271,7 @@ export default function AutoTradingTab({ underlying } = {}) {
         setSelectedId(item.id);
         if (isMobile) setMobileDetailOpen(true);
       }
+      setCloneError(null);
       loadList();
     } catch (err) {
       if (mounted.current) setCloneError(err);

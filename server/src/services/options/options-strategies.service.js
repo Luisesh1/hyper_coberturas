@@ -52,6 +52,25 @@ function round(value, decimals = 2) {
   return Math.round(Number(value) * f) / f;
 }
 
+/** Estadísticas de las operaciones cerradas de un libro (orden: cierre, luego id). */
+function tradeStatsFor(closed) {
+  const sorted = [...closed].sort((a, b) => a.closedAt - b.closedAt || a.id - b.id);
+  let cum = 0; let peak = 0; let drawdown = 0; let streak = 0; let worst = 0; let sum = 0; let counted = 0;
+  for (const p of sorted) {
+    const pnl = Number.isFinite(p.pnlUsdt) ? p.pnlUsdt : null;
+    if (pnl !== null) { cum += pnl; sum += pnl; counted += 1; }
+    peak = Math.max(peak, cum);
+    drawdown = Math.max(drawdown, peak - cum);
+    if (pnl !== null && pnl < 0) { streak += 1; worst = Math.max(worst, streak); } else streak = 0;
+  }
+  return {
+    closedTrades: sorted.length,
+    avgPnlUsdt: counted ? round(sum / counted) : null,
+    maxDrawdownUsdt: sorted.length ? round(drawdown) : null,
+    longestLosingStreak: worst,
+  };
+}
+
 function kpisFor(positions, events, mode, now) {
   const mine = positions.filter((p) => p.mode === mode);
   const closed = mine.filter((p) => p.closedAt != null);
@@ -75,6 +94,7 @@ function kpisFor(positions, events, mode, now) {
     cycles: cycles.size,
     winRatePct: finished.length ? round((finished.filter((c) => c.pnl > 0).length / finished.length) * 100, 1) : null,
     openPositions: mine.length - closed.length,
+    ...tradeStatsFor(closed),
   };
 }
 
@@ -342,3 +362,4 @@ function createOptionsStrategiesService(deps = {}) {
 module.exports = createOptionsStrategiesService();
 module.exports.createOptionsStrategiesService = createOptionsStrategiesService;
 module.exports.DEFAULT_LIMITS = DEFAULT_LIMITS;
+module.exports.kpisFor = kpisFor;
