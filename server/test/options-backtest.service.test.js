@@ -467,3 +467,21 @@ test('backtest bot dvol + banda ATR: pide historia previa de 1h y reproduce la s
   assert.ok(['take_profit_atr_band', 'expiry'].includes(result.cycles[0].exitReason), result.cycles[0].exitReason);
   assert.deepEqual(result.signals, { received: 1, traded: 1, ignored: 0 });
 });
+
+test('backtest bot: respeta el presupuesto total (lo comprometido por posiciones abiertas)', async () => {
+  const signals = [
+    { t: SIG_T, direction: 'bullish', alertId: 5 },
+    { t: SIG_T + 10 * 60 * 1000, direction: 'bullish', alertId: 6 },
+  ];
+  const base = { maxOpenPositions: 5, quantity: 1, stopLossPct: 1000, takeProfitPct: 1000 };
+  const free = botService({ params: { ...base, capitalUsdt: 10 }, signals });
+  const freeResult = await free.service.runBacktest(await free.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }));
+  assert.equal(freeResult.metrics.cycles, 2, 'sin presupuesto, capitalUsdt es por entrada');
+
+  const capped = botService({ params: { ...base, budgetUsdt: 10, budgetFractions: 1 }, signals });
+  const result = await capped.service.runBacktest(await capped.service.normalizeConfig(3, { strategyId: BOT_ID, from: FROM, to: TO }));
+  assert.equal(result.metrics.cycles, 1);
+  const leg = result.cycles[0].legs[0];
+  assert.ok(leg.price * leg.quantity <= 10 + 1e-6);
+  assert.deepEqual(result.signals, { received: 2, traded: 1, ignored: 1 });
+});

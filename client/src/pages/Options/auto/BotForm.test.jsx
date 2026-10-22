@@ -40,3 +40,15 @@ describe('BotForm · aviso al pasar a Banda ATR', () => {
     expect(screen.queryByText(ATR_BAND_SWITCH_WARNING)).toBeNull();
   });
 });
+
+describe('BotForm · presupuesto total', () => {
+  it('con presupuesto muestra «Hasta X USDT por señal» y oculta el capital por entrada', () => {
+    renderEdit({ ...bot('fixed', []), params: { structure: 'buy_with', takeProfitMode: 'fixed', capitalUsdt: 500 } });
+    expect(screen.getAllByLabelText(/Capital asignado/).length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByRole('textbox', { name: /Presupuesto total/ }), { target: { value: '48' } });
+    expect(screen.getByText('Hasta 12 USDT por señal')).toBeTruthy();
+    expect(screen.queryAllByLabelText(/Capital asignado/)).toHaveLength(0);
+    fireEvent.change(screen.getByRole('textbox', { name: /Fracciones/ }), { target: { value: '6' } });
+    expect(screen.getByText('Hasta 8 USDT por señal')).toBeTruthy();
+  });
+});

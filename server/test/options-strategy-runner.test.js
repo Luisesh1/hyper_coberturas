@@ -568,3 +568,78 @@ test('notify por bot: una apertura real con trades=false no llama a notify', asy
   assert.equal(credentials.orders.length, 2);
   assert.equal(notes.length, 0);
 });
+
+// ---------- presupuesto total con reserva de pendientes (Task 11) ----------
+
+const BUDGET_PARAMS = { alertIds: [1], budgetUsdt: 10, budgetFractions: 1, quantity: 1 };
+
+function pendingEntry(strategyId, overrides = {}) {
+  // 0,01 BTC a 1000 USDT = 10 USDT pendientes de ejecutar.
+  return { id: 1, strategyId, action: 'open', purpose: 'standard', status: 'active',
+    symbol: 'BTC-261023-65000-C', side: 'BUY', quantity: 0.01, processedQty: 0, limitPrice: 1000, ...overrides };
+}
+
+test('presupuesto: una orden de entrada pendiente de 10 USDT en Real cuenta como comprometida', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  const asked = [];
+  runner.liveOrders = { async listByStrategy(id) { asked.push(id); return [pendingEntry(id)]; } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.deepEqual(asked, [strategy.id]);
+  assert.equal(actions.live[0].type, 'skip');
+  assert.equal(actions.live[0].reason, 'budget_exhausted');
+  assert.equal(actions.live[0].detail, 'Presupuesto comprometido: 10 de 10 USDT');
+  // La sombra solo cuenta sus posiciones: abre.
+  assert.equal(actions.shadow[0].type, 'open');
+});
+
+test('presupuesto: lo ejecutado o cancelado de una orden no reserva; la orden final tampoco', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  runner.liveOrders = { async listByStrategy(id) {
+    return [pendingEntry(id, { processedQty: 0.005 }), pendingEntry(id, { id: 2, status: 'final' }),
+      pendingEntry(id, { id: 3, action: 'close' })];
+  } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  const open = actions.live.find((a) => a.type === 'open');
+  assert.ok(open, 'quedan 5 USDT libres');
+  assert.ok(open.legs.reduce((s, l) => s + l.price * l.quantity, 0) <= 5 + 1e-9);
+});
+
+test('presupuesto: las posiciones abiertas del modo comprometen su prima', async () => {
+  const { repo, runner, strategy } = await setup({ template: 'alert_signal', params: { ...BUDGET_PARAMS, maxOpenPositions: 5 } });
+  await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261023-65000-C',
+    side: 'BUY', quantity: 0.01, entryPrice: 1000, openedAt: FRIDAY_9, feesUsdt: 0 });
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  const skipped = actions.shadow.find((a) => a.type === 'skip');
+  assert.equal(skipped?.reason, 'budget_exhausted');
+});
+
+test('presupuesto: la reentrada diferida también resta lo reservado', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id)]; } };
+  const result = await runner.executeDeferredReentry(strategy.id, { direction: 'bullish' });
+  assert.equal(result.status, 'no_valid_entry');
+});
+
+test('presupuesto: sin budgetUsdt no se consulta el ledger de órdenes', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1] } });
+  runner.liveOrders = { async listByStrategy() { throw new Error('no debería consultarse'); } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(actions.live[0].type, 'open');
+});
+
+test('presupuesto: el ejecutor real revalida contra la parte de la señal e ignora capitalUsdt', async () => {
+  const { runner, strategy, credentials, market } = await setup({ mode: 'live' });
+  const symbol = 'BTC-261016-60000-C';
+  const q = await market.getQuote(symbol);
+  const quantity = 0.1;
+  const legs = [{ symbol, side: 'BUY', quantity, optionType: 'C', strike: 60000 }];
+  const ctx = { now: FRIDAY_9, spot: SPOT, positions: [] };
+  // capitalUsdt diminuto ignorado: la parte de la señal cubre la prima.
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs, signalBudgetUsdt: q.ask * quantity * 1.1 },
+    { ...ctx, params: { capitalUsdt: 1, budgetUsdt: 1e6, budgetFractions: 4 } });
+  assert.equal(credentials.orders.length, 1);
+  // La parte de la señal no alcanza al precio LIMIT actual: bloquea.
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs, signalBudgetUsdt: q.ask * quantity * 0.9 },
+    { ...ctx, params: { capitalUsdt: null, budgetUsdt: 1e6, budgetFractions: 4 } });
+  assert.equal(credentials.orders.length, 1);
+});

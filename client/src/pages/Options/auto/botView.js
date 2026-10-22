@@ -62,6 +62,8 @@ export const COMMON_DEFAULTS = {
   quantity: 0.01,
   contractCount: 1,
   capitalUsdt: null,
+  budgetUsdt: null,
+  budgetFractions: 4,
   takeProfitMode: 'fixed',
   tpAtrMultiplier: 1,
   tpHorizonHours: 4,
@@ -357,6 +359,8 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       quantity: val('quantity'),
       contractCount: val('contractCount'),
       capitalUsdt: toNumber(p.capitalUsdt),
+      budgetUsdt: toNumber(p.budgetUsdt),
+      budgetFractions: val('budgetFractions'),
       onOpposite: ON_OPPOSITE.some((o) => o.value === p.onOpposite) ? p.onOpposite : defs.onOpposite,
       takeProfitPct: val('takeProfitPct'),
       takeProfitMode: takeProfitModesFor(structure).some((m) => m.value === p.takeProfitMode) ? p.takeProfitMode : 'fixed',
@@ -420,6 +424,15 @@ export function withStructure(form, structure, { editing = false } = {}) {
 
 const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
+// Presupuesto total: cada señal compromete como máximo una fracción.
+// null sin presupuesto o con fracciones inválidas.
+export function perSignalBudget({ budgetUsdt, budgetFractions } = {}) {
+  const budget = Number(budgetUsdt);
+  const fractions = Number(budgetFractions);
+  if (!isNum(budgetUsdt) || !(budget > 0) || !Number.isInteger(fractions) || fractions < 1 || fractions > 20) return null;
+  return budget / fractions;
+}
+
 export function validateBotForm(form) {
   const errors = {};
   const name = String(form.name || '').trim();
@@ -441,7 +454,11 @@ export function validateBotForm(form) {
   range('expiryDays', 1, 90, { integer: true });
   range('quantity', 0.0001, 1000000, { minLabel: 'Debe ser mayor que 0' });
   range('contractCount', 1, 10, { integer: true });
-  if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
+  const hasBudget = isNum(form.budgetUsdt);
+  if (hasBudget) {
+    if (Number(form.budgetUsdt) <= 0) errors.budgetUsdt = 'El presupuesto debe ser mayor a 0';
+    range('budgetFractions', 1, 20, { integer: true });
+  } else if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
   if (Number(form.maxOpenPositions) < Number(form.contractCount)) errors.maxOpenPositions = 'Debe cubrir todos los contratos seleccionados';
   if (!takeProfitModesFor(form.structure).some((m) => m.value === form.takeProfitMode)) errors.takeProfitMode = 'Modo de Take Profit inválido';
   if (form.takeProfitMode === 'atr_band') {
@@ -474,7 +491,11 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     expiryDays: Number(form.expiryDays),
     quantity: Number(form.quantity),
     contractCount: Number(form.contractCount),
-    capitalUsdt: Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
+    // Con presupuesto total el capital por entrada se ignora: no se envía.
+    capitalUsdt: !(Number(form.budgetUsdt) > 0) && Number(form.capitalUsdt) > 0 ? Number(form.capitalUsdt) : null,
+    budgetUsdt: Number(form.budgetUsdt) > 0 ? Number(form.budgetUsdt) : null,
+    budgetFractions: Number.isInteger(Number(form.budgetFractions)) && isNum(form.budgetFractions)
+      ? Number(form.budgetFractions) : COMMON_DEFAULTS.budgetFractions,
     onOpposite: form.onOpposite,
     takeProfitPct: Number(form.takeProfitPct),
     takeProfitMode: form.takeProfitMode,
@@ -524,6 +545,8 @@ export function describeParams(bot) {
   const premium = toNumber(p.maxPremiumUsdt);
   const margin = toNumber(bot.limits?.maxMarginUsdt);
   const capital = toNumber(p.capitalUsdt);
+  const budget = toNumber(p.budgetUsdt);
+  const fractions = v('budgetFractions');
   const atr = p.takeProfitMode === 'atr_band' && buy;
   const exits = atr
     ? [
@@ -545,7 +568,11 @@ export function describeParams(bot) {
       { key: 'expiryDays', label: 'Vencimiento', value: `${formatNumber(v('expiryDays'), { decimals: 0 })} días` },
       { key: 'quantity', label: 'Cantidad', value: `${formatNumber(v('quantity'), { decimals: 4, minDecimals: 0 })} ${bot.underlying || ''}`.trim() },
       { key: 'contractCount', label: 'Contratos distintos', value: formatNumber(v('contractCount'), { decimals: 0 }) },
-      { key: 'capitalUsdt', label: 'Capital máx. por entrada', value: capital ? `${formatUsdt(capital, { decimals: 0 })} USDT` : 'sin límite', text: !capital },
+      budget
+        ? { key: 'budgetUsdt', label: 'Presupuesto total',
+          value: `${formatUsdt(budget, { decimals: 2, minDecimals: 0 })} USDT · ${formatNumber(fractions, { decimals: 0 })} fracciones · hasta ${formatUsdt(budget / fractions, { decimals: 2, minDecimals: 0 })} USDT por señal`,
+          text: true }
+        : { key: 'capitalUsdt', label: 'Capital máx. por entrada', value: capital ? `${formatUsdt(capital, { decimals: 0 })} USDT` : 'sin límite', text: !capital },
       ...(buy ? [{ key: 'maxPremiumUsdt', label: 'Prima máx.', value: premium ? `${formatUsdt(premium, { decimals: 0 })} USDT` : 'sin límite', text: !premium }] : []),
       // La banda ATR fuerza «ignorar» y ya declara que no hay otras salidas.
       ...(atr ? [] : [{ key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true }]),

@@ -84,6 +84,12 @@ describe('usageRows', () => {
     expect(rows[2]).toMatchObject({ used: 50, max: 200, pct: 25 });
     expect(rows[3]).toMatchObject({ max: null, pct: null });
   });
+  it('con presupuesto añade «Comprometido X de Y USDT»', () => {
+    const rows = usageRows({ ...bot, params: { ...bot.params, budgetUsdt: 48 }, usage: { ...bot.usage, committedUsdt: 12 } });
+    expect(rows).toHaveLength(5);
+    expect(rows[4]).toMatchObject({ label: 'Comprometido', used: 12, max: 48, pct: 25, text: '12 de 48 USDT' });
+    expect(usageRows(bot).some((r) => r.label === 'Comprometido')).toBe(false);
+  });
 });
 
 describe('closedTradeRows', () => {

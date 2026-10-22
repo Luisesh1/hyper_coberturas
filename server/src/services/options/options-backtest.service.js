@@ -19,6 +19,7 @@ const templates = require('./templates');
 const { intrinsic } = require('./options-pricing');
 const { buildSyntheticChain, syntheticExpiries, syntheticLeg } = require('./options-synthetic-chain');
 const { wilderAtrBands, atrBandTakeProfit } = require('./options-atr-band-tp');
+const { committedUsdt } = require('./options-committed-capital');
 const {
   HOUR_MS,
   DAY_MS,
@@ -299,6 +300,8 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
     if (signal) {
       ctx.signal = signal;
       ctx.tradesToday = tradesToday;
+      // Presupuesto total del bot: lo comprometido por las posiciones abiertas.
+      if (params.budgetUsdt != null) ctx.committedUsdt = committedUsdt({ positions, spot });
     }
     // La cadena es perezosa: si el template no la mira, no se calcula.
     Object.defineProperty(ctx, 'chain', { enumerable: true, get: chainFor });

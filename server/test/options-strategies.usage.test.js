@@ -151,3 +151,31 @@ test('GET detalle: las posiciones abiertas traen mark, bid y ask; si la cotizaci
   assert.deepEqual([bad.mark, bad.bid, bad.ask], [null, null, null]);
   assert.equal(detail.usage.netDelta, null);
 });
+
+test('usage.committedUsdt: con presupuesto, posiciones del libro + entradas pendientes en Real (cálculo compartido)', async () => {
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  let orders = [];
+  const service = createOptionsStrategiesService({
+    repo, now: () => NOW,
+    credentials: { async getClientForUser() { return {}; }, async getLimits() { return {}; } },
+    market: { async getChain() { return { spot: 68000 }; }, async getQuote() { return { delta: 0.3 }; } },
+    liveOrders: { async listByStrategy() { return orders; } },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'live',
+    params: { alertIds: [1], budgetUsdt: 48, budgetFractions: 4 } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
+  // La sombra no cuenta en un bot real.
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
+  orders = [{ id: 1, action: 'open', purpose: 'standard', status: 'active', symbol: 'BTC-261031-71000-C', side: 'BUY', quantity: 0.02, processedQty: 0.01, limitPrice: 1000 }];
+
+  const detail = await service.get(USER, s.id);
+  // 12 (posición) + 0,01 × 1000 (pendiente) = 22.
+  assert.equal(detail.usage.committedUsdt, 22);
+});
+
+test('usage.committedUsdt: null si el bot no tiene presupuesto', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'shadow', params: { alertIds: [1] } });
+  const detail = await service.get(USER, s.id);
+  assert.equal(detail.usage.committedUsdt, null);
+});

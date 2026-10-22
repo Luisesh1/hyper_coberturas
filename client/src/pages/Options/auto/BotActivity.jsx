@@ -223,7 +223,7 @@ function Usage({ rows, mobile }) {
             <div className={styles.usageHead}>
               <span>{r.label}</span>
               <span className={ui.mono}>
-                {formatNumber(r.used, { decimals: 2, minDecimals: 0 })} / {r.max === null ? '—' : formatNumber(r.max, { decimals: 2, minDecimals: 0 })}
+                {r.text ?? `${formatNumber(r.used, { decimals: 2, minDecimals: 0 })} / ${r.max === null ? '—' : formatNumber(r.max, { decimals: 2, minDecimals: 0 })}`}
               </span>
             </div>
             <div

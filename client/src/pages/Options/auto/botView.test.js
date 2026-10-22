@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
-  describeParams, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  describeParams, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 
 describe('buildMapping', () => {
@@ -99,7 +99,7 @@ describe('formulario de bot', () => {
       params: {
         structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, quantity: 0.01, onOpposite: 'reverse',
         takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
-        maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null,
+        maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null, budgetUsdt: null, budgetFractions: 4,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
         notify: { trades: true, errors: true },
       },
@@ -271,5 +271,49 @@ describe('KPIs de operaciones cerradas (del servidor)', () => {
     expect(form.notifyErrors).toBe(true);
     expect(initialBotForm({ bot: normalizeBot({ id: 1, params: { alertIds: [1] } }) }).notifyTrades).toBe(true);
     expect(buildBotPayload({ ...form, alertIds: [1], name: 'x' }).params.notify).toEqual({ trades: false, errors: true });
+  });
+});
+
+describe('presupuesto total en fracciones', () => {
+  const form = (extra = {}) => ({ ...initialBotForm({ underlying: 'BTC' }), name: 'B', alertIds: [1], ...extra });
+  const row = (rows, key) => rows.find((r) => r.key === key);
+
+  it('por defecto: sin presupuesto y 4 fracciones', () => {
+    expect(initialBotForm()).toMatchObject({ budgetUsdt: null, budgetFractions: 4 });
+    expect(perSignalBudget(form())).toBeNull();
+  });
+
+  it('hasta presupuesto / fracciones por señal', () => {
+    expect(perSignalBudget(form({ budgetUsdt: 48, budgetFractions: 4 }))).toBe(12);
+    expect(perSignalBudget(form({ budgetUsdt: 48, budgetFractions: 0 }))).toBeNull();
+  });
+
+  it('valida presupuesto > 0 y fracciones enteras 1–20 solo si hay presupuesto', () => {
+    expect(validateBotForm(form({ budgetUsdt: 48, budgetFractions: 4 }))).toEqual({});
+    expect(validateBotForm(form({ budgetUsdt: 0 })).budgetUsdt).toBeTruthy();
+    expect(validateBotForm(form({ budgetUsdt: 48, budgetFractions: 21 })).budgetFractions).toBe('Máximo 20');
+    expect(validateBotForm(form({ budgetUsdt: 48, budgetFractions: 2.5 })).budgetFractions).toBe('Debe ser un número entero');
+    expect(validateBotForm(form({ budgetUsdt: null, budgetFractions: 99 })).budgetFractions).toBeUndefined();
+  });
+
+  it('payload: con presupuesto se envía y capitalUsdt queda en null', () => {
+    const p = buildBotPayload(form({ budgetUsdt: 48, budgetFractions: 6, capitalUsdt: 500 })).params;
+    expect(p).toMatchObject({ budgetUsdt: 48, budgetFractions: 6, capitalUsdt: null });
+    const q = buildBotPayload(form({ capitalUsdt: 500 })).params;
+    expect(q).toMatchObject({ budgetUsdt: null, budgetFractions: 4, capitalUsdt: 500 });
+  });
+
+  it('editar recupera presupuesto y fracciones; los bots antiguos sin claves quedan sin presupuesto', () => {
+    expect(initialBotForm({ bot: normalizeBot({ id: 1, params: { budgetUsdt: 48, budgetFractions: 6 } }) })).toMatchObject({ budgetUsdt: 48, budgetFractions: 6 });
+    expect(initialBotForm({ bot: normalizeBot({ id: 1, params: {} }) })).toMatchObject({ budgetUsdt: null, budgetFractions: 4 });
+  });
+
+  it('describeParams: presupuesto sustituye al capital por entrada', () => {
+    const d = describeParams(normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with', budgetUsdt: 48, budgetFractions: 4, capitalUsdt: 500 } }));
+    expect(row(d.entry, 'capitalUsdt')).toBeUndefined();
+    expect(row(d.entry, 'budgetUsdt').value).toBe('48 USDT · 4 fracciones · hasta 12 USDT por señal');
+    const old = describeParams(normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with' } }));
+    expect(row(old.entry, 'budgetUsdt')).toBeUndefined();
+    expect(row(old.entry, 'capitalUsdt')).toBeTruthy();
   });
 });

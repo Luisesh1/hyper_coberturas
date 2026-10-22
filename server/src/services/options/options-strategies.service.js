@@ -10,6 +10,7 @@ const templates = require('./templates');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const { DAY_MS, parseSymbol } = require('./options-utils');
 const { estimateMargin, legDeltaExposure, utcDayStart, lazyMarket } = require('./options-strategy-runner.service');
+const { committedUsdt: computeCommitted } = require('./options-committed-capital');
 
 const MODES = ['paused', 'shadow', 'live'];
 const LIMIT_KEYS = ['maxMarginUsdt', 'maxDailyLossUsdt', 'maxNetDelta', 'maxOrdersPerDay'];
@@ -121,7 +122,7 @@ const round2 = (v) => Math.round(v * 1e4) / 1e4;
  * estrategia está en `live`, si no el de sombra. El margen y la delta piden
  * datos de mercado: si fallan quedan en null en vez de romper el detalle.
  */
-async function limitsUsage({ repo, market, strategy, positions, at, quotes = new Map() }) {
+async function limitsUsage({ repo, market, strategy, positions, at, quotes = new Map(), orders = [] }) {
   const mode = strategy.mode === 'live' ? 'live' : 'shadow';
   const since = utcDayStart(at);
   const open = positions.filter((p) => p.mode === mode && p.closedAt == null);
@@ -132,8 +133,9 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
 
   let marginUsedUsdt = null;
   let netDelta = null;
+  let spot;
   try {
-    const { spot } = await market.getChain(strategy.underlying);
+    ({ spot } = await market.getChain(strategy.underlying));
     marginUsedUsdt = 0;
     for (const p of open) {
       const meta = parseSymbol(p.symbol);
@@ -147,7 +149,14 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
     netDelta = round2(open.reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: quotes.get(p.id)?.delta, quantity: p.quantity }), 0));
   } catch { netDelta = null; }
 
-  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta };
+  // Presupuesto total del bot: el mismo cálculo que el runner pasa al template.
+  let committedUsdt = null;
+  if (strategy.params?.budgetUsdt != null) {
+    const total = computeCommitted({ positions: open, orders: mode === 'live' ? orders : [], spot });
+    committedUsdt = Number.isFinite(total) ? round2(total) : null;
+  }
+
+  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta, committedUsdt };
 }
 
 function createOptionsStrategiesService(deps = {}) {
@@ -260,7 +269,7 @@ function createOptionsStrategiesService(deps = {}) {
           closedAt: p.closedAt, pnlUsdt: p.pnlUsdt, feesUsdt: p.feesUsdt,
           closeReason: p.closeReason ?? null,
         })),
-      usage: await limitsUsage({ repo, market, strategy, positions, at, quotes }),
+      usage: await limitsUsage({ repo, market, strategy, positions, at, quotes, orders: standingOrders }),
       events,
     };
   }

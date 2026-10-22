@@ -245,3 +245,79 @@ test('alert_signal: notify por defecto {trades:true, errors:true} y se valida', 
   assert.throws(() => params({ notify: { trades: 'si', errors: true } }), /notify/);
   assert.throws(() => params({ notify: 5 }), /notify/);
 });
+
+// ---------- presupuesto total en fracciones (Task 11) ----------
+
+function runBudget(p, { committedUsdt, positions = [], direction = 'bullish' } = {}) {
+  return alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain: chainFor(p.expiryDays),
+    positions, params: p, signal: { direction }, tradesToday: 0, committedUsdt });
+}
+const legCost = (l) => l.price * l.quantity;
+
+test('alert_signal: budgetUsdt/budgetFractions por defecto y validación', () => {
+  const p = params();
+  assert.equal(p.budgetUsdt, null);
+  assert.equal(p.budgetFractions, 4);
+  assert.equal(params({ budgetUsdt: 48, budgetFractions: 20 }).budgetFractions, 20);
+  assert.equal(params({ budgetUsdt: '' }).budgetUsdt, null);
+  assert.throws(() => params({ budgetFractions: 0 }), /budgetFractions/);
+  assert.throws(() => params({ budgetFractions: 21 }), /budgetFractions/);
+  assert.throws(() => params({ budgetFractions: 2.5 }), /budgetFractions/);
+  assert.throws(() => params({ budgetUsdt: -1 }), /budgetUsdt/);
+});
+
+test('alert_signal: presupuesto 48 en 4 fracciones, nada comprometido → 12 por señal, ≤ 4 USDT por contrato', () => {
+  const p = params({ budgetUsdt: 48, budgetFractions: 4, contractCount: 3, maxOpenPositions: 3, quantity: 1, capitalUsdt: 1000 });
+  const [open] = runBudget(p, { committedUsdt: 0 });
+  assert.equal(open.type, 'open');
+  assert.equal(open.legs.length, 3);
+  for (const leg of open.legs) {
+    assert.ok(legCost(leg) <= 4 + 1e-9, `pata ${legCost(leg)} > 4`);
+    assert.ok(legCost(leg) > 3, 'el presupuesto se aprovecha (redondeo hacia abajo al step)');
+  }
+});
+
+test('alert_signal: comprometido 40 de 48 → 8 por señal', () => {
+  const p = params({ budgetUsdt: 48, budgetFractions: 4, contractCount: 1, quantity: 1 });
+  const [open] = runBudget(p, { committedUsdt: 40 });
+  assert.equal(open.type, 'open');
+  assert.ok(legCost(open.legs[0]) <= 8 + 1e-9);
+  assert.ok(legCost(open.legs[0]) > 7);
+});
+
+test('alert_signal: comprometido 48 de 48 → budget_exhausted', () => {
+  const p = params({ budgetUsdt: 48, budgetFractions: 4, quantity: 1 });
+  const [action] = runBudget(p, { committedUsdt: 48 });
+  assert.equal(action.type, 'skip');
+  assert.equal(action.reason, 'budget_exhausted');
+  assert.equal(action.detail, 'Presupuesto comprometido: 48 de 48 USDT');
+});
+
+test('alert_signal: comprometido desconocido (NaN) bloquea la entrada', () => {
+  const p = params({ budgetUsdt: 48, quantity: 1 });
+  const [action] = runBudget(p, { committedUsdt: NaN });
+  assert.equal(action.type, 'skip');
+  assert.equal(action.reason, 'budget_unknown');
+});
+
+test('alert_signal: con presupuesto, capitalUsdt se ignora', () => {
+  const p = params({ budgetUsdt: 48, budgetFractions: 4, quantity: 1, capitalUsdt: 1 });
+  const [open] = runBudget(p, { committedUsdt: 0 });
+  assert.equal(open.type, 'open');
+  assert.ok(legCost(open.legs[0]) > 11 && legCost(open.legs[0]) <= 12 + 1e-9);
+});
+
+test('alert_signal: sin presupuesto sigue mandando capitalUsdt', () => {
+  const p = params({ quantity: 1, capitalUsdt: 5 });
+  const [open] = runBudget(p, { committedUsdt: 1e9 });
+  assert.equal(open.type, 'open');
+  assert.ok(legCost(open.legs[0]) <= 5 + 1e-9 && legCost(open.legs[0]) > 4);
+});
+
+test('alert_signal: al girar, lo comprometido por la posición contraria que se cierra se libera', () => {
+  const p = params({ budgetUsdt: 48, budgetFractions: 4, quantity: 1, onOpposite: 'reverse' });
+  const opposite = { ...position({ side: 'BUY', type: 'P', entryPrice: 4800 }) };
+  const actions = runBudget(p, { committedUsdt: 48, positions: [opposite] });
+  assert.deepEqual(actions.map((a) => a.type), ['close', 'open']);
+  assert.ok(legCost(actions[1].legs[0]) <= 12 + 1e-9);
+});

@@ -32,6 +32,7 @@ const { fullSizeFokLimit } = require('./options-fok-depth');
 const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
 const { ensureAtrBandTarget } = require('./options-atr-band-target');
+const { estimateMargin, committedUsdt } = require('./options-committed-capital');
 
 // Cierres por toma de ganancia: con un TP LIMIT residente no se cancela ni
 // se compite con él; deben alcanzar su objetivo con la cotización fresca.
@@ -50,6 +51,12 @@ function lazyMarket() {
     getVolatilityInputs: (...args) => load().getVolatilityInputs(...args),
     getAtrBand: (...args) => load().getAtrBand(...args),
   };
+}
+
+function lazyLiveOrders() {
+  // eslint-disable-next-line global-require
+  const load = () => require('../../repositories/options-live-orders.repository');
+  return { listByStrategy: (...args) => load().listByStrategy(...args) };
 }
 
 function lazyCredentials() {
@@ -80,20 +87,6 @@ function utcDayStart(ms) {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
-/**
- * Margen estimado de una pata (USDT). Vendida: prima + máx(15 % del spot −
- * lo que esté OTM, 10 % del spot), por unidad. Comprada: la prima pagada.
- */
-function estimateMargin({ side, type, strike, price, quantity, spot }) {
-  const qty = Number(quantity);
-  if (side === 'BUY') return Number(price) * qty;
-  // Sin spot el margen de una venta es desconocido: NaN obliga a bloquear
-  // en vez de quedarse solo con la prima.
-  if (!(Number(spot) > 0)) return NaN;
-  const otm = type === 'C' ? Math.max(strike - spot, 0) : Math.max(spot - strike, 0);
-  return qty * (Number(price) + Math.max(0.15 * spot - otm, 0.1 * spot));
-}
-
 /** Delta neta en unidades del subyacente (vender una call resta delta). */
 function legDeltaExposure({ side, delta, quantity }) {
   const d = num(delta) ?? 0;
@@ -105,6 +98,11 @@ class OptionsStrategyRunner {
     this.repo = deps.repo || defaultRepo;
     this.market = deps.market || lazyMarket();
     this.credentials = deps.credentials || lazyCredentials();
+    // Órdenes de entrada pendientes (reserva del presupuesto). Con un repo
+    // inyectado (pruebas) no se abre el ledger PostgreSQL salvo que se pase.
+    this.liveOrders = deps.liveOrders || (this.repo === defaultRepo
+      ? lazyLiveOrders()
+      : { listByStrategy: async () => [] });
     this.notify = deps.notify || notifyTelegram;
     this.logger = deps.logger || logger;
     this.now = deps.now || Date.now;
@@ -252,6 +250,7 @@ class OptionsStrategyRunner {
         lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
         tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
           utcDayStart(tickCtx.now)),
+        committedUsdt: await this.committedFor(strategy, 'live', params, [], spot),
       });
       const open = actions.find((a) => a.type === 'open');
       if (!open) return { status: 'no_valid_entry' };
@@ -369,6 +368,17 @@ class OptionsStrategyRunner {
   }
 
   /**
+   * Capital comprometido de un modo para el presupuesto total del bot:
+   * posiciones abiertas y, solo en Real, órdenes de entrada no finales.
+   * undefined si el bot no tiene presupuesto (no hace falta consultarlo).
+   */
+  async committedFor(strategy, mode, params, positions, spot) {
+    if (params?.budgetUsdt == null) return undefined;
+    const orders = mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : [];
+    return committedUsdt({ positions, orders, spot });
+  }
+
+  /**
    * Contexto de ejecución de un modo: posiciones abiertas enriquecidas con
    * cotización (y objetivos de volatilidad en bots por alertas), spot y
    * parámetros. Lo comparten la evaluación del template y el cierre manual.
@@ -412,6 +422,9 @@ class OptionsStrategyRunner {
         mode,
         signal: tickCtx.signal || null,
         tradesToday,
+        committedUsdt: tickCtx.signal
+          ? await this.committedFor(strategy, mode, params, positions, spot)
+          : undefined,
       });
       byMode[mode] = actions;
       // Una alerta opuesta con onOpposite=reverse registra CIERRE + REENTRADA
@@ -746,8 +759,12 @@ class OptionsStrategyRunner {
         type: leg.optionType || parseSymbol(leg.symbol)?.type,
         spot: ctx.spot,
       }), 0);
+      // Con presupuesto total, el tope es la parte de la señal (capitalUsdt se ignora).
+      const cap = ctx.params.budgetUsdt != null
+        ? (action.signalBudgetUsdt ?? ctx.params.budgetUsdt / (ctx.params.budgetFractions || 4))
+        : ctx.params.capitalUsdt;
       if (!Number.isFinite(capital) || capital <= 0 ||
-          (ctx.params.capitalUsdt != null && capital > Number(ctx.params.capitalUsdt) + 1e-8)) {
+          (cap != null && capital > Number(cap) + 1e-8)) {
         await this.recordOutcome(strategy, 'live', {
           type: 'skip', reason: 'capital_limit',
           detail: 'Entrada real bloqueada: capital requerido excede el presupuesto o no pudo verificarse',

@@ -134,7 +134,15 @@ export function usageRows(bot = {}) {
     usageRow('Operaciones de hoy', usage.ordersToday, params.maxTradesPerDay),
     usageRow('Margen usado', usage.marginUsedUsdt, limits.maxMarginUsdt),
     usageRow('Pérdida del día', usage.dailyLossUsdt, limits.maxDailyLossUsdt),
+    ...(toNumber(params.budgetUsdt) > 0 ? [committedRow(usage.committedUsdt, params.budgetUsdt)] : []),
   ];
+}
+
+// Presupuesto total del bot: posiciones abiertas + entradas pendientes (Real).
+function committedRow(committed, budget) {
+  const row = usageRow('Comprometido', committed, budget);
+  const fmt = (n) => formatNumber(n, { decimals: 2, minDecimals: 0 });
+  return { ...row, text: `${fmt(row.used)} de ${fmt(row.max)} USDT` };
 }
 
 export function closedTradeRows(detail = {}, mode = 'shadow') {

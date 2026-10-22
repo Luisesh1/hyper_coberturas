@@ -8,8 +8,9 @@ import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import {
   NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, ATR_BAND_INTERVALS, ATR_BAND_NOTE, ATR_BAND_SWITCH_WARNING, alertMeta, buildBotPayload,
-  initialBotForm, normalizeAlert, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  initialBotForm, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
+import { formatNumber } from '../strategies/common/format';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
 
@@ -172,6 +173,8 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
   const labels = structureLabels(form.structure);
   const buy = form.structure === 'buy_with';
   const atrBand = form.takeProfitMode === 'atr_band';
+  const perSignal = perSignalBudget(form);
+  const hasBudget = form.budgetUsdt !== null && form.budgetUsdt !== undefined && form.budgetUsdt !== '';
   const hasOpenPositions = (bot?.positions || []).some((p) => p.closedAt == null);
   const switchingToAtr = editing && atrBand && bot?.params?.takeProfitMode !== 'atr_band' && hasOpenPositions;
   const errorCount = Object.keys(errors).length;
@@ -303,15 +306,42 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             onChange={(v) => update({ contractCount: v })}
           />
           <NumberField
-            label="Capital asignado"
-            help="Se reparte por igual. En compras limita prima; en ventas limita margen estimado. Vacío = usa la cantidad configurada."
+            label="Presupuesto total"
+            help={perSignal !== null
+              ? `Hasta ${formatNumber(perSignal, { decimals: 2, minDecimals: 0 })} USDT por señal`
+              : 'Vacío = sin presupuesto total (usa el capital por entrada). Las órdenes pendientes también reservan.'}
             unit="USDT"
-            value={form.capitalUsdt}
+            value={form.budgetUsdt}
             min={0}
             step={10}
-            error={errors.capitalUsdt}
-            onChange={(v) => update({ capitalUsdt: v })}
+            error={errors.budgetUsdt}
+            onChange={(v) => update({ budgetUsdt: v })}
           />
+          {hasBudget && (
+            <NumberField
+              label="Fracciones"
+              help="Cada señal usa como máximo una fracción; cambiarlo solo afecta a nuevas entradas"
+              value={form.budgetFractions}
+              min={1}
+              max={20}
+              step={1}
+              integer
+              error={errors.budgetFractions}
+              onChange={(v) => update({ budgetFractions: v })}
+            />
+          )}
+          {!hasBudget && (
+            <NumberField
+              label="Capital asignado"
+              help="Se reparte por igual. En compras limita prima; en ventas limita margen estimado. Vacío = usa la cantidad configurada."
+              unit="USDT"
+              value={form.capitalUsdt}
+              min={0}
+              step={10}
+              error={errors.capitalUsdt}
+              onChange={(v) => update({ capitalUsdt: v })}
+            />
+          )}
           <NumberField
             label="Cantidad máxima por contrato"
             unit={form.underlying}
