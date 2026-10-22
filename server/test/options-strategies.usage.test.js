@@ -129,3 +129,25 @@ test('GET detalle: closedPositions ordena por cierre desc con motivo y una plant
   const other = await repo.createStrategy({ userId: USER, name: 'y', template: 'short_strangle', underlying: 'BTC', mode: 'shadow' });
   assert.equal((await service.get(USER, other.id)).pendingOrders, undefined);
 });
+
+test('GET detalle: las posiciones abiertas traen mark, bid y ask; si la cotización falla quedan en null', async () => {
+  const market = {
+    async getChain() { return { spot: 2500 }; },
+    async getQuote(symbol) {
+      if (symbol.endsWith('-2600-C')) throw new Error('sin datos');
+      return { delta: 0.4, mark: 11.5, bid: 11, ask: 12 };
+    },
+  };
+  const { repo, service } = setup({ market });
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2600-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW });
+
+  const detail = await service.get(USER, s.id);
+
+  const ok = detail.positions.find((p) => p.symbol.endsWith('-2500-C'));
+  const bad = detail.positions.find((p) => p.symbol.endsWith('-2600-C'));
+  assert.deepEqual([ok.mark, ok.bid, ok.ask], [11.5, 11, 12]);
+  assert.deepEqual([bad.mark, bad.bid, bad.ask], [null, null, null]);
+  assert.equal(detail.usage.netDelta, null);
+});

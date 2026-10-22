@@ -1,7 +1,7 @@
 // Vistas puras del detalle de un bot: posiciones abiertas, órdenes vivas,
 // uso de límites y operaciones cerradas. Sin acceso a red ni al reloj salvo
 // el parámetro `now` (para poder probarlas).
-import { formatNumber, pick, toNumber, tone } from '../strategies/common/format';
+import { formatNumber, toNumber, tone } from '../strategies/common/format';
 
 export const REASON_LABEL = {
   take_profit: 'Toma de ganancia',
@@ -35,7 +35,7 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
       const sell = isSell(p.side);
       const entry = toNumber(p.entryPrice);
       const qty = toNumber(p.quantity);
-      const mark = toNumber(pick(p, 'mark', 'markPrice') ?? p.quote?.mark);
+      const mark = toNumber(p.mark);
       const dir = sell ? -1 : 1;
       let tpPrice = null;
       if (volatility) tpPrice = toNumber(p.takeProfitTarget?.price);

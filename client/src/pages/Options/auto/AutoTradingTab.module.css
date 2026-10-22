@@ -466,3 +466,32 @@
 .tpList li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .tpList li > span:first-child { font-family: var(--font-mono); }
 .tpList li > span:last-child { margin-left: auto; }
+
+/* ── Actividad del bot ─────────────────────────────────────── */
+.activityPanel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.activityList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.activityCard {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+}
+.activityCardHead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.activitySymbol { font-weight: 600; color: var(--text-bright); overflow-wrap: anywhere; }
+.activityPnl { font-size: 24px; font-weight: 700; font-family: var(--font-mono, monospace); line-height: 1.2; }
+.activityPnl small { font-size: 13px; font-weight: 500; }
+.activityRow {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+}
+.activityRowMain { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.attention { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: 13px; }
+.touchBtn { min-height: 44px; min-width: 44px; }
+.tpStop { display: flex; flex-direction: column; gap: 4px; }
+.tpStopTrack { position: relative; height: 6px; border-radius: 3px; background: var(--bg-input); }
+.tpStopDot { position: absolute; top: -3px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--indigo); }
+.tpStopLabels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono, monospace); }
+.usageList { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.usageItem { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.usageHead { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+.usageTrack { height: 8px; border-radius: 4px; background: var(--bg-input); overflow: hidden; }
+.usageFill { display: block; height: 100%; background: var(--indigo); border-radius: 4px; }
+.usageFillHot { background: var(--red-light); }

@@ -7,6 +7,7 @@ import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import SignalsFeed, { SignalFilter } from './SignalsFeed';
 import LiveTpStatus from './LiveTpStatus';
+import BotActivity from './BotActivity';
 import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, buildBotKpis, describeParams } from './botView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
@@ -86,12 +87,16 @@ export default function BotDetail({
   onDelete,
   onUnlink,
   onBack,
+  onClosePosition,
+  onCloseAll,
+  onCancelOrder,
 }) {
   const kpis = useMemo(() => buildBotKpis(bot, stats), [bot, stats]);
   const desc = useMemo(() => describeParams(bot), [bot]);
   const info = STRUCTURE_INFO[bot.structure];
   const isLive = bot.mode === 'live';
   const p = bot.params || {};
+  const activity = { bot, mobile, onClosePosition, onCloseAll, onCancelOrder };
 
   const liveWarning = isLive && (
     <p className={`${ui.alert} ${ui.alertWarn}`}>
@@ -146,6 +151,7 @@ export default function BotDetail({
               <span className={`${ui.tileValue} ${ui[`tone_${kPnl.tone}`]}`}>{kPnl.value}</span>
             </div>
           </div>
+          <BotActivity {...activity} part="top" />
           <section className={styles.mobileSection}>
             <h2 className={styles.mobileH2}>Al recibir la señal</h2>
             <span className={styles.structurePill}>{info.label}</span>
@@ -162,6 +168,7 @@ export default function BotDetail({
             <SignalFilter value={signalsFilter} onChange={onSignalsFilter} />
             <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} mobile />
           </section>
+          <BotActivity {...activity} part="bottom" />
         </div>
       </div>
     );
@@ -202,6 +209,8 @@ export default function BotDetail({
           </div>
         ))}
       </div>
+
+      <BotActivity {...activity} part="top" />
 
       <div className={styles.twoCol}>
         <div className={`${ui.panel} ${styles.col}`}>
@@ -244,6 +253,8 @@ export default function BotDetail({
         </div>
         <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} />
       </div>
+
+      <BotActivity {...activity} part="bottom" />
     </section>
   );
 }

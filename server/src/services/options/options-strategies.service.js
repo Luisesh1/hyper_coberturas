@@ -101,7 +101,7 @@ const round2 = (v) => Math.round(v * 1e4) / 1e4;
  * estrategia está en `live`, si no el de sombra. El margen y la delta piden
  * datos de mercado: si fallan quedan en null en vez de romper el detalle.
  */
-async function limitsUsage({ repo, market, strategy, positions, at }) {
+async function limitsUsage({ repo, market, strategy, positions, at, quotes = new Map() }) {
   const mode = strategy.mode === 'live' ? 'live' : 'shadow';
   const since = utcDayStart(at);
   const open = positions.filter((p) => p.mode === mode && p.closedAt == null);
@@ -123,8 +123,8 @@ async function limitsUsage({ repo, market, strategy, positions, at }) {
     marginUsedUsdt = Number.isFinite(marginUsedUsdt) ? round2(marginUsedUsdt) : null;
   } catch { marginUsedUsdt = null; }
   try {
-    const quotes = await Promise.all(open.map((p) => market.getQuote(p.symbol)));
-    netDelta = round2(open.reduce((acc, p, i) => acc + legDeltaExposure({ side: p.side, delta: quotes[i]?.delta, quantity: p.quantity }), 0));
+    if (open.some((p) => !quotes.get(p.id))) throw new Error('cotización no disponible');
+    netDelta = round2(open.reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: quotes.get(p.id)?.delta, quantity: p.quantity }), 0));
   } catch { netDelta = null; }
 
   return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta };
@@ -206,11 +206,20 @@ function createOptionsStrategiesService(deps = {}) {
         : Promise.resolve([]),
     ]);
     const at = now();
+    // Una sola cotización por posición abierta: alimenta el mark que ve el
+    // cliente y la delta neta de los límites. Una que falle no rompe el detalle.
+    const openNow = positions.filter((p) => p.closedAt == null);
+    const quotes = new Map(await Promise.all(openNow.map(async (p) => {
+      try { return [p.id, (await market.getQuote(p.symbol)) || null]; } catch { return [p.id, null]; }
+    })));
     return {
       ...strategy,
       kpis: { shadow: kpisFor(positions, events, 'shadow', at), live: kpisFor(positions, events, 'live', at) },
       equity: equityCurve(positions, strategy.createdAt),
-      positions: positions.filter((p) => p.closedAt == null),
+      positions: openNow.map((p) => {
+        const q = quotes.get(p.id);
+        return { ...p, mark: q?.mark ?? null, bid: q?.bid ?? null, ask: q?.ask ?? null };
+      }),
       // Solo información operacional; las credenciales nunca llegan al cliente.
       takeProfitOrders: standingOrders.filter((o) => o.purpose === 'take_profit')
         .slice(0, 20).map((o) => ({
@@ -231,7 +240,7 @@ function createOptionsStrategiesService(deps = {}) {
           closedAt: p.closedAt, pnlUsdt: p.pnlUsdt, feesUsdt: p.feesUsdt,
           closeReason: p.closeReason ?? null,
         })),
-      usage: await limitsUsage({ repo, market, strategy, positions, at }),
+      usage: await limitsUsage({ repo, market, strategy, positions, at, quotes }),
       events,
     };
   }
