@@ -1,11 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   IndicatorField,
+  MobileTextField,
   OperandField,
   OperatorField,
   ParamFields,
   SeriesField,
   TimeframeField,
+  mobileLabelClass,
   paramsSummary,
   ruleParts,
   ruleWithCondition,
@@ -19,6 +21,32 @@ import styles from './MobileRuleSheet.module.css';
 const WEIGHT_STEP = 0.5;
 const weightFmt = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 });
 const roundWeight = (v) => Math.max(0, Math.round(v * 100) / 100);
+
+// Clave local y estable de cada condición del borrador (para `key`): así
+// quitar una condición no pasa el estado plegado/desplegado a la siguiente.
+// Solo vive en el borrador; se quita antes de `onApply`.
+const DRAFT_KEY = '__draftKey';
+let draftKeySeq = 0;
+function withDraftKeys(rule) {
+  const { conditions } = ruleParts(rule);
+  if (conditions.every((c) => c[DRAFT_KEY])) return rule;
+  return {
+    ...rule,
+    conditions: conditions.map((c) => (c[DRAFT_KEY] ? c : { ...c, [DRAFT_KEY]: `c${++draftKeySeq}` })),
+  };
+}
+function withoutDraftKeys(rule) {
+  if (!Array.isArray(rule.conditions)) return rule;
+  return {
+    ...rule,
+    conditions: rule.conditions.map((c) => {
+      const { [DRAFT_KEY]: _key, ...rest } = c;
+      return rest;
+    }),
+  };
+}
+
+const FOCUSABLE = 'button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
 function CloseIcon() {
   return (
@@ -114,7 +142,9 @@ function JoinerToggle({ index, value, onChange }) {
 function SheetContent({ index, rule, isNew, canDelete, onApply, onDiscard, onDelete }) {
   const ids = useId();
   const titleRef = useRef(null);
-  const [draft, setDraft] = useState(() => structuredClone(rule));
+  const dialogRef = useRef(null);
+  const [draft, setDraft] = useState(() => withDraftKeys(structuredClone(rule)));
+  const edit = (fn) => setDraft((d) => withDraftKeys(fn(d)));
   const { conditions, joiners } = ruleParts(draft);
   const weight = Number.isFinite(Number(draft.weight)) ? Number(draft.weight) : 1;
 
@@ -125,20 +155,38 @@ function SheetContent({ index, rule, isNew, canDelete, onApply, onDiscard, onDel
     return () => { if (previous?.isConnected) previous.focus?.(); };
   }, []);
 
-  // Escape = descartar (siempre con el último callback).
+  // Escape = descartar (siempre con el último callback). Tab y Mayús+Tab
+  // dan la vuelta dentro de la hoja (aria-modal): el editor de debajo no
+  // recibe el foco.
   const discardRef = useRef(onDiscard);
   useEffect(() => { discardRef.current = onDiscard; }, [onDiscard]);
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') discardRef.current?.(); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { discardRef.current?.(); return; }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const items = [...dialogRef.current.querySelectorAll(FOCUSABLE)];
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      const inside = dialogRef.current.contains(active);
+      if (e.shiftKey && (!inside || active === first)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (!inside || active === last)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  const setWeight = (v) => setDraft((d) => ({ ...d, weight: roundWeight(v) }));
+  const setWeight = (v) => edit((d) => ({ ...d, weight: roundWeight(v) }));
 
   return (
     <div className={styles.layer}>
-      <section className={styles.sheet} role="dialog" aria-modal="true" aria-labelledby={`${ids}-title`}>
+      <section ref={dialogRef} className={styles.sheet} role="dialog" aria-modal="true" aria-labelledby={`${ids}-title`}>
         <header className={styles.header}>
           <button
             type="button"
@@ -163,21 +211,17 @@ function SheetContent({ index, rule, isNew, canDelete, onApply, onDiscard, onDel
         </header>
 
         <div className={styles.body}>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor={`${ids}-label`}>Etiqueta en Telegram</label>
-            <input
-              id={`${ids}-label`}
-              className={styles.input}
-              type="text"
-              maxLength={120}
-              value={draft.label || ''}
-              onChange={(e) => { const label = e.target.value; setDraft((d) => ({ ...d, label })); }}
-              placeholder="Ej: RSI sobreventa"
-            />
-          </div>
+          <MobileTextField
+            id={`${ids}-label`}
+            label="Etiqueta en Telegram"
+            maxLength={120}
+            value={draft.label || ''}
+            onChange={(e) => { const label = e.target.value; edit((d) => ({ ...d, label })); }}
+            placeholder="Ej: RSI sobreventa"
+          />
 
           <fieldset className={styles.weightRow}>
-            <legend className={styles.label}>Peso de la regla</legend>
+            <legend className={mobileLabelClass}>Peso de la regla</legend>
             <div className={styles.stepper}>
               <button
                 type="button"
@@ -196,35 +240,35 @@ function SheetContent({ index, rule, isNew, canDelete, onApply, onDiscard, onDel
           </fieldset>
 
           {conditions.map((cond, i) => (
-            <div key={i} className={styles.condItem}>
+            <div key={cond[DRAFT_KEY] || i} className={styles.condItem}>
               {i > 0 && (
                 <JoinerToggle
                   index={i - 1}
                   value={joiners[i - 1]}
-                  onChange={(v) => setDraft((d) => ruleWithJoiner(d, i - 1, v))}
+                  onChange={(v) => edit((d) => ruleWithJoiner(d, i - 1, v))}
                 />
               )}
               <ConditionCard
                 condition={cond}
                 index={i}
-                onChange={(next) => setDraft((d) => ruleWithCondition(d, i, next))}
-                onRemove={conditions.length > 1 ? () => setDraft((d) => ruleWithoutCondition(d, i)) : null}
+                onChange={(next) => edit((d) => ruleWithCondition(d, i, next))}
+                onRemove={conditions.length > 1 ? () => edit((d) => ruleWithoutCondition(d, i)) : null}
               />
             </div>
           ))}
 
           <div className={styles.addRow}>
-            <button type="button" className={styles.addBtn} onClick={() => setDraft((d) => ruleWithNewCondition(d, 'and'))}>
+            <button type="button" className={styles.addBtn} onClick={() => edit((d) => ruleWithNewCondition(d, 'and'))}>
               + Condición «Y»
             </button>
-            <button type="button" className={styles.addBtn} onClick={() => setDraft((d) => ruleWithNewCondition(d, 'or'))}>
+            <button type="button" className={styles.addBtn} onClick={() => edit((d) => ruleWithNewCondition(d, 'or'))}>
               + Condición «O»
             </button>
           </div>
         </div>
 
         <div className={styles.bar}>
-          <button type="button" className={styles.applyBtn} onClick={() => onApply(draft)}>Aplicar regla</button>
+          <button type="button" className={styles.applyBtn} onClick={() => onApply(withoutDraftKeys(draft))}>Aplicar regla</button>
         </div>
       </section>
     </div>

@@ -187,4 +187,52 @@ describe('MobileRuleSheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Aplicar regla' }));
     expect(props.onApply.mock.calls[0][0].joiners).toEqual(['or']);
   });
+
+  it('Tab y Mayús+Tab dan la vuelta dentro de la hoja', () => {
+    render(<button type="button">fuera</button>);
+    setup();
+    const dialog = screen.getByRole('dialog', { name: 'Regla 1' });
+    const close = within(dialog).getByRole('button', { name: 'Descartar cambios' });
+    const apply = within(dialog).getByRole('button', { name: 'Aplicar regla' });
+    apply.focus();
+    fireEvent.keyDown(document.activeElement, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(document.activeElement, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(apply);
+    // Con el foco fuera de la hoja, Tab lo devuelve dentro.
+    screen.getByRole('button', { name: 'fuera' }).focus();
+    fireEvent.keyDown(document.activeElement, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
+    // En medio de la hoja, Tab sigue su curso normal.
+    const label = within(dialog).getByLabelText('Etiqueta en Telegram');
+    label.focus();
+    const ev = fireEvent.keyDown(label, { key: 'Tab' });
+    expect(ev).toBe(true);
+    expect(document.activeElement).toBe(label);
+  });
+
+  it('quitar una condición no pasa su estado plegado a la siguiente y el payload no lleva claves locales', () => {
+    const rsi = { indicatorType: 'rsi', indicatorParams: { length: 14 }, timeframe: '15m', operandSeries: 'line', operator: '<', operand: { kind: 'constant', value: 30 } };
+    const { props } = setup({ rule: { ...RULE, conditions: [SQZ, rsi], joiners: ['and'] } });
+    const first = screen.getByRole('group', { name: 'Condición 1' });
+    fireEvent.click(within(first).getByRole('button', { name: /Parámetros del indicador/ }));
+    expect(within(first).getByRole('button', { name: /Parámetros del indicador/ }).getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Quitar condición 1' }));
+    const remaining = screen.getByRole('group', { name: 'Condición 1' });
+    expect(within(remaining).getByLabelText('Indicador').value).toBe('rsi');
+    expect(within(remaining).getByRole('button', { name: /Parámetros del indicador/ }).getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(screen.getByRole('button', { name: 'Aplicar regla' }));
+    const applied = props.onApply.mock.calls[0][0];
+    expect(applied.conditions).toEqual([rsi]);
+    expect(applied.joiners).toEqual([]);
+  });
+
+  it('el payload aplicado conserva la forma de la regla', () => {
+    const { props } = setup();
+    fireEvent.click(screen.getByRole('button', { name: '+ Condición «Y»' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Aplicar regla' }));
+    const applied = props.onApply.mock.calls[0][0];
+    expect(Object.keys(applied).sort()).toEqual(Object.keys(RULE).sort());
+    for (const c of applied.conditions) expect(Object.keys(c).sort()).toEqual(Object.keys(SQZ).sort());
+  });
 });

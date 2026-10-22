@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { alertsApi } from '../../services/api';
 import { useTradingContext } from '../../context/TradingContext';
 import { MOBILE_QUERY, useMediaQuery } from '../TradingView/useMediaQuery';
-import { AlertRuleRow, emptyCondition } from './components/AlertRuleRow';
+import { AlertRuleRow } from './components/AlertRuleRow';
 import AssetPickerModal from './components/AssetPickerModal';
 import MobileAlertEditor from './mobile/MobileAlertEditor';
 import MobileAlertList from './mobile/MobileAlertList';

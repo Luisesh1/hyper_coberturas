@@ -7,8 +7,8 @@
   padding: 0 16px 104px;
 }
 .header { padding-top: 4px; }
-.title { margin: 0; font-size: 20px; font-weight: 700; color: var(--text-primary, #e5e7eb); }
-.subtitle { margin: 2px 0 0; font-size: 12px; color: var(--text-secondary, #9ca3af); }
+.title { margin: 0; font-size: 20px; font-weight: 700; color: var(--text-primary); }
+.subtitle { margin: 2px 0 0; font-size: 12px; color: var(--text-secondary); }
 
 /* La fila se desplaza dentro de sí misma; la página nunca. */
 .filters {
@@ -28,22 +28,22 @@
   min-height: 40px;
   padding: 0 14px;
   border-radius: 999px;
-  border: 1px solid var(--border, #2a2e38);
+  border: 1px solid var(--border);
   background: transparent;
-  color: var(--text-secondary, #9ca3af);
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
 .filterActive {
-  border-color: var(--accent, #3b82f6);
-  background: rgba(59,130,246,0.14);
-  color: var(--text-primary, #e5e7eb);
+  border-color: var(--blue);
+  background: var(--blue-bg);
+  color: var(--text-primary);
 }
 .count { font-variant-numeric: tabular-nums; opacity: 0.85; }
 
 .list { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.empty { text-align: center; color: var(--text-tertiary, #6b7280); padding: 24px 8px; font-size: 14px; }
+.empty { text-align: center; color: var(--text-tertiary); padding: 24px 8px; font-size: 14px; }
 
 .card {
   position: relative;
@@ -54,11 +54,11 @@
   align-items: center;
   padding: 14px;
   min-width: 0;
-  background: var(--surface-2, #1a1d24);
-  border: 1px solid var(--border, #2a2e38);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 14px;
 }
-.cardPaused .name { color: var(--text-secondary, #9ca3af); }
+.cardPaused .name { color: var(--text-secondary); }
 
 /* El botón de abrir cubre toda la tarjeta; el interruptor y «Probar» van encima. */
 .open {
@@ -76,12 +76,12 @@
 }
 .open::after { content: ''; position: absolute; inset: 0; border-radius: 14px; }
 .open:focus-visible { outline: none; }
-.open:focus-visible::after { outline: 2px solid var(--accent, #3b82f6); }
+.open:focus-visible::after { outline: 2px solid var(--blue); }
 .name {
   font-size: 15px;
   font-weight: 600;
   line-height: 1.3;
-  color: var(--text-primary, #e5e7eb);
+  color: var(--text-primary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -89,7 +89,7 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
-.meta { font-size: 12.5px; color: var(--text-secondary, #9ca3af); }
+.meta { font-size: 12.5px; color: var(--text-secondary); }
 
 .switchBtn {
   position: relative;
@@ -102,7 +102,7 @@
   padding: 0 2px;
   border: 0;
   background: transparent;
-  color: var(--text-secondary, #9ca3af);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -112,8 +112,8 @@
   width: 44px;
   height: 26px;
   border-radius: 999px;
-  border: 1px solid #ef4444;
-  background: rgba(239,68,68,0.12);
+  border: 1px solid var(--red);
+  background: var(--red-bg);
   transition: background 160ms ease, border-color 160ms ease;
 }
 .switchThumb {
@@ -123,21 +123,21 @@
   width: 18px;
   height: 18px;
   border-radius: 999px;
-  background: #ef4444;
+  background: var(--red);
   transition: transform 160ms ease, background 160ms ease;
 }
-.switchOn { color: #22c55e; }
-.switchOn .switchTrack { border-color: #22c55e; background: rgba(34,197,94,0.14); }
-.switchOn .switchThumb { background: #22c55e; transform: translateX(18px); }
-.switchBtn:focus-visible { outline: 2px solid var(--accent, #3b82f6); border-radius: 10px; }
+.switchOn { color: var(--green); }
+.switchOn .switchTrack { border-color: var(--green); background: var(--green-bg); }
+.switchOn .switchThumb { background: var(--green); transform: translateX(18px); }
+.switchBtn:focus-visible { outline: 2px solid var(--blue); border-radius: 10px; }
 
 .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .chip {
   font-size: 12px;
   padding: 4px 9px;
   border-radius: 999px;
-  background: var(--surface-1, #14171d);
-  color: var(--text-secondary, #9ca3af);
+  background: var(--bg-input);
+  color: var(--text-secondary);
 }
 .testBtn {
   position: relative;
@@ -145,16 +145,16 @@
   min-height: 44px;
   padding: 0 16px;
   border-radius: 10px;
-  border: 1px solid var(--border-strong, #3a3f4a);
+  border: 1px solid var(--border-strong);
   background: transparent;
-  color: var(--text-primary, #e5e7eb);
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
 }
 .testBtn:disabled { opacity: 0.6; cursor: default; }
-.testBtn:focus-visible { outline: 2px solid var(--accent, #3b82f6); }
-.last { grid-column: 1 / -1; font-size: 12px; color: var(--text-tertiary, #8b93a3); }
+.testBtn:focus-visible { outline: 2px solid var(--blue); }
+.last { grid-column: 1 / -1; font-size: 12px; color: var(--text-tertiary); }
 
 .fab {
   position: fixed;
@@ -165,7 +165,7 @@
   padding: 0 22px;
   border: 0;
   border-radius: 999px;
-  background: var(--accent, #3b82f6);
+  background: var(--blue);
   color: #fff;
   font-size: 15px;
   font-weight: 700;
@@ -174,6 +174,6 @@
 }
 .fab:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
-.sheetNote { margin: 0 0 10px; font-size: 12px; color: var(--text-secondary, #9ca3af); }
+.sheetNote { margin: 0 0 10px; font-size: 12px; color: var(--text-secondary); }
 /* Solo en desarrollo: sube sobre el botón «Logs». */
 .fabDev { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }

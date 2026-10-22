@@ -216,7 +216,7 @@ const isMobile = (layout) => layout === 'mobile';
 const selectCls = (layout) => (isMobile(layout) ? m.control : styles.select);
 const inputCls = (layout) => (isMobile(layout) ? m.control : styles.input);
 
-function Field({ layout, label, htmlFor, className, children }) {
+function Field({ layout, label, htmlFor, children }) {
   if (isMobile(layout)) {
     return (
       <div className={m.field}>
@@ -226,10 +226,21 @@ function Field({ layout, label, htmlFor, className, children }) {
     );
   }
   return (
-    <div className={className || styles.formField}>
+    <div className={styles.formField}>
       <label>{label}</label>
       {children}
     </div>
+  );
+}
+
+// Para otras vistas móviles (la hoja de regla) con el mismo aspecto.
+export const mobileLabelClass = m.label;
+
+export function MobileTextField({ id, label, ...inputProps }) {
+  return (
+    <Field layout="mobile" label={label} htmlFor={id}>
+      <input id={id} className={m.control} type="text" {...inputProps} />
+    </Field>
   );
 }
 
