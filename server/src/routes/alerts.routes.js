@@ -1,7 +1,25 @@
 const { Router } = require('express');
 const asyncHandler = require('../middleware/async-handler');
 const { authenticate } = require('../middleware/auth.middleware');
+const { z } = require('zod');
 const alertsService = require('../services/alerts/alerts.service');
+const alertBacktest = require('../services/alerts/alert-backtest.service');
+const { AppError, ValidationError, ExternalServiceError } = require('../errors/app-error');
+
+const backtestBodySchema = z.object({
+  asset: z.string().trim().min(1),
+  datasource: z.enum(alertsService.DATASOURCES),
+  startTime: z.number().int().positive(),
+  endTime: z.number().int().positive(),
+}).refine((b) => b.startTime < b.endTime, { message: 'startTime debe ser menor que endTime', path: ['startTime'] });
+
+function parseBacktestBody(body) {
+  const parsed = backtestBodySchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(`Body inválido: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(' | ')}`);
+  }
+  return parsed.data;
+}
 
 const router = Router();
 router.use(authenticate);
@@ -43,4 +61,17 @@ router.get('/:id/events', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+router.post('/:id/backtest', asyncHandler(async (req, res) => {
+  const body = parseBacktestBody(req.body);
+  let data;
+  try {
+    data = await alertBacktest.run(req.user.userId, Number(req.params.id), body);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new ExternalServiceError(`No se pudieron obtener las velas: ${err.message}`);
+  }
+  res.json({ success: true, data });
+}));
+
 module.exports = router;
+module.exports.parseBacktestBody = parseBacktestBody;

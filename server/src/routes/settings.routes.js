@@ -467,6 +467,24 @@ router.put('/chart-indicators', asyncHandler(async (req, res) => {
 }));
 
 // ------------------------------------------------------------------
+// Chart alert markers (alertas seleccionadas para el gráfico)
+// ------------------------------------------------------------------
+
+router.get('/chart-alert-markers', asyncHandler(async (req, res) => {
+  const data = await settingsService.getChartAlertMarkers(req.user.userId);
+  res.json({ success: true, data });
+}));
+
+router.put('/chart-alert-markers', asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  if (!Array.isArray(body.items)) {
+    throw new ValidationError('items debe ser un arreglo');
+  }
+  const saved = await settingsService.setChartAlertMarkers(req.user.userId, body);
+  res.json({ success: true, data: saved });
+}));
+
+// ------------------------------------------------------------------
 // Chart drawings (por simbolo)
 // ------------------------------------------------------------------
 
