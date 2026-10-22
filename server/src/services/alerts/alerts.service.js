@@ -243,6 +243,8 @@ async function listAlertEvents(userId, alertId, opts) {
 
 const TF_MS = marketData.TIMEFRAME_TO_MS;
 const CANDLE_FETCH_LIMIT = 250;
+// Margen tras el cierre de vela para que el provider publique la última cerrada.
+const POST_CLOSE_BUFFER_MS = 3_000;
 
 function ruleConditions(rule) {
   if (Array.isArray(rule?.conditions)) return rule.conditions;
@@ -313,6 +315,21 @@ function calculateWeightedScore(rules, ruleResults) {
   };
 }
 
+// Puntúa las reglas sobre velas ya cerradas por timeframe. Pura: la comparten
+// el motor en vivo y el backtest. Una excepción de regla cuenta como no cumplida.
+function scoreAlert(rules, candlesByTf) {
+  const ruleResults = rules.map((rule) => {
+    try {
+      const r = evaluator.evaluateRule(rule, candlesByTf);
+      return { rule, ...r };
+    } catch (err) {
+      return { rule, matched: false, value: null, threshold: null, reason: `error: ${err.message}` };
+    }
+  });
+  const { score } = calculateWeightedScore(rules, ruleResults);
+  return { ruleResults, score };
+}
+
 // `emitSignal` (por defecto true) publica el disparo en `alert-events` para
 // los consumidores (bots de Opciones). Las pruebas manuales pasan false: un
 // «Probar» nunca debe abrir ni cerrar posiciones.
@@ -339,16 +356,7 @@ async function evaluateAlertOnAsset(alertDto, asset, { ignoreCooldown = false, s
     }
   }));
 
-  const ruleResults = rules.map((rule) => {
-    try {
-      const r = evaluator.evaluateRule(rule, candlesByTf);
-      return { rule, ...r };
-    } catch (err) {
-      return { rule, matched: false, value: null, threshold: null, reason: `error: ${err.message}` };
-    }
-  });
-
-  const { score } = calculateWeightedScore(rules, ruleResults);
+  const { ruleResults, score } = scoreAlert(rules, candlesByTf);
 
   const lowestTf = lowestTimeframe(rules);
   const lowestCandles = candlesByTf[lowestTf] || [];
@@ -563,13 +571,17 @@ function invalidateSchedulerCache() {
 }
 
 module.exports = {
+  CANDLE_FETCH_LIMIT,
+  POST_CLOSE_BUFFER_MS,
   TIMEFRAMES,
   DATASOURCES,
   DIRECTIONS,
   buildAlertMessage,
   calculateWeightedScore,
+  candleCloseTimeMs,
   createAlert,
   deleteAlert,
+  distinctTimeframes,
   evaluateAlertOnAsset,
   filterClosedCandles,
   getAlert,
@@ -578,6 +590,7 @@ module.exports = {
   lowestTimeframe,
   normalizeDirection,
   rowToDto,
+  scoreAlert,
   setSchedulerCacheInvalidator,
   testAlertNow,
   updateAlert,

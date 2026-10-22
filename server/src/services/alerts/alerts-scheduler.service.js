@@ -17,7 +17,7 @@ const alertsService = require('./alerts.service');
 
 const TICK_MS = 1_000;
 const CACHE_REFRESH_MS = 30_000;
-const POST_CLOSE_BUFFER_MS = 3_000;
+const { POST_CLOSE_BUFFER_MS } = alertsService;
 
 const TF_MS = marketData.TIMEFRAME_TO_MS;
 
