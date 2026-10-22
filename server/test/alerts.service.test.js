@@ -109,3 +109,21 @@ test('validatePayload conserva label por regla', () => {
 
   assert.equal(payload.rules[0].label, 'RSI sobreventa');
 });
+
+test('validatePayload acepta momentum_rising / momentum_falling', () => {
+  for (const operator of ['momentum_rising', 'momentum_falling']) {
+    const payload = validatePayload({
+      name: 'SQZ', isActive: true, thresholdPercent: 100, cooldownSeconds: 900,
+      telegramEnabled: true, datasource: 'binance', assetList: ['BTCUSDT'],
+      rules: [{
+        weight: 1,
+        conditions: [{
+          indicatorType: 'sqzmom', indicatorParams: {}, timeframe: '15m',
+          operandSeries: 'sqzMomentum', operator, operand: { kind: 'none' },
+        }],
+        joiners: [],
+      }],
+    });
+    assert.equal(payload.rules[0].conditions[0].operator, operator);
+  }
+});

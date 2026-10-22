@@ -40,6 +40,7 @@ const PARAM_BLACKLIST = {
 export const NONE_KIND_OPS = new Set([
   'above_upper', 'below_lower', 'above_middle', 'below_middle',
   'squeeze_on', 'squeeze_off', 'momentum_positive', 'momentum_negative',
+  'momentum_rising', 'momentum_falling',
   'momentum_redirect_bullish', 'momentum_redirect_bearish',
 ]);
 const BETWEEN_OPS = new Set(['between']);

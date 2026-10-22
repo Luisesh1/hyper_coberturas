@@ -149,3 +149,30 @@ test('SQZMOM no dispara redirección sin tres valores válidos de momentum', () 
   assert.equal(withNull.matched, false);
   assert.equal(withNull.reason, 'momentum no disponible');
 });
+
+test('SQZMOM momentum_rising se cumple si el momentum sube', () => {
+  const r = evaluateSqzmomRedirect('momentum_rising', [5, 1, 2]);
+  assert.equal(r.matched, true);
+  assert.equal(r.value, 2);
+  assert.equal(r.threshold, 1);
+  assert.match(r.reason, /momentum subiendo/);
+  assert.equal(evaluateSqzmomRedirect('momentum_falling', [5, 1, 2]).matched, false);
+});
+
+test('SQZMOM momentum_falling se cumple si el momentum baja', () => {
+  const r = evaluateSqzmomRedirect('momentum_falling', [1, 3, 2]);
+  assert.equal(r.matched, true);
+  assert.equal(r.value, 2);
+  assert.equal(r.threshold, 3);
+  assert.match(r.reason, /momentum bajando/);
+  assert.equal(evaluateSqzmomRedirect('momentum_rising', [1, 3, 2]).matched, false);
+});
+
+test('SQZMOM momentum subiendo/bajando: igual o no disponible no se cumple', () => {
+  for (const op of ['momentum_rising', 'momentum_falling']) {
+    assert.equal(evaluateSqzmomRedirect(op, [1, 2, 2]).matched, false);
+    const na = evaluateSqzmomRedirect(op, [1, null, 2]);
+    assert.equal(na.matched, false);
+    assert.equal(na.reason, 'momentum no disponible');
+  }
+});
