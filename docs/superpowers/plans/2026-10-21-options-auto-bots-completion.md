@@ -352,3 +352,58 @@ Solo lo **ya decidido** en el documento v2. Quedan fuera, a la espera de decisi�
 - [ ] **Step 3:** Commit `feat(options): optional spread and leverage entry filters for bots`.
 
 **Al terminar la fase E:** integrar, desplegar, actualizar el vault y anotar en el spec v2 qué partes quedan implementadas.
+
+---
+
+## Fase F · Un bot, varios subyacentes con la misma alerta (petición del usuario, 2026-10-21)
+
+Decisiones del usuario:
+- Un bot puede operar **varios subyacentes a la vez** con las mismas alertas. Opera el subyacente X solo si la alerta que dispara incluye X en sus activos (el disparo ya llega por activo: `payload.asset`).
+- **Límites y presupuesto compartidos por todo el bot**: máx. posiciones abiertas, operaciones por día y presupuesto/fracciones suman todos los subyacentes.
+- **Disparos simultáneos** de la misma alerta para varios activos se procesan por separado, en orden de llegada, mientras quepan en los límites.
+
+Decisiones de Claude:
+- Se guarda en `params.underlyings: string[]` (1–6, sin repetir, de `UNDERLYINGS`). La columna `underlying` sigue existiendo y vale el primero (compatibilidad con listados, filtros y backtest de estrategias). Un bot sin `params.underlyings` opera solo `strategy.underlying`, exactamente como hoy.
+- La señal contraria actúa **por subyacente**: una señal bajista de ETH solo cierra o gira posiciones de ETH.
+- Al crear o editar, cada subyacente elegido debe estar cubierto por al menos una alerta vinculada; si no, 400 «Ninguna alerta vinculada cubre <X>».
+- Backtest de un bot multi-subyacente: se elige **un** subyacente a la vez (selector), con los límites aplicados a ese subyacente solo; la UI lo advierte.
+
+### Task 16: Servidor: bots multi-subyacente
+
+**Files:**
+- Modify: `server/src/services/options/templates/alert-signal.js`, `options-auto-trading.service.js`, `options-strategy-runner.service.js`, `options-strategies.service.js`, `options-backtest.service.js`, `server/src/schemas/options-automation.schema.js`
+- Create: `server/src/services/options/bot-underlyings.js`
+- Test: tests de template, auto-trading, runner, strategies service, backtest, rutas
+
+**Interfaces:**
+- Produces: `botUnderlyings(strategy) → string[]` (params.underlyings si no está vacío, si no `[strategy.underlying]`).
+- `alert-signal.validateParams`: `underlyings` opcional (array 1–6 de `UNDERLYINGS`, únicos, mayúsculas).
+- `createBot`/`updateBot` aceptan `underlyings`; guardan `underlying = underlyings[0]`; validan cobertura por alertas (400). `eligibleAlerts(userId, underlyings)` acepta lista (coma) y devuelve por alerta `coveredUnderlyings`.
+- `handleAlertTriggered`: un bot escucha si `botUnderlyings(b).includes(underlying)` y la alerta está vinculada.
+- Runner:
+  - `runForSignal`: cadena/spot del `signal.underlying`; `ctx.positions` = posiciones abiertas de ese subyacente (para la señal contraria); `ctx.openCountAll` = todas las del modo; `tradesToday` y `committedUsdt` de todo el bot.
+  - Template `openFor` usa `ctx.openCountAll` (menos las que se cierran por señal contraria) para `maxOpenPositions` cuando existe; sin él, el comportamiento actual.
+  - Tick de salidas y `closeManually`: agrupan posiciones por subyacente (de su símbolo) y enriquecen cada grupo con su cadena y spot (objetivos ATR/volatilidad incluidos).
+- `limitsUsage`/detalle: margen y delta con el spot del subyacente de cada posición.
+- Backtest: `underlying` del config debe estar en `botUnderlyings(bot)`; las señales se filtran a ese subyacente.
+
+- [ ] **Step 1: Tests**: bot BTC+ETH recibe disparo ETHUSDT → abre en cadena ETH; disparo SOLUSDT → no lo procesa; con `maxOpenPositions 1` y posición BTC abierta, señal ETH → `max_open_positions`; señal bajista ETH no cierra posición BTC (`onOpposite 'close'`); presupuesto 48/4 con 40 comprometidos en BTC → señal ETH dimensiona 8; tick con posiciones BTC y ETH pide las dos cadenas y evalúa salidas de ambas; bot antiguo sin `underlyings` igual que antes; crear con ETH no cubierto por ninguna alerta → 400; backtest con subyacente fuera del bot → ValidationError.
+- [ ] **Step 2:** FAIL → implementar → PASS. Lint.
+- [ ] **Step 3:** Commit `feat(options): alert bots can trade several underlyings with shared limits`.
+
+### Task 17: Cliente: elegir varios subyacentes
+
+**Files:**
+- Modify: `client/src/pages/Options/auto/BotForm.jsx`, `botView.js`, `BotList.jsx`, `BotDetail.jsx`, `autoTradingApi.js`, `client/src/pages/Options/backtesting/BacktestForm.jsx`
+- Test: `botView.test.js`, `BotForm.test.jsx`, `BacktestingTab.test.jsx`
+
+Decisiones:
+- «Subyacente» pasa a selección múltiple (los mismos chips, `aria-pressed`, ≥ 44 px; al menos uno). Texto: «Puedes elegir varios: el bot opera cada uno cuando la alerta lo incluye».
+- La lista de alertas muestra las que cubren **alguno** de los elegidos, y en cada alerta qué subyacentes elegidos cubre («BTC, ETH»). Si un subyacente elegido no queda cubierto por ninguna alerta marcada, error en el formulario: «Ninguna alerta marcada cubre ETH».
+- Payload: `underlyings` (y `underlying` = el primero).
+- Tarjeta y cabecera del detalle: «BTC · ETH». Las filas de posiciones ya llevan el símbolo; en móvil añadir el subyacente como chip.
+- Backtesting: con un bot multi-subyacente aparece un selector de subyacente limitado a los del bot, con la nota «Se prueba un subyacente a la vez; los límites se aplican solo a él».
+
+- [ ] **Step 1: Tests**: elegir BTC y ETH → payload `underlyings ['BTC','ETH']`; alerta con BTCUSDT,ETHUSDT muestra «BTC, ETH»; ETH sin alerta → error; bot antiguo (sin underlyings) se edita con su único subyacente marcado; selector de backtest solo ofrece los del bot.
+- [ ] **Step 2:** FAIL → implementar → PASS. Lint.
+- [ ] **Step 3:** Commit `feat(options): pick several underlyings for an alert bot`.
