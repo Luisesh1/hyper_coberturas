@@ -59,6 +59,8 @@ const defaultParams = {
   atrBandLength: 14,
   atrBandMultiplier: 2,
   tpMaxGainPct: 200,
+  maxSpreadPct: null,
+  minLeverage: null,
   notify: { trades: true, errors: true },
 };
 
@@ -119,6 +121,16 @@ function normalizeNotify(value) {
   return out;
 }
 
+/** Número opcional > 0 (vacío/null = filtro apagado). */
+function optionalPositive(value, label, max) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0 || n > max) throw new ValidationError(`${label}: debe ser un número mayor que 0 y hasta ${max}`);
+  return n;
+}
+
+const fmtFilter = (v) => String(Math.round(v * 100) / 100).replace('.', ',');
+
 /**
  * Valida y completa los parámetros. Los valores por defecto de delta y
  * salidas dependen de la estructura (comprar o vender).
@@ -153,7 +165,10 @@ function validateParams(raw = {}) {
   const budgetFractions = input.budgetFractions == null || input.budgetFractions === '' ? defaultParams.budgetFractions : Number(input.budgetFractions);
   if (budgetUsdt !== null && (!Number.isFinite(budgetUsdt) || budgetUsdt <= 0 || budgetUsdt > 1e7)) throw new ValidationError('budgetUsdt inválido');
   if (!Number.isInteger(budgetFractions) || budgetFractions < 1 || budgetFractions > 20) throw new ValidationError('budgetFractions debe ser un entero entre 1 y 20');
-  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, budgetUsdt, budgetFractions, notify: normalizeNotify(input.notify) };
+  const maxSpreadPct = optionalPositive(input.maxSpreadPct, 'Spread máximo', 200);
+  // El apalancamiento nominal (spot / ask) solo tiene sentido al comprar.
+  const minLeverage = structure === 'buy_with' ? optionalPositive(input.minLeverage, 'Apalancamiento mínimo', 1000) : null;
+  return { alertIds: normalizeAlertIds(input.alertIds), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, budgetUsdt, budgetFractions, maxSpreadPct, minLeverage, notify: normalizeNotify(input.notify) };
 }
 
 /** Pata que abre una señal según la estructura. */
@@ -300,15 +315,39 @@ function openFor(ctx, direction, openCount, released = 0) {
   const allotment = signalBudget(ctx, released);
   if (allotment.skip) return allotment.skip;
   const leg = legFor(params.structure, direction);
-  const candidates = chain.rows.map((row) => ({ row, quote: leg.type === 'C' ? row.call : row.put }))
+  const execKey = leg.side === 'BUY' ? 'ask' : 'bid';
+  const liquid = chain.rows.map((row) => ({ row, quote: leg.type === 'C' ? row.call : row.put }))
     .filter(({ row, quote }) => quote && Number.isFinite(Number(quote.delta))
       && Number(leg.type === 'C' ? row.strike : -row.strike) > (leg.type === 'C' ? spot : -spot)
-      && Number(quote[leg.side === 'BUY' ? 'ask' : 'bid']) > 0)
-    .sort((a, b) => Math.abs(Math.abs(Number(a.quote.delta)) - params.targetDelta)
+      && Number(quote[execKey]) > 0);
+  // Filtros opcionales de entrada (apagados = null): spread relativo y
+  // apalancamiento nominal spot / ask (solo compra).
+  const dropped = { spread: 0, leverage: 0 };
+  const candidates = liquid.filter(({ quote }) => {
+    if (params.maxSpreadPct != null) {
+      const bid = Number(quote.bid);
+      const ask = Number(quote.ask);
+      const spread = bid > 0 && ask > 0 ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null;
+      if (spread == null || spread > params.maxSpreadPct) { dropped.spread += 1; return false; }
+    }
+    if (leg.side === 'BUY' && params.minLeverage != null) {
+      const ask = Number(quote.ask);
+      if (!(spot / ask >= params.minLeverage)) { dropped.leverage += 1; return false; }
+    }
+    return true;
+  }).sort((a, b) => Math.abs(Math.abs(Number(a.quote.delta)) - params.targetDelta)
       - Math.abs(Math.abs(Number(b.quote.delta)) - params.targetDelta));
   const count = params.contractCount || 1;
   const selected = candidates.slice(0, count);
-  if (selected.length < count) return skip('no_legs', 'No hay suficientes contratos líquidos para la selección');
+  if (selected.length < count) {
+    const names = [];
+    if (dropped.spread) names.push(`spread > ${fmtFilter(params.maxSpreadPct)} %`);
+    if (dropped.leverage) names.push(`apalancamiento < ${fmtFilter(params.minLeverage)}×`);
+    const detail = names.length
+      ? `No hay suficientes contratos que cumplan los filtros de entrada (${names.join(' y ')})`
+      : 'No hay suficientes contratos líquidos para la selección';
+    return skip('no_legs', detail);
+  }
   // Presupuesto de la señal repartido por igual. Para ventas es margen
   // estimado, no la prima. Se redondea siempre hacia abajo; nunca se excede
   // la cantidad configurada ni se redistribuye lo no usado.

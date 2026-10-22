@@ -321,3 +321,62 @@ test('alert_signal: al girar, lo comprometido por la posición contraria que se 
   assert.deepEqual(actions.map((a) => a.type), ['close', 'open']);
   assert.ok(legCost(actions[1].legs[0]) <= 12 + 1e-9);
 });
+
+// ---- Filtros de entrada: spread y apalancamiento ----
+function filterChain(calls) {
+  return {
+    expiry: chainFor(7).expiry,
+    rows: calls.map(([strike, delta, bid, ask]) => ({
+      strike,
+      call: { symbol: `BTC-261023-${strike}-C`, delta, bid, ask, mark: (bid + ask) / 2, stepSize: 0.01, minQty: 0.01 },
+      put: null,
+    })),
+  };
+}
+
+test('alert_signal: maxSpreadPct descarta candidatos con spread > máximo y detalla el filtro', () => {
+  const p = params({ maxSpreadPct: 10 });
+  assert.equal(p.maxSpreadPct, 10);
+  const chain = filterChain([[65000, 0.35, 9, 11]]); // spread 20 %
+  const [a] = run(p, { signal: { direction: 'bullish' }, chain });
+  assert.equal(a.type, 'skip');
+  assert.equal(a.reason, 'no_legs');
+  assert.match(a.detail, /spread > 10 %/);
+  // Sin bid: falla el filtro de spread.
+  const [b] = run(p, { signal: { direction: 'bullish' }, chain: filterChain([[65000, 0.35, 0, 11]]) });
+  assert.equal(b.reason, 'no_legs');
+  // Con un candidato dentro del límite, se elige ese aunque el delta sea peor.
+  const [c] = run(p, { signal: { direction: 'bullish' }, chain: filterChain([[65000, 0.35, 9, 11], [70000, 0.2, 99, 101]]) });
+  assert.equal(c.type, 'open');
+  assert.equal(c.legs[0].symbol, 'BTC-261023-70000-C');
+});
+
+test('alert_signal: minLeverage descarta apalancamiento nominal spot/ask menor', () => {
+  const p = params({ minLeverage: 20 });
+  const chain = filterChain([[65000, 0.35, 190, 200]]); // 60000/200 = 300×... usar ask alto
+  chain.rows[0].call.ask = 4000; chain.rows[0].call.bid = 3900; // 15×
+  const [a] = run(p, { signal: { direction: 'bullish' }, chain });
+  assert.equal(a.reason, 'no_legs');
+  assert.match(a.detail, /apalancamiento < 20×/);
+  chain.rows[0].call.ask = 2900; chain.rows[0].call.bid = 2850; // ~20,7×
+  assert.equal(run(p, { signal: { direction: 'bullish' }, chain })[0].type, 'open');
+});
+
+test('alert_signal: si ambos filtros eliminan candidatos se mencionan los dos', () => {
+  const p = params({ maxSpreadPct: 10, minLeverage: 20 });
+  const chain = filterChain([[65000, 0.35, 3000, 4500], [66000, 0.3, 3900, 4000]]);
+  const [a] = run(p, { signal: { direction: 'bullish' }, chain });
+  assert.match(a.detail, /spread > 10 %/);
+  assert.match(a.detail, /apalancamiento < 20×/);
+});
+
+test('alert_signal: filtros null o ausentes no cambian la selección; minLeverage no aplica a sell_against', () => {
+  const chain = filterChain([[65000, 0.35, 9, 11]]);
+  const base = run(params(), { signal: { direction: 'bullish' }, chain });
+  assert.equal(base[0].type, 'open');
+  const nulls = run(params({ maxSpreadPct: null, minLeverage: '' }), { signal: { direction: 'bullish' }, chain });
+  assert.deepEqual(nulls, base);
+  assert.equal(params({ structure: 'sell_against', minLeverage: 5 }).minLeverage, null);
+  assert.throws(() => params({ maxSpreadPct: -1 }), /Spread máximo/);
+  assert.throws(() => params({ minLeverage: 0.0 + 'x' }), /Apalancamiento/);
+});

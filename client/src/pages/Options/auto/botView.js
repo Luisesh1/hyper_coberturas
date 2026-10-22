@@ -71,6 +71,8 @@ export const COMMON_DEFAULTS = {
   atrBandLength: 14,
   atrBandMultiplier: 2,
   tpMaxGainPct: 200,
+  maxSpreadPct: null,
+  minLeverage: null,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
   maxOpenPositions: 1,
@@ -377,6 +379,8 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       notifyTrades: p.notify?.trades !== false,
       notifyErrors: p.notify?.errors !== false,
       maxPremiumUsdt: structure === 'buy_with' ? (toNumber(p.maxPremiumUsdt) ?? null) : defs.maxPremiumUsdt,
+      maxSpreadPct: toNumber(p.maxSpreadPct) ?? null,
+      minLeverage: structure === 'buy_with' ? (toNumber(p.minLeverage) ?? null) : null,
       maxMarginUsdt: structure === 'sell_against' ? (toNumber(bot.limits?.maxMarginUsdt) ?? null) : null,
     };
   }
@@ -478,6 +482,8 @@ export function validateBotForm(form) {
   range('maxTradesPerDay', 1, 100, { integer: true });
   const riskKey = form.structure === 'sell_against' ? 'maxMarginUsdt' : 'maxPremiumUsdt';
   if (isNum(form[riskKey]) && Number(form[riskKey]) < 0) errors[riskKey] = 'No puede ser negativo';
+  if (isNum(form.maxSpreadPct) && !(Number(form.maxSpreadPct) > 0 && Number(form.maxSpreadPct) <= 200)) errors.maxSpreadPct = 'Entre 0 y 200 (vacío = sin filtro)';
+  if (form.structure === 'buy_with' && isNum(form.minLeverage) && !(Number(form.minLeverage) > 0 && Number(form.minLeverage) <= 1000)) errors.minLeverage = 'Entre 0 y 1000 (vacío = sin filtro)';
   return errors;
 }
 
@@ -518,6 +524,9 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     params.tpMaxGainPct = Number(form.tpMaxGainPct);
   }
   if (buy && Number(form.maxPremiumUsdt) > 0) params.maxPremiumUsdt = Number(form.maxPremiumUsdt);
+  // Filtros de entrada opcionales: vacío/0 = apagado (no se envía).
+  if (Number(form.maxSpreadPct) > 0) params.maxSpreadPct = Number(form.maxSpreadPct);
+  if (buy && Number(form.minLeverage) > 0) params.minLeverage = Number(form.minLeverage);
   // 0 o vacío = sin margen propio (sólo el límite global).
   const limits = { ...(baseLimits || {}) };
   if (!buy && Number(form.maxMarginUsdt) > 0) limits.maxMarginUsdt = Number(form.maxMarginUsdt);
@@ -547,6 +556,8 @@ export function describeParams(bot) {
   const capital = toNumber(p.capitalUsdt);
   const budget = toNumber(p.budgetUsdt);
   const fractions = v('budgetFractions');
+  const maxSpread = toNumber(p.maxSpreadPct);
+  const minLeverage = toNumber(p.minLeverage);
   const atr = p.takeProfitMode === 'atr_band' && buy;
   const exits = atr
     ? [
@@ -574,6 +585,8 @@ export function describeParams(bot) {
           text: true }
         : { key: 'capitalUsdt', label: 'Capital máx. por entrada', value: capital ? `${formatUsdt(capital, { decimals: 0 })} USDT` : 'sin límite', text: !capital },
       ...(buy ? [{ key: 'maxPremiumUsdt', label: 'Prima máx.', value: premium ? `${formatUsdt(premium, { decimals: 0 })} USDT` : 'sin límite', text: !premium }] : []),
+      ...(maxSpread > 0 ? [{ key: 'maxSpreadPct', label: 'Spread máx.', value: `${formatNumber(maxSpread, { decimals: 2, minDecimals: 0 })} %` }] : []),
+      ...(buy && minLeverage > 0 ? [{ key: 'minLeverage', label: 'Apalancamiento mín.', value: `${formatNumber(minLeverage, { decimals: 2, minDecimals: 0 })}×` }] : []),
       // La banda ATR fuerza «ignorar» y ya declara que no hay otras salidas.
       ...(atr ? [] : [{ key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true }]),
     ],

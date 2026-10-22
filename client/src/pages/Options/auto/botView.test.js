@@ -317,3 +317,34 @@ describe('presupuesto total en fracciones', () => {
     expect(row(old.entry, 'capitalUsdt')).toBeTruthy();
   });
 });
+
+describe('filtros de entrada: spread y apalancamiento', () => {
+  const form = (extra = {}) => ({ ...initialBotForm({ underlying: 'BTC' }), name: 'B', alertIds: [1], ...extra });
+  const row = (rows, key) => rows.find((r) => r.key === key);
+
+  it('apagados por defecto: no se envían ni se muestran', () => {
+    expect(initialBotForm()).toMatchObject({ maxSpreadPct: null, minLeverage: null });
+    const p = buildBotPayload(form()).params;
+    expect(p.maxSpreadPct).toBeUndefined();
+    expect(p.minLeverage).toBeUndefined();
+    const d = describeParams(normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with' } }));
+    expect(row(d.entry, 'maxSpreadPct')).toBeUndefined();
+    expect(row(d.entry, 'minLeverage')).toBeUndefined();
+  });
+
+  it('payload, validación y detalle cuando están activos', () => {
+    const p = buildBotPayload(form({ maxSpreadPct: 8, minLeverage: 5 })).params;
+    expect(p).toMatchObject({ maxSpreadPct: 8, minLeverage: 5 });
+    const s = buildBotPayload({ ...form({ maxSpreadPct: 8, minLeverage: 5 }), structure: 'sell_against' }).params;
+    expect(s.maxSpreadPct).toBe(8);
+    expect(s.minLeverage).toBeUndefined();
+    expect(validateBotForm(form({ maxSpreadPct: 0 })).maxSpreadPct).toBeTruthy();
+    expect(validateBotForm(form({ minLeverage: -1 })).minLeverage).toBeTruthy();
+    expect(validateBotForm(form({ maxSpreadPct: 8, minLeverage: 5 }))).toEqual({});
+    const bot = normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with', maxSpreadPct: 8, minLeverage: 5 } });
+    expect(initialBotForm({ bot })).toMatchObject({ maxSpreadPct: 8, minLeverage: 5 });
+    const d = describeParams(bot);
+    expect(row(d.entry, 'maxSpreadPct').value).toBe('8 %');
+    expect(row(d.entry, 'minLeverage').value).toBe('5×');
+  });
+});

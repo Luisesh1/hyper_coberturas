@@ -343,6 +343,30 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             />
           )}
           <NumberField
+            label="Spread máx. (%)"
+            help="Descarta contratos con (ask − bid) / mid mayor a esto. Vacío = sin filtro"
+            unit="%"
+            value={form.maxSpreadPct}
+            min={0}
+            max={200}
+            step={1}
+            error={errors.maxSpreadPct}
+            onChange={(v) => update({ maxSpreadPct: v })}
+          />
+          {buy && (
+            <NumberField
+              label="Apalancamiento mín. (×)"
+              help="Spot / ask del contrato. Vacío = sin filtro"
+              unit="×"
+              value={form.minLeverage}
+              min={0}
+              max={1000}
+              step={1}
+              error={errors.minLeverage}
+              onChange={(v) => update({ minLeverage: v })}
+            />
+          )}
+          <NumberField
             label="Cantidad máxima por contrato"
             unit={form.underlying}
             value={form.quantity}
