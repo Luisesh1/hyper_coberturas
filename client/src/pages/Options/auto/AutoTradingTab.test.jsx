@@ -203,7 +203,7 @@ describe('AutoTradingTab · escritorio', () => {
     const preview = within(dialog).getByRole('list', { name: 'Qué abre cada dirección' });
     expect(within(preview).getByText('Comprar call')).toBeTruthy();
     expect(within(preview).getByText('Δ ≈ 0,35 · venc. ~7 d')).toBeTruthy();
-    expect(within(dialog).getByText('Toma de ganancia')).toBeTruthy();
+    expect(within(dialog).getByText('Tope de ganancia (%)')).toBeTruthy();
     expect(within(dialog).getByText('Prima máx. por operación')).toBeTruthy();
 
     fireEvent.click(within(dialog).getByRole('radio', { name: /Vender en contra/ }));

@@ -52,6 +52,10 @@ export const COMMON_DEFAULTS = {
   takeProfitMode: 'fixed',
   tpAtrMultiplier: 1,
   tpHorizonHours: 4,
+  atrBandInterval: '1h',
+  atrBandLength: 14,
+  atrBandMultiplier: 2,
+  tpMaxGainPct: 200,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
   maxOpenPositions: 1,
@@ -59,9 +63,19 @@ export const COMMON_DEFAULTS = {
 };
 
 export const TAKE_PROFIT_MODES = [
+  { value: 'atr_band', label: 'Banda ATR' },
   { value: 'fixed', label: 'Porcentaje fijo' },
   { value: 'volatility', label: 'Volatilidad ATR + IV' },
 ];
+
+// «Banda ATR» solo existe al comprar a favor de la señal.
+export const takeProfitModesFor = (structure) => TAKE_PROFIT_MODES
+  .filter((m) => m.value !== 'atr_band' || normalizeStructure(structure) === 'buy_with');
+
+export const ATR_BAND_INTERVALS = ['5m', '15m', '1h', '4h', '1d'];
+
+export const ATR_BAND_NOTE = 'Sin stop ni salida por tiempo: si no se alcanza el objetivo, la opción se mantiene hasta su vencimiento y puede perderse toda la prima.';
+export const ATR_BAND_SWITCH_WARNING = 'Las posiciones abiertas calcularán su objetivo con el precio actual, no con el de su compra.';
 
 export const ON_OPPOSITE = [
   { value: 'reverse', label: 'Girar', help: 'Cierra y abre en la nueva dirección' },
@@ -282,9 +296,13 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       capitalUsdt: toNumber(p.capitalUsdt),
       onOpposite: ON_OPPOSITE.some((o) => o.value === p.onOpposite) ? p.onOpposite : defs.onOpposite,
       takeProfitPct: val('takeProfitPct'),
-      takeProfitMode: TAKE_PROFIT_MODES.some((m) => m.value === p.takeProfitMode) ? p.takeProfitMode : 'fixed',
+      takeProfitMode: takeProfitModesFor(structure).some((m) => m.value === p.takeProfitMode) ? p.takeProfitMode : 'fixed',
       tpAtrMultiplier: val('tpAtrMultiplier'),
       tpHorizonHours: val('tpHorizonHours'),
+      atrBandInterval: ATR_BAND_INTERVALS.includes(p.atrBandInterval) ? p.atrBandInterval : COMMON_DEFAULTS.atrBandInterval,
+      atrBandLength: val('atrBandLength'),
+      atrBandMultiplier: val('atrBandMultiplier'),
+      tpMaxGainPct: val('tpMaxGainPct'),
       stopLossPct: val('stopLossPct'),
       exitHoursBeforeExpiry: val('exitHoursBeforeExpiry'),
       maxOpenPositions: val('maxOpenPositions'),
@@ -300,13 +318,39 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
     structure: 'buy_with',
     ...COMMON_DEFAULTS,
     ...STRUCTURE_DEFAULTS.buy_with,
+    // Los bots nuevos que compran a favor nacen con la banda ATR.
+    takeProfitMode: 'atr_band',
   };
 }
 
+// Al salir de «Banda ATR» el servidor había sobrescrito señal contraria,
+// salida por tiempo y stop (ignore / 0): se restauran los valores de la estructura.
+function leaveAtrBand(form, structure) {
+  return {
+    ...form,
+    onOpposite: COMMON_DEFAULTS.onOpposite,
+    exitHoursBeforeExpiry: COMMON_DEFAULTS.exitHoursBeforeExpiry,
+    stopLossPct: STRUCTURE_DEFAULTS[structure].stopLossPct,
+  };
+}
+
+export function withTakeProfitMode(form, mode) {
+  if (mode === form.takeProfitMode) return form;
+  const base = form.takeProfitMode === 'atr_band' ? leaveAtrBand(form, normalizeStructure(form.structure)) : form;
+  return { ...base, takeProfitMode: mode };
+}
+
 // Cambiar de estructura aplica sus valores por defecto (delta, salidas y riesgo).
-export function withStructure(form, structure) {
+// Al pasar a vender se abandona la banda ATR; al editar, comprar no la activa.
+export function withStructure(form, structure, { editing = false } = {}) {
   const s = normalizeStructure(structure);
-  return { ...form, structure: s, ...STRUCTURE_DEFAULTS[s] };
+  let next = form;
+  if (s !== 'buy_with' && form.takeProfitMode === 'atr_band') {
+    next = { ...leaveAtrBand(form, s), takeProfitMode: 'fixed' };
+  } else if (s === 'buy_with' && !editing && form.takeProfitMode === 'fixed') {
+    next = { ...form, takeProfitMode: 'atr_band' };
+  }
+  return { ...next, structure: s, ...STRUCTURE_DEFAULTS[s] };
 }
 
 const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
@@ -334,12 +378,20 @@ export function validateBotForm(form) {
   range('contractCount', 1, 10, { integer: true });
   if (isNum(form.capitalUsdt) && Number(form.capitalUsdt) <= 0) errors.capitalUsdt = 'El capital debe ser mayor a 0';
   if (Number(form.maxOpenPositions) < Number(form.contractCount)) errors.maxOpenPositions = 'Debe cubrir todos los contratos seleccionados';
-  range('takeProfitPct', 1, 1000);
-  if (!TAKE_PROFIT_MODES.some((m) => m.value === form.takeProfitMode)) errors.takeProfitMode = 'Modo de Take Profit inválido';
-  range('tpAtrMultiplier', 0.25, 4);
-  range('tpHorizonHours', 1, 24, { integer: true });
-  range('stopLossPct', 1, 1000);
-  range('exitHoursBeforeExpiry', 0, 168);
+  if (!takeProfitModesFor(form.structure).some((m) => m.value === form.takeProfitMode)) errors.takeProfitMode = 'Modo de Take Profit inválido';
+  if (form.takeProfitMode === 'atr_band') {
+    // Stop, salida por tiempo y señal contraria no existen en este modo.
+    if (!ATR_BAND_INTERVALS.includes(form.atrBandInterval)) errors.atrBandInterval = 'Elige una temporalidad';
+    range('atrBandLength', 2, 100, { integer: true });
+    range('atrBandMultiplier', 0.25, 10);
+    range('tpMaxGainPct', 10, 2000);
+  } else {
+    range('takeProfitPct', 1, 1000);
+    range('tpAtrMultiplier', 0.25, 4);
+    range('tpHorizonHours', 1, 24, { integer: true });
+    range('stopLossPct', 1, 1000);
+    range('exitHoursBeforeExpiry', 0, 168);
+  }
   range('maxOpenPositions', 1, 20, { integer: true });
   range('maxTradesPerDay', 1, 100, { integer: true });
   const riskKey = form.structure === 'sell_against' ? 'maxMarginUsdt' : 'maxPremiumUsdt';
@@ -368,6 +420,16 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     maxOpenPositions: Number(form.maxOpenPositions),
     maxTradesPerDay: Number(form.maxTradesPerDay),
   };
+  if (buy && form.takeProfitMode === 'atr_band') {
+    // Sin stop: el servidor fuerza onOpposite=ignore y sin salida por tiempo.
+    delete params.stopLossPct;
+    params.onOpposite = 'ignore';
+    params.exitHoursBeforeExpiry = 0;
+    params.atrBandInterval = form.atrBandInterval;
+    params.atrBandLength = Number(form.atrBandLength);
+    params.atrBandMultiplier = Number(form.atrBandMultiplier);
+    params.tpMaxGainPct = Number(form.tpMaxGainPct);
+  }
   if (buy && Number(form.maxPremiumUsdt) > 0) params.maxPremiumUsdt = Number(form.maxPremiumUsdt);
   // 0 o vacío = sin margen propio (sólo el límite global).
   const limits = { ...(baseLimits || {}) };
@@ -395,6 +457,21 @@ export function describeParams(bot) {
   const opposite = ON_OPPOSITE.find((o) => o.value === p.onOpposite) || ON_OPPOSITE[0];
   const premium = toNumber(p.maxPremiumUsdt);
   const margin = toNumber(bot.limits?.maxMarginUsdt);
+  const atr = p.takeProfitMode === 'atr_band' && buy;
+  const exits = atr
+    ? [
+      { key: 'takeProfitPct', label: 'Venta por banda ATR',
+        value: `${p.atrBandInterval || COMMON_DEFAULTS.atrBandInterval} ${formatNumber(v('atrBandLength'), { decimals: 0 })}/${formatNumber(v('atrBandMultiplier'), { decimals: 2, minDecimals: 0 })} · tope +${formatNumber(v('tpMaxGainPct'), { decimals: 0 })} %` },
+      { key: 'stopLossPct', label: 'Sin stop', value: 'se mantiene hasta vencer' },
+    ]
+    : [
+      { key: 'takeProfitPct', label: labels.takeProfit,
+        value: p.takeProfitMode === 'volatility'
+          ? `ATR × ${formatNumber(v('tpAtrMultiplier'), { decimals: 2 })} + IV · ${formatNumber(v('tpHorizonHours'), { decimals: 0 })} h`
+          : `${buy ? '+' : ''}${formatNumber(v('takeProfitPct'), { decimals: 0 })} % de la prima` },
+      { key: 'stopLossPct', label: labels.stopLoss, value: `${buy ? '−' : ''}${formatNumber(v('stopLossPct'), { decimals: 0 })} % de la prima` },
+      { key: 'exitHoursBeforeExpiry', label: 'Cerrar antes del venc.', value: `${formatNumber(v('exitHoursBeforeExpiry'), { decimals: 0 })} h` },
+    ];
   return {
     entry: [
       { key: 'targetDelta', label: 'Delta objetivo', value: formatNumber(Math.abs(v('targetDelta')), { decimals: 2 }) },
@@ -402,14 +479,7 @@ export function describeParams(bot) {
       { key: 'quantity', label: 'Cantidad', value: `${formatNumber(v('quantity'), { decimals: 4, minDecimals: 0 })} ${bot.underlying || ''}`.trim() },
       { key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true },
     ],
-    exits: [
-      { key: 'takeProfitPct', label: labels.takeProfit,
-        value: p.takeProfitMode === 'volatility'
-          ? `ATR × ${formatNumber(v('tpAtrMultiplier'), { decimals: 2 })} + IV · ${formatNumber(v('tpHorizonHours'), { decimals: 0 })} h`
-          : `${buy ? '+' : ''}${formatNumber(v('takeProfitPct'), { decimals: 0 })} % de la prima` },
-      { key: 'stopLossPct', label: labels.stopLoss, value: `${buy ? '−' : ''}${formatNumber(v('stopLossPct'), { decimals: 0 })} % de la prima` },
-      { key: 'exitHoursBeforeExpiry', label: 'Cerrar antes del venc.', value: `${formatNumber(v('exitHoursBeforeExpiry'), { decimals: 0 })} h` },
-    ],
+    exits,
     risk: [
       { key: 'maxOpenPositions', label: 'Posiciones abiertas máx.', value: formatNumber(v('maxOpenPositions'), { decimals: 0 }) },
       { key: 'maxTradesPerDay', label: 'Operaciones por día', value: formatNumber(v('maxTradesPerDay'), { decimals: 0 }) },

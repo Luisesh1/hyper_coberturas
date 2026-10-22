@@ -7,8 +7,8 @@ import { autoBotsApi } from '../autoTradingApi';
 import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import {
-  NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, TAKE_PROFIT_MODES, alertMeta, buildBotPayload,
-  initialBotForm, normalizeAlert, structureLabels, validateBotForm, withStructure,
+  NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, ATR_BAND_INTERVALS, ATR_BAND_NOTE, ATR_BAND_SWITCH_WARNING, alertMeta, buildBotPayload,
+  initialBotForm, normalizeAlert, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
@@ -142,7 +142,13 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
 
   const pickStructure = (s) => {
     if (s === form.structure) return;
-    const next = withStructure(form, s);
+    const next = withStructure(form, s, { editing });
+    setForm(next);
+    if (submitted) setErrors(validateBotForm(next));
+  };
+
+  const pickTakeProfitMode = (mode) => {
+    const next = withTakeProfitMode(form, mode);
     setForm(next);
     if (submitted) setErrors(validateBotForm(next));
   };
@@ -165,6 +171,9 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
 
   const labels = structureLabels(form.structure);
   const buy = form.structure === 'buy_with';
+  const atrBand = form.takeProfitMode === 'atr_band';
+  const hasOpenPositions = (bot?.positions || []).some((p) => p.closedAt == null);
+  const switchingToAtr = editing && atrBand && bot?.params?.takeProfitMode !== 'atr_band' && hasOpenPositions;
   const errorCount = Object.keys(errors).length;
   const onStructureKey = (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -312,26 +321,73 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             error={errors.quantity}
             onChange={(v) => update({ quantity: v })}
           />
-          <ChoiceField
+          {!atrBand && <ChoiceField
             label="Si llega la señal contraria"
             help={(ON_OPPOSITE.find((o) => o.value === form.onOpposite) || ON_OPPOSITE[0]).help}
             options={ON_OPPOSITE.map((o) => ({ value: o.value, label: o.label }))}
             value={form.onOpposite}
             onChange={(v) => update({ onOpposite: v })}
             columns={3}
-          />
+          />}
         </FieldGroup>
 
         <FieldGroup title="3 · Salidas">
           <ChoiceField
             label="Tipo de Take Profit"
-            options={TAKE_PROFIT_MODES.map((m) => ({ value: m.value, label: m.label }))}
+            options={takeProfitModesFor(form.structure).map((m) => ({ value: m.value, label: m.label }))}
             value={form.takeProfitMode}
-            onChange={(v) => update({ takeProfitMode: v })}
+            onChange={pickTakeProfitMode}
             error={errors.takeProfitMode}
-            columns={2}
+            columns={buy ? 3 : 2}
           />
-          {form.takeProfitMode === 'volatility' ? (
+          {atrBand ? (
+            <>
+              <details className={styles.note}>
+                <summary aria-label="Información sobre la banda ATR">ⓘ Cómo se calcula</summary>
+                <p>Banda del indicador «ATR Bands»: último cierre ± multiplicador × ATR. Al llenarse la compra se fija el precio de venta = prima × (1 + distancia a la banda × apalancamiento), con el tope de ganancia, y queda como orden límite en reposo en Binance. No se recalcula.</p>
+              </details>
+              {switchingToAtr && <p className={`${ui.alert} ${ui.alertWarn}`} role="status">{ATR_BAND_SWITCH_WARNING}</p>}
+              <ChoiceField
+                label="Temporalidad de las velas"
+                options={ATR_BAND_INTERVALS.map((i) => ({ value: i, label: i }))}
+                value={form.atrBandInterval}
+                onChange={(v) => update({ atrBandInterval: v })}
+                error={errors.atrBandInterval}
+                columns={5}
+              />
+              <NumberField
+                label="Longitud del ATR"
+                unit="velas"
+                value={form.atrBandLength}
+                min={2}
+                max={100}
+                integer
+                error={errors.atrBandLength}
+                onChange={(v) => update({ atrBandLength: v })}
+              />
+              <NumberField
+                label="Multiplicador de la banda"
+                value={form.atrBandMultiplier}
+                min={0.25}
+                max={10}
+                step={0.25}
+                error={errors.atrBandMultiplier}
+                onChange={(v) => update({ atrBandMultiplier: v })}
+              />
+              <NumberField
+                label="Tope de ganancia (%)"
+                help="Máximo sobre la prima pagada"
+                unit="%"
+                value={form.tpMaxGainPct}
+                min={10}
+                max={2000}
+                step={10}
+                error={errors.tpMaxGainPct}
+                onChange={(v) => update({ tpMaxGainPct: v })}
+              />
+              <p className={styles.note}>{ATR_BAND_NOTE}</p>
+            </>
+          ) : form.takeProfitMode === 'volatility' ? (
             <>
               <details className={styles.note}>
                 <summary aria-label="Información sobre TP por volatilidad">ⓘ Cómo se calcula</summary>
@@ -370,7 +426,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
               onChange={(v) => update({ takeProfitPct: v })}
             />
           )}
-          <NumberField
+          {!atrBand && <NumberField
             label={labels.stopLoss}
             help={labels.stopLossHelp}
             unit="%"
@@ -380,8 +436,8 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             step={buy ? 5 : 25}
             error={errors.stopLossPct}
             onChange={(v) => update({ stopLossPct: v })}
-          />
-          <NumberField
+          />}
+          {!atrBand && <NumberField
             label="Cerrar antes del venc."
             unit="h"
             value={form.exitHoursBeforeExpiry}
@@ -390,7 +446,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             integer
             error={errors.exitHoursBeforeExpiry}
             onChange={(v) => update({ exitHoursBeforeExpiry: v })}
-          />
+          />}
         </FieldGroup>
 
         <FieldGroup title="4 · Riesgo">

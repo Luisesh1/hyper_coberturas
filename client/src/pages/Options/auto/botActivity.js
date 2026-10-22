@@ -6,6 +6,7 @@ import { formatNumber, toNumber, tone } from '../strategies/common/format';
 export const REASON_LABEL = {
   take_profit: 'Toma de ganancia',
   take_profit_volatility: 'TP por volatilidad',
+  take_profit_atr_band: 'TP banda ATR',
   stop_loss: 'Stop',
   time_exit: 'Por tiempo',
   opposite_signal: 'Señal contraria',
@@ -24,11 +25,22 @@ function expiryMs(symbol) {
   return m ? Date.UTC(2000 + Number(m[1]), Number(m[2]) - 1, Number(m[3]), 8) : null;
 }
 
+// Desglose del objetivo fijado al llenarse (tp_target_meta).
+export function atrBandBreakdown(p) {
+  const m = p.tpTargetMeta;
+  const target = toNumber(p.tpTargetPrice);
+  if (!m || target === null) return 'Calculando objetivo…';
+  const n = (v, d = 2) => formatNumber(v, { decimals: d, minDecimals: 0 });
+  const text = `Spot ${n(m.spot)} → banda ${n(m.bandValue)} (${formatNumber(m.distancePct, { decimals: 1, sign: true })} %) × apal. ${n(m.leverage, 1)}× = ${formatNumber(m.appliedGainPct, { decimals: 0, sign: true })} % → venta a ${formatNumber(target, { decimals: 2, minDecimals: 1 })} USDT`;
+  return m.capped ? `${text} (tope)` : text;
+}
+
 export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now()) {
   const params = detail.params || {};
   const tpPct = toNumber(params.takeProfitPct);
   const slPct = toNumber(params.stopLossPct);
   const volatility = params.takeProfitMode === 'volatility';
+  const atrBand = params.takeProfitMode === 'atr_band';
   return list(detail.positions)
     .filter((p) => p.closedAt == null && (p.mode || 'shadow') === mode)
     .map((p) => {
@@ -38,10 +50,11 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
       const mark = toNumber(p.mark);
       const dir = sell ? -1 : 1;
       let tpPrice = null;
-      if (volatility) tpPrice = toNumber(p.takeProfitTarget?.price);
+      if (atrBand) tpPrice = toNumber(p.tpTargetPrice);
+      else if (volatility) tpPrice = toNumber(p.takeProfitTarget?.price);
       // compra: entry·(1+tp); venta (recompra): entry·(1−tp)
       else if (entry !== null && tpPct !== null) tpPrice = round(entry * (sell ? 1 - tpPct / 100 : 1 + tpPct / 100));
-      const stopPrice = entry !== null && slPct !== null ? round(entry * (sell ? 1 + slPct / 100 : 1 - slPct / 100)) : null;
+      const stopPrice = !atrBand && entry !== null && slPct !== null ? round(entry * (sell ? 1 + slPct / 100 : 1 - slPct / 100)) : null;
       const pnlUsdt = mark !== null && entry !== null && qty !== null ? round((mark - entry) * dir * qty) : null;
       const pnlPct = mark !== null && entry ? ((mark - entry) * dir / entry) * 100 : null;
       const exp = expiryMs(p.symbol);
@@ -56,6 +69,7 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
         pnlPct,
         tpPrice,
         stopPrice,
+        tpBreakdown: atrBand ? atrBandBreakdown(p) : null,
         hoursToExpiry: exp === null ? null : Math.max(0, Math.round((exp - now) / 3600000)),
         tone: tone(pnlUsdt),
       };

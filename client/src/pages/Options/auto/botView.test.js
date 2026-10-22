@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   botDirections, buildBotKpis, buildBotPayload, buildMapping, filterSignals, initialBotForm,
-  latestSignal, normalizeBot, normalizeSignals, signalStats, validateBotForm, withStructure,
+  describeParams, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 
 describe('buildMapping', () => {
@@ -41,7 +41,7 @@ describe('formulario de bot', () => {
   });
 
   it('payload: prima máx. sólo al comprar; margen en limits al vender; sin subyacente al editar', () => {
-    const buy = buildBotPayload({ ...initialBotForm({ underlying: 'BTC' }), name: ' Bot ', alertIds: [3] });
+    const buy = buildBotPayload({ ...initialBotForm({ underlying: 'BTC' }), takeProfitMode: 'fixed', name: ' Bot ', alertIds: [3] });
     expect(buy).toEqual({
       name: 'Bot',
       underlying: 'BTC',
@@ -62,7 +62,7 @@ describe('formulario de bot', () => {
 
   it('configura TP ATR/IV y valida parámetros de volatilidad', () => {
     const base = initialBotForm({ underlying: 'ETH' });
-    expect(base.takeProfitMode).toBe('fixed');
+    expect(base.takeProfitMode).toBe('atr_band');
     const dynamic = { ...base, name: 'TP dinámico', alertIds: [3],
       takeProfitMode: 'volatility', tpAtrMultiplier: 1.5, tpHorizonHours: 6 };
     expect(validateBotForm(dynamic)).toEqual({});
@@ -76,6 +76,43 @@ describe('formulario de bot', () => {
     expect(validateBotForm({ ...dynamic, tpAtrMultiplier: 5, tpHorizonHours: 2.5 })).toMatchObject({
       tpAtrMultiplier: 'Máximo 4', tpHorizonHours: 'Debe ser un número entero',
     });
+  });
+
+  it('banda ATR: nuevo buy_with nace con atr_band; sell_against no la ofrece', () => {
+    expect(initialBotForm({ underlying: 'ETH' })).toMatchObject({ takeProfitMode: 'atr_band', atrBandInterval: '1h', atrBandLength: 14, atrBandMultiplier: 2, tpMaxGainPct: 200 });
+    expect(takeProfitModesFor('buy_with').map((m) => m.value)).toEqual(['atr_band', 'fixed', 'volatility']);
+    expect(takeProfitModesFor('sell_against').map((m) => m.value)).toEqual(['fixed', 'volatility']);
+    const sell = withStructure(initialBotForm(), 'sell_against');
+    expect(sell).toMatchObject({ takeProfitMode: 'fixed', onOpposite: 'reverse', exitHoursBeforeExpiry: 12, stopLossPct: 200 });
+    expect(validateBotForm({ ...sell, name: 'x', alertIds: [1], takeProfitMode: 'atr_band' }).takeProfitMode).toBeTruthy();
+    expect(withStructure(sell, 'buy_with').takeProfitMode).toBe('atr_band');
+    expect(withStructure(sell, 'buy_with', { editing: true }).takeProfitMode).toBe('fixed');
+  });
+
+  it('banda ATR: el payload lleva los cuatro params y no stopLossPct', () => {
+    const form = { ...initialBotForm({ underlying: 'ETH' }), name: 'ATR', alertIds: [3], atrBandInterval: '4h', atrBandLength: 20, atrBandMultiplier: 1.5, tpMaxGainPct: 300 };
+    expect(validateBotForm(form)).toEqual({});
+    const { params } = buildBotPayload(form);
+    expect(params).toMatchObject({ takeProfitMode: 'atr_band', atrBandInterval: '4h', atrBandLength: 20, atrBandMultiplier: 1.5, tpMaxGainPct: 300, onOpposite: 'ignore', exitHoursBeforeExpiry: 0 });
+    expect('stopLossPct' in params).toBe(false);
+    expect(validateBotForm({ ...form, atrBandLength: 1, atrBandMultiplier: 11, tpMaxGainPct: 5, atrBandInterval: '2h' })).toMatchObject({
+      atrBandLength: 'Mínimo 2', atrBandMultiplier: 'Máximo 10', tpMaxGainPct: 'Mínimo 10', atrBandInterval: 'Elige una temporalidad',
+    });
+  });
+
+  it('banda ATR: al salir se restauran onOpposite, salida por tiempo y stop', () => {
+    const bot = normalizeBot({ id: 1, params: { structure: 'buy_with', takeProfitMode: 'atr_band', onOpposite: 'ignore', exitHoursBeforeExpiry: 0, atrBandInterval: '15m' } });
+    const form = initialBotForm({ bot });
+    expect(form).toMatchObject({ takeProfitMode: 'atr_band', atrBandInterval: '15m', onOpposite: 'ignore', exitHoursBeforeExpiry: 0 });
+    expect(withTakeProfitMode(form, 'fixed')).toMatchObject({ takeProfitMode: 'fixed', onOpposite: 'reverse', exitHoursBeforeExpiry: 12, stopLossPct: 50 });
+  });
+
+  it('describeParams en atr_band', () => {
+    const d = describeParams(normalizeBot({ id: 1, underlying: 'ETH', params: { structure: 'buy_with', takeProfitMode: 'atr_band', atrBandInterval: '1h', atrBandLength: 14, atrBandMultiplier: 2, tpMaxGainPct: 200 } }));
+    expect(d.exits).toEqual([
+      expect.objectContaining({ label: 'Venta por banda ATR', value: '1h 14/2 · tope +200 %' }),
+      expect.objectContaining({ label: 'Sin stop', value: 'se mantiene hasta vencer' }),
+    ]);
   });
 
   it('al editar parte de los parámetros guardados', () => {

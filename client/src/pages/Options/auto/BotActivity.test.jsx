@@ -22,6 +22,14 @@ describe('BotActivity', () => {
     expect(screen.getAllByText(/\+2,00/).length).toBeGreaterThan(0);
   });
 
+  it('atr_band: muestra el desglose con tope y «Calculando objetivo…»', () => {
+    const meta = { spot: 3000, bandValue: 3060, distancePct: 2, leverage: 75, appliedGainPct: 200, capped: true };
+    const pos = (id, extra) => ({ id, mode: 'shadow', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 1, entryPrice: 10, mark: 12, closedAt: null, ...extra });
+    render(<BotActivity bot={bot({ params: { takeProfitMode: 'atr_band', maxOpenPositions: 2 }, positions: [pos(1, { tpTargetPrice: 30, tpTargetMeta: meta }), pos(2, { tpTargetPrice: null, tpTargetMeta: null })] })} part="top" />);
+    expect(screen.getAllByText(/\(tope\)/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Calculando objetivo…').length).toBeGreaterThan(0);
+  });
+
   it('sin posiciones muestra el vacío', () => {
     render(<BotActivity bot={bot({ positions: [] })} part="top" />);
     expect(screen.getByText('Sin posiciones abiertas')).toBeTruthy();

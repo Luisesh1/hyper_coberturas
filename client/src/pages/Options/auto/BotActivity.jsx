@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 import { ChartLegend } from '../strategies/common/LineChart';
 import PnlChart from '../strategies/common/PnlChart';
 import { formatDateTime, formatNumber, formatPct, formatUsdt } from '../strategies/common/format';
@@ -58,6 +58,16 @@ function TpStopBar({ row }) {
   );
 }
 
+// Banda ATR: sin stop; muestra el objetivo fijado al llenarse y su cálculo.
+function AtrTarget({ row }) {
+  return (
+    <div className={styles.atrTarget}>
+      <span><strong>Objetivo {price(row.tpPrice)}</strong> · sin stop</span>
+      <span className={`${ui.muted} ${ui.small}`}>{row.tpBreakdown}</span>
+    </div>
+  );
+}
+
 function CloseBtn({ row, onClosePosition, busy }) {
   if (!onClosePosition) return null;
   return (
@@ -89,7 +99,7 @@ function Positions({ rows, mobile, onClosePosition, onCloseAll, busy }) {
               <div className={`${ui.muted} ${ui.small}`}>
                 Entrada {price(r.entry)} · Mark {price(r.mark)}{r.hoursToExpiry !== null ? ` · vence en ${r.hoursToExpiry} h` : ''}
               </div>
-              <TpStopBar row={r} />
+              {r.tpBreakdown !== null ? <AtrTarget row={r} /> : <TpStopBar row={r} />}
               <CloseBtn row={r} onClosePosition={onClosePosition} busy={busy} />
             </li>
           ))}
@@ -107,7 +117,8 @@ function Positions({ rows, mobile, onClosePosition, onCloseAll, busy }) {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id}>
+                <Fragment key={r.id}>
+                <tr>
                   <td className={ui.mono}>{r.symbol}</td>
                   <td>{r.sideLabel}</td>
                   <td className={`${ui.mono} ${ui.num}`}>{formatNumber(r.quantity, { decimals: 4, minDecimals: 0 })}</td>
@@ -121,6 +132,12 @@ function Positions({ rows, mobile, onClosePosition, onCloseAll, busy }) {
                   <td className={`${ui.mono} ${ui.num}`}>{r.hoursToExpiry === null ? '—' : `${r.hoursToExpiry} h`}</td>
                   {onClosePosition && <td className={ui.num}><CloseBtn row={r} onClosePosition={onClosePosition} busy={busy} /></td>}
                 </tr>
+                {r.tpBreakdown !== null && (
+                  <tr>
+                    <td colSpan={onClosePosition ? 10 : 9} className={`${ui.muted} ${ui.small}`}>{r.tpBreakdown}</td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

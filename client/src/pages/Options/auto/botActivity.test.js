@@ -24,6 +24,18 @@ describe('openPositionRows', () => {
     expect(openPositionRows(d({ takeProfitTarget: { price: 15 } }), 'shadow')[0].tpPrice).toBe(15);
     expect(openPositionRows(d({}), 'shadow')[0].tpPrice).toBeNull();
   });
+  it('atr_band: tp = tpTargetPrice, sin stop, con desglose', () => {
+    const meta = { spot: 3000, interval: '1h', length: 14, multiplier: 2, bandValue: 3060, distancePct: 2, leverage: 75, rawGainPct: 150, appliedGainPct: 150, capped: false };
+    const d = (extra) => ({ positions: [{ ...buyPos, ...extra }], params: { takeProfitMode: 'atr_band', stopLossPct: 50 } });
+    const [r] = openPositionRows(d({ tpTargetPrice: 25, tpTargetMeta: meta }), 'shadow');
+    expect(r.tpPrice).toBe(25);
+    expect(r.stopPrice).toBeNull();
+    expect(r.tpBreakdown).toBe('Spot 3.000 → banda 3.060 (+2,0 %) × apal. 75× = +150 % → venta a 25,0 USDT');
+    expect(openPositionRows(d({ tpTargetPrice: 25, tpTargetMeta: { ...meta, capped: true } }), 'shadow')[0].tpBreakdown).toMatch(/\(tope\)$/);
+    const [pending] = openPositionRows(d({ tpTargetPrice: null, tpTargetMeta: null }), 'shadow');
+    expect(pending.tpPrice).toBeNull();
+    expect(pending.tpBreakdown).toBe('Calculando objetivo…');
+  });
   it('filtra por modo y sin mark deja P&L nulo', () => {
     const rows = openPositionRows({ positions: [buyPos, { ...buyPos, id: 2, mode: 'live' }], params: {} }, 'live');
     expect(rows.map((r) => r.id)).toEqual([2]);
