@@ -168,9 +168,9 @@ test('GET /options/auto-bots lista solo bots y GET /options/strategies los exclu
       // Por /options/strategies no se crean bots ni se cambian sus alertas.
       assert.equal((await call('POST', '/strategies', { template: 'alert_signal', underlying: 'BTC' })).status, 400);
       assert.equal((await call('PUT', `/strategies/${bot.id}`, { underlying: 'ETH' })).status, 400);
-      // Tampoco se backtestean.
-      const backtests = createOptionsBacktestService({ repo: {}, snapshotsRepo: {}, strategiesRepo: repo });
-      await assert.rejects(backtests.enqueue(USER, { strategyId: bot.id }), /no se pueden backtestear/);
+      // El backtest de un bot repite los disparos de sus alertas: sin disparos en el rango, error explicado.
+      const backtests = createOptionsBacktestService({ repo: {}, snapshotsRepo: {}, strategiesRepo: repo, alertsRepo: { async listAlertSignals() { return []; } } });
+      await assert.rejects(backtests.enqueue(USER, { strategyId: bot.id }), /Las alertas de este bot no se dispararon entre/);
     });
   } finally { restore(); }
 });

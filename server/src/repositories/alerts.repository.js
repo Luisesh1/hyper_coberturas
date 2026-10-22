@@ -151,8 +151,36 @@ async function listEventsForAlert(userId, alertId, { limit = 50 } = {}) {
   return rows;
 }
 
+/**
+ * Disparos históricos con dirección de unas alertas, para el backtest de bots.
+ * Descarta los neutrales (o sin dirección) y los de activos cuyo subyacente
+ * de opciones no sea `underlying`. Devuelve [{ t, direction, alertId }]
+ * ordenado por created_at (ms).
+ */
+async function listAlertSignals({ userId, alertIds, underlying, from, to }) {
+  const ids = [...new Set((alertIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!ids.length) return [];
+  const { rows } = await db.query(
+    `SELECT alert_id, asset, created_at, direction FROM alert_events
+      WHERE user_id = $1 AND alert_id = ANY($2::int[])
+        AND created_at >= $3 AND created_at <= $4
+        AND direction IN ('bullish', 'bearish')
+      ORDER BY created_at, id`,
+    [userId, ids, from, to]
+  );
+  // Perezoso: el servicio de bots carga dependencias de opciones.
+  // eslint-disable-next-line global-require
+  const { assetToUnderlying } = require('../services/options/options-auto-trading.service');
+  return rows
+    .filter((r) => (r.direction === 'bullish' || r.direction === 'bearish')
+      && assetToUnderlying(r.asset) === underlying)
+    .map((r) => ({ t: Number(r.created_at), direction: r.direction, alertId: Number(r.alert_id) }))
+    .sort((a, b) => a.t - b.t);
+}
+
 module.exports = {
   create,
+  listAlertSignals,
   getById,
   listByUser,
   listAllActive,

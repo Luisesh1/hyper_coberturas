@@ -18,6 +18,7 @@ const { AppError, ValidationError, NotFoundError } = require('../../errors/app-e
 const templates = require('./templates');
 const { intrinsic } = require('./options-pricing');
 const { buildSyntheticChain, syntheticExpiries, syntheticLeg } = require('./options-synthetic-chain');
+const { wilderAtrBands, atrBandTakeProfit } = require('./options-atr-band-tp');
 const {
   HOUR_MS,
   DAY_MS,
@@ -33,6 +34,7 @@ const {
 } = require('./options-utils');
 
 const SOURCES = ['recorded', 'dvol', 'realized'];
+const SIGNAL_SOURCES = ['dvol', 'realized'];
 const DVOL_UNDERLYINGS = ['BTC', 'ETH'];
 const MAX_RANGE_DAYS = 365;
 const REALIZED_WINDOW_HOURS = 30 * 24;
@@ -220,20 +222,56 @@ function sharpe(dailyEquity) {
   return std > 0 ? (mean / std) * Math.sqrt(365) : 0;
 }
 
+/** Velas {time, open, high, low, close, closeTime?} → filas Binance [openTime, o, h, l, c, v, closeTime]. */
+function candleRows(candles) {
+  return (candles || []).map((c) => [c.time, c.open, c.high, c.low, c.close, c.volume ?? 0, c.closeTime ?? c.time + HOUR_MS - 1]);
+}
+
+/**
+ * Objetivo de venta por banda ATR al abrir (como options-atr-band-target):
+ * velas de 1h cerradas antes de `t` (las mismas que pide el mercado en vivo:
+ * máx(200, longitud × 10), tope 500), spot del paso y prima del fill.
+ * La cadena sintética no tiene tick: 0.0001 desde 0. null si no hay banda.
+ */
+function atrBandTarget({ rows, t, spot, fillPrice, type, params }) {
+  const length = params.atrBandLength;
+  const limit = Math.min(500, Math.max(200, length * 10));
+  let end = rows.length;
+  while (end > 0 && !(rows[end - 1][6] < t)) end -= 1;
+  const band = wilderAtrBands(rows.slice(Math.max(0, end - limit), end), { length, multiplier: params.atrBandMultiplier, now: t });
+  if (!band) return null;
+  const tp = atrBandTakeProfit({ fillPrice, spot, type, band, tickSize: 0.0001, minPrice: 0, maxGainPct: params.tpMaxGainPct });
+  return tp ? tp.price : null;
+}
+
+const utcDay = (t) => Math.floor(t / DAY_MS);
+
 /**
  * Corre la simulación sobre `steps`. Puro: no hace E/S.
  * `feePct` es la tasa sobre el nocional del subyacente (tope: 10 % de la prima).
+ *
+ * Bots por alertas (`signals` = [{ t, direction, alertId }] ordenadas): en cada
+ * paso, las señales con `prevT < s.t ≤ step.t` se evalúan una a una como
+ * `ctx.signal` (antes de las salidas del paso) y `ctx.tradesToday` cuenta las
+ * aperturas del día UTC. Con `takeProfitMode = 'atr_band'` el objetivo se fija
+ * al abrir con `candles` (velas de 1h).
  */
-function simulate({ template, params: rawParams, steps, capitalUsdt, feePct }) {
+function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, signals = [], candles = [] }) {
   if (steps.length < 2) throw new ValidationError('No hay datos suficientes en el rango elegido');
   const s0 = steps[0].spot;
   const params = { ...rawParams };
   const holding = template.holdsSpot ? capitalUsdt / s0 : 0;
   if (template.holdsSpot) params.holdingQty = holding;
+  const atrBand = params.takeProfitMode === 'atr_band';
+  const atrRows = atrBand ? candleRows(candles) : null;
 
   let cash = 0;
   let seq = 1;
   let lastOpenedAt = null;
+  let tradesDay = null;
+  let tradesToday = 0;
+  let signalIdx = 0;
+  const signalStats = { received: 0, traded: 0, ignored: 0 };
   const positions = [];
   const cycles = [];
   const equity = [];
@@ -253,27 +291,19 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct }) {
     positions.splice(positions.indexOf(position), 1);
   }
 
-  for (const step of steps) {
+  /** Evalúa el template (con señal o sin ella) y aplica sus acciones. Devuelve cuántas se ejecutaron. */
+  function evaluateAndApply(step, chainFor, signal) {
     const { t, spot } = step;
-
-    // Vencimientos: liquidación europea contra el spot del paso.
-    for (const p of positions.filter((x) => x.expiryMs <= t)) {
-      const value = intrinsic({ S: spot, K: p.strike, type: p.type });
-      closePosition(p, value, exerciseFee({ spot, quantity: p.quantity, intrinsicValue: value }), t, 'expiry');
-    }
-
     const enriched = positions.map((p) => ({ ...p, quote: step.quote(p.symbol) }));
     const ctx = { now: t, underlying: null, spot, positions: enriched, params, lastOpenedAt };
+    if (signal) {
+      ctx.signal = signal;
+      ctx.tradesToday = tradesToday;
+    }
     // La cadena es perezosa: si el template no la mira, no se calcula.
-    let chainCache;
-    Object.defineProperty(ctx, 'chain', {
-      enumerable: true,
-      get: () => {
-        if (chainCache === undefined) chainCache = step.chainFor(params.expiryDays);
-        return chainCache;
-      },
-    });
+    Object.defineProperty(ctx, 'chain', { enumerable: true, get: chainFor });
 
+    let booked = 0;
     for (const action of template.evaluate(ctx)) {
       if (action.type === 'open') {
         const cycle = { openedAt: t, expiry: action.legs[0]?.expiry || null, legs: [], premium: 0, pnl: 0, openLegs: 0, closedAt: null, exitReason: null };
@@ -283,7 +313,9 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct }) {
           const f = fee(spot, leg.quantity, price);
           cash += signedPremium(leg.side, price, leg.quantity) - f;
           const meta = parseSymbol(leg.symbol);
-          positions.push({ id: seq++, symbol: leg.symbol, side: leg.side, quantity: leg.quantity, entryPrice: price, fee: f, openedAt: t, ...meta, cycle });
+          const position = { id: seq++, symbol: leg.symbol, side: leg.side, quantity: leg.quantity, entryPrice: price, fee: f, openedAt: t, ...meta, cycle };
+          if (atrBand) position.tpTargetPrice = atrBandTarget({ rows: atrRows, t, spot, fillPrice: price, type: meta?.type, params });
+          positions.push(position);
           cycle.legs.push({ symbol: leg.symbol, side: leg.side, quantity: leg.quantity, price: round(price, 4) });
           cycle.premium += signedPremium(leg.side, price, leg.quantity);
           cycle.openLegs += 1;
@@ -291,6 +323,8 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct }) {
         if (cycle.openLegs) {
           cycles.push(cycle);
           lastOpenedAt = t;
+          tradesToday += 1;
+          booked += 1;
         }
       } else if (action.type === 'close') {
         for (const leg of action.legs) {
@@ -299,9 +333,45 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct }) {
           const quote = enriched.find((p) => p.id === position.id)?.quote;
           const price = fillPrice(quote, leg.side) ?? num(quote?.mark) ?? intrinsic({ S: spot, K: position.strike, type: position.type });
           closePosition(position, price, fee(spot, position.quantity, price), t, action.reason);
+          booked += 1;
         }
       }
     }
+    return booked;
+  }
+
+  let prevT = -Infinity;
+  for (const step of steps) {
+    const { t, spot } = step;
+    if (tradesDay !== utcDay(t)) {
+      tradesDay = utcDay(t);
+      tradesToday = 0;
+    }
+
+    // Vencimientos: liquidación europea contra el spot del paso.
+    for (const p of positions.filter((x) => x.expiryMs <= t)) {
+      const value = intrinsic({ S: spot, K: p.strike, type: p.type });
+      closePosition(p, value, exerciseFee({ spot, quantity: p.quantity, intrinsicValue: value }), t, 'expiry');
+    }
+
+    let chainCache;
+    const chainFor = () => {
+      if (chainCache === undefined) chainCache = step.chainFor(params.expiryDays);
+      return chainCache;
+    };
+
+    // Disparos de alertas del intervalo (prevT, t], uno a uno.
+    while (signalIdx < signals.length && signals[signalIdx].t <= t) {
+      const signal = signals[signalIdx];
+      signalIdx += 1;
+      if (!(signal.t > prevT)) continue;
+      signalStats.received += 1;
+      if (evaluateAndApply(step, chainFor, signal) > 0) signalStats.traded += 1;
+      else signalStats.ignored += 1;
+    }
+    prevT = t;
+
+    evaluateAndApply(step, chainFor, null);
 
     // Valor de mercado de lo abierto (al mark).
     let mtm = 0;
@@ -351,6 +421,7 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct }) {
       exitReason: c.exitReason,
       pnlUsdt: round(c.pnl),
     })),
+    ...(template.signalDriven ? { signals: signalStats } : {}),
   };
 }
 
@@ -378,6 +449,8 @@ function createOptionsBacktestService(deps = {}) {
   const snapshotsRepo = deps.snapshotsRepo || require('../../repositories/options-iv-snapshots.repository');
   // eslint-disable-next-line global-require
   const strategiesRepo = deps.strategiesRepo || require('../../repositories/options-strategies.repository');
+  // eslint-disable-next-line global-require
+  const alertsRepo = deps.alertsRepo || require('../../repositories/alerts.repository');
   const getCandles = deps.getCandles || lazyGetCandles();
   const fetchImpl = deps.fetchImpl || ((...args) => fetch(...args));
   const log = deps.logger || logger;
@@ -405,8 +478,9 @@ function createOptionsBacktestService(deps = {}) {
       params = input.params || {};
     }
     templates.getTemplate(template);
-    if (templates.isSignalDriven(template)) {
-      throw new ValidationError('Los bots por alertas no se pueden backtestear: dependen de señales en vivo');
+    const signalDriven = templates.isSignalDriven(template);
+    if (signalDriven && strategyId == null) {
+      throw new ValidationError('Para backtestear un bot por alertas indica su strategyId');
     }
     params = templates.validateParams(template, params);
     if (!underlying) throw new ValidationError('underlying es obligatorio');
@@ -416,12 +490,31 @@ function createOptionsBacktestService(deps = {}) {
     if (source === 'dvol' && !DVOL_UNDERLYINGS.includes(underlying)) {
       throw new ValidationError('La fuente DVOL solo existe para BTC y ETH');
     }
+    if (signalDriven) {
+      if (!SIGNAL_SOURCES.includes(source)) {
+        throw new ValidationError('Los bots por alertas solo se backtestean con DVOL o volatilidad realizada: los precios grabados aún no están disponibles para ellos');
+      }
+      if (params.takeProfitMode === 'atr_band' && params.atrBandInterval !== '1h') {
+        throw new ValidationError('El backtest de venta por banda ATR solo admite velas de 1h por ahora');
+      }
+      if (!params.alertIds?.length) throw new ValidationError('El bot no tiene alertas asignadas');
+    }
 
     const to = toMs(input.to) ?? now();
     const from = toMs(input.from) ?? to - 90 * DAY_MS;
     if (!(from < to)) throw new ValidationError('from debe ser anterior a to');
     if (to - from > MAX_RANGE_DAYS * DAY_MS) throw new ValidationError(`El rango máximo es de ${MAX_RANGE_DAYS} días`);
     if (to - from < 2 * DAY_MS) throw new ValidationError('El rango mínimo es de 2 días');
+
+    const fromH = Math.floor(from / HOUR_MS) * HOUR_MS;
+    const toH = Math.floor(to / HOUR_MS) * HOUR_MS;
+    if (signalDriven) {
+      const signals = await alertsRepo.listAlertSignals({ userId, alertIds: params.alertIds, underlying, from: fromH, to: toH });
+      if (!signals.length) {
+        const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+        throw new ValidationError(`Las alertas de este bot no se dispararon entre ${day(fromH)} y ${day(toH)}`);
+      }
+    }
 
     const pick = (key, min, max) => {
       const value = input[key] == null ? DEFAULTS[key] : Number(input[key]);
@@ -434,8 +527,10 @@ function createOptionsBacktestService(deps = {}) {
       params,
       underlying,
       source,
-      from: Math.floor(from / HOUR_MS) * HOUR_MS,
-      to: Math.floor(to / HOUR_MS) * HOUR_MS,
+      from: fromH,
+      to: toH,
+      // Los bots releen sus disparos al correr (no se guardan en la config).
+      ...(signalDriven ? { userId } : {}),
       capitalUsdt: pick('capitalUsdt', 1, 1e9),
       spreadPct: pick('spreadPct', 0, 100),
       feePct: pick('feePct', 0, 5),
@@ -451,7 +546,11 @@ function createOptionsBacktestService(deps = {}) {
   /** Corre un backtest ya normalizado y devuelve el resultado (sin persistir). */
   async function runBacktest(config) {
     const template = templates.getTemplate(config.template);
+    if (template.signalDriven && !SIGNAL_SOURCES.includes(config.source)) {
+      throw new ValidationError('Los bots por alertas no se backtestean con precios grabados');
+    }
     let steps;
+    let candles = [];
     const extra = {};
     if (config.source === 'recorded') {
       const snapshots = await snapshotsRepo.listRange(config.underlying, config.from, config.to);
@@ -459,17 +558,26 @@ function createOptionsBacktestService(deps = {}) {
       steps = recordedSteps({ underlying: config.underlying, snapshots });
       extra.snapshots = steps.length;
     } else if (config.source === 'dvol') {
-      const candles = (await loadCandles(config.underlying, config.from, config.to)).filter((c) => c.time >= config.from);
+      // Los bots con banda ATR necesitan historia previa para el ATR de las primeras aperturas.
+      const lookback = config.params.takeProfitMode === 'atr_band' ? REALIZED_WINDOW_HOURS * HOUR_MS : 0;
+      candles = await loadCandles(config.underlying, config.from - lookback, config.to);
+      const inRange = candles.filter((c) => c.time >= config.from);
       const series = await fetchDvol({ currency: config.underlying, from: config.from - DAY_MS, to: config.to, fetchImpl });
       if (!series.length) throw new ValidationError('Deribit no devolvió DVOL para ese rango');
-      steps = syntheticSteps({ underlying: config.underlying, candles, ivAt: forwardFill(series), spreadPct: config.spreadPct });
+      steps = syntheticSteps({ underlying: config.underlying, candles: inRange, ivAt: forwardFill(series), spreadPct: config.spreadPct });
     } else {
-      const all = await loadCandles(config.underlying, config.from - REALIZED_WINDOW_HOURS * HOUR_MS, config.to);
-      const vols = realizedVolSeries(all);
+      candles = await loadCandles(config.underlying, config.from - REALIZED_WINDOW_HOURS * HOUR_MS, config.to);
+      const vols = realizedVolSeries(candles);
       const premium = 1 + config.volPremiumPct / 100;
-      const byTime = new Map(all.map((c, i) => [c.time + HOUR_MS, vols[i] == null ? null : Math.max(0.05, vols[i] * premium)]));
-      const candles = all.filter((c) => c.time >= config.from);
-      steps = syntheticSteps({ underlying: config.underlying, candles, ivAt: (t) => byTime.get(t), spreadPct: config.spreadPct });
+      const byTime = new Map(candles.map((c, i) => [c.time + HOUR_MS, vols[i] == null ? null : Math.max(0.05, vols[i] * premium)]));
+      const inRange = candles.filter((c) => c.time >= config.from);
+      steps = syntheticSteps({ underlying: config.underlying, candles: inRange, ivAt: (t) => byTime.get(t), spreadPct: config.spreadPct });
+    }
+    let signals = [];
+    if (template.signalDriven) {
+      signals = await alertsRepo.listAlertSignals({
+        userId: config.userId, alertIds: config.params.alertIds, underlying: config.underlying, from: config.from, to: config.to,
+      });
     }
     const result = simulate({
       template,
@@ -477,6 +585,9 @@ function createOptionsBacktestService(deps = {}) {
       steps,
       capitalUsdt: config.capitalUsdt,
       feePct: config.feePct,
+      signals,
+      // Velas de 1h ya cargadas: base de la banda ATR (normalizeConfig rechaza otras temporalidades).
+      candles,
     });
     return { ...result, sourceNote: sourceNote(config, extra) };
   }
