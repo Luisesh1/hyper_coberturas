@@ -25,6 +25,9 @@ describe('chartBucketSec', () => {
     const c = [...candles(H, T(10), 3), ...candles(H, T(20), 2)]; // 10,11,12 | 20,21
     expect(chartBucketSec(T(16), '1h', c)).toBe(T(12) / 1000);
   });
+  it('temporalidad desconocida → null', () => {
+    expect(chartBucketSec(T(14, 15), '7m', c1h)).toBeNull();
+  });
   it('null antes de la primera vela o después del cierre de la última', () => {
     expect(chartBucketSec(T(10), '1h', c1h)).toBeNull();
     expect(chartBucketSec(T(22) + 1, '1h', c1h)).toBeNull();
@@ -63,6 +66,12 @@ describe('buildMarkers', () => {
     expect(m).toHaveLength(1);
     expect(m[0].time).toBe(T(4) / 1000);
   });
+  it('el cutoff usa evalTime, no time', () => {
+    const e = { evalTime: T(15), time: T(14), suppressed: false };
+    const m = buildMarkers({ ...base, cutoffMs: T(14, 30), items: [{ alertId: 'a', color: '#fff', hidden: false }],
+      eventsByAlert: { a: [e] } });
+    expect(m).toEqual([]);
+  });
   it('ordena por time', () => {
     const m = buildMarkers({ ...base, items: [
       { alertId: 'a', color: '#fff', hidden: false }, { alertId: 'b', color: '#000', hidden: false }],
@@ -77,6 +86,16 @@ describe('eventsInBucket', () => {
     const items = [{ alertId: 'a', hidden: false }, { alertId: 'b', hidden: true }];
     const e1 = ev(T(5));
     const out = eventsInBucket({ a: [e1, ev(T(9))], b: [ev(T(5))] }, items, '4h', c, T(4) / 1000);
+    expect(out).toEqual([{ alertId: 'a', event: e1 }]);
+  });
+});
+
+describe('eventsInBucket cutoff', () => {
+  it('no lista eventos posteriores al cutoff', () => {
+    const c = candles(4 * H, T(0), 6);
+    const items = [{ alertId: 'a', hidden: false }];
+    const e1 = ev(T(5));
+    const out = eventsInBucket({ a: [e1, ev(T(7))] }, items, '4h', c, T(4) / 1000, T(6));
     expect(out).toEqual([{ alertId: 'a', event: e1 }]);
   });
 });

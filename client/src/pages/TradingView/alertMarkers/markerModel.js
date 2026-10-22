@@ -22,7 +22,8 @@ export const setAlertColor = (items, alertId, color) =>
 // Vela del gráfico (time en s) que contiene evalTime − 1 ms: la última con open ≤ evalTime − 1.
 // Null si cae antes de la primera vela o después del cierre de la última.
 export function chartBucketSec(evalTimeMs, chartTf, chartCandles) {
-  if (!Number.isFinite(evalTimeMs) || !chartCandles?.length) return null;
+  const tfMs = OVERLAY_TF_MS[chartTf];
+  if (!tfMs || !Number.isFinite(evalTimeMs) || !chartCandles?.length) return null;
   const target = evalTimeMs - 1;
   let lo = 0;
   let hi = chartCandles.length - 1;
@@ -32,7 +33,6 @@ export function chartBucketSec(evalTimeMs, chartTf, chartCandles) {
     if (chartCandles[mid].time <= target) lo = mid; else hi = mid - 1;
   }
   const last = chartCandles[lo];
-  const tfMs = OVERLAY_TF_MS[chartTf] ?? 60_000;
   if (lo === chartCandles.length - 1 && target >= last.time + tfMs) return null;
   return last.time / 1000;
 }
@@ -49,7 +49,7 @@ export function buildMarkers({ eventsByAlert, items, alertsById, chartTf, chartC
     if (item.hidden) continue;
     const buckets = new Map();
     for (const e of eventsByAlert?.[item.alertId] || []) {
-      if (e.time > cutoffMs) continue;
+      if (e.evalTime > cutoffMs) continue;
       const sec = chartBucketSec(e.evalTime, chartTf, chartCandles);
       if (sec == null) continue;
       if (!buckets.has(sec)) buckets.set(sec, []);
@@ -69,11 +69,12 @@ export function buildMarkers({ eventsByAlert, items, alertsById, chartTf, chartC
   return out.sort((a, b) => a.time - b.time);
 }
 
-export function eventsInBucket(eventsByAlert, items, chartTf, chartCandles, bucketSec) {
+export function eventsInBucket(eventsByAlert, items, chartTf, chartCandles, bucketSec, cutoffMs = Infinity) {
   const out = [];
   for (const item of items || []) {
     if (item.hidden) continue;
     for (const event of eventsByAlert?.[item.alertId] || []) {
+      if (event.evalTime > cutoffMs) continue;
       if (chartBucketSec(event.evalTime, chartTf, chartCandles) === bucketSec) out.push({ alertId: item.alertId, event });
     }
   }
