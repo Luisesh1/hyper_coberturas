@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  botDirections, buildBotKpis, buildBotPayload, buildMapping, filterSignals, initialBotForm,
-  describeParams, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
+  describeParams, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 
 describe('buildMapping', () => {
@@ -19,6 +19,56 @@ describe('buildMapping', () => {
       ['bullish', 'Vender put', 'Δ ≈ −0,25 · venc. ~14 d'],
       ['bearish', 'Vender call', 'Δ ≈ 0,25 · venc. ~14 d'],
     ]);
+  });
+});
+
+describe('configuración completa del bot', () => {
+  const base = { id: 1, underlying: 'ETH', params: { structure: 'buy_with', takeProfitMode: 'fixed' } };
+  const row = (rows, key) => rows.find((r) => r.key === key);
+
+  it('volatilidad: la fila de TP no usa «%»', () => {
+    const d = describeParams(normalizeBot({ ...base, params: { ...base.params, takeProfitMode: 'volatility', tpAtrMultiplier: 1.5, tpHorizonHours: 6 } }));
+    const tp = row(d.exits, 'takeProfitPct');
+    expect(tp.value).toBe('ATR × 1,5 + IV · horizonte 6 h');
+    expect(tp.value).not.toContain('%');
+  });
+
+  it('entrada: contratos, capital y prima máx.', () => {
+    const d = describeParams(normalizeBot({ ...base, params: { ...base.params, contractCount: 3, capitalUsdt: null, maxPremiumUsdt: 150 } }));
+    expect(row(d.entry, 'contractCount').value).toBe('3');
+    expect(row(d.entry, 'capitalUsdt').value).toBe('sin límite');
+    expect(row(d.entry, 'maxPremiumUsdt').value).toContain('150');
+    const c = describeParams(normalizeBot({ ...base, params: { ...base.params, capitalUsdt: 500 } }));
+    expect(row(c.entry, 'capitalUsdt').value).toContain('500');
+  });
+
+  it('vender en contra no muestra «Prima máx.» en la entrada', () => {
+    const d = describeParams(normalizeBot({ ...base, params: { structure: 'sell_against' } }));
+    expect(row(d.entry, 'maxPremiumUsdt')).toBeUndefined();
+  });
+
+  it('atr_band no repite «Señal contraria»', () => {
+    const d = describeParams(normalizeBot({ ...base, params: { ...base.params, takeProfitMode: 'atr_band' } }));
+    expect(row(d.entry, 'onOpposite')).toBeUndefined();
+  });
+
+  it('ventana de vencimiento de la alerta en el mapeo', () => {
+    const alerts = [
+      { id: 1, direction: 'bullish', optionExpiryMinDays: 7, optionExpiryMaxDays: 14 },
+      { id: 2, direction: 'bearish' },
+    ].map(normalizeAlert);
+    const rows = buildMapping('buy_with', { targetDelta: 0.35, expiryDays: 7, alerts });
+    expect(rows[0].detail).toBe('Δ ≈ 0,35 · venc. 7–14 d (de la alerta)');
+    expect(rows[1].detail).toBe('Δ ≈ −0,35 · venc. ~7 d');
+  });
+
+  it('estado del runner en lenguaje humano', () => {
+    expect(statusLabel('paused')).toBe('Pausado');
+    expect(statusLabel('in_position')).toBe('En posición');
+    expect(statusLabel('waiting')).toBe('Esperando señal');
+    expect(statusLabel('algo_nuevo_raro')).toBe('Sin estado');
+    expect(statusLabel('')).toBe('—');
+    expect(normalizeBot({ id: 1, status: 'paused' }).statusLabel).toBe('Pausado');
   });
 });
 

@@ -43,7 +43,7 @@ async function withServer(fn) {
 
 // Alertas del usuario 1 (A añade `direction`; sin él cuenta como neutral).
 const ALERTS = [
-  { id: 1, name: 'RSI sobreventa BTC', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70 },
+  { id: 1, name: 'RSI sobreventa BTC', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70, optionExpiryMinDays: 7, optionExpiryMaxDays: 14 },
   { id: 2, name: 'Cruce bajista BTC/ETH', direction: 'bearish', assetList: ['ETHUSDT', 'BTCUSDT'], thresholdPercent: 60 },
   { id: 3, name: 'Volumen BTC', direction: 'neutral', assetList: ['BTCUSDT'], thresholdPercent: 50 },
   { id: 4, name: 'Sin dirección', assetList: ['BTCUSDT'], thresholdPercent: 50 },
@@ -98,6 +98,7 @@ test('POST /options/auto-bots crea en sombra y valida alertas, subyacente y form
       assert.equal(bot.params.targetDelta, 0.35);
       assert.equal(bot.limits.maxOrdersPerDay, 3);
       assert.deepEqual(bot.alerts.map((a) => [a.id, a.direction]), [[1, 'bullish'], [2, 'bearish']]);
+      assert.deepEqual(bot.alerts.map((a) => [a.optionExpiryMinDays, a.optionExpiryMaxDays]), [[7, 14], [null, null]]);
       assert.deepEqual(bot.pnl30d, { shadow: 0, live: 0 });
       assert.equal(bot.status, 'waiting');
       assert.equal(bot.lastSignal, null);

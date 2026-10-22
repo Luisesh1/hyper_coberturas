@@ -33,13 +33,13 @@ export default function BotList({ bots, selectedId, onSelect, mobile = false }) 
               <span className={styles.cardBottom}>
                 {mobile ? (
                   <>
-                    <span>{b.status || '—'}</span>
+                    <span>{b.statusLabel}</span>
                     <Pnl value={cardPnl(b)} className={styles.cardPnlBig} />
                   </>
                 ) : (
                   <>
                     <span>P&amp;L 30d <Pnl value={cardPnl(b)} /></span>
-                    <span>{b.status}</span>
+                    <span>{b.statusLabel}</span>
                   </>
                 )}
               </span>

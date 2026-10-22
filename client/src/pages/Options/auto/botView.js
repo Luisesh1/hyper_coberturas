@@ -7,6 +7,19 @@ import { normalizeStrategy } from '../strategies/strategyView';
 
 export const BOT_MODE_LABEL = { paused: 'Pausado', shadow: 'Sombra', live: 'Real' };
 
+// Estado del runner (strategies service: waiting | paused | error | in_position;
+// también los motivos de espera del tick).
+export const STATUS_LABEL = {
+  waiting: 'Esperando señal',
+  waiting_signal: 'Esperando señal',
+  paused: 'Pausado',
+  in_position: 'En posición',
+  error: 'Con error',
+  no_quote: 'Sin cotización',
+  no_volatility_tp: 'Sin volatilidad para el objetivo',
+};
+export const statusLabel = (status) => (status ? STATUS_LABEL[status] || 'Sin estado' : '—');
+
 // ── Dirección de una alerta ───────────────────────────────────────────
 export const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
 export const DIRECTION_LABEL = { bullish: 'Alcista', bearish: 'Bajista', neutral: 'Neutral' };
@@ -84,24 +97,42 @@ export const ON_OPPOSITE = [
 ];
 
 // Qué abre cada dirección con la estructura y el delta elegidos.
-export function buildMapping(structure, { targetDelta, expiryDays } = {}) {
+// Ventana de vencimiento que imponen las alertas vinculadas (mín–máx en días).
+export function alertExpiryWindow(alerts) {
+  const mins = []; const maxs = [];
+  for (const a of alerts || []) {
+    const lo = toNumber(a?.optionExpiryMinDays);
+    const hi = toNumber(a?.optionExpiryMaxDays);
+    if (lo === null && hi === null) continue;
+    mins.push(lo ?? hi); maxs.push(hi ?? lo);
+  }
+  if (!mins.length) return null;
+  return { min: Math.min(...mins), max: Math.max(...maxs) };
+}
+
+export function buildMapping(structure, { targetDelta, expiryDays, alerts } = {}) {
   const buy = normalizeStructure(structure) === 'buy_with';
   const d = toNumber(targetDelta) ?? STRUCTURE_DEFAULTS[buy ? 'buy_with' : 'sell_against'].targetDelta;
   const days = toNumber(expiryDays) ?? COMMON_DEFAULTS.expiryDays;
   const delta = (sign) => formatNumber(sign * Math.abs(d), { decimals: 2 });
-  const venc = `venc. ~${formatNumber(days, { decimals: 0 })} d`;
+  const vencFor = (direction) => {
+    const w = alertExpiryWindow((alerts || []).filter((a) => normalizeDirection(a?.direction) === direction));
+    if (!w) return `venc. ~${formatNumber(days, { decimals: 0 })} d`;
+    const n = (x) => formatNumber(x, { decimals: 0 });
+    return `venc. ${w.min === w.max ? n(w.min) : `${n(w.min)}–${n(w.max)}`} d (de la alerta)`;
+  };
   return [
     {
       direction: 'bullish',
       action: buy ? 'Comprar call' : 'Vender put',
       side: buy ? 'buy' : 'sell',
-      detail: `Δ ≈ ${delta(buy ? 1 : -1)} · ${venc}`,
+      detail: `Δ ≈ ${delta(buy ? 1 : -1)} · ${vencFor('bullish')}`,
     },
     {
       direction: 'bearish',
       action: buy ? 'Comprar put' : 'Vender call',
       side: buy ? 'buy' : 'sell',
-      detail: `Δ ≈ ${delta(buy ? -1 : 1)} · ${venc}`,
+      detail: `Δ ≈ ${delta(buy ? -1 : 1)} · ${vencFor('bearish')}`,
     },
   ];
 }
@@ -127,6 +158,8 @@ export function normalizeAlert(raw = {}) {
     direction: normalizeDirection(raw.direction),
     assetList: Array.isArray(assets) ? assets : String(assets || '').split(',').map((s) => s.trim()).filter(Boolean),
     thresholdPercent: toNumber(pick(raw, 'thresholdPercent', 'threshold_percent')),
+    optionExpiryMinDays: toNumber(pick(raw, 'optionExpiryMinDays', 'option_expiry_min_days')),
+    optionExpiryMaxDays: toNumber(pick(raw, 'optionExpiryMaxDays', 'option_expiry_max_days')),
   };
 }
 
@@ -150,6 +183,7 @@ export function normalizeBot(raw = {}) {
     alerts,
     alertIds,
     structure: normalizeStructure(params.structure),
+    statusLabel: statusLabel(base.status),
     lastSignal: raw.lastSignal || raw.last_signal ? normalizeSignal(raw.lastSignal || raw.last_signal) : null,
   };
 }
@@ -457,6 +491,7 @@ export function describeParams(bot) {
   const opposite = ON_OPPOSITE.find((o) => o.value === p.onOpposite) || ON_OPPOSITE[0];
   const premium = toNumber(p.maxPremiumUsdt);
   const margin = toNumber(bot.limits?.maxMarginUsdt);
+  const capital = toNumber(p.capitalUsdt);
   const atr = p.takeProfitMode === 'atr_band' && buy;
   const exits = atr
     ? [
@@ -467,7 +502,7 @@ export function describeParams(bot) {
     : [
       { key: 'takeProfitPct', label: labels.takeProfit,
         value: p.takeProfitMode === 'volatility'
-          ? `ATR × ${formatNumber(v('tpAtrMultiplier'), { decimals: 2 })} + IV · ${formatNumber(v('tpHorizonHours'), { decimals: 0 })} h`
+          ? `ATR × ${formatNumber(v('tpAtrMultiplier'), { decimals: 2, minDecimals: 0 })} + IV · horizonte ${formatNumber(v('tpHorizonHours'), { decimals: 0 })} h`
           : `${buy ? '+' : ''}${formatNumber(v('takeProfitPct'), { decimals: 0 })} % de la prima` },
       { key: 'stopLossPct', label: labels.stopLoss, value: `${buy ? '−' : ''}${formatNumber(v('stopLossPct'), { decimals: 0 })} % de la prima` },
       { key: 'exitHoursBeforeExpiry', label: 'Cerrar antes del venc.', value: `${formatNumber(v('exitHoursBeforeExpiry'), { decimals: 0 })} h` },
@@ -477,7 +512,11 @@ export function describeParams(bot) {
       { key: 'targetDelta', label: 'Delta objetivo', value: formatNumber(Math.abs(v('targetDelta')), { decimals: 2 }) },
       { key: 'expiryDays', label: 'Vencimiento', value: `${formatNumber(v('expiryDays'), { decimals: 0 })} días` },
       { key: 'quantity', label: 'Cantidad', value: `${formatNumber(v('quantity'), { decimals: 4, minDecimals: 0 })} ${bot.underlying || ''}`.trim() },
-      { key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true },
+      { key: 'contractCount', label: 'Contratos distintos', value: formatNumber(v('contractCount'), { decimals: 0 }) },
+      { key: 'capitalUsdt', label: 'Capital máx. por entrada', value: capital ? `${formatUsdt(capital, { decimals: 0 })} USDT` : 'sin límite', text: !capital },
+      ...(buy ? [{ key: 'maxPremiumUsdt', label: 'Prima máx.', value: premium ? `${formatUsdt(premium, { decimals: 0 })} USDT` : 'sin límite', text: !premium }] : []),
+      // La banda ATR fuerza «ignorar» y ya declara que no hay otras salidas.
+      ...(atr ? [] : [{ key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true }]),
     ],
     exits,
     risk: [

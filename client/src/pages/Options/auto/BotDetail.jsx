@@ -197,7 +197,7 @@ export default function BotDetail({
           <section className={styles.mobileSection}>
             <h2 className={styles.mobileH2}>Al recibir la señal</h2>
             <span className={styles.structurePill}>{info.label}</span>
-            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} compact />
+            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} compact />
             <AlertRows alerts={bot.alerts} />
             <button type="button" className={ui.btn} onClick={onEdit}>
               <PencilIcon size={18} /> Alertas, salidas y riesgo
@@ -224,7 +224,7 @@ export default function BotDetail({
           <h2 className={styles.h2}>{bot.name}</h2>
           <span className={ui.muted} style={{ fontSize: 13 }}>
             Opera {bot.underlying} cuando se dispara una de sus alertas · {info.short}
-            {bot.status ? ` · ${bot.status}` : ''}
+            {bot.status ? ` · ${bot.statusLabel}` : ''}
           </span>
         </div>
         <div className={styles.detailActions}>
@@ -277,7 +277,7 @@ export default function BotDetail({
             <h3 className={ui.h3}>2 · Qué hacer con la señal</h3>
             <span className={styles.structurePill}>{info.label}</span>
           </div>
-          <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} />
+          <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} />
           <ParamRows rows={desc.entry} />
         </div>
       </div>

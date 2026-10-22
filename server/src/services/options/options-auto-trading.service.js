@@ -291,7 +291,8 @@ function createOptionsAutoTradingService(deps = {}) {
       alerts: (bot.params?.alertIds || [])
         .map((id) => byId.get(Number(id)))
         .filter(Boolean)
-        .map((a) => ({ id: Number(a.id), name: a.name, direction: alertDirection(a), assetList: a.assetList || [] })),
+        .map((a) => ({ id: Number(a.id), name: a.name, direction: alertDirection(a), assetList: a.assetList || [],
+          optionExpiryMinDays: a.optionExpiryMinDays ?? null, optionExpiryMaxDays: a.optionExpiryMaxDays ?? null })),
       lastSignal: signalDto(lastSignals.find((s) => s.strategyId === bot.id)),
     }));
   }

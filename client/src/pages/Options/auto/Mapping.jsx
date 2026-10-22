@@ -11,8 +11,8 @@ function ArrowIcon() {
 }
 
 // Vista previa «qué abre cada dirección» con la estructura elegida.
-export default function Mapping({ structure, targetDelta, expiryDays, compact = false }) {
-  const rows = buildMapping(structure, { targetDelta, expiryDays });
+export default function Mapping({ structure, targetDelta, expiryDays, alerts, compact = false }) {
+  const rows = buildMapping(structure, { targetDelta, expiryDays, alerts });
   return (
     <ul className={`${styles.mapping} ${compact ? styles.mappingCompact : ''}`} aria-label="Qué abre cada dirección" aria-live="polite">
       {rows.map((r) => (
