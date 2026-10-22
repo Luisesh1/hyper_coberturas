@@ -120,6 +120,16 @@ describe('señales y KPIs', () => {
     ]);
   });
 
+  it('las señales simuladas llevan la marca y no cuentan en los KPIs', () => {
+    const list = normalizeSignals([
+      ...raw,
+      { id: 9, alertName: 'Simulación', direction: 'bullish', decision: 'opened', simulated: true, createdAt: now - 10 },
+    ]);
+    expect(list.find((s) => s.id === 9).simulated).toBe(true);
+    expect(list.find((s) => s.id === 1).simulated).toBe(false);
+    expect(signalStats(list, now)).toEqual({ total: 3, bullish: 1, bearish: 2, traded: 2 });
+  });
+
   it('direcciones del bot y última señal entre bots', () => {
     expect(botDirections([{ direction: 'bearish' }, { direction: 'bullish' }, { direction: 'bullish' }])).toEqual(['bullish', 'bearish']);
     const bots = [

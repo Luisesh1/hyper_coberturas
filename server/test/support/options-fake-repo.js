@@ -144,7 +144,7 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
 
     async claimAutoSignal(row) {
       if (row.alertEventId != null && signals.some((x) => x.strategyId === row.strategyId && x.alertEventId === row.alertEventId)) return null;
-      const s = { id: seq++, alertId: null, alertEventId: null, alertName: null, direction: null, asset: null, score: null, detail: null, createdAt: now(), ...row };
+      const s = { id: seq++, alertId: null, alertEventId: null, alertName: null, direction: null, asset: null, score: null, detail: null, simulated: false, createdAt: now(), ...row };
       signals.push(s);
       return clone(s);
     },

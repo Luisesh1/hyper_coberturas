@@ -20,6 +20,7 @@ const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const TEMPLATE_ID = 'alert_signal';
 const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
 const SIGNAL_FILTERS = ['all', 'traded', 'ignored'];
+const SIMULATE_COOLDOWN_MS = 10_000;
 const QUOTE_SUFFIXES = ['USDT', 'USDC', 'USD'];
 
 /**
@@ -59,6 +60,7 @@ function signalDto(row) {
     score: row.score,
     decision: row.decision,
     detail: row.detail,
+    simulated: row.simulated === true,
     createdAt: row.createdAt,
   };
 }
@@ -67,8 +69,8 @@ function signalDto(row) {
  * Traduce lo que produjo el runner en una decisión. Manda el libro real si
  * el bot está en `live`; si no, la sombra.
  */
-function decide(strategy, produced = []) {
-  const mode = strategy.mode === 'live' ? 'live' : 'shadow';
+function decide(strategy, produced = [], { forceShadow = false } = {}) {
+  const mode = strategy.mode === 'live' && !forceShadow ? 'live' : 'shadow';
   const mine = produced.filter((p) => p.mode === mode);
   const booked = mine.filter((p) => p.booked);
   const opened = booked.filter((p) => p.type === 'open');
@@ -146,6 +148,7 @@ function createOptionsAutoTradingService(deps = {}) {
   const log = deps.logger || logger;
   const now = deps.now || Date.now;
   let unsubscribe = null;
+  const lastSimulation = new Map(); // botId → instante de la última simulación
 
   // ---------- señales ----------
 
@@ -412,9 +415,65 @@ function createOptionsAutoTradingService(deps = {}) {
     return orderDto(updated);
   }
 
+  /**
+   * Simula una señal en el libro sombra (aunque el bot esté en Real): no hay
+   * evento de alerta, así que no hay dedupe; se limita a 1 cada 10 s por bot.
+   */
+  async function simulateSignal(userId, id, { direction } = {}) {
+    if (!['bullish', 'bearish'].includes(direction)) {
+      throw new ValidationError('direction debe ser bullish o bearish');
+    }
+    const bot = await requireBot(userId, id);
+    if (bot.mode !== 'shadow' && bot.mode !== 'live') {
+      throw new AppError('Pasa el bot a Sombra para simular', { status: 409, code: 'BOT_PAUSED' });
+    }
+    const at = now();
+    const last = lastSimulation.get(bot.id);
+    if (last !== undefined && at - last < SIMULATE_COOLDOWN_MS) {
+      throw new AppError('Espera unos segundos antes de simular otra señal', { status: 429, code: 'SIMULATE_RATE_LIMIT' });
+    }
+    lastSimulation.set(bot.id, at);
+
+    const claim = await repo.claimAutoSignal({
+      strategyId: bot.id,
+      userId: bot.userId,
+      alertId: null,
+      alertEventId: null,
+      alertName: 'Simulación',
+      direction,
+      asset: bot.underlying,
+      score: null,
+      decision: 'pending',
+      detail: 'Procesando…',
+      simulated: true,
+      createdAt: at,
+    });
+    let outcome;
+    try {
+      const { produced } = await runner.runForSignal(bot, {
+        direction,
+        alertId: null,
+        alertName: 'Simulación',
+        asset: bot.underlying,
+        underlying: bot.underlying,
+        score: null,
+        eventId: null,
+        triggeredAt: at,
+        simulated: true,
+      }, { shadowOnly: true });
+      outcome = decide(bot, produced, { forceShadow: true });
+    } catch (err) {
+      log.warn('options_auto_signal_simulation_failed', { strategyId: bot.id, error: err.message });
+      outcome = { decision: 'error', detail: `Error al simular la señal: ${err.message}` };
+    }
+    await repo.finishAutoSignal(claim.id, outcome);
+    return outcome;
+  }
+
   return {
     start,
     stop,
+    simulateSignal,
     handleAlertTriggered,
     listBots,
     eligibleAlerts,

@@ -495,3 +495,9 @@
 .usageTrack { height: 8px; border-radius: 4px; background: var(--bg-input); overflow: hidden; }
 .usageFill { display: block; height: 100%; background: var(--indigo); border-radius: 4px; }
 .usageFillHot { background: var(--red-light); }
+
+/* Probar señal ▾ */
+.simRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.simMenu { position: relative; display: inline-flex; flex-direction: column; gap: 6px; }
+.simMenuList { display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid var(--border, #2a3140); border-radius: 10px; background: var(--surface, #151a23); }
+.simTag { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px dashed currentColor; opacity: 0.85; }

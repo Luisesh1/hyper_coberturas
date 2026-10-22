@@ -314,3 +314,38 @@ test('cierre manual en Real: registra el evento y explica por qué no se envió'
   assert.equal(repo.events.at(-1).action, 'skip');
   assert.match(repo.events.at(-1).detail, /^Cierre manual no enviado: Envio real deshabilitado/);
 });
+
+test('simular en un bot Real: solo corre la sombra, no envía órdenes y la fila queda simulated', async () => {
+  const { repo, service, bot, orders } = await setup({ mode: 'live' });
+  const res = await service.simulateSignal(USER, bot.id, { direction: 'bullish' });
+  assert.equal(res.decision, 'opened');
+  assert.match(res.detail, /Sombra/);
+  assert.equal(orders.length, 0, 'no se llama a submit real');
+  assert.deepEqual(repo.positions.map((p) => p.mode), ['shadow']);
+  const [row] = await repo.listAutoSignals(bot.id);
+  assert.equal(row.simulated, true);
+  assert.equal(row.alertName, 'Simulación');
+  assert.equal(row.alertEventId, null);
+  assert.equal(row.direction, 'bullish');
+});
+
+test('simular: límite de 1 cada 10 s por bot (429 SIMULATE_RATE_LIMIT) y otro bot no se ve afectado', async () => {
+  const { clock, repo, service, bot } = await setup();
+  const other = await repo.createStrategy({ userId: USER, name: 'Otro', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [11] }, mode: 'shadow' });
+  await service.simulateSignal(USER, bot.id, { direction: 'bullish' });
+  clock.now += 9_000;
+  await assert.rejects(service.simulateSignal(USER, bot.id, { direction: 'bearish' }), (err) => err.status === 429 && err.code === 'SIMULATE_RATE_LIMIT');
+  await service.simulateSignal(USER, other.id, { direction: 'bullish' });
+  clock.now += 1_000;
+  const again = await service.simulateSignal(USER, bot.id, { direction: 'bearish' });
+  assert.ok(again.decision);
+  assert.equal((await repo.listAutoSignals(bot.id)).length, 2, 'las simulaciones no se deduplican entre sí');
+});
+
+test('simular: bot pausado → 409 BOT_PAUSED y dirección inválida → 400', async () => {
+  const { service, bot, repo } = await setup({ mode: 'paused' });
+  await assert.rejects(service.simulateSignal(USER, bot.id, { direction: 'bullish' }), (err) => err.status === 409 && err.code === 'BOT_PAUSED' && /Sombra/.test(err.message));
+  assert.equal((await repo.listAutoSignals(bot.id)).length, 0);
+  await repo.setMode(USER, bot.id, 'shadow');
+  await assert.rejects(service.simulateSignal(USER, bot.id, { direction: 'neutral' }), (err) => err.status === 400);
+});

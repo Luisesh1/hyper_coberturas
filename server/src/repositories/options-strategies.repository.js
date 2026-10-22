@@ -77,6 +77,7 @@ function mapAutoSignal(row) {
     score: numberOrNull(row.score),
     decision: row.decision,
     detail: row.detail || null,
+    simulated: row.simulated === true,
     createdAt: Number(row.created_at),
   };
 }
@@ -352,14 +353,14 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
    * Reserva el procesamiento de un disparo para un bot. Devuelve la fila, o
    * null si ese `alertEventId` ya se procesó (índice único por bot y evento).
    */
-  async function claimAutoSignal({ strategyId, userId, alertId, alertEventId, alertName, direction, asset, score, decision, detail = null, createdAt }) {
+  async function claimAutoSignal({ strategyId, userId, alertId, alertEventId, alertName, direction, asset, score, decision, detail = null, simulated = false, createdAt }) {
     const { rows } = await db.query(
       `INSERT INTO options_auto_signals
-         (strategy_id, user_id, alert_id, alert_event_id, alert_name, direction, asset, score, decision, detail, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         (strategy_id, user_id, alert_id, alert_event_id, alert_name, direction, asset, score, decision, detail, simulated, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (strategy_id, alert_event_id) DO NOTHING
        RETURNING *`,
-      [strategyId, userId, alertId ?? null, alertEventId ?? null, alertName ?? null, direction ?? null, asset ?? null, score ?? null, decision, detail, createdAt ?? now()]
+      [strategyId, userId, alertId ?? null, alertEventId ?? null, alertName ?? null, direction ?? null, asset ?? null, score ?? null, decision, detail, simulated === true, createdAt ?? now()]
     );
     return rows[0] ? mapAutoSignal(rows[0]) : null;
   }

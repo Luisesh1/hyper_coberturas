@@ -5,7 +5,7 @@ const { validate } = require('../middleware/validate.middleware');
 const { requireIntParam } = require('../middleware/parse-params');
 const autoTradingService = require('../services/options/options-auto-trading.service');
 const { AppError } = require('../errors/app-error');
-const { createAutoBotSchema, updateAutoBotSchema, closeAutoBotSchema } = require('../schemas/options-automation.schema');
+const { createAutoBotSchema, updateAutoBotSchema, closeAutoBotSchema, simulateAutoBotSchema } = require('../schemas/options-automation.schema');
 
 // Montado en /options/auto-bots, antes que /options. El detalle, el cambio de
 // modo y el borrado de un bot van por /options/strategies/:id.
@@ -46,6 +46,10 @@ function requireConfirm(req, _res, next) {
 
 router.post('/:id/close', requireConfirm, validate(closeAutoBotSchema), asyncHandler(async (req, res) => {
   res.json({ success: true, data: await service().closeBot(req.user.userId, requireIntParam(req, 'id'), req.body) });
+}));
+
+router.post('/:id/simulate', validate(simulateAutoBotSchema), asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await service().simulateSignal(req.user.userId, requireIntParam(req, 'id'), req.body) });
 }));
 
 router.post('/:id/orders/:orderId/cancel', asyncHandler(async (req, res) => {

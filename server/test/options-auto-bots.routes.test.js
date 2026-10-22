@@ -156,7 +156,7 @@ test('GET /options/auto-bots lista solo bots y GET /options/strategies los exclu
       assert.equal(bots.status, 200);
       assert.deepEqual(bots.json.data.map((b) => b.id), [bot.id]);
       assert.deepEqual(bots.json.data[0].lastSignal, {
-        id: repo.signals[0].id, alertId: 1, alertName: 'RSI sobreventa BTC', direction: 'bullish', asset: 'BTCUSDT', score: 80, decision: 'opened', detail: 'Sombra: compra', createdAt: 1,
+        id: repo.signals[0].id, alertId: 1, alertName: 'RSI sobreventa BTC', direction: 'bullish', asset: 'BTCUSDT', score: 80, decision: 'opened', detail: 'Sombra: compra', simulated: false, createdAt: 1,
       });
 
       const list = await call('GET', '/strategies');
@@ -214,7 +214,7 @@ test('GET /options/auto-bots/:id/signals con filtro y límite', async () => {
       assert.equal(all.status, 200);
       assert.equal(all.json.data.length, 6);
       assert.equal(all.json.data[0].createdAt, 1005, 'más reciente primero');
-      assert.deepEqual(Object.keys(all.json.data[0]).sort(), ['alertId', 'alertName', 'asset', 'createdAt', 'decision', 'detail', 'direction', 'id', 'score']);
+      assert.deepEqual(Object.keys(all.json.data[0]).sort(), ['alertId', 'alertName', 'asset', 'createdAt', 'decision', 'detail', 'direction', 'id', 'score', 'simulated']);
       assert.deepEqual((await call('GET', `/auto-bots/${bot.id}/signals?filter=traded`)).json.data.map((s) => s.decision), ['reversed', 'closed', 'opened']);
       assert.deepEqual((await call('GET', `/auto-bots/${bot.id}/signals?filter=ignored`)).json.data.map((s) => s.decision), ['ignored', 'ignored']);
       assert.equal((await call('GET', `/auto-bots/${bot.id}/signals?limit=2`)).json.data.length, 2);
@@ -385,6 +385,34 @@ test('POST /options/auto-bots/:id/orders/:orderId/cancel solo cancela órdenes p
       assert.equal(ok.json.data.id, 501);
       assert.equal(ok.json.data.cancelRequested, true);
       assert.deepEqual(liveOrders.cancels, [501]);
+    });
+  } finally { restore(); }
+});
+
+test('POST /options/auto-bots/:id/simulate valida la dirección, simula en sombra y responde 429 / 409', async () => {
+  const runner = fakeCloseRunner();
+  const shadowOnlyFlags = [];
+  runner.runForSignal = async (_s, _signal, opts) => { shadowOnlyFlags.push(opts?.shadowOnly); return { produced: [] }; };
+  const { repo, restore } = useFakeServices({ runner, liveOrders: fakeLiveOrders() });
+  try {
+    await withServer(async (call) => {
+      const bot = (await call('POST', '/auto-bots', validBot)).json.data;
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/simulate`, { direction: 'neutral' })).status, 400);
+      assert.equal((await call('POST', `/auto-bots/${bot.id}/simulate`, {})).status, 400);
+      const ok = await call('POST', `/auto-bots/${bot.id}/simulate`, { direction: 'bullish' });
+      assert.equal(ok.status, 200);
+      assert.deepEqual(Object.keys(ok.json.data).sort(), ['decision', 'detail']);
+      assert.deepEqual(shadowOnlyFlags, [true]);
+      const limited = await call('POST', `/auto-bots/${bot.id}/simulate`, { direction: 'bearish' });
+      assert.equal(limited.status, 429);
+      assert.equal(limited.json.code, 'SIMULATE_RATE_LIMIT');
+      const signals = (await call('GET', `/auto-bots/${bot.id}/signals`)).json.data;
+      assert.equal(signals[0].simulated, true);
+
+      const paused = await repo.createStrategy({ userId: USER, name: 'p', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [1] }, mode: 'paused' });
+      const res = await call('POST', `/auto-bots/${paused.id}/simulate`, { direction: 'bullish' });
+      assert.equal(res.status, 409);
+      assert.equal(res.json.code, 'BOT_PAUSED');
     });
   } finally { restore(); }
 });

@@ -75,7 +75,12 @@ const closeAutoBotSchema = z.object({
   confirm: z.literal(true),
 });
 
+const simulateAutoBotSchema = z.object({
+  direction: z.enum(['bullish', 'bearish']),
+});
+
 module.exports = {
+  simulateAutoBotSchema,
   createAutoBotSchema,
   closeAutoBotSchema,
   updateAutoBotSchema,

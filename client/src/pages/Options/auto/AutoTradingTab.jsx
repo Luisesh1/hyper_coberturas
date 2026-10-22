@@ -12,7 +12,7 @@ import BotDetail from './BotDetail';
 import BotForm from './BotForm';
 import DirectionChip from './DirectionChip';
 import { AutoIcon as BoltIcon } from '../icons';
-import { filterSignals, latestSignal, normalizeBot, normalizeSignals, signalStats } from './botView';
+import { DECISION_LABEL, filterSignals, latestSignal, normalizeBot, normalizeSignals, signalStats } from './botView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
 
@@ -64,6 +64,7 @@ export default function AutoTradingTab({ underlying } = {}) {
   const [unlink, setUnlink] = useState({ pending: false, error: null });
   const [closeDialog, setCloseDialog] = useState(CLOSED_CLOSE);
   const [cancel, setCancel] = useState({ pendingId: null, notice: null });
+  const [sim, setSim] = useState({ pending: false, notice: null });
   // Bloqueo síncrono: un doble clic no puede lanzar dos peticiones antes
   // de que React vuelva a pintar los botones deshabilitados.
   const actionInFlight = useRef(false);
@@ -138,6 +139,7 @@ export default function AutoTradingTab({ underlying } = {}) {
     setModeError(null);
     setUnlink({ pending: false, error: null });
     setCancel({ pendingId: null, notice: null });
+    setSim({ pending: false, notice: null });
     if (!detailVisible) return;
     setDetail((prev) => (prev?.id === selectedId ? prev : null));
     loadDetail(selectedId);
@@ -319,6 +321,7 @@ export default function AutoTradingTab({ underlying } = {}) {
     if (!shown || actionInFlight.current) return;
     const id = shown.id;
     actionInFlight.current = true;
+    setSim((x) => ({ ...x, notice: null }));
     setCancel({ pendingId: orderId, notice: null });
     try {
       await autoBotsApi.cancelOrder(id, orderId);
@@ -331,6 +334,26 @@ export default function AutoTradingTab({ underlying } = {}) {
       refresh(id);
     } catch (err) {
       if (mounted.current) setCancel({ pendingId: null, notice: { error: true, message: `No se pudo cancelar la orden: ${err.message}` } });
+    } finally {
+      actionInFlight.current = false;
+    }
+  };
+
+  const simulate = async (direction) => {
+    if (!shown || actionInFlight.current) return;
+    const id = shown.id;
+    actionInFlight.current = true;
+    setSim({ pending: true, notice: null });
+    try {
+      const res = await autoBotsApi.simulate(id, { direction });
+      if (mounted.current) {
+        const label = DECISION_LABEL[res?.decision] || res?.decision || '—';
+        setSim({ pending: false, notice: { message: `Simulación enviada: ${label}${res?.detail ? ` · ${res.detail}` : ''}` } });
+      }
+      loadSignals(id, filterRef.current);
+      refresh(id);
+    } catch (err) {
+      if (mounted.current) setSim({ pending: false, notice: { error: true, message: err.message || 'No se pudo simular la señal' } });
     } finally {
       actionInFlight.current = false;
     }
@@ -359,8 +382,9 @@ export default function AutoTradingTab({ underlying } = {}) {
     onClosePosition: (positionId) => openClose([positionId]),
     onCloseAll: () => openClose(undefined),
     onCancelOrder: cancelOrder,
-    actionBusy: closeDialog.submitting || cancel.pendingId !== null,
-    actionNotice: cancel.notice,
+    onSimulate: simulate,
+    actionBusy: closeDialog.submitting || cancel.pendingId !== null || sim.pending,
+    actionNotice: sim.notice || cancel.notice,
   };
 
   const closeAll = closeDialog.positionIds === undefined;

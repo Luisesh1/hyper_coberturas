@@ -28,6 +28,8 @@ export const autoBotsApi = {
   // Cierre manual en el libro del modo actual (Real → órdenes LIMIT reales).
   // Sin positionIds cierra todas. → { status: 'closed' | 'pending' | 'nothing_to_close' | 'not_submitted', detail }
   close: (id, { positionIds } = {}) => request('POST', `/options/auto-bots/${enc(id)}/close`, { positionIds, confirm: true }),
+  // Simula una señal en el libro sombra (aunque el bot esté en Real). direction: 'bullish' | 'bearish'. → { decision, detail }
+  simulate: (id, { direction }) => request('POST', `/options/auto-bots/${enc(id)}/simulate`, { direction }),
   // Pide cancelar una entrada real pendiente (las salidas y el TP no se cancelan). → orden con cancelRequested
   cancelOrder: (id, orderId) => request('POST', `/options/auto-bots/${enc(id)}/orders/${enc(orderId)}/cancel`),
 };

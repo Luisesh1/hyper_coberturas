@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ModeSwitch from '../strategies/ModeSwitch';
 import { ChevronLeftIcon, CloseIcon, PencilIcon, TrashIcon, WarningIcon } from '../strategies/common/icons';
@@ -34,6 +34,38 @@ function ParamRows({ rows }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+// Menú «Probar señal ▾»: simula una señal alcista o bajista solo en sombra.
+function SimulateMenu({ bot, onSimulate, busy, mobile }) {
+  const [open, setOpen] = useState(false);
+  if (!onSimulate) return null;
+  const paused = bot.mode === 'paused';
+  const choose = (direction) => {
+    setOpen(false);
+    onSimulate(direction);
+  };
+  return (
+    <div className={styles.simMenu} onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}>
+      <button
+        type="button"
+        className={`${ui.btn} ${mobile ? styles.touchBtn : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={paused || busy}
+        title={paused ? 'Pasa el bot a Sombra para simular' : 'Simula una señal solo en sombra; no envía órdenes reales'}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Probar señal ▾
+      </button>
+      {open && !paused && (
+        <div role="menu" aria-label="Probar señal" className={styles.simMenuList}>
+          <button type="button" role="menuitem" className={`${ui.btn} ${styles.touchBtn}`} onClick={() => choose('bullish')}>Alcista</button>
+          <button type="button" role="menuitem" className={`${ui.btn} ${styles.touchBtn}`} onClick={() => choose('bearish')}>Bajista</button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -90,6 +122,7 @@ export default function BotDetail({
   onClosePosition,
   onCloseAll,
   onCancelOrder,
+  onSimulate,
   actionBusy = false,
   actionNotice = null,
 }) {
@@ -169,6 +202,7 @@ export default function BotDetail({
             <button type="button" className={ui.btn} onClick={onEdit}>
               <PencilIcon size={18} /> Alertas, salidas y riesgo
             </button>
+            <SimulateMenu bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
           </section>
           <section className={styles.mobileSection}>
             <div className={styles.sectionHead}>
@@ -230,7 +264,10 @@ export default function BotDetail({
           </div>
           {unlinkAlert}
           <AlertRows alerts={bot.alerts} onUnlink={onUnlink} unlinking={unlinking} />
-          <button type="button" className={ui.btn} onClick={onEdit}>Vincular alerta…</button>
+          <div className={styles.simRow}>
+            <button type="button" className={ui.btn} onClick={onEdit}>Vincular alerta…</button>
+            <SimulateMenu bot={bot} onSimulate={onSimulate} busy={actionBusy} />
+          </div>
           <p className={styles.note}>
             Solo se listan alertas alcistas o bajistas cuyo activo tiene opciones en Binance (BTC, ETH, BNB, SOL, XRP, DOGE). Las neutrales no operan.
           </p>

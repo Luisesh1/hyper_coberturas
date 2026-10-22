@@ -14,7 +14,7 @@ vi.mock('../optionsAutomationApi', () => ({
 }));
 vi.mock('../autoTradingApi', () => ({
   SIGNAL_FILTERS: ['all', 'traded', 'ignored'],
-  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn() },
+  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn(), simulate: vi.fn() },
 }));
 
 const ALERT_UP = { id: 11, name: 'BTC · MACD cruce alcista 15m', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70 };
@@ -358,6 +358,38 @@ describe('AutoTradingTab · cierre manual y cancelación', () => {
     expect(screen.getByRole('button', { name: 'Cancelar orden 9' }).disabled).toBe(true);
     await act(async () => { resolveCancel({ id: 9, cancelRequested: true }); });
     expect(await screen.findByText(/Cancelación solicitada/)).toBeTruthy();
+  });
+});
+
+describe('AutoTradingTab · probar señal', () => {
+  it('«Probar señal ▾» → Alcista envía la simulación, avisa del resultado y recarga las señales', async () => {
+    autoBotsApi.simulate.mockResolvedValue({ decision: 'opened', detail: 'Sombra: Compra BTC-261024-70000-C' });
+    renderTab();
+    const trigger = await screen.findByRole('button', { name: /Probar señal/ });
+    expect(screen.queryByRole('menuitem', { name: 'Alcista' })).toBeNull();
+    fireEvent.click(trigger);
+    const before = autoBotsApi.signals.mock.calls.length;
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Alcista' }));
+    await waitFor(() => expect(autoBotsApi.simulate).toHaveBeenCalledWith(1, { direction: 'bullish' }));
+    expect(await screen.findByText(/Simulación enviada: Abrió/)).toBeTruthy();
+    await waitFor(() => expect(autoBotsApi.signals.mock.calls.length).toBeGreaterThan(before));
+    expect(screen.queryByRole('menuitem', { name: 'Bajista' })).toBeNull();
+  });
+
+  it('un 429 o 409 del servidor se muestra como error', async () => {
+    autoBotsApi.simulate.mockRejectedValue(Object.assign(new Error('Espera unos segundos antes de simular otra señal'), { code: 'SIMULATE_RATE_LIMIT' }));
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /Probar señal/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Bajista' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Espera unos segundos/);
+  });
+
+  it('con el bot pausado el botón está deshabilitado', async () => {
+    serverModes = { 1: 'paused', 2: 'paused' };
+    renderTab();
+    const trigger = await screen.findByRole('button', { name: /Probar señal/ });
+    expect(trigger.disabled).toBe(true);
+    expect(trigger.title).toMatch(/Sombra/);
   });
 });
 

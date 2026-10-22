@@ -176,6 +176,7 @@ export function normalizeSignal(raw = {}, i = 0) {
     decisionLabel: DECISION_LABEL[decision] || decision || '—',
     tone: DECISION_TONE[decision] || 'skip',
     detail: raw.detail || '',
+    simulated: raw.simulated === true,
     at: toMs(pick(raw, 'createdAt', 'created_at', 'at', 't')),
   };
 }
@@ -212,7 +213,7 @@ const usdtSigned = (v) => (Number.isFinite(v) ? formatUsdt(v, { sign: true }) : 
 const toneOfPnl = (v) => (!Number.isFinite(v) || v === 0 ? 'neutral' : v > 0 ? 'pos' : 'neg');
 
 export function signalStats(signals, now = Date.now()) {
-  const recent = (signals || []).filter((s) => s.at === null || now - s.at <= 30 * DAY_MS);
+  const recent = (signals || []).filter((s) => !s.simulated).filter((s) => s.at === null || now - s.at <= 30 * DAY_MS);
   return {
     total: recent.length,
     bullish: recent.filter((s) => s.direction === 'bullish').length,
