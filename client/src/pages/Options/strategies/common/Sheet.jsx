@@ -19,6 +19,8 @@ export default function Sheet({
   tone = 'default',
   size = 'md',
   closeDisabled = false,
+  // false: pulsar fuera no cierra (formularios que se guardan o se cancelan).
+  dismissOnScrim = true,
 }) {
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const panelRef = useRef(null);
@@ -62,7 +64,7 @@ export default function Sheet({
         className={styles.scrim}
         aria-label="Cerrar"
         tabIndex={-1}
-        onClick={() => { if (!closeDisabled) onClose?.(); }}
+        onClick={() => { if (!closeDisabled && dismissOnScrim) onClose?.(); }}
       />
       <section
         ref={panelRef}
