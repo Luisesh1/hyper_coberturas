@@ -30,6 +30,19 @@ describe('BotActivity', () => {
     expect(screen.getAllByText('Calculando objetivo…').length).toBeGreaterThan(0);
   });
 
+  it('posición abierta: prima total y fecha/hora de compra en escritorio y móvil', () => {
+    const openedAt = new Date(2026, 9, 22, 14, 5).getTime();
+    const withDate = bot({ positions: [{ ...bot().positions[0], openedAt }] });
+    const { rerender } = render(<BotActivity bot={withDate} part="top" />);
+    expect(screen.getByRole('columnheader', { name: 'Prima' })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Ejecutada' })).toBeTruthy();
+    expect(screen.getByText('10,00 USDT')).toBeTruthy();
+    expect(screen.getByText('22 oct 14:05')).toBeTruthy();
+    rerender(<BotActivity bot={withDate} mobile part="top" />);
+    expect(screen.getByText(/Prima 10,00 USDT/)).toBeTruthy();
+    expect(screen.getByText(/22 oct 14:05/)).toBeTruthy();
+  });
+
   it('sin posiciones muestra el vacío', () => {
     render(<BotActivity bot={bot({ positions: [] })} part="top" />);
     expect(screen.getByText('Sin posiciones abiertas')).toBeTruthy();
