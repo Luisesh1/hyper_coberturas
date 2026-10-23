@@ -43,6 +43,13 @@ describe('BotActivity', () => {
     expect(screen.getByText(/22 oct 14:05/)).toBeTruthy();
   });
 
+  it('TP con su incremento porcentual debajo, en escritorio y móvil', () => {
+    const { rerender } = render(<BotActivity bot={bot()} part="top" />);
+    expect(screen.getByText('+80,0 %')).toBeTruthy();
+    rerender(<BotActivity bot={bot()} mobile part="top" />);
+    expect(screen.getByText(/TP 18,00 \(\+80,0 %\)/)).toBeTruthy();
+  });
+
   it('sin posiciones muestra el vacío', () => {
     render(<BotActivity bot={bot({ positions: [] })} part="top" />);
     expect(screen.getByText('Sin posiciones abiertas')).toBeTruthy();

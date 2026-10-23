@@ -15,6 +15,7 @@ const LEGEND = [
 
 const price = (v) => (v === null || v === undefined ? '—' : formatNumber(v, { decimals: 4, minDecimals: 2 }));
 const usdt = (v) => (v === null || v === undefined ? '—' : `${formatUsdt(v)} USDT`);
+const tpPctText = (r) => (r.tpPct === null ? '' : ` (${formatPct(r.tpPct, { sign: true })})`);
 const pnl = (v) => (v === null || v === undefined ? '—' : `${formatUsdt(v, { sign: true })} USDT`);
 const toneClass = (t) => ui[`tone_${t === 'neutral' ? 'muted' : t}`];
 const ICON_BTN = `${ui.btn} ${ui.btnSmall}`;
@@ -53,7 +54,7 @@ function TpStopBar({ row }) {
       </div>
       <div className={styles.tpStopLabels}>
         <span>Stop {price(row.stopPrice)}</span>
-        <span>TP {price(row.tpPrice)}</span>
+        <span>TP {price(row.tpPrice)}{tpPctText(row)}</span>
       </div>
     </div>
   );
@@ -63,7 +64,7 @@ function TpStopBar({ row }) {
 function AtrTarget({ row }) {
   return (
     <div className={styles.atrTarget}>
-      <span><strong>Objetivo {price(row.tpPrice)}</strong> · sin stop</span>
+      <span><strong>Objetivo {price(row.tpPrice)}{tpPctText(row)}</strong> · sin stop</span>
       <span className={`${ui.muted} ${ui.small}`}>{row.tpBreakdown}</span>
     </div>
   );
@@ -135,7 +136,10 @@ function Positions({ rows, mobile, multi, onClosePosition, onCloseAll, busy }) {
                     {pnl(r.pnlUsdt)}{r.pnlPct !== null ? ` (${formatPct(r.pnlPct, { sign: true })})` : ''}
                   </td>
                   <td className={`${ui.mono} ${ui.num}`}>{price(r.stopPrice)}</td>
-                  <td className={`${ui.mono} ${ui.num}`}>{price(r.tpPrice)}</td>
+                  <td className={`${ui.mono} ${ui.num}`}>
+                    {price(r.tpPrice)}
+                    {r.tpPct !== null && <div className={`${ui.small} ${ui.muted}`}>{formatPct(r.tpPct, { sign: true })}</div>}
+                  </td>
                   <td className={`${ui.mono} ${ui.num}`}>{r.hoursToExpiry === null ? '—' : `${r.hoursToExpiry} h`}</td>
                   {onClosePosition && <td className={ui.num}><CloseBtn row={r} onClosePosition={onClosePosition} busy={busy} /></td>}
                 </tr>
