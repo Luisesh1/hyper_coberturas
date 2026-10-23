@@ -215,6 +215,12 @@ export const SIGNAL_FILTER_OPTIONS = [
   { key: 'ignored', label: 'Ignoradas' },
 ];
 
+// «BTCUSDT» / «SOL-PERP» → «BTC» / «SOL»: subyacente del activo que disparó la alerta.
+function assetUnderlying(asset) {
+  return String(asset || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+    .replace(/(USDT|USDC|FDUSD|BUSD|USD|PERP)+$/, '');
+}
+
 export function normalizeSignal(raw = {}, i = 0) {
   const decision = String(raw.decision || '').toLowerCase();
   return {
@@ -224,6 +230,7 @@ export function normalizeSignal(raw = {}, i = 0) {
     alertName: pick(raw, 'alertName', 'alert_name') || '—',
     direction: normalizeDirection(raw.direction),
     asset: raw.asset || '',
+    underlying: assetUnderlying(raw.asset),
     score: toNumber(raw.score),
     decision,
     decisionLabel: DECISION_LABEL[decision] || decision || '—',

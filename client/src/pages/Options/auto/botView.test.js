@@ -196,6 +196,15 @@ describe('señales y KPIs', () => {
     { id: 4, alertName: 'B', direction: 'bearish', score: 70, decision: 'error', createdAt: now - 40 * 86400000 },
   ];
 
+  it('subyacente que disparó la señal, a partir del activo', () => {
+    const u = (asset) => normalizeSignals([{ id: 1, asset }])[0].underlying;
+    expect(u('BTCUSDT')).toBe('BTC');
+    expect(u('ethusdc')).toBe('ETH');
+    expect(u('SOL-PERP')).toBe('SOL');
+    expect(u('BNB')).toBe('BNB');
+    expect(u(null)).toBe('');
+  });
+
   it('ordena por fecha y filtra operadas / ignoradas', () => {
     const list = normalizeSignals(raw);
     expect(list.map((s) => s.id)).toEqual([1, 3, 2, 4]);
