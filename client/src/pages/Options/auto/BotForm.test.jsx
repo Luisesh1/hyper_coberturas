@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import BotForm from './BotForm';
 import { ATR_BAND_SWITCH_WARNING } from './botView';
 import { autoBotsApi } from '../autoTradingApi';
@@ -16,13 +16,73 @@ const bot = (mode, positions) => ({
   positions,
 });
 
-function renderEdit(b) {
-  render(<MemoryRouter><BotForm open bot={b} underlying="ETH" onCancel={() => {}} onSubmit={() => {}} /></MemoryRouter>);
+function renderEdit(b, props = {}) {
+  render(<MemoryRouter><BotForm open bot={b} underlying="ETH" onCancel={() => {}} onSubmit={() => {}} {...props} /></MemoryRouter>);
 }
+
+const toMode = (name) => fireEvent.click(screen.getByRole('radio', { name }));
+
+beforeEach(() => {
+  try { window.localStorage.clear(); } catch { /* sin almacenamiento */ }
+});
+
+describe('BotForm · modos Simple, Avanzado y Presets', () => {
+  it('abre en Simple: lo esencial a la vista y los campos finos ocultos', () => {
+    renderEdit(bot('fixed', []));
+    for (const name of ['Simple', 'Avanzado', 'Presets']) expect(screen.getByRole('radio', { name })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Simple' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('textbox', { name: /Riesgo por operación/ })).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: /Spread máx/ })).toBeNull();
+    toMode('Avanzado');
+    expect(screen.getByRole('textbox', { name: /Spread máx/ })).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: /Riesgo por operación/ })).toBeNull();
+  });
+
+  it('Presets aplica strike, vencimiento y salida; Simple los muestra y al tocar uno pasa a Personalizado', () => {
+    renderEdit(bot('fixed', []));
+    toMode('Presets');
+    fireEvent.click(screen.getByRole('radio', { name: /Swing/ }));
+    expect(screen.getByRole('radio', { name: /Swing/ }).getAttribute('aria-checked')).toBe('true');
+    toMode('Simple');
+    expect(screen.getByRole('radio', { name: 'Equilibrado' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: '~1 semana' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('Preset: Swing')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Cercano' }));
+    expect(screen.getByText('Preset: Personalizado')).toBeTruthy();
+  });
+
+  it('Riesgo por operación envía capitalUsdt y sube la cantidad máxima al tope', async () => {
+    const onSubmit = vi.fn(() => Promise.resolve());
+    renderEdit({ ...bot('fixed', []), alertIds: [7], alerts: [{ id: 7, name: 'A', direction: 'bullish', assetList: ['ETHUSDT'], coveredUnderlyings: ['ETH'] }] }, { onSubmit });
+    fireEvent.change(screen.getByRole('textbox', { name: /Riesgo por operación/ }), { target: { value: '10' } });
+    expect(screen.getByText(/arriesgando hasta 10 USDT/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0].params).toMatchObject({ capitalUsdt: 10, quantity: 1 });
+  });
+
+  it('recuerda el último modo al volver a abrir', () => {
+    const { unmount } = render(<MemoryRouter><BotForm open bot={bot('fixed', [])} underlying="ETH" onCancel={() => {}} onSubmit={() => {}} /></MemoryRouter>);
+    toMode('Avanzado');
+    unmount();
+    renderEdit(bot('fixed', []));
+    expect(screen.getByRole('radio', { name: 'Avanzado' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('pulsar fuera del editor no lo cierra', () => {
+    const onCancel = vi.fn();
+    renderEdit(bot('fixed', []), { onCancel });
+    fireEvent.click(document.querySelector('[class*="scrim"]'));
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('BotForm · aviso al pasar a Banda ATR', () => {
   it('editando un bot fijo con posiciones abiertas, al elegir Banda ATR muestra el aviso', () => {
     renderEdit(bot('fixed', [OPEN]));
+    toMode('Avanzado');
     expect(screen.queryByText(ATR_BAND_SWITCH_WARNING)).toBeNull();
     fireEvent.click(screen.getByRole('radio', { name: 'Banda ATR' }));
     expect(screen.getByText(ATR_BAND_SWITCH_WARNING)).toBeTruthy();
@@ -30,6 +90,7 @@ describe('BotForm · aviso al pasar a Banda ATR', () => {
 
   it('sin posiciones abiertas no lo muestra', () => {
     renderEdit(bot('fixed', [{ ...OPEN, closedAt: 123 }]));
+    toMode('Avanzado');
     fireEvent.click(screen.getByRole('radio', { name: 'Banda ATR' }));
     expect(screen.getByText('Longitud del ATR')).toBeTruthy();
     expect(screen.queryByText(ATR_BAND_SWITCH_WARNING)).toBeNull();
@@ -37,6 +98,7 @@ describe('BotForm · aviso al pasar a Banda ATR', () => {
 
   it('si el modo guardado ya es Banda ATR no lo muestra', () => {
     renderEdit(bot('atr_band', [OPEN]));
+    toMode('Avanzado');
     expect(screen.getByText('Longitud del ATR')).toBeTruthy();
     expect(screen.queryByText(ATR_BAND_SWITCH_WARNING)).toBeNull();
   });
@@ -53,6 +115,7 @@ describe('BotForm · señal contraria con Banda ATR', () => {
 describe('BotForm · presupuesto total', () => {
   it('con presupuesto muestra «Hasta X USDT por señal» y oculta el capital por entrada', () => {
     renderEdit({ ...bot('fixed', []), params: { structure: 'buy_with', takeProfitMode: 'fixed', capitalUsdt: 500 } });
+    toMode('Avanzado');
     expect(screen.getAllByLabelText(/Capital asignado/).length).toBeGreaterThan(0);
     fireEvent.change(screen.getByRole('textbox', { name: /Presupuesto total/ }), { target: { value: '48' } });
     expect(screen.getByText('Hasta 12 USDT por señal')).toBeTruthy();

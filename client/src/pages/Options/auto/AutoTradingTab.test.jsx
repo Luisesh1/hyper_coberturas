@@ -62,6 +62,7 @@ function renderTab(props = {}) {
 }
 
 beforeEach(() => {
+  try { window.localStorage.clear(); } catch { /* sin almacenamiento */ }
   // Aquí y no sólo en afterEach: el desmontaje del test anterior puede
   // resolver promesas pendientes después de limpiar.
   vi.clearAllMocks();
@@ -194,6 +195,7 @@ describe('AutoTradingTab · escritorio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Nuevo bot' }));
     const dialog = await screen.findByRole('dialog', { name: 'Nuevo bot' });
     await waitFor(() => expect(autoBotsApi.eligibleAlerts).toHaveBeenCalledWith('BTC'));
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Avanzado' }));
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Crear bot' }));
     expect(await within(dialog).findByText('Ponle un nombre')).toBeTruthy();
@@ -238,7 +240,8 @@ describe('AutoTradingTab · escritorio', () => {
       limits: { maxMarginUsdt: 1000 },
     });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Nuevo bot' })).toBeNull());
-  });
+    // Recorre el formulario completo (modo Avanzado): con la suite entera tarda más de 5 s.
+  }, 15_000);
 
   it('sin alertas elegibles muestra el enlace a Alertas', async () => {
     renderTab({ underlying: 'BTC' });

@@ -10,6 +10,10 @@ import {
   NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, ATR_BAND_INTERVALS, ATR_BAND_NOTE, ATR_BAND_SWITCH_WARNING, alertMeta, buildBotPayload,
   coveredList, initialBotForm, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
+import {
+  EDITOR_MODES, EXIT_OPTIONS, EXPIRY_OPTIONS, PRESETS, STRIKE_OPTIONS, applyPreset, botSummary, errorMode, exitHelp, exitOf,
+  expiryHelp, expiryOf, presetOf, presetTags, strikeHelp, strikeOf, withExit, withExpiry, withRisk, withStrike,
+} from './editorModes';
 import { formatNumber } from '../strategies/common/format';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
@@ -74,6 +78,17 @@ function AlertPicker({ underlyings, alerts, loading, error, selected, onToggle, 
   );
 }
 
+// Último modo usado (comodidad por navegador; sin almacenamiento, Simple).
+const MODE_KEY = 'options.botEditorMode';
+function readMode() {
+  try {
+    const saved = window.localStorage.getItem(MODE_KEY);
+    return EDITOR_MODES.some((m) => m.value === saved) ? saved : 'simple';
+  } catch {
+    return 'simple';
+  }
+}
+
 // Crear o editar un bot. Los subyacentes son de selección múltiple; quitar
 // uno con posiciones abiertas lo rechaza el servidor (409) y se muestra aquí.
 export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel, onSubmit }) {
@@ -84,6 +99,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState(null);
   const [eligible, setEligible] = useState({ loading: false, error: null, list: [], key: null });
+  const [mode, setMode] = useState(readMode);
   const reqId = useRef(0);
   const underlyingsKey = form.underlyings.join(',');
 
@@ -94,6 +110,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
     setSubmitted(false);
     setServerError(null);
     setSaving(false);
+    setMode(readMode());
     // Sólo al abrir (o al cambiar de bot): no pisar lo que se está escribiendo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, bot?.id]);
@@ -156,6 +173,11 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
     update({ alertIds: ids });
   };
 
+  const pickMode = (m) => {
+    setMode(m);
+    try { window.localStorage.setItem(MODE_KEY, m); } catch { /* sin almacenamiento */ }
+  };
+
   const pickStructure = (s) => {
     if (s === form.structure) return;
     const next = withStructure(form, s, { editing });
@@ -174,7 +196,11 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
     setSubmitted(true);
     const found = validate(form);
     setErrors(found);
-    if (Object.keys(found).length) return;
+    if (Object.keys(found).length) {
+      // Llevar al modo donde se ven los campos con error.
+      setMode((m) => errorMode(found, m));
+      return;
+    }
     setSaving(true);
     setServerError(null);
     try {
@@ -193,6 +219,10 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
   const hasOpenPositions = (bot?.positions || []).some((p) => p.closedAt == null);
   const switchingToAtr = editing && atrBand && bot?.params?.takeProfitMode !== 'atr_band' && hasOpenPositions;
   const errorCount = Object.keys(errors).length;
+  const preset = PRESETS.find((p) => p.value === presetOf(form));
+  const presetBadge = (
+    <p className={`${styles.presetBadge} ${preset ? '' : styles.presetBadgeCustom}`}>Preset: {preset ? preset.label : 'Personalizado'}</p>
+  );
   const onStructureKey = (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     e.preventDefault();
@@ -208,6 +238,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
         : 'Se crea en modo sombra: opera con llenados simulados hasta que lo pases a Real.'}
       onClose={onCancel}
       closeDisabled={saving}
+      dismissOnScrim={false}
       size="md"
       footer={(
         <>
@@ -219,6 +250,47 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
       )}
     >
       <form id="options-auto-bot-form" className={styles.form} onSubmit={submit} noValidate>
+        <ChoiceField
+          label="Modo del editor"
+          options={EDITOR_MODES}
+          value={mode}
+          onChange={pickMode}
+          columns={3}
+        />
+        {mode === 'presets' ? (
+          <>
+            <div role="radiogroup" aria-label="Presets" className={styles.presetList}>
+              {PRESETS.map((p) => {
+                const on = preset?.value === p.value;
+                return (
+                  <button
+                    key={p.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    className={`${styles.structureCard} ${on ? styles.structureCardOn : ''}`}
+                    onClick={() => update(applyPreset(form, p.value))}
+                  >
+                    <span className={styles.structureTitle}>{p.label}{on ? ' · aplicado' : ''}</span>
+                    <span className={styles.structureHint}>{p.desc}</span>
+                    <span className={styles.presetTags}>
+                      {presetTags(p, form).map((t) => <span key={t} className={styles.presetTag}>{t}</span>)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {!preset && (
+              <p className={`${ui.alert} ${ui.alertWarn}`} role="status">
+                Este bot tiene ajustes propios que no coinciden con ningún preset. Elegir uno reemplaza strike, vencimiento y salida.
+              </p>
+            )}
+            <p className={styles.summaryBox}>{botSummary(form)}</p>
+            <p className={styles.note}>Un preset fija strike, vencimiento y salida. El riesgo, las alertas y la señal contraria se ajustan en Simple.</p>
+          </>
+        ) : (
+        <>
+        {presetBadge}
         <FieldGroup title="General">
           <TextField
             label="Nombre"
@@ -281,6 +353,66 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
           <Mapping structure={form.structure} targetDelta={form.targetDelta} expiryDays={form.expiryDays} />
         </fieldset>
 
+        {mode === 'simple' ? (
+          <>
+            <FieldGroup title="Entrada y salida">
+              {hasBudget ? (
+                <p className={styles.note}>
+                  Este bot usa presupuesto total{perSignal !== null ? `: hasta ${formatNumber(perSignal, { decimals: 2, minDecimals: 0 })} USDT por señal` : ''}. Cámbialo en Avanzado.
+                </p>
+              ) : (
+                <NumberField
+                  label="Riesgo por operación"
+                  help={buy
+                    ? 'Lo máximo que pierdes por entrada: la prima. Vacío = usa la cantidad configurada'
+                    : 'Margen estimado por entrada. Vacío = usa la cantidad configurada'}
+                  unit="USDT"
+                  value={form.capitalUsdt}
+                  min={0}
+                  step={5}
+                  error={errors.capitalUsdt}
+                  onChange={(v) => update(withRisk(form, v))}
+                />
+              )}
+              <ChoiceField
+                label="Strike"
+                help={strikeHelp(form)}
+                options={STRIKE_OPTIONS}
+                value={strikeOf(form)}
+                onChange={(v) => update(withStrike(form, v))}
+                columns={3}
+              />
+              <ChoiceField
+                label="Vencimiento"
+                help={expiryHelp(form)}
+                options={EXPIRY_OPTIONS}
+                value={expiryOf(form)}
+                onChange={(v) => update(withExpiry(form, v))}
+                columns={3}
+              />
+              <ChoiceField
+                label="Salida"
+                help={exitHelp(form)}
+                options={buy ? EXIT_OPTIONS : EXIT_OPTIONS.filter((o) => o.value === 'fixed')}
+                value={exitOf(form)}
+                onChange={(v) => update(withExit(form, v))}
+                columns={buy ? 2 : 1}
+              />
+              {switchingToAtr && <p className={`${ui.alert} ${ui.alertWarn}`} role="status">{ATR_BAND_SWITCH_WARNING}</p>}
+              <ChoiceField
+                label="Si llega la señal contraria"
+                help={(ON_OPPOSITE.find((o) => o.value === form.onOpposite) || ON_OPPOSITE[0]).help}
+                options={ON_OPPOSITE.map((o) => ({ value: o.value, label: o.label }))}
+                value={form.onOpposite}
+                onChange={(v) => update({ onOpposite: v })}
+                columns={3}
+              />
+            </FieldGroup>
+            <p className={styles.summaryBox}>{botSummary(form)}</p>
+            <p className={styles.note}>Spread, apalancamiento, límites diarios y avisos mantienen sus valores. Cámbialos en Avanzado.</p>
+          </>
+        ) : (
+        <>
         <FieldGroup title="Entrada">
           <NumberField
             label="Delta objetivo"
@@ -580,6 +712,10 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
           </label>
           <p className={styles.note}>Solo aplica en modo Real. Las alertas de incidentes del ejecutor siempre se envían.</p>
         </FieldGroup>
+        </>
+        )}
+        </>
+        )}
 
         {submitted && errorCount > 0 && (
           <p className={`${ui.alert} ${ui.alertError}`} role="alert">

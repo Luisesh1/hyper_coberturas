@@ -527,3 +527,36 @@
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
 }
+
+/* ── Editor: modos Simple / Avanzado / Presets ─────────────────── */
+.presetBadge {
+  align-self: flex-start;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--indigo);
+  background: var(--indigo-dark-bg);
+  color: var(--text-bright);
+  font-size: 12px;
+  font-weight: 600;
+}
+.presetBadgeCustom { border-style: dashed; border-color: var(--border-strong); background: transparent; color: var(--text-secondary); }
+.presetList { display: flex; flex-direction: column; gap: 8px; }
+.presetTags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.presetTag {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.summaryBox {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--indigo-border);
+  background: var(--indigo-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
