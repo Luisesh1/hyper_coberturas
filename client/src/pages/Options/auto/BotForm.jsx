@@ -397,14 +397,14 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             error={errors.quantity}
             onChange={(v) => update({ quantity: v })}
           />
-          {!atrBand && <ChoiceField
+          <ChoiceField
             label="Si llega la señal contraria"
             help={(ON_OPPOSITE.find((o) => o.value === form.onOpposite) || ON_OPPOSITE[0]).help}
             options={ON_OPPOSITE.map((o) => ({ value: o.value, label: o.label }))}
             value={form.onOpposite}
             onChange={(v) => update({ onOpposite: v })}
             columns={3}
-          />}
+          />
         </FieldGroup>
 
         <FieldGroup title="3 · Salidas">

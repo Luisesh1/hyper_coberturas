@@ -71,6 +71,8 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
         pnlUsdt,
         pnlPct,
         tpPrice,
+        // Incremento del TP sobre la entrada (negativo al vender: recompra más barata).
+        tpPct: tpPrice !== null && entry ? ((tpPrice - entry) / entry) * 100 : null,
         stopPrice,
         tpBreakdown: atrBand ? atrBandBreakdown(p) : null,
         hoursToExpiry: exp === null ? null : Math.max(0, Math.round((exp - now) / 3600000)),

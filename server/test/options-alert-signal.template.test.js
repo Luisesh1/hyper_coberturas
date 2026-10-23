@@ -167,7 +167,10 @@ test('alert_signal atr_band: valores por defecto, rangos y combinaciones', () =>
   assert.equal(p.atrBandLength, 14);
   assert.equal(p.atrBandMultiplier, 2);
   assert.equal(p.tpMaxGainPct, 200);
-  assert.equal(p.onOpposite, 'ignore', 'atr_band fuerza ignorar la señal contraria');
+  assert.equal(p.onOpposite, 'reverse', 'atr_band respeta la señal contraria elegida');
+  for (const mode of ['reverse', 'close', 'ignore']) {
+    assert.equal(params({ takeProfitMode: 'atr_band', onOpposite: mode }).onOpposite, mode);
+  }
   assert.equal(p.exitHoursBeforeExpiry, 0, 'atr_band no tiene salida por tiempo');
   assert.equal(params({ takeProfitMode: 'atr_band', exitHoursBeforeExpiry: 0 }).exitHoursBeforeExpiry, 0);
 
@@ -193,14 +196,20 @@ test('alert_signal atr_band: valores por defecto, rangos y combinaciones', () =>
   assert.equal(params({ structure: 'sell_against' }).takeProfitMode, 'fixed');
 });
 
-test('alert_signal atr_band: señal contraria con posición abierta se ignora sin cerrar', () => {
-  const p = params({ takeProfitMode: 'atr_band', onOpposite: 'reverse' });
+test('alert_signal atr_band: señal contraria según onOpposite (girar, solo cerrar, ignorar)', () => {
   const call = { ...position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 50, ask: 55 } }), tpTargetPrice: 300 };
-  const actions = run(p, { signal: { direction: 'bearish' }, positions: [call] });
-  assert.equal(actions.length, 1);
-  assert.equal(actions[0].type, 'skip');
-  assert.equal(actions[0].reason, 'opposite_ignored');
-  assert.ok(!actions.some((a) => a.type === 'close'));
+  const bearish = (onOpposite) => run(params({ takeProfitMode: 'atr_band', onOpposite }), { signal: { direction: 'bearish' }, positions: [call] });
+
+  const reverse = bearish('reverse');
+  assert.deepEqual(reverse.map((a) => a.type), ['close', 'open']);
+  assert.equal(reverse[0].reason, 'opposite_signal');
+  assert.equal(parseSymbol(reverse[1].legs[0].symbol).type, 'P');
+
+  const close = bearish('close');
+  assert.deepEqual(close.map((a) => a.type), ['close']);
+
+  const ignore = bearish('ignore');
+  assert.deepEqual(ignore.map((a) => a.reason), ['opposite_ignored']);
 });
 
 test('alert_signal atr_band: ni stop ni salida por tiempo, aun con pérdida del 90 % y a 2 h del vencimiento', () => {

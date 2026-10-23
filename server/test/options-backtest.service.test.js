@@ -442,11 +442,11 @@ test('simulate atr_band: sin llegar al objetivo no cierra por stop ni por tiempo
   const hours = 8 * 24 + 10;
   const bids = Array.from({ length: hours }, (_, i) => (i === 0 ? 195 : Math.max(1, 300 - i)));
   const result = simulate({
-    template: templatesIndex.getTemplate('alert_signal'), params: atrParams(),
+    template: templatesIndex.getTemplate('alert_signal'), params: atrParams({ onOpposite: 'ignore' }),
     steps: controlledSteps(bids), capitalUsdt: 1000, feePct: 0,
     signals: [
       { t: ATR_T0, direction: 'bullish', alertId: 5 },
-      // La contraria se ignora en modo banda ATR (onOpposite forzado a ignore).
+      // Con onOpposite 'ignore' la contraria no cierra la posición.
       { t: ATR_T0 + 5 * HOUR_MS, direction: 'bearish', alertId: 5 },
     ],
     candles: atrCandles,

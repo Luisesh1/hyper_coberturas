@@ -47,9 +47,9 @@ describe('configuración completa del bot', () => {
     expect(row(d.entry, 'maxPremiumUsdt')).toBeUndefined();
   });
 
-  it('atr_band no repite «Señal contraria»', () => {
-    const d = describeParams(normalizeBot({ ...base, params: { ...base.params, takeProfitMode: 'atr_band' } }));
-    expect(row(d.entry, 'onOpposite')).toBeUndefined();
+  it('atr_band también muestra «Señal contraria»', () => {
+    const d = describeParams(normalizeBot({ ...base, params: { ...base.params, takeProfitMode: 'atr_band', onOpposite: 'close' } }));
+    expect(row(d.entry, 'onOpposite').value).toBe('Cierra la posición y no abre otra');
   });
 
   it('estado del runner en lenguaje humano', () => {
@@ -150,21 +150,21 @@ describe('formulario de bot', () => {
   });
 
   it('banda ATR: el payload lleva los cuatro params y no stopLossPct', () => {
-    const form = { ...initialBotForm({ underlying: 'ETH' }), name: 'ATR', alertIds: [3], atrBandInterval: '4h', atrBandLength: 20, atrBandMultiplier: 1.5, tpMaxGainPct: 300 };
+    const form = { ...initialBotForm({ underlying: 'ETH' }), name: 'ATR', alertIds: [3], atrBandInterval: '4h', atrBandLength: 20, atrBandMultiplier: 1.5, tpMaxGainPct: 300, onOpposite: 'close' };
     expect(validateBotForm(form)).toEqual({});
     const { params } = buildBotPayload(form);
-    expect(params).toMatchObject({ takeProfitMode: 'atr_band', atrBandInterval: '4h', atrBandLength: 20, atrBandMultiplier: 1.5, tpMaxGainPct: 300, onOpposite: 'ignore', exitHoursBeforeExpiry: 0 });
+    expect(params).toMatchObject({ takeProfitMode: 'atr_band', atrBandInterval: '4h', atrBandLength: 20, atrBandMultiplier: 1.5, tpMaxGainPct: 300, onOpposite: 'close', exitHoursBeforeExpiry: 0 });
     expect('stopLossPct' in params).toBe(false);
     expect(validateBotForm({ ...form, atrBandLength: 1, atrBandMultiplier: 11, tpMaxGainPct: 5, atrBandInterval: '2h' })).toMatchObject({
       atrBandLength: 'Mínimo 2', atrBandMultiplier: 'Máximo 10', tpMaxGainPct: 'Mínimo 10', atrBandInterval: 'Elige una temporalidad',
     });
   });
 
-  it('banda ATR: al salir se restauran onOpposite, salida por tiempo y stop', () => {
+  it('banda ATR: al salir se restauran salida por tiempo y stop; la señal contraria se conserva', () => {
     const bot = normalizeBot({ id: 1, params: { structure: 'buy_with', takeProfitMode: 'atr_band', onOpposite: 'ignore', exitHoursBeforeExpiry: 0, atrBandInterval: '15m' } });
     const form = initialBotForm({ bot });
     expect(form).toMatchObject({ takeProfitMode: 'atr_band', atrBandInterval: '15m', onOpposite: 'ignore', exitHoursBeforeExpiry: 0 });
-    expect(withTakeProfitMode(form, 'fixed')).toMatchObject({ takeProfitMode: 'fixed', onOpposite: 'reverse', exitHoursBeforeExpiry: 12, stopLossPct: 50 });
+    expect(withTakeProfitMode(form, 'fixed')).toMatchObject({ takeProfitMode: 'fixed', onOpposite: 'ignore', exitHoursBeforeExpiry: 12, stopLossPct: 50 });
   });
 
   it('describeParams en atr_band', () => {
@@ -195,6 +195,15 @@ describe('señales y KPIs', () => {
     { id: 3, alertName: 'B', direction: 'bearish', score: 70, decision: 'closed', createdAt: now - 3000 },
     { id: 4, alertName: 'B', direction: 'bearish', score: 70, decision: 'error', createdAt: now - 40 * 86400000 },
   ];
+
+  it('subyacente que disparó la señal, a partir del activo', () => {
+    const u = (asset) => normalizeSignals([{ id: 1, asset }])[0].underlying;
+    expect(u('BTCUSDT')).toBe('BTC');
+    expect(u('ethusdc')).toBe('ETH');
+    expect(u('SOL-PERP')).toBe('SOL');
+    expect(u('BNB')).toBe('BNB');
+    expect(u(null)).toBe('');
+  });
 
   it('ordena por fecha y filtra operadas / ignoradas', () => {
     const list = normalizeSignals(raw);

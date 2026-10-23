@@ -76,6 +76,7 @@ export default function SignalsFeed({ signals, filter, loading = false, error = 
             <span className={styles.signalCardRow}>
               <Decision signal={s} />
               <SimTag signal={s} />
+              {s.underlying && <span className={styles.underlyingTag} title={s.asset}>{s.underlying}</span>}
               <span className={styles.signalAlert}>{s.alertName}</span>
             </span>
             <SignalDetail detail={s.detail} />
@@ -89,12 +90,13 @@ export default function SignalsFeed({ signals, filter, loading = false, error = 
     <div className={ui.tableWrap}>
       <table className={ui.table}>
         <thead>
-          <tr><th>Hora</th><th>Alerta</th><th>Dirección</th><th className={ui.num}>Puntaje</th><th>Decisión</th><th>Detalle</th></tr>
+          <tr><th>Hora</th><th>Subyacente</th><th>Alerta</th><th>Dirección</th><th className={ui.num}>Puntaje</th><th>Decisión</th><th>Detalle</th></tr>
         </thead>
         <tbody>
           {signals.map((s) => (
             <tr key={s.id}>
               <td className={`${ui.mono} ${ui.muted}`} style={{ whiteSpace: 'nowrap' }}>{formatDateTime(s.at)}</td>
+              <td className={ui.mono} title={s.asset || undefined}>{s.underlying || '—'}</td>
               <td>{s.alertName}</td>
               <td><DirectionChip direction={s.direction} /></td>
               <td className={`${ui.mono} ${ui.num}`}>{formatScore(s.score)}</td>

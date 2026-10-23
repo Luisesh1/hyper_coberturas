@@ -42,6 +42,14 @@ describe('BotForm · aviso al pasar a Banda ATR', () => {
   });
 });
 
+describe('BotForm · señal contraria con Banda ATR', () => {
+  it('muestra Girar / Solo cerrar / Ignorar también en Banda ATR', () => {
+    renderEdit(bot('atr_band', []));
+    expect(screen.getByText('Si llega la señal contraria')).toBeTruthy();
+    for (const name of ['Girar', 'Solo cerrar', 'Ignorar']) expect(screen.getByRole('radio', { name })).toBeTruthy();
+  });
+});
+
 describe('BotForm · presupuesto total', () => {
   it('con presupuesto muestra «Hasta X USDT por señal» y oculta el capital por entrada', () => {
     renderEdit({ ...bot('fixed', []), params: { structure: 'buy_with', takeProfitMode: 'fixed', capitalUsdt: 500 } });
