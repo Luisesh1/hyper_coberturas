@@ -33,10 +33,11 @@ async function run(page, shot) {
   const state = {};
   await mockApi(page, state);
   await page.goto('/opciones?tab=auto');
-  await page.getByRole('button', { name: 'Nuevo bot' }).first().click();
+  // En el Docker de desarrollo el botón «Logs» tapa el FAB móvil: clic directo.
+  await page.getByRole('button', { name: 'Nuevo bot' }).first().dispatchEvent('click');
   const form = page.getByRole('dialog', { name: 'Nuevo bot' });
   await expect(form.getByRole('radio', { name: 'Simple' })).toHaveAttribute('aria-checked', 'true');
-  await expect(form.getByLabel(/Riesgo por operación/)).toBeVisible();
+  await expect(form.getByRole('textbox', { name: /Riesgo por operación/ })).toBeVisible();
 
   // Pulsar fuera no cierra.
   await page.mouse.click(5, 5);
@@ -51,7 +52,7 @@ async function run(page, shot) {
   await expect(form.getByRole('radio', { name: 'Cercano' })).toHaveAttribute('aria-checked', 'true');
   await expect(form.getByText('Preset: Rápido')).toBeVisible();
   await form.getByLabel('Nombre').fill('Bot simple');
-  await form.getByLabel(/Riesgo por operación/).fill('10');
+  await form.getByRole('textbox', { name: /Riesgo por operación/ }).fill('10');
   await form.getByRole('checkbox', { name: new RegExp(ALERT_UP.name) }).click();
   await expect(form.getByText(/arriesgando hasta 10 USDT/)).toBeVisible();
   await page.screenshot({ path: `test-results/${shot}-simple.png`, fullPage: false });
