@@ -398,12 +398,11 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
   };
 }
 
-// Al salir de «Banda ATR» el servidor había sobrescrito señal contraria,
-// salida por tiempo y stop (ignore / 0): se restauran los valores de la estructura.
+// Al salir de «Banda ATR» el servidor había sobrescrito salida por tiempo y
+// stop (0 / sin stop): se restauran los valores de la estructura.
 function leaveAtrBand(form, structure) {
   return {
     ...form,
-    onOpposite: COMMON_DEFAULTS.onOpposite,
     exitHoursBeforeExpiry: COMMON_DEFAULTS.exitHoursBeforeExpiry,
     stopLossPct: STRUCTURE_DEFAULTS[structure].stopLossPct,
   };
@@ -538,9 +537,8 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     notify: { trades: form.notifyTrades !== false, errors: form.notifyErrors !== false },
   };
   if (buy && form.takeProfitMode === 'atr_band') {
-    // Sin stop: el servidor fuerza onOpposite=ignore y sin salida por tiempo.
+    // Sin stop ni salida por tiempo; la señal contraria es la elegida.
     delete params.stopLossPct;
-    params.onOpposite = 'ignore';
     params.exitHoursBeforeExpiry = 0;
     params.atrBandInterval = form.atrBandInterval;
     params.atrBandLength = Number(form.atrBandLength);
@@ -620,7 +618,7 @@ export function describeParams(bot) {
       ...(maxSpread > 0 ? [{ key: 'maxSpreadPct', label: 'Spread máx.', value: `${formatNumber(maxSpread, { decimals: 2, minDecimals: 0 })} %` }] : []),
       ...(buy && minLeverage > 0 ? [{ key: 'minLeverage', label: 'Apalancamiento mín.', value: `${formatNumber(minLeverage, { decimals: 2, minDecimals: 0 })}×` }] : []),
       // La banda ATR fuerza «ignorar» y ya declara que no hay otras salidas.
-      ...(atr ? [] : [{ key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true }]),
+      { key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true },
     ],
     exits,
     risk: [

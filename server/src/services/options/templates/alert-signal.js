@@ -17,8 +17,9 @@
  *
  * `takeProfitMode = 'atr_band'` (solo `buy_with`): el precio de venta se fija
  * una vez al llenarse (banda ATR, ver options-atr-band-target) y queda como
- * LIMIT GTC en Binance. No hay otras salidas: ni stop, ni por tiempo, ni por
- * señal contraria; si no se vende, se mantiene hasta la liquidación.
+ * LIMIT GTC en Binance. Sin stop ni salida por tiempo; la señal contraria
+ * sigue `onOpposite` (en Real el cierre cancela antes la LIMIT residente).
+ * Si no se vende ni se cierra, se mantiene hasta la liquidación.
  */
 
 const { ValidationError } = require('../../../errors/app-error');
@@ -147,7 +148,7 @@ const fmtFilter = (v) => String(Math.round(v * 100) / 100).replace('.', ',');
 function validateParams(raw = {}) {
   const input = raw && typeof raw === 'object' ? raw : {};
   const structure = pickEnum(input.structure, STRUCTURES, defaultParams.structure, 'Estructura');
-  let onOpposite = pickEnum(input.onOpposite, ON_OPPOSITE, defaultParams.onOpposite, 'Señal contraria');
+  const onOpposite = pickEnum(input.onOpposite, ON_OPPOSITE, defaultParams.onOpposite, 'Señal contraria');
   const takeProfitMode = pickEnum(input.takeProfitMode, TAKE_PROFIT_MODES, defaultParams.takeProfitMode, 'Tipo de Take Profit');
   const atrBandInterval = pickEnum(input.atrBandInterval, ATR_BAND_INTERVALS, defaultParams.atrBandInterval, 'Temporalidad de la banda ATR');
   if (takeProfitMode === 'atr_band' && structure !== 'buy_with') {
@@ -163,13 +164,10 @@ function validateParams(raw = {}) {
   }
   // La prima máxima solo aplica al comprar.
   if (structure !== 'buy_with') numeric.maxPremiumUsdt = null;
-  // Banda ATR: la única salida es el objetivo (o el vencimiento). La señal
-  // contraria se ignora y no hay salida por tiempo; el plazo de la LIMIT en
-  // Binance queda en vencimiento − 1 h (Math.max(1, 0) del ejecutor).
-  if (takeProfitMode === 'atr_band') {
-    onOpposite = 'ignore';
-    numeric.exitHoursBeforeExpiry = 0;
-  }
+  // Banda ATR: sin salida por tiempo; el plazo de la LIMIT en Binance queda
+  // en vencimiento − 1 h (Math.max(1, 0) del ejecutor). La señal contraria
+  // sigue lo elegido, como en los demás modos.
+  if (takeProfitMode === 'atr_band') numeric.exitHoursBeforeExpiry = 0;
   // Una sola opción por señal (y por subyacente). Los bots guardados con más
   // contratos se normalizan a 1 en vez de fallar la validación.
   const contractCount = 1;
