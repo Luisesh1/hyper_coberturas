@@ -4,6 +4,13 @@ import { closedTradeRows, openPositionRows, pendingOrderRows, usageRows } from '
 const buyPos = { id: 1, mode: 'shadow', symbol: 'ETH-251031-2500-C', side: 'BUY', quantity: 0.01, entryPrice: 10, openedAt: 1 };
 
 describe('openPositionRows', () => {
+  it('prima total = entrada × cantidad y hora de apertura', () => {
+    const [r] = openPositionRows({ positions: [{ ...buyPos, openedAt: 1761141900000 }], params: {} }, 'shadow');
+    expect(r.premiumUsdt).toBeCloseTo(0.1);
+    expect(r.openedAt).toBe(1761141900000);
+    const [none] = openPositionRows({ positions: [{ ...buyPos, entryPrice: null }], params: {} }, 'shadow');
+    expect(none.premiumUsdt).toBeNull();
+  });
   it('compra: TP y stop sobre la entrada', () => {
     const [r] = openPositionRows({ positions: [{ ...buyPos, mark: 12 }], params: { takeProfitPct: 80, stopLossPct: 50 } }, 'shadow');
     expect(r.tpPrice).toBe(18);

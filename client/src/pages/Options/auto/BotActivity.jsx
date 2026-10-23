@@ -14,6 +14,7 @@ const LEGEND = [
 ];
 
 const price = (v) => (v === null || v === undefined ? '—' : formatNumber(v, { decimals: 4, minDecimals: 2 }));
+const usdt = (v) => (v === null || v === undefined ? '—' : `${formatUsdt(v)} USDT`);
 const pnl = (v) => (v === null || v === undefined ? '—' : `${formatUsdt(v, { sign: true })} USDT`);
 const toneClass = (t) => ui[`tone_${t === 'neutral' ? 'muted' : t}`];
 const ICON_BTN = `${ui.btn} ${ui.btnSmall}`;
@@ -100,6 +101,9 @@ function Positions({ rows, mobile, multi, onClosePosition, onCloseAll, busy }) {
               <div className={`${ui.muted} ${ui.small}`}>
                 Entrada {price(r.entry)} · Mark {price(r.mark)}{r.hoursToExpiry !== null ? ` · vence en ${r.hoursToExpiry} h` : ''}
               </div>
+              <div className={`${ui.muted} ${ui.small}`}>
+                Prima {usdt(r.premiumUsdt)} · ejecutada {formatDateTime(r.openedAt)}
+              </div>
               {r.tpBreakdown !== null ? <AtrTarget row={r} /> : <TpStopBar row={r} />}
               <CloseBtn row={r} onClosePosition={onClosePosition} busy={busy} />
             </li>
@@ -111,8 +115,8 @@ function Positions({ rows, mobile, multi, onClosePosition, onCloseAll, busy }) {
           <table className={ui.table}>
             <thead>
               <tr>
-                <th>Símbolo</th><th>Lado</th><th className={ui.num}>Cantidad</th><th className={ui.num}>Entrada</th>
-                <th className={ui.num}>Mark</th><th className={ui.num}>P&amp;L</th><th className={ui.num}>Stop</th>
+                <th>Símbolo</th><th>Ejecutada</th><th>Lado</th><th className={ui.num}>Cantidad</th><th className={ui.num}>Entrada</th>
+                <th className={ui.num}>Prima</th><th className={ui.num}>Mark</th><th className={ui.num}>P&amp;L</th><th className={ui.num}>Stop</th>
                 <th className={ui.num}>TP</th><th className={ui.num}>Vence</th>{onClosePosition && <th />}
               </tr>
             </thead>
@@ -121,9 +125,11 @@ function Positions({ rows, mobile, multi, onClosePosition, onCloseAll, busy }) {
                 <Fragment key={r.id}>
                 <tr>
                   <td className={ui.mono}>{r.symbol}</td>
+                  <td className={`${ui.mono} ${ui.muted}`}>{formatDateTime(r.openedAt)}</td>
                   <td>{r.sideLabel}</td>
                   <td className={`${ui.mono} ${ui.num}`}>{formatNumber(r.quantity, { decimals: 4, minDecimals: 0 })}</td>
                   <td className={`${ui.mono} ${ui.num}`}>{price(r.entry)}</td>
+                  <td className={`${ui.mono} ${ui.num}`}>{usdt(r.premiumUsdt)}</td>
                   <td className={`${ui.mono} ${ui.num}`}>{price(r.mark)}</td>
                   <td className={`${ui.mono} ${ui.num} ${toneClass(r.tone)}`}>
                     {pnl(r.pnlUsdt)}{r.pnlPct !== null ? ` (${formatPct(r.pnlPct, { sign: true })})` : ''}
@@ -135,7 +141,7 @@ function Positions({ rows, mobile, multi, onClosePosition, onCloseAll, busy }) {
                 </tr>
                 {r.tpBreakdown !== null && (
                   <tr>
-                    <td colSpan={onClosePosition ? 10 : 9} className={`${ui.muted} ${ui.small}`}>{r.tpBreakdown}</td>
+                    <td colSpan={onClosePosition ? 12 : 11} className={`${ui.muted} ${ui.small}`}>{r.tpBreakdown}</td>
                   </tr>
                 )}
                 </Fragment>

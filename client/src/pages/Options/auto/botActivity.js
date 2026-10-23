@@ -64,6 +64,9 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
         sideLabel: sideLabel(p.side),
         quantity: qty,
         entry,
+        // Prima total: pagada al comprar, cobrada al vender.
+        premiumUsdt: entry !== null && qty !== null ? round(entry * qty) : null,
+        openedAt: p.openedAt ?? null,
         mark,
         pnlUsdt,
         pnlPct,
