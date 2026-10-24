@@ -261,7 +261,10 @@ test('migrar con snapshot del LP nuevo no toca el estado del snapshot', async (t
 function pendingRefreshService(row, { refreshResult }) {
   const decisions = [];
   const service = new ProtectedPoolDeltaNeutralService({
-    protectedPoolRepository: { getById: async () => ({ ...row }) },
+    protectedPoolRepository: {
+      getById: async () => ({ ...row }),
+      updateStrategyState: async (_userId, _id, payload) => { row.strategyState = payload.strategyState; },
+    },
     logger: silentLogger(),
   });
   service._persistDecision = async (_protection, decision) => { decisions.push(decision); };
@@ -293,6 +296,7 @@ test('el motor no opera con una fila migrada pendiente si la relectura falla', a
   assert.equal(decisions.length, 1);
   assert.equal(decisions[0].reason, 'snapshot_refresh_pending');
   assert.equal(decisions[0].executionSkippedBecause, 'snapshot_refresh_pending');
+  assert.equal(row.strategyState.pendingForceReason, 'lp_range_changed', 'el forzado no se pierde');
 });
 
 test('con la relectura del LP nuevo exitosa el motor sigue evaluando', async () => {

@@ -1372,6 +1372,14 @@ class ProtectedPoolDeltaNeutralService {
           protectionId: protection.id,
           userId: protection.userId,
         });
+        // El forzado es one-shot: si el lock lo descarta, el tick que si
+        // evalua lo recoge de `pendingForceReason`.
+        if (options?.forceRebalance) {
+          await this._persistBusyLockForce(protection, options).catch((err) => this.logger.warn?.(
+            'delta_neutral_busy_lock_force_persist_failed',
+            { protectionId: protection.id, error: err.message },
+          ));
+        }
         return null;
       }
       return await this._evaluateProtectionUnlocked(protection, options);
@@ -1387,6 +1395,21 @@ class ProtectedPoolDeltaNeutralService {
       }
       client.release();
     }
+  }
+
+  async _persistBusyLockForce(protection, options) {
+    const current = await this.repo.getById(protection.userId, protection.id);
+    if (!current || current.status !== 'active') return;
+    const state = normalizeStrategyState(current.strategyState);
+    await this.repo.updateStrategyState(current.userId, current.id, {
+      strategyState: {
+        ...state,
+        pendingForceReason: options.forceReason || state.pendingForceReason || 'forced',
+      },
+      // El repo sobreescribe estas dos columnas con NULL si no se pasan.
+      cooldownReason: current.cooldownReason,
+      lastDecisionReason: current.lastDecisionReason,
+    });
   }
 
   async _continueDeactivation(protection, context = {}) {

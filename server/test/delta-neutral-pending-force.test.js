@@ -274,3 +274,77 @@ test('net_profit_v2 live ejecuta el ajuste parcial y conserva su identidad', asy
   assert.ok(execution.metrics.targetQty < execution.metrics.deltaQty);
   assert.equal(state.executed, true);
 });
+
+// ---- Forzados que no se pierden en las salidas tempranas ----
+const FORCE = { forceReason: 'lp_range_changed', forceRebalance: true };
+
+test('snapshot_refresh_pending conserva la senal forzada', async () => {
+  const protection = buildProtection({ snapshotStatus: 'refresh_pending', strategyState: {} });
+  const service = buildService(protection);
+  service._refreshProtectionTruth = async () => ({ refreshed: false });
+  await service.evaluateProtection(protection, FORCE);
+  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+});
+
+test('snapshot_invalid conserva la senal forzada', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service._normalizeSnapshot = () => ({
+    validation: { valid: false, status: 'invalid', reasons: ['x'] },
+    snapshotFreshAt: NOW,
+    snapshotHash: 'h',
+  });
+  service._notifyBlock = async () => {};
+  await service.evaluateProtection(protection, FORCE);
+  assert.equal(protection.strategyState.status, 'snapshot_invalid');
+  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+});
+
+test('spot_stale conserva la senal forzada', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service._resolvePricingContext = async () => ({
+    currentPrice: NaN, twin: null, spotSource: 'x', spotFailureReason: 'boom',
+  });
+  await service.evaluateProtection(protection, FORCE);
+  assert.equal(protection.strategyState.lastDecisionReason, 'spot_stale');
+  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+});
+
+test('un tick sin forzado no deja senal pendiente en las salidas tempranas', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service._resolvePricingContext = async () => ({
+    currentPrice: NaN, twin: null, spotSource: 'x', spotFailureReason: 'boom',
+  });
+  await service.evaluateProtection(protection);
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+});
+
+test('lock distribuido ocupado conserva la senal forzada', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service.useDistributedLocks = true;
+  service._db = {
+    pool: {
+      connect: async () => ({
+        query: async () => ({ rows: [{ acquired: false }] }),
+        release: () => {},
+      }),
+    },
+  };
+  const result = await service.evaluateProtection(protection, FORCE);
+  assert.equal(result, null);
+  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+});
+
+test('lock ocupado sin forzado no escribe estado', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service.useDistributedLocks = true;
+  service._db = {
+    pool: { connect: async () => ({ query: async () => ({ rows: [{ acquired: false }] }), release: () => {} }) },
+  };
+  await service.evaluateProtection(protection);
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+});

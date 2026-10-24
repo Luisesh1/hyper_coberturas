@@ -121,6 +121,8 @@ function decideNetProfitV1({
   now = Date.now(),
   state = {},
   reason = 'normal',
+  forceRebalance = false,
+  minOrderNotionalUsd = null,
 } = {}) {
   const targetQty = Math.max(0, finite(deltaQty, 0));
   const actual = Math.max(0, finite(actualQty, 0));
@@ -135,6 +137,42 @@ function decideNetProfitV1({
   const upperHysteresis = !isTerminalClose
     ? resolveUpperHysteresis({ currentPrice: price, rangeLowerPrice, rangeUpperPrice, now, state })
     : null;
+
+  // Forzado (cambio de LP): el LP ya cambio, asi que el objetivo viejo es
+  // falso y esperar bandas, dwell o cooldown dejaria la cobertura mal
+  // dimensionada. Se ajusta el drift COMPLETO en UNA orden de |delta - actual|;
+  // nunca se cierra todo para reabrir parte. Bajo el minimo del exchange la
+  // orden seria rechazada, asi que se sostiene.
+  if (forceRebalance && !isTerminalClose) {
+    const forcedFills = activeFillTimestamps(state, now);
+    const forcedMinUsd = Math.max(0, finite(minOrderNotionalUsd, 0));
+    if (errorAbsQty <= 0 || errorUsd < forcedMinUsd) {
+      return {
+        decision: 'hold', gate: 'forced_within_min_notional', targetQty, errorQty, errorUsd, minNotionalUsd,
+        fillTimestamps: forcedFills, nextState: state, ...thresholds,
+      };
+    }
+    const forcedDay = Math.floor(now / DAY_MS);
+    const forcedSameDay = Number(state?.rotationBudgetDay) === forcedDay;
+    const forcedCount = forcedSameDay ? Math.max(0, finite(state?.rotationBudgetCount, 0)) : 0;
+    return {
+      decision: 'rebalance',
+      gate: 'forced',
+      targetQty,
+      errorQty,
+      errorUsd,
+      minNotionalUsd,
+      adjustQty: round(errorQty),
+      fillTimestamps: forcedFills,
+      nextState: {
+        ...state,
+        zeroTargetSince: null,
+        fillTimestamps: [...forcedFills, now], lastFillAt: now, cooldownUntil: now + COOLDOWN_MS,
+        ...(policyVersion === NET_PROFIT_V2 ? { rotationBudgetDay: forcedDay, rotationBudgetCount: forcedCount + 1 } : {}),
+      },
+      ...thresholds,
+    };
+  }
 
   // `upper_exit_latched` ya NO frena.
   //
