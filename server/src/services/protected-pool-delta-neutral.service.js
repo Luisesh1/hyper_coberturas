@@ -39,11 +39,14 @@ const DEACTIVATION_RESIDUAL_PCT = 0.01;
 const DELTA_NEUTRAL_LOCK_NAMESPACE = 0x444e;
 const DEFAULT_MAX_CONCURRENT_EVALS = 3;
 
-// Clave del limitador de evaluaciones: dos protecciones sobre la misma cuenta
-// y el mismo activo mueven el mismo hedge en Hyperliquid, asi que nunca se
-// evaluan a la vez.
+// Clave del limitador de evaluaciones: la cuenta de Hyperliquid. Activos
+// distintos de la misma cuenta comparten `withdrawable` para los top-ups de
+// margen, y dos preflights a la vez contra el margen previo al trade del otro
+// darian por bueno un colateral que ya no esta. Sin cuenta, todas comparten
+// la clave 'unknown' y van en serie (lo conservador).
 function deltaNeutralEvalKey(protection) {
-  return `${protection.accountId}:${String(protection.inferredAsset || 'unknown').toUpperCase()}`;
+  const accountId = protection?.accountId;
+  return accountId == null || accountId === '' ? 'unknown' : String(accountId);
 }
 
 // Un valor de entorno roto (NaN, 0, negativo) no puede tumbar el arranque: el
@@ -162,7 +165,7 @@ class ProtectedPoolDeltaNeutralService {
     this.evaluationLocks = new Map();
     // Las evaluaciones completas salen del bucle de 2 s por este limitador:
     // tope global (cada una puede retener una conexion del pool para el lock
-    // consultivo) y en serie por `cuenta:activo`. `queuedEvals` evita encolar
+    // consultivo) y en serie por cuenta de Hyperliquid. `queuedEvals` evita encolar
     // otra vez una proteccion que sigue en cola o en curso.
     this.maxConcurrentEvals = sanitizeMaxConcurrentEvals(deps.maxConcurrentEvals)
       || sanitizeMaxConcurrentEvals(config.deltaNeutral.maxConcurrentEvals)
@@ -1147,9 +1150,19 @@ class ProtectedPoolDeltaNeutralService {
     const id = protection.id;
     if (this.queuedEvals.has(id)) return false;
     this.queuedEvals.add(id);
+    // El `marketContext` del tick (precio, bbo, clearinghouseState del
+    // preflight de margen) solo vale si la evaluacion arranca ya. `KeyedLimiter`
+    // ejecuta `fn` en sincrono dentro de `run` cuando hay hueco y la clave esta
+    // libre; si espero en la cola, arranca despues de que `startedInline` pase
+    // a false y se evalua sin contexto para que `evaluate` lo pida de nuevo
+    // (con los precios y el margen posteriores al trade de la otra).
+    let startedInline = true;
     // `run` nunca lanza en sincrono (un throw de `fn` llega como rechazo), y
     // el `catch` deja la promesa siempre resuelta: no hay rechazos sin manejar.
-    this.evalLimiter.run(deltaNeutralEvalKey(protection), () => this.evaluateProtection(protection, decision))
+    this.evalLimiter.run(deltaNeutralEvalKey(protection), () => this.evaluateProtection(
+      protection,
+      startedInline ? decision : { forceReason: decision.forceReason },
+    ))
       .catch((err) => {
         this.logger.warn('protected_pool_delta_neutral_tick_failed', {
           protectionId: id,
@@ -1160,6 +1173,7 @@ class ProtectedPoolDeltaNeutralService {
       .finally(() => {
         this.queuedEvals.delete(id);
       });
+    startedInline = false;
     return true;
   }
 

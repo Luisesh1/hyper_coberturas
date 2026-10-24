@@ -76,10 +76,10 @@ test('evaluateAll vuelve sin esperar a las evaluaciones', async () => {
   assert.equal(service.queuedEvals.size, 0);
 });
 
-test('misma cuenta y activo se evalúan en serie', async () => {
+test('misma cuenta se evalúa en serie aunque el activo cambie', async () => {
   const list = [
     { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
-    { id: 2, userId: 1, accountId: 7, inferredAsset: 'eth' },
+    { id: 2, userId: 1, accountId: 7, inferredAsset: 'BTC' },
   ];
   const { service, started, pending } = buildService(list);
 
@@ -195,7 +195,107 @@ test('maxConcurrentEvals invalido cae a 3 en lugar de romper el arranque', () =>
   }
 });
 
-test('deltaNeutralEvalKey normaliza el activo', () => {
-  assert.equal(deltaNeutralEvalKey({ accountId: 7, inferredAsset: 'eth' }), '7:ETH');
-  assert.equal(deltaNeutralEvalKey({ accountId: 7 }), '7:UNKNOWN');
+test('deltaNeutralEvalKey es la cuenta de Hyperliquid', () => {
+  assert.equal(deltaNeutralEvalKey({ accountId: 7, inferredAsset: 'eth' }), '7');
+  assert.equal(deltaNeutralEvalKey({ accountId: 7, inferredAsset: 'BTC' }), '7');
+  assert.equal(deltaNeutralEvalKey({ accountId: null, inferredAsset: 'ETH' }), 'unknown');
+  assert.equal(deltaNeutralEvalKey({ inferredAsset: 'ETH' }), 'unknown');
+});
+
+test('cuentas distintas se evalúan en paralelo', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 8, inferredAsset: 'ETH' },
+  ];
+  const { service, started, pending } = buildService(list);
+  await service.evaluateAll();
+  assert.deepEqual(started, [1, 2]);
+  pending.forEach((d) => d.resolve());
+  await service.drain();
+});
+
+test('sin cuenta, las protecciones comparten clave y van en serie', async () => {
+  const list = [
+    { id: 1, userId: 1, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: null, inferredAsset: 'BTC' },
+  ];
+  const { service, started, pending } = buildService(list);
+  await service.evaluateAll();
+  assert.deepEqual(started, [1]);
+  pending[0].resolve();
+  await flush();
+  assert.deepEqual(started, [1, 2]);
+  pending[1].resolve();
+  await service.drain();
+});
+
+// El contexto de mercado del tick (precio, bbo, clearinghouseState del
+// preflight de margen) solo vale si la evaluacion arranca en el acto.
+function buildContextService(list, opts) {
+  const ctx = buildService(list, opts);
+  const options = new Map();
+  ctx.service._tickProtection = async (p) => ({
+    marketContext: { tag: `ctx-${p.id}` },
+    forceReason: 'boundary_cross',
+  });
+  const inner = ctx.service.evaluateProtection;
+  ctx.service.evaluateProtection = (protection, opt) => {
+    options.set(protection.id, opt);
+    return inner(protection, opt);
+  };
+  return { ...ctx, options };
+}
+
+test('KeyedLimiter arranca fn en sincrono si hay hueco y la clave esta libre', () => {
+  const KeyedLimiter = require('../src/utils/keyed-limiter');
+  const limiter = new KeyedLimiter({ maxConcurrent: 1 });
+  let ran = false;
+  limiter.run('a', () => { ran = true; });
+  assert.equal(ran, true);
+});
+
+test('una evaluacion que arranca en el acto recibe el marketContext del tick', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' }];
+  const { service, options, pending } = buildContextService(list);
+  await service.evaluateAll();
+  assert.deepEqual(options.get(1), { marketContext: { tag: 'ctx-1' }, forceReason: 'boundary_cross' });
+  pending[0].resolve();
+  await service.drain();
+});
+
+test('una evaluacion encolada tras la misma cuenta no reusa el marketContext', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 7, inferredAsset: 'BTC' },
+  ];
+  const { service, options, pending } = buildContextService(list);
+  await service.evaluateAll();
+  pending[0].resolve();
+  await flush();
+  const opt = options.get(2);
+  assert.ok(opt, 'la segunda arranco');
+  assert.equal(opt.marketContext, undefined);
+  assert.equal(opt.forceReason, 'boundary_cross');
+  pending[1].resolve();
+  await service.drain();
+});
+
+test('una evaluacion encolada por el tope global no reusa el marketContext', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 2, inferredAsset: 'ETH' },
+    { id: 3, userId: 1, accountId: 3, inferredAsset: 'ETH' },
+  ];
+  const { service, options, pending } = buildContextService(list);
+  await service.evaluateAll();
+  assert.equal(options.get(2).marketContext.tag, 'ctx-2');
+  pending[0].resolve();
+  await flush();
+  const opt = options.get(3);
+  assert.ok(opt, 'la tercera arranco');
+  assert.equal(opt.marketContext, undefined);
+  assert.equal(opt.forceReason, 'boundary_cross');
+  pending[1].resolve();
+  pending[2].resolve();
+  await service.drain();
 });
