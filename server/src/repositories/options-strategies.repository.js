@@ -48,6 +48,10 @@ function mapPosition(row) {
     closedAt: numberOrNull(row.closed_at),
     pnlUsdt: numberOrNull(row.pnl_usdt),
     feesUsdt: Number(row.fees_usdt || 0),
+    // Desglose (NULL en cerradas históricas, sin reparto fiable).
+    entryFeeUsdt: numberOrNull(row.entry_fee_usdt),
+    exitFeeUsdt: numberOrNull(row.exit_fee_usdt),
+    exerciseFeeUsdt: numberOrNull(row.exercise_fee_usdt),
     closeReason: row.close_reason || null,
     tpTargetPrice: numberOrNull(row.tp_target_price),
     tpTargetMeta: parseJson(row.tp_target_meta, null),
@@ -80,11 +84,20 @@ function mapAutoSignal(row) {
     decision: row.decision,
     detail: row.detail || null,
     simulated: row.simulated === true,
+    feesUsdt: numberOrNull(row.fees_usdt),
+    feesEstimated: row.fees_estimated === true,
     createdAt: Number(row.created_at),
   };
 }
 
 const TRADED_DECISIONS = ['opened', 'closed', 'reversed'];
+const FINAL_DECISIONS = ['opened', 'closed', 'reversed', 'ignored', 'error'];
+
+function normalizeUnderlying(underlying) {
+  const u = String(underlying ?? '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,20}$/.test(u)) throw new Error('Invalid underlying');
+  return u;
+}
 
 function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = {}) {
   // ---------- estrategias ----------
@@ -173,8 +186,53 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return rows[0] ? mapStrategy(rows[0]) : null;
   }
 
+  /**
+   * Guarda el estado del runner. `blockedUnderlyings` NUNCA sale de aquí:
+   * el runner escribe copias en memoria que pueden ser anteriores a un
+   * bloqueo (`setUnderlyingBlock`); se conserva siempre el de la fila.
+   */
   async function setState(id, state) {
-    await db.query('UPDATE options_strategies SET state = $2 WHERE id = $1', [id, JSON.stringify(state || {})]);
+    await db.query(
+      `UPDATE options_strategies
+          SET state = $2::jsonb || jsonb_build_object('blockedUnderlyings',
+                COALESCE(state->'blockedUnderlyings', '{}'::jsonb))
+        WHERE id = $1`,
+      [id, JSON.stringify(state || {})]
+    );
+  }
+
+  /**
+   * Bloquea un subyacente del bot: `state.blockedUnderlyings[U] = { reason, at }`.
+   * La fusión se hace en SQL para no perder claves escritas en paralelo
+   * (p. ej. `lastReasons`) ni otros subyacentes bloqueados.
+   */
+  async function setUnderlyingBlock(strategyId, underlying, { reason, at } = {}) {
+    const u = normalizeUnderlying(underlying);
+    const { rows } = await db.query(
+      `UPDATE options_strategies
+          SET state = jsonb_set(
+                COALESCE(state, '{}'::jsonb), '{blockedUnderlyings}',
+                CASE WHEN jsonb_typeof(state->'blockedUnderlyings') = 'object'
+                     THEN state->'blockedUnderlyings' ELSE '{}'::jsonb END
+                  || jsonb_build_object($2::text, jsonb_build_object('reason', $3::text, 'at', $4::bigint)),
+                true)
+        WHERE id = $1
+        RETURNING *`,
+      [strategyId, u, reason == null ? null : String(reason), at ?? now()]
+    );
+    return rows[0] ? mapStrategy(rows[0]) : null;
+  }
+
+  async function clearUnderlyingBlock(strategyId, underlying) {
+    const u = normalizeUnderlying(underlying);
+    const { rows } = await db.query(
+      `UPDATE options_strategies
+          SET state = jsonb_set(state, '{blockedUnderlyings}', (state->'blockedUnderlyings') - $2::text)
+        WHERE id = $1 AND jsonb_typeof(state->'blockedUnderlyings') = 'object'
+        RETURNING *`,
+      [strategyId, u]
+    );
+    return rows[0] ? mapStrategy(rows[0]) : null;
   }
 
   async function deleteStrategy(userId, id) {
@@ -184,11 +242,12 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
 
   // ---------- posiciones ----------
 
+  /** Una apertura solo paga la entrada: `entry_fee_usdt = fees_usdt`. */
   async function insertPosition({ strategyId, userId, mode, symbol, side, quantity, entryPrice, openedAt, feesUsdt = 0 }) {
     const { rows } = await db.query(
       `INSERT INTO options_strategy_positions
-         (strategy_id, user_id, mode, symbol, side, quantity, entry_price, opened_at, fees_usdt)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (strategy_id, user_id, mode, symbol, side, quantity, entry_price, opened_at, fees_usdt, entry_fee_usdt)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
        RETURNING *`,
       [strategyId, userId, mode, symbol, side, quantity, entryPrice, openedAt ?? now(), feesUsdt]
     );
@@ -212,14 +271,22 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return current[0] ? mapPosition(current[0]) : null;
   }
 
-  /** Cierra una posición abierta. `feesUsdt` es el total (entrada + salida). */
-  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
+  /**
+   * Cierra una posición abierta. `feesUsdt` es el total; `entryFeeUsdt`,
+   * `exitFeeUsdt` y `exerciseFeeUsdt` su desglose (entrada ausente: se
+   * conserva la guardada).
+   */
+  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null,
+    entryFeeUsdt = null, exitFeeUsdt = null, exerciseFeeUsdt = null }) {
     const { rows } = await db.query(
       `UPDATE options_strategy_positions
-          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5, close_reason = $6
+          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5, close_reason = $6,
+              entry_fee_usdt = COALESCE($7::numeric, entry_fee_usdt),
+              exit_fee_usdt = $8, exercise_fee_usdt = $9
         WHERE id = $1 AND closed_at IS NULL
         RETURNING *`,
-      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt, closeReason]
+      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt, closeReason,
+        entryFeeUsdt, exitFeeUsdt, exerciseFeeUsdt]
     );
     return rows[0] ? mapPosition(rows[0]) : null;
   }
@@ -395,6 +462,35 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return rows[0] ? mapAutoSignal(rows[0]) : null;
   }
 
+  /**
+   * Resultado definitivo de una señal con su comisión. A diferencia de
+   * `finishAutoSignal`, sobrescribe 'pending' y también el 'opened'
+   * provisional (p. ej. una entrada en sombra que al final caduca).
+   * `feesUsdt`/`feesEstimated` ausentes conservan el valor guardado.
+   */
+  async function resolveAutoSignal(id, { decision, detail, feesUsdt, feesEstimated } = {}) {
+    if (!FINAL_DECISIONS.includes(decision)) throw new Error('Invalid signal decision');
+    const { rows } = await db.query(
+      `UPDATE options_auto_signals
+          SET decision = $2, detail = $3,
+              fees_usdt = COALESCE($4::numeric, fees_usdt),
+              fees_estimated = COALESCE($5::boolean, fees_estimated)
+        WHERE id = $1 AND decision IN ('pending','opened')
+        RETURNING *`,
+      [id, decision, detail ?? null, feesUsdt ?? null, feesEstimated ?? null]
+    );
+    return rows[0] ? mapAutoSignal(rows[0]) : null;
+  }
+
+  async function setAutoSignalFees(id, { feesUsdt, feesEstimated } = {}) {
+    const { rows } = await db.query(
+      `UPDATE options_auto_signals SET fees_usdt = $2, fees_estimated = $3
+        WHERE id = $1 AND decision = 'pending' RETURNING *`,
+      [id, feesUsdt ?? null, feesEstimated === true]
+    );
+    return rows[0] ? mapAutoSignal(rows[0]) : null;
+  }
+
   /** `filter`: 'all' | 'traded' (abrió, cerró o dio la vuelta) | 'ignored'. */
   async function listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {
     let decisions = null;
@@ -428,6 +524,8 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     countEventsSince,
     claimAutoSignal,
     finishAutoSignal,
+    resolveAutoSignal,
+    setAutoSignalFees,
     listAutoSignals,
     lastAutoSignalsByUser,
     getStrategy,
@@ -438,6 +536,8 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     updateStrategy,
     setMode,
     setState,
+    setUnderlyingBlock,
+    clearUnderlyingBlock,
     deleteStrategy,
     insertPosition,
     setTpTarget,

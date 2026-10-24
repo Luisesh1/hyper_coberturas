@@ -193,6 +193,32 @@ El stop porcentual sigue sin garantizar el precio de salida.
 La validación de ejecución real, fees efectivos y conciliación
 real Binance quedan pendientes. No declarar `pilot_ready=yes`.
 
+## Actualización 24 oct 2026: entradas LIMIT GTC al precio medio
+
+**Sustituye al FOK de entrada descrito en la sección siguiente.** Todas las
+entradas de los bots de alertas (ETH y resto, real y sombra) son ahora
+`LIMIT GTC` al precio medio `(bid + ask) / 2`, redondeado a la rejilla de
+tick (hacia arriba al comprar, hacia abajo al vender, sin pasar de ask ni
+de bid). Sin bid y ask válidos no hay entrada (`no_mid_price`).
+
+- La orden se supervisa 10 min (`WINDOW_MS`); si no se llena entera, se
+  cancela. Los llenados parciales se aceptan: la cantidad llenada es una
+  posición real confirmada por Binance.
+- Si la cantidad **llenada** (la posición que queda abierta tras cancelar
+  el resto) no se puede cerrar por estar bajo el lote mínimo o fuera de su
+  paso, el subyacente queda **bloqueado**, se avisa por Telegram y se
+  desbloquea desde la UI («Desbloquear»), tras revisar la cuenta. Lo que
+  se cancela sin llenar no deja nada abierto.
+- Los cierres no cambian: los cierres ETH que no son TP siguen en FOK, los
+  demás en GTC, y el TP residente sigue siendo `LIMIT GTC reduceOnly`.
+- El script de preparación imprime `gtc_pilot_entry_tif=GTC` y
+  `gtc_pilot_exit_tif=FOK`.
+- Las barreras reales no cambian: los dos flags, `enforcePilotEntry` y las
+  comprobaciones de órdenes ajenas y de exposición. La migración 046 es
+  inocua con los flags apagados. Las menciones a «entrada FOK» de las
+  secciones históricas siguientes quedan superadas; el estado NO-GO se
+  mantiene.
+
 ## Endurecimiento: entrada ETH FOK y residuos de cierres (17 oct 2026)
 
 Binance Options documenta timeInForce=FOK para POST /eapi/v1/order:

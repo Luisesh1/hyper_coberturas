@@ -27,14 +27,17 @@ const deps = {
   previewFn:async()=>quote,
 };
 
-test('GTC preparation preserves FOK BUY, resident GTC TP after fill and never returns approval',async()=>{
+test('GTC preparation: GTC mid BUY, FOK standard exit, resident GTC TP after fill and never returns approval',async()=>{
   const report = await assess(deps);
   assert.equal(report.status,'candidate');
   assert.equal(report.readOnly,true);
   assert.equal(report.pilotReady,false);
   assert.equal(report.checks.exchangeGtc,true);
-  assert.equal(report.checks.ethFokEntry,true);
+  assert.equal(report.checks.ethGtcEntry,true);
+  assert.equal(report.checks.ethFokExit,true);
   const lines=summaryLines(report).join('\n');
+  assert.match(lines,/gtc_pilot_entry_tif=GTC/);
+  assert.match(lines,/gtc_pilot_exit_tif=FOK/);
   assert.match(lines,/gtc_pilot_take_profit_tif=GTC/);
   assert.match(lines,/gtc_pilot_take_profit_placement=after_confirmed_fill/);
   assert.match(lines,/gtc_pilot_partial_fill_dust_resolution=unverified/);

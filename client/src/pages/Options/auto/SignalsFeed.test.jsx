@@ -8,10 +8,11 @@ const signals = normalizeSignals([
 ]);
 
 describe('SignalsFeed', () => {
-  it('escritorio: columna «Subyacente» con el que disparó la alerta', () => {
+  it('escritorio: cronología con el subyacente que disparó la alerta y su resultado', () => {
     render(<SignalsFeed signals={signals} filter="all" />);
-    expect(screen.getByRole('columnheader', { name: 'Subyacente' })).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Señales' })).toBeTruthy();
     expect(screen.getByText('ETH')).toBeTruthy();
+    expect(screen.getByText('Abierta')).toBeTruthy();
   });
 
   it('móvil: el subyacente aparece en la tarjeta', () => {

@@ -171,13 +171,36 @@ test('usage.committedUsdt: con presupuesto, posiciones del libro + entradas pend
   const detail = await service.get(USER, s.id);
   // 12 (posición) + 0,01 × 1000 (pendiente) = 22.
   assert.equal(detail.usage.committedUsdt, 22);
+  assert.equal(detail.usage.reservedUsdt, 10);
 });
 
-test('usage.committedUsdt: null si el bot no tiene presupuesto', async () => {
+test('usage.committedUsdt: sin presupuesto también se calcula (KPI «en uso»)', async () => {
   const { repo, service } = setup();
   const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'shadow', params: { alertIds: [1] } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
   const detail = await service.get(USER, s.id);
-  assert.equal(detail.usage.committedUsdt, null);
+  assert.equal(detail.usage.committedUsdt, 12);
+  assert.equal(detail.usage.reservedUsdt, 0);
+});
+
+test('usage.reservedUsdt: la parte de entradas pendientes; en sombra cuentan las simuladas como en el runner', async () => {
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  const shadowPending = [{ id: 4, strategyId: 0, status: 'pending', symbol: 'BTC-261031-71000-C', side: 'BUY',
+    optionType: 'C', quantity: 0.02, limitPrice: 1000, deadlineAt: NOW + 60_000 }];
+  const service = createOptionsStrategiesService({
+    repo, now: () => NOW,
+    credentials: { async getClientForUser() { return {}; }, async getLimits() { return {}; } },
+    market: { async getChain() { return { spot: 68000 }; }, async getQuote() { return { delta: 0.3 }; } },
+    liveOrders: { async listByStrategy() { return []; } },
+    shadowEntries: { async listPending() { return shadowPending; } },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'shadow',
+    params: { alertIds: [1], budgetUsdt: 100, budgetFractions: 4 } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
+  const detail = await service.get(USER, s.id);
+  // 12 (posición) + 0,02 × 1000 (entrada simulada pendiente) = 32.
+  assert.equal(detail.usage.committedUsdt, 32);
+  assert.equal(detail.usage.reservedUsdt, 20);
 });
 
 test('usage de un bot multi-subyacente: margen y comprometido con el spot del subyacente de cada posición', async () => {
@@ -213,4 +236,86 @@ test('netDelta es null si las posiciones abiertas abarcan varios subyacentes (un
     params: { alertIds: [1], underlyings: ['BTC', 'ETH'] } });
   await repo.insertPosition({ strategyId: one.id, userId: USER, mode: 'live', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
   assert.equal((await service.get(USER, one.id)).usage.netDelta, 0.03);
+});
+
+test('kpis feeBreakdown sums components and reports unallocated history', () => {
+  const { kpisFor } = require('../src/services/options/options-strategies.service');
+  const positions = [
+    // Abierta: solo entrada.
+    { mode: 'live', openedAt: 1, closedAt: null, feesUsdt: 1, entryFeeUsdt: 1, exitFeeUsdt: null, exerciseFeeUsdt: null },
+    // Cerrada con salida.
+    { mode: 'live', openedAt: 2, closedAt: 5, pnlUsdt: 3, feesUsdt: 2.5, entryFeeUsdt: 2, exitFeeUsdt: 0.5, exerciseFeeUsdt: null },
+    // Vencida con ejercicio.
+    { mode: 'live', openedAt: 3, closedAt: 6, pnlUsdt: -1, feesUsdt: 1.75, entryFeeUsdt: 1.5, exitFeeUsdt: null, exerciseFeeUsdt: 0.25 },
+    // Histórica sin desglose.
+    { mode: 'live', openedAt: 4, closedAt: 7, pnlUsdt: 1, feesUsdt: 4, entryFeeUsdt: null, exitFeeUsdt: null, exerciseFeeUsdt: null },
+    // Otro libro: no cuenta.
+    { mode: 'shadow', openedAt: 1, closedAt: null, feesUsdt: 9, entryFeeUsdt: 9 },
+  ];
+  const k = kpisFor(positions, [], 'live', NOW);
+  assert.equal(k.feesUsdt, 9.25);
+  assert.deepEqual(k.feeBreakdown, { entryUsdt: 4.5, exitUsdt: 0.5, exerciseUsdt: 0.25, unallocatedUsdt: 4 });
+  const empty = kpisFor([], [], 'live', NOW);
+  assert.deepEqual(empty.feeBreakdown, { entryUsdt: 0, exitUsdt: 0, exerciseUsdt: 0, unallocatedUsdt: 0 });
+});
+
+test('GET detalle: pendingEntries une sombra y real con bid/ask, comisión estimada y bloqueos; posiciones traen desglose de comisiones', async () => {
+  const market = {
+    async getChain() { return { spot: 68000 }; },
+    async getQuote() { return { delta: 0.3, bid: 90, ask: 110 }; },
+  };
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  const service = createOptionsStrategiesService({
+    repo, now: () => NOW, market,
+    credentials: { async getClientForUser() { return {}; }, async getLimits() { return {}; } },
+    shadowEntries: { async listPending() {
+      return [{ id: 3, strategyId: 1, symbol: 'BTC-261031-70000-C', side: 'BUY', optionType: 'CALL', quantity: 0.1, limitPrice: 100, spot: 68000, deadlineAt: NOW + 1000, status: 'pending' }];
+    } },
+    liveOrders: { async listByStrategy() {
+      return [
+        { id: 9, purpose: 'entry', action: 'open', status: 'working', symbol: 'BTC-261031-72000-C', side: 'BUY', quantity: 0.2, processedQty: 0.05, limitPrice: 50, deadlineAt: NOW + 2000, cancelRequested: false },
+        { id: 10, purpose: 'entry', action: 'open', status: 'final', symbol: 'BTC-261031-72000-C', side: 'BUY', quantity: 0.2, processedQty: 0.2, limitPrice: 50, deadlineAt: NOW },
+        { id: 11, purpose: 'exit', action: 'close', status: 'working', symbol: 'BTC-261031-72000-C', side: 'SELL', quantity: 0.2, processedQty: 0, limitPrice: 50, deadlineAt: NOW },
+      ];
+    } },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'BTC', mode: 'live' });
+  repo.strategies[0].state = { blockedUnderlyings: { BTC: { reason: 'r', at: 5 } } };
+  const closed = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261017-64000-P', side: 'BUY', quantity: 0.01, entryPrice: 50, openedAt: NOW - 7200e3 });
+  await repo.closePosition(closed.id, { exitPrice: 70, closedAt: NOW - 600e3, pnlUsdt: 1, feesUsdt: 0.7, entryFeeUsdt: 0.5, exitFeeUsdt: 0.2 });
+
+  const d = await service.get(USER, s.id);
+
+  assert.deepEqual(d.pendingEntries.map((e) => [e.id, e.mode, e.executedQty, e.bid, e.ask, e.deadlineAt]),
+    [[3, 'shadow', 0, 90, 110, NOW + 1000], [9, 'live', 0.05, 90, 110, NOW + 2000]]);
+  assert.ok(d.pendingEntries.every((e) => e.feesEstUsdt > 0));
+  assert.deepEqual(Object.keys(d.blockedUnderlyings), ['BTC']);
+  assert.equal(d.kpis.live.feesPctOfPremium, null);
+  assert.equal(d.closedPositions[0].entryFeeUsdt, 0.5);
+  assert.equal(d.closedPositions[0].exitFeeUsdt, 0.2);
+  assert.equal(d.closedPositions[0].exerciseFeeUsdt, null);
+});
+
+test('kpisFor feesPctOfPremium = comisiones / prima', () => {
+  const { kpisFor } = require('../src/services/options/options-strategies.service');
+  const k = kpisFor([{ mode: 'live', openedAt: 1, closedAt: null, feesUsdt: 2 }], [{ mode: 'live', action: 'open', premiumUsdt: 100 }], 'live', NOW);
+  assert.equal(k.feesPctOfPremium, 2);
+});
+
+test('dailyPnlSeries: 30 puntos diarios acumulados del libro, más antiguo primero', () => {
+  const { dailyPnlSeries } = require('../src/services/options/options-pnl-series');
+  const DAY = 86400e3;
+  const day0 = Math.floor(NOW / DAY) * DAY;
+  const positions = [
+    { mode: 'shadow', closedAt: day0 - 40 * DAY, pnlUsdt: 5 },
+    { mode: 'shadow', closedAt: day0 - 2 * DAY + 5, pnlUsdt: 3 },
+    { mode: 'shadow', closedAt: day0 + 10, pnlUsdt: -1 },
+    { mode: 'live', closedAt: day0, pnlUsdt: 100 },
+    { mode: 'shadow', closedAt: null, pnlUsdt: null },
+  ];
+  const s = dailyPnlSeries(positions, 'shadow', NOW);
+  assert.equal(s.length, 30);
+  assert.equal(s[0], 5);
+  assert.deepEqual(s.slice(-4), [5, 8, 8, 7]);
+  assert.equal(dailyPnlSeries([], 'live', NOW).every((v) => v === 0), true);
 });

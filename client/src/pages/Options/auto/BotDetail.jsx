@@ -9,9 +9,15 @@ import Mapping from './Mapping';
 import SignalsFeed, { SignalFilter } from './SignalsFeed';
 import LiveTpStatus from './LiveTpStatus';
 import BotActivity from './BotActivity';
-import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, buildBotKpis, describeParams } from './botView';
+import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, botDirections, botStatus, buildBotKpis, describeParams, flowSteps } from './botView';
+import { pendingEntryRows } from './botActivity';
+import BotFlow from './visual/BotFlow';
+import BotNowStrip from './visual/BotNowStrip';
+import KpiCards from './visual/KpiCards';
+import { kpiCardsModel } from './visual/visualModel';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
+import v from './visual/visual.module.css';
 
 function ModeError({ error }) {
   if (!error) return null;
@@ -36,6 +42,17 @@ function ParamRows({ rows }) {
       ))}
     </dl>
   );
+}
+
+// El bot fusionado trae el detalle (GET /options/strategies/:id) cuando ya
+// llegó: entonces botStatus mira sus entradas, bloqueos y posiciones.
+const hasDetail = (bot) => Array.isArray(bot.pendingEntries) || Array.isArray(bot.positions)
+  || (bot.blockedUnderlyings && typeof bot.blockedUnderlyings === 'object');
+
+// Entrada en curso que enseña la franja: la que vence antes.
+function currentEntry(bot) {
+  const rows = pendingEntryRows(bot);
+  return rows.reduce((best, r) => (!best || (r.deadlineAt ?? Infinity) < (best.deadlineAt ?? Infinity) ? r : best), null);
 }
 
 const underlyingsText = (bot) => (bot.underlyings?.length ? bot.underlyings : [bot.underlying]).join(' · ');
@@ -140,6 +157,8 @@ export default function BotDetail({
   onCloseAll,
   onCancelOrder,
   onSimulate,
+  onUnblock,
+  unblocking = null,
   actionBusy = false,
   actionNotice = null,
 }) {
@@ -174,10 +193,26 @@ export default function BotDetail({
     <p className={`${ui.alert} ${ui.alertError}`} role="alert">No se pudo desvincular la alerta: {unlinkError.message}</p>
   );
 
+  const status = botStatus(bot, hasDetail(bot) ? bot : null);
+  const entry = status.kind === 'pending' ? currentEntry(bot) : null;
+  const blocked = Object.keys(bot.blockedUnderlyings || {});
+  const kSignals = kpis.find((k) => k.key === 'signals');
+  const nowStrip = (
+    <BotNowStrip
+      key={bot.id}
+      status={status}
+      entry={entry}
+      blocked={blocked}
+      onUnblock={onUnblock}
+      unblocking={unblocking}
+      unknown={bot.pendingEntryUnknown === true}
+      compact={mobile}
+    />
+  );
+
+  // Teléfono: estado → KPIs 2×2 → posición → flujo → cronología; debajo,
+  // órdenes y límites, la configuración de la señal y la curva.
   if (mobile) {
-    const kSignals = kpis.find((k) => k.key === 'signals');
-    const kTraded = kpis.find((k) => k.key === 'traded');
-    const kPnl = kpis.find((k) => k.key === (isLive ? 'pnlLive' : 'pnlShadow'));
     return (
       <div className={styles.mobileDetail} role="dialog" aria-modal="true" aria-label={bot.name}>
         <header className={styles.mobileDetailHead}>
@@ -204,36 +239,39 @@ export default function BotDetail({
           {liveWarning}
           {loadAlert}
           {noticeAlert}
+          {nowStrip}
+          <KpiCards model={kpiCardsModel(bot)} compact />
           <LiveTpStatus bot={bot} />
-          <div className={ui.tileGrid}>
-            <div className={ui.tile}>
-              <span className={ui.tileLabel}>Señales 30d</span>
-              <span className={`${ui.tileValue} ${ui.tone_neutral}`}>
-                {kSignals.value}{stats ? ` · ${kTraded.value} operadas` : ''}
-              </span>
+          <BotActivity {...activity} part="positions" />
+          <section className={`${styles.mobileSection} ${styles.mobileCard}`} aria-label="Regla del bot">
+            <BotFlow steps={flowSteps(bot)} directions={botDirections(bot.alerts)} compact />
+            <div className={styles.mobileActions}>
+              <button type="button" className={`${ui.btn} ${styles.touchBtn}`} onClick={onEdit}>
+                <PencilIcon size={18} /> Alertas, salidas y riesgo
+              </button>
+              <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
             </div>
-            <div className={ui.tile}>
-              <span className={ui.tileLabel}>{kPnl.label}</span>
-              <span className={`${ui.tileValue} ${ui[`tone_${kPnl.tone}`]}`}>{kPnl.value}</span>
-            </div>
-          </div>
-          <BotActivity {...activity} part="top" />
-          <section className={styles.mobileSection}>
-            <h2 className={styles.mobileH2}>Al recibir la señal</h2>
-            <span className={styles.structurePill}>{info.label}</span>
-            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} compact />
-            <AlertRows alerts={bot.alerts} />
-            <button type="button" className={ui.btn} onClick={onEdit}>
-              <PencilIcon size={18} /> Alertas, salidas y riesgo
-            </button>
-            <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
           </section>
           <section className={styles.mobileSection}>
             <div className={styles.sectionHead}>
               <h2 className={styles.mobileH2}>Señales y decisiones</h2>
             </div>
+            {stats && (
+              <p className={styles.signalsStats}>
+                <span>{kSignals.value} señales en 30 d</span> · <span>{kSignals.hint}</span> · <span>{stats.traded} operadas</span>
+              </p>
+            )}
             <SignalFilter value={signalsFilter} onChange={onSignalsFilter} />
-            <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} mobile />
+            <div className={styles.mobileCard}>
+              <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} mobile />
+            </div>
+          </section>
+          <BotActivity {...activity} part="orders" />
+          <section className={styles.mobileSection}>
+            <h2 className={styles.mobileH2}>Al recibir la señal</h2>
+            <span className={styles.structurePill}>{info.label}</span>
+            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} compact />
+            <AlertRows alerts={bot.alerts} />
           </section>
           <BotActivity {...activity} part="bottom" />
         </div>
@@ -244,28 +282,34 @@ export default function BotDetail({
   return (
     <section className={styles.detail} aria-label="Detalle del bot">
       <div className={`${ui.panel} ${styles.detailHead}`}>
-        <div className={styles.detailTitle}>
-          <h2 className={styles.h2}>{bot.name}</h2>
-          <span className={ui.muted} style={{ fontSize: 13 }}>
-            Opera {underlyingsText(bot)} cuando se dispara una de sus alertas · {info.short}
-            {bot.status ? ` · ${bot.statusLabel}` : ''}
-          </span>
+        <div className={styles.detailHeadRow}>
+          <div className={styles.detailTitle}>
+            <div className={styles.titleRow}>
+              <h2 className={styles.h2}>{bot.name}</h2>
+              <span className={`${v.pill} ${v[`pill_${bot.mode}`] || ''}`}>{isLive ? '● ' : ''}{BOT_MODE_LABEL[bot.mode] || bot.mode}</span>
+            </div>
+            <span className={ui.muted} style={{ fontSize: 13 }}>
+              Opera {underlyingsText(bot)} cuando se dispara una de sus alertas · {info.short}
+              {bot.status ? ` · ${bot.statusLabel}` : ''}
+            </span>
+          </div>
+          <div className={styles.detailActions}>
+            <ModeSwitch value={bot.mode} onSelect={onModeSelect} disabled={!!modePending} pending={modePending} labels={BOT_MODE_LABEL} />
+            <Link to={backtestHref} className={ui.btn} title="Simula este bot con las alertas históricas">
+              <BacktestIcon size={16} /> Backtestear
+            </Link>
+            <button type="button" className={ui.iconBtn} onClick={onEdit} aria-label="Editar bot" title="Editar">
+              <PencilIcon size={18} />
+            </button>
+            <button type="button" className={ui.iconBtn} onClick={onClone} disabled={cloning} aria-label="Clonar bot" title="Clonar (se crea en sombra)">
+              <CopyIcon size={18} />
+            </button>
+            <button type="button" className={ui.iconBtn} onClick={onDelete} aria-label="Eliminar bot" title="Eliminar">
+              <TrashIcon size={18} />
+            </button>
+          </div>
         </div>
-        <div className={styles.detailActions}>
-          <ModeSwitch value={bot.mode} onSelect={onModeSelect} disabled={!!modePending} pending={modePending} labels={BOT_MODE_LABEL} />
-          <Link to={backtestHref} className={ui.btn} title="Simula este bot con las alertas históricas">
-            <BacktestIcon size={16} /> Backtestear
-          </Link>
-          <button type="button" className={ui.iconBtn} onClick={onEdit} aria-label="Editar bot" title="Editar">
-            <PencilIcon size={18} />
-          </button>
-          <button type="button" className={ui.iconBtn} onClick={onClone} disabled={cloning} aria-label="Clonar bot" title="Clonar (se crea en sombra)">
-            <CopyIcon size={18} />
-          </button>
-          <button type="button" className={ui.iconBtn} onClick={onDelete} aria-label="Eliminar bot" title="Eliminar">
-            <TrashIcon size={18} />
-          </button>
-        </div>
+        <BotFlow steps={flowSteps(bot)} directions={botDirections(bot.alerts)} />
       </div>
 
       <ModeError error={modeError} />
@@ -274,17 +318,27 @@ export default function BotDetail({
       {noticeAlert}
       <LiveTpStatus bot={bot} />
 
-      <div className={ui.kpiGrid}>
-        {kpis.map((k) => (
-          <div key={k.key} className={ui.kpi}>
-            <span className={ui.kpiLabel}>{k.label}</span>
-            <span className={`${ui.kpiValue} ${ui[`tone_${k.tone}`]}`}>{k.value}</span>
-            {k.hint && <span className={ui.kpiHint}>{k.hint}</span>}
+      {nowStrip}
+
+      <KpiCards model={kpiCardsModel(bot)} />
+
+      <div className={styles.grid2}>
+        <BotActivity {...activity} part="positions" />
+        <div className={`${ui.panel} ${styles.signalsPanel}`}>
+          <div className={ui.panelHead}>
+            <h3 className={ui.h3}>Señales</h3>
+            <SignalFilter value={signalsFilter} onChange={onSignalsFilter} />
           </div>
-        ))}
+          {stats && (
+            <p className={styles.signalsStats}>
+              <span>{kSignals.value} señales en 30 d</span> · <span>{kSignals.hint}</span> · <span>{stats.traded} operadas</span>
+            </p>
+          )}
+          <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} />
+        </div>
       </div>
 
-      <BotActivity {...activity} part="top" />
+      <BotActivity {...activity} part="orders" />
 
       <div className={styles.twoCol}>
         <div className={`${ui.panel} ${styles.col}`}>
@@ -321,14 +375,6 @@ export default function BotDetail({
           <h3 className={ui.h3}>4 · Riesgo</h3>
           <ParamRows rows={desc.risk} />
         </div>
-      </div>
-
-      <div className={`${ui.panel} ${ui.panelFlush}`}>
-        <div className={ui.panelHead}>
-          <h3 className={ui.h3}>Señales recibidas y decisiones</h3>
-          <SignalFilter value={signalsFilter} onChange={onSignalsFilter} />
-        </div>
-        <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} />
       </div>
 
       <BotActivity {...activity} part="bottom" />

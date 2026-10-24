@@ -59,7 +59,14 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     },
     async setState(id, state) {
       const s = strategies.find((x) => x.id === id);
-      if (s) s.state = clone(state);
+      // Igual que el repo real: los bloqueos guardados nunca se pisan.
+      if (s) s.state = { ...clone(state || {}), blockedUnderlyings: clone(s.state?.blockedUnderlyings || {}) };
+    },
+    async clearUnderlyingBlock(strategyId, underlying) {
+      const s = strategies.find((x) => x.id === strategyId);
+      if (!s || !s.state?.blockedUnderlyings) return null;
+      delete s.state.blockedUnderlyings[String(underlying).toUpperCase()];
+      return clone(s);
     },
     async deleteStrategy(userId, id) {
       const i = strategies.findIndex((x) => x.id === id && x.userId === userId);
@@ -69,7 +76,9 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     },
 
     async insertPosition(p) {
-      const row = { id: seq++, exitPrice: null, closedAt: null, pnlUsdt: null, feesUsdt: 0, ...p };
+      const row = { id: seq++, exitPrice: null, closedAt: null, pnlUsdt: null, feesUsdt: 0,
+        exitFeeUsdt: null, exerciseFeeUsdt: null, ...p };
+      row.entryFeeUsdt = row.feesUsdt;
       positions.push(row);
       return clone(row);
     },
@@ -79,10 +88,12 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       if (p.tpTargetPrice == null) Object.assign(p, { tpTargetPrice: price, tpTargetMeta: clone(meta) });
       return clone(p);
     },
-    async closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
+    async closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null,
+      entryFeeUsdt = null, exitFeeUsdt = null, exerciseFeeUsdt = null }) {
       const p = positions.find((x) => x.id === id && x.closedAt == null);
       if (!p) return null;
-      Object.assign(p, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason });
+      Object.assign(p, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason,
+        entryFeeUsdt: entryFeeUsdt ?? p.entryFeeUsdt, exitFeeUsdt, exerciseFeeUsdt });
       return clone(p);
     },
     async listOpenPositions(strategyId, mode) {
@@ -158,6 +169,15 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       const s = signals.find((x) => x.id === id);
       if (!s) return null;
       Object.assign(s, { decision, detail: detail ?? null });
+      return clone(s);
+    },
+    // Igual que el repo real: solo resuelve una señal 'pending' u 'opened'.
+    async resolveAutoSignal(id, { decision, detail, feesUsdt, feesEstimated } = {}) {
+      const s = signals.find((x) => x.id === id);
+      if (!s || !['pending', 'opened'].includes(s.decision)) return null;
+      Object.assign(s, { decision, detail: detail ?? null });
+      if (feesUsdt != null) s.feesUsdt = feesUsdt;
+      if (feesEstimated != null) s.feesEstimated = feesEstimated;
       return clone(s);
     },
     async listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {

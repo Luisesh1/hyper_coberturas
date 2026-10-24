@@ -1,6 +1,6 @@
 /**
  * Motor real de ejecución Binance Options.
- * LIMIT para Binance Options: ETH FOK al abrir y al cerrar (excepto TP resting GTC), sin fills sintéticos.
+ * LIMIT para Binance Options: aperturas GTC al medio; ETH FOK al cerrar (excepto TP resting GTC), sin fills sintéticos.
  * Orden durable -> POST único -> status/trades -> cancelar remanente -> ledger.
  */
 const liveRepo = require('../../repositories/options-live-orders.repository');
@@ -48,13 +48,12 @@ function holdsToExpiryWithoutTp(params, expiryMs, now) {
     tpDeadline(expiryMs, params) <= now + TP_MIN_LEAD_MS;
 }
 
-// En ETH, las entradas y los cierres estándar usan FOK para evitar
-// residuos por ejecuciones parciales. El TP residente necesita GTC:
-// el riesgo de fills parciales de TP aún bloquea el piloto automático.
+// Las entradas reposan como GTC al medio en cualquier subyacente: un fill
+// parcial de apertura es válido y se contabiliza lo confirmado. En ETH los
+// cierres estándar usan FOK para evitar residuos; el TP residente es GTC.
 const orderTimeInForce = (order) => {
   const eth = /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(order.symbol || '');
-  return eth && (order.action === 'open' ||
-    (order.action === 'close' && order.purpose !== 'take_profit'))
+  return eth && order.action === 'close' && order.purpose !== 'take_profit'
     ? 'FOK' : 'GTC';
 };
 
@@ -78,6 +77,35 @@ function isOrderableRemainder(exchange, symbol, remaining) {
   const qty = Number(remaining.toFixed(12));
   return qty >= min && (!Number.isFinite(max) || max <= 0 || qty <= max) &&
     matchesStep(String(qty), filter.minQty, filter.stepSize);
+}
+
+/** Número es-ES: `min`–`max` decimales (0,35 · 712 · 7,14). */
+function esNum(value, min = 0, max = 8) {
+  return Number(value).toLocaleString('es-ES', { minimumFractionDigits: min, maximumFractionDigits: max });
+}
+const qtyText = (q) => esNum(q, 2, 8);
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Decisión y texto definitivos de la señal a partir del resultado de su
+ * lote de entrada (`batchEntryOutcome`). Comisión siempre la real.
+ */
+function entrySignalResolution(outcome) {
+  const feesUsdt = Number(outcome.feesUsdt) || 0;
+  if (!(Number(outcome.filled) > 0)) {
+    const why = outcome.rejected ? 'Entrada rechazada por Binance'
+      : outcome.cancelRequested ? 'Entrada cancelada por señal contraria'
+        : 'Entrada sin ejecutar en 10 min';
+    return { decision: 'ignored', detail: `Real: ${why}`, feesUsdt, feesEstimated: false };
+  }
+  const side = outcome.side === 'SELL' ? 'Venta' : 'Compra';
+  let detail = `Real: ${side} ${qtyText(outcome.filled)} ${outcome.symbol} a ${esNum(outcome.avgPrice)}` +
+    ` · comisión ${esNum(feesUsdt, 2, 2)} USDT`;
+  if (outcome.filled < Number(outcome.requested) - 1e-9) {
+    detail += ` · parcial: ${qtyText(outcome.filled)} de ${qtyText(outcome.requested)}`;
+  }
+  return { decision: 'opened', detail, feesUsdt, feesEstimated: false };
 }
 
 function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly, now }) {
@@ -226,15 +254,20 @@ class OptionsLiveExecution {
     }
     // Una orden manual que todavía no ha llenado no aparece en posiciones:
     // puede ejecutarse después de nuestro preflight. Bloquear (abrir o
-    // cerrar) mientras la cuenta tenga órdenes abiertas que no sean TPs
-    // resting propios e identificados de este usuario (banda ATR / GTC).
+    // cerrar) mientras la cuenta tenga órdenes abiertas que no sean órdenes
+    // propias e identificadas de este usuario aún no finales en el ledger
+    // (TP residente, entrada GTC en reposo, cierre en curso).
     const openOrders = await client.getOpenOrders();
     if (!Array.isArray(openOrders)) throw new Error('Invalid Binance open-order list');
     if (openOrders.length) {
       const unmanaged = new Error('La cuenta de Binance tiene órdenes abiertas no gestionadas ' +
         'por la app: cancélalas o concílialas antes de operar (manual reconciliation required)');
-      if (typeof this.repo.listRestingTpOrderIds !== 'function') throw unmanaged;
-      const mine = await this.repo.listRestingTpOrderIds(strategy.userId);
+      const listOwn = typeof this.repo.listOwnOpenOrderIds === 'function'
+        ? this.repo.listOwnOpenOrderIds
+        : this.repo.listRestingTpOrderIds;
+      if (typeof listOwn !== 'function') throw unmanaged;
+      const mine = await listOwn.call(this.repo, strategy.userId);
+      if (!Array.isArray(mine)) throw unmanaged;
       const ids = new Set(mine.map((o) => clean(o.clientOrderId)).filter(Boolean));
       const orderIds = new Set(mine.map((o) => clean(o.orderId)).filter(Boolean));
       if (openOrders.some((o) =>
@@ -264,10 +297,15 @@ class OptionsLiveExecution {
     // Freno final antes del ledger y de cualquier POST si hay trading real.
     // Nunca activa una orden: exige contrato, precio y permiso exactos.
     enforcePilotEntry({ strategy, action: { ...action, legs }, now: this.now() });
+    // Solo una entrada se enlaza con su señal (la resuelve resolveEntrySignal).
+    // Reentradas/reevaluaciones diferidas traen el signalId guardado en la cola.
+    const signalId = Number(ctx.signal?.signalId);
     const orders = await this.repo.beginBatch({
       strategy, action: action.type, legs, key: actionKey(strategy, action, ctx),
       detail: action.detail, deadlineAt,
       exchangePositions,
+      autoSignalId: action.type === 'open' && Number.isSafeInteger(signalId) && signalId > 0
+        ? signalId : null,
     });
     if (!orders) return { status: 'duplicate_or_unresolved' };
     let sent = 0;
@@ -363,7 +401,7 @@ class OptionsLiveExecution {
       if (this.now() < order.deadlineAt && !order.cancelRequested) return;
       // Solo finishOrder puede finalizarla, y únicamente si la fila
       // continúa en 'queued' bajo FOR UPDATE.
-      await this.repo.finishOrder(order.id, null, 0);
+      await this.finalizeOrder(order, null, 0);
       return;
     }
     const args = { symbol: order.symbol, ...(order.orderId
@@ -492,7 +530,7 @@ class OptionsLiveExecution {
         'Stop/expiry exit needs supervised exchange reconciliation.');
     }
     // Registrar PRIMERO los trades confirmados para no ocultar exposición.
-    // FOK es todo o nada: un fill parcial de entrada O salida es anómalo.
+    // FOK (solo cierres ETH) es todo o nada: un fill parcial es anómalo.
     if (orderTimeInForce(order) === 'FOK' &&
         (status === 'PARTIALLY_FILLED' ||
          (executed > 0 && executed < order.quantity - 1e-8))) {
@@ -517,8 +555,97 @@ class OptionsLiveExecution {
       throw new Error('Terminal Binance order has missing or inconsistent trades');
     }
     if (TERMINAL.has(status)) {
-      await this.repo.finishOrder(order.id, orderId, executed);
+      // El bloqueo por resto no operable se decide ANTES de finalizar y se
+      // escribe en la misma transacción que la finalización.
+      const block = await this.entryRemainderBlock(order, client, trades, executed);
+      await this.finalizeOrder(order, orderId, executed, block);
     }
+  }
+
+  isEntry(order) {
+    return order.action === 'open' && (!order.purpose || order.purpose === 'standard');
+  }
+
+  /**
+   * Finaliza la orden. En una ENTRADA, finishOrder escribe en la misma
+   * transacción el bloqueo del subyacente (si lo hay) y la resolución de la
+   * señal enlazada: o queda todo, o nada y la siguiente pasada lo reintenta.
+   * El aviso de Telegram sale DESPUÉS del commit y dice si se bloqueó o no.
+   */
+  async finalizeOrder(order, orderId, executed, block = null) {
+    if (!this.isEntry(order)) return this.repo.finishOrder(order.id, orderId, executed);
+    let finished;
+    try {
+      finished = await this.repo.finishOrder(order.id, orderId, executed,
+        { block, resolveSignal: entrySignalResolution });
+    } catch (err) {
+      if (block) {
+        await this.notifyRemainder(order, block, false);
+      }
+      throw err;
+    }
+    if (finished?.blocked && block) await this.notifyRemainder(order, block, true);
+    return finished;
+  }
+
+  async notifyRemainder(order, block, applied) {
+    const message = applied
+      ? '<b>ALERTA · Resto de entrada no operable</b>\n' + escapeHtml(block.reason) + '.\n' +
+        'El bot no abrirá más en ' + escapeHtml(block.underlying) +
+        ' hasta que lo revises y lo desbloquees; los cierres siguen activos.'
+      : '<b>ALERTA · Resto de entrada no operable</b>\n' + escapeHtml(block.reason) + '.\n' +
+        'NO se pudo bloquear ' + escapeHtml(block.underlying) + '; revisa manualmente. ' +
+        'La orden queda en atención y se reintentará en la próxima conciliación.';
+    try {
+      await this.sendIncidentAlert(order.userId,
+        applied ? 'ENTRY_REMAINDER_INOPERABLE' : 'ENTRY_REMAINDER_BLOCK_FAILED', String(order.id), message);
+    } catch (err) {
+      this.logger.warn('options_entry_remainder_notify_failed', { liveOrderId: order.id, error: err.message });
+    }
+  }
+
+  /**
+   * Cada fill de una entrada es una fila de posición propia, con su TP y su
+   * cierre. Si ALGUNA fila no es una cantidad que Binance acepte como orden
+   * nueva (< minQty o fuera del stepSize), no se puede cerrar ni proteger:
+   * bloquear el subyacente. Un único fill igual a lo pedido ya se validó al
+   * enviar y no necesita filtros. Sin filtros verificables se asume lo peor.
+   */
+  async entryRemainderBlock(order, client, trades, executed) {
+    if (!this.isEntry(order) || !(Number(executed) > 0)) return null;
+    const rows = trades.map((t) => Number(t.quantity));
+    if (rows.length === 1 && Math.abs(rows[0] - order.quantity) < 1e-8) return null;
+    let bad;
+    let unverified = false;
+    try {
+      if (!client || typeof client.getExchangeInfo !== 'function') throw new Error('Binance client unavailable');
+      const info = await client.getExchangeInfo();
+      bad = rows.filter((q) => !isOrderableRemainder(info, order.symbol, q));
+    } catch (err) {
+      unverified = true;
+      bad = rows;
+      this.logger.warn('options_entry_lot_filters_unavailable', {
+        liveOrderId: order.id, symbol: order.symbol, error: err.message,
+      });
+    }
+    if (!bad.length) return null;
+    const total = Number(bad.reduce((a, q) => a + q, 0).toFixed(12));
+    const underlying = parseSymbol(order.symbol)?.underlying || String(order.symbol).split('-')[0];
+    const reason = `Resto no operable de ${qtyText(total)} contratos en ${order.symbol}` +
+      (bad.length > 1 ? ` (${bad.length} posiciones)` : '') +
+      (unverified ? ' (filtros de lote no disponibles)' : '');
+    return { underlying, reason, at: this.now() };
+  }
+
+  /**
+   * Resuelve a mano la señal enlazada a un lote de entrada (la vía normal es
+   * finishOrder, en la misma transacción que finaliza la última orden).
+   */
+  async resolveEntrySignal(order) {
+    if (typeof this.repo.batchEntryOutcome !== 'function') return null;
+    const outcome = await this.repo.batchEntryOutcome(order.batchId);
+    if (!outcome || outcome.autoSignalId == null) return null;
+    return this.targetRepo.resolveAutoSignal(outcome.autoSignalId, entrySignalResolution(outcome));
   }
 
   async reconcileExpired() {
@@ -963,11 +1090,28 @@ class OptionsLiveExecution {
     return { sent };
   }
 
+  /** La señal en cola que caduca sin abrir queda resuelta como ignorada. */
+  async resolveExpiredSignal(request) {
+    const signalId = Number(request.signal?.signalId);
+    if (!Number.isSafeInteger(signalId) || signalId <= 0 ||
+        typeof this.targetRepo?.resolveAutoSignal !== 'function') return;
+    try {
+      await this.targetRepo.resolveAutoSignal(signalId, {
+        decision: 'ignored',
+        detail: request.kind === 'reevaluate'
+          ? 'Real: reevaluación caducada sin abrir' : 'Real: giro caducado sin abrir',
+      });
+    } catch (err) {
+      this.logger.warn('options_expired_signal_resolve_failed', { signalId, error: err.message });
+    }
+  }
+
   async processDeferredReentries() {
-    if (!this.enabled || typeof this.repo.listPendingReentries !== 'function') return { sent: 0, expired: 0 };
+    if (!this.enabled || typeof this.repo.listPendingReentries !== 'function') return { sent: 0, expired: 0, reevaluated: 0 };
     const reentries = await this.repo.listPendingReentries(50);
     let sent = 0;
     let expired = 0;
+    let reevaluated = 0;
     for (const request of reentries) {
       try {
         // Una señal antigua no puede reabrir exposición horas después de
@@ -975,17 +1119,32 @@ class OptionsLiveExecution {
         if (this.now() - request.createdAt > 30 * 60_000) {
           await this.repo.markReentry(request.id, 'expired');
           expired++;
+          await this.resolveExpiredSignal(request);
           if (typeof this.repo.claimIncidentNotification === 'function' &&
               await this.repo.claimIncidentNotification(request.userId,
                 'REVERSAL_EXPIRED', String(request.id))) {
-            await this.notify(request.userId,
-              '<b>ALERTA · Giro caducado</b>\n' +
-              'La salida tardó demasiado. No se abrió una posición nueva.');
+            await this.notify(request.userId, request.kind === 'reevaluate'
+              ? '<b>ALERTA · Reevaluación caducada</b>\n' +
+                'La entrada pendiente tardó demasiado en cancelarse. No se abrió una posición nueva.'
+              : '<b>ALERTA · Giro caducado</b>\n' +
+                'La salida tardó demasiado. No se abrió una posición nueva.');
           }
           continue;
         }
         if (!request.ready) continue;
         const runner = this.runner || require('./options-strategy-runner.service');
+        // Señal contraria que canceló entradas pendientes: con todas sus
+        // órdenes ya finales, se vuelve a evaluar entera (solo Real). Si
+        // giró, queueReversal convirtió esta fila en una reentrada y no se
+        // marca; si aparecieron entradas nuevas que cancelar, sigue a la espera.
+        if (request.kind === 'reevaluate') {
+          const result = await runner.reevaluateSignal(request.strategyId, request.signal);
+          if (['evaluated', 'underlying_removed'].includes(result?.status)) {
+            await this.repo.markReentry(request.id, 'submitted');
+            reevaluated++;
+          }
+          continue;
+        }
         const result = await runner.executeDeferredReentry(request.strategyId, request.signal);
         const submitted = ['submitted', 'attention'].includes(result?.status) ||
           (typeof this.repo.hasReentryOrder === 'function' &&
@@ -1000,7 +1159,7 @@ class OptionsLiveExecution {
         });
       }
     }
-    return { sent, expired };
+    return { sent, expired, reevaluated };
   }
 
   async reconcilePending() {
@@ -1083,3 +1242,4 @@ module.exports.orderTimeInForce = orderTimeInForce;
 module.exports.WINDOW_MS = WINDOW_MS;
 module.exports.isOrderableRemainder = isOrderableRemainder;
 module.exports.standingPrice = standingPrice;
+module.exports.entrySignalResolution = entrySignalResolution;

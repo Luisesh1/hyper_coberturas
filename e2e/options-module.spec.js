@@ -45,16 +45,21 @@ const BOT = {
   name: 'Momentum BTC (MACD 15m)',
   template: 'alert_signal',
   underlying: 'BTC',
-  mode: 'shadow',
-  status: 'Call abierta',
+  mode: 'live',
+  status: 'Entrada pendiente',
   params: { alertIds: [11, 12], structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, quantity: 0.05, onOpposite: 'reverse', takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4, maxPremiumUsdt: 150 },
   limits: {},
   alerts: [ALERT_UP, ALERT_DOWN],
-  pnl30d: { shadow: 214.6, live: null },
+  pnl30d: { shadow: 188.1, live: 214.6 },
+  pnlSeries: Array.from({ length: 30 }, (_, i) => Math.round(i * 7.4 * 100) / 100),
+  feesUsdt: 31.85,
+  pendingEntry: { deadlineAt: Date.now() + 6 * 60_000 + 12_000 },
+  pendingEntryUnknown: false,
+  blocked: false,
   lastSignal: { alertName: ALERT_UP.name, direction: 'bullish', asset: 'BTCUSDT', decision: 'opened', detail: 'Compra BTC-261024-70000-C a 905', createdAt: Date.now() - 60000 },
 };
 const BOT_SIGNALS = [
-  { id: 1, alertId: 11, alertName: ALERT_UP.name, direction: 'bullish', asset: 'BTCUSDT', score: 85, decision: 'opened', detail: 'Compra BTC-261024-70000-C a 905 · 0,05', createdAt: Date.now() - 60000 },
+  { id: 1, alertId: 11, alertName: ALERT_UP.name, direction: 'bullish', asset: 'BTCUSDT', score: 85, decision: 'opened', detail: 'Compra BTC-261024-70000-C a 905 · 0,05', createdAt: Date.now() - 60000, feesUsdt: 1.37, feesEstimated: false },
   { id: 2, alertId: 12, alertName: ALERT_DOWN.name, direction: 'bearish', asset: 'BTCUSDT', score: 72, decision: 'ignored', detail: 'Ya hay una posición abierta (máx. 1)', createdAt: Date.now() - 3600000 },
 ];
 
@@ -100,7 +105,27 @@ async function mockApi(page) {
     }
     if (pathname === '/api/options/auto-bots') return json([BOT]);
     if (pathname === `/api/options/strategies/${BOT.id}`) {
-      return json({ ...BOT, alerts: undefined, kpis: { shadow: { pnl30dUsdt: 214.6, cycles: 9, winRatePct: 66.7 }, live: {} }, usage: {}, events: [] });
+      return json({
+        ...BOT,
+        alerts: undefined,
+        kpis: {
+          shadow: { pnl30dUsdt: 188.1, cycles: 9, winRatePct: 66.7 },
+          live: {
+            pnl30dUsdt: 214.6, cycles: 9, winRatePct: 66.7, closedTrades: 9, avgPnlUsdt: 23.8, maxDrawdownUsdt: 61.4,
+            feesUsdt: 31.85, premiumUsdt: 690, feesPctOfPremium: 4.6,
+            feeBreakdown: { entryUsdt: 18.2, exitUsdt: 11.05, exerciseUsdt: 2.6, unallocatedUsdt: 0 },
+          },
+        },
+        usage: {},
+        events: [],
+        positions: [],
+        closedPositions: [],
+        blockedUnderlyings: {},
+        pendingEntries: [{
+          id: 1, mode: 'live', symbol: `BTC-${EXPIRY}-70000-C`, side: 'BUY', quantity: 0.35, executedQty: 0,
+          limitPrice: 712, deadlineAt: BOT.pendingEntry.deadlineAt, bid: 700, ask: 725, feesEstUsdt: 7.14,
+        }],
+      });
     }
     if (pathname === '/api/options/backtests') return json([]);
     // Fallback en array: varios consumidores globales hacen `.reduce`.
@@ -109,11 +134,30 @@ async function mockApi(page) {
   return { orders, botRequests };
 }
 
+// Espera a las animaciones finitas (la hoja que entra). Las infinitas, como el
+// pulso del punto «Real», no terminan nunca y no cuentan.
+async function settleAnimations(page) {
+  await page.waitForFunction(() => document.getAnimations()
+    .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+    .every((a) => a.playState !== 'running'));
+}
+
 async function horizontalOverflow(page) {
   return page.evaluate(() => {
     const d = document.documentElement;
     return Math.max(0, d.scrollWidth - d.clientWidth);
   });
+}
+
+// Comprobaciones del rediseño visual: entrada pendiente con cuenta atrás,
+// KPI de comisiones y señal con «Comisión», sin scroll horizontal.
+async function expectVisualAuto(page, scope) {
+  await expect(scope.getByText('Entrada pendiente').first()).toBeVisible();
+  await expect(scope.getByText(/^\d+:\d{2}$/).first()).toBeVisible();
+  await expect(scope.getByText(/Comisiones/).first()).toBeVisible();
+  await expect(scope.getByText(/4,6 % de la prima/).first()).toBeVisible();
+  await expect(scope.getByText(/Comisión 1,37 USDT/).first()).toBeVisible();
+  expect(await horizontalOverflow(page)).toBe(0);
 }
 
 test.describe('Opciones en escritorio', () => {
@@ -150,6 +194,26 @@ test.describe('Opciones en escritorio', () => {
     expect(errores).toEqual([]);
   });
 
+  test('Trading automatizado: entrada pendiente, comisiones y señal con «Comisión» (captura visual)', async ({ page }) => {
+    const errores = [];
+    page.on('pageerror', (e) => errores.push(e.message));
+    await mockApi(page);
+    await page.goto('/opciones?tab=auto');
+    await expect(page.getByRole('heading', { name: BOT.name })).toBeVisible();
+    await expectVisualAuto(page, page);
+    await page.screenshot({ path: 'test-results/options-auto-visual-desktop.png', fullPage: true });
+    expect(errores).toEqual([]);
+  });
+
+  test('Trading automatizado en tema claro (captura visual)', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('hlbot_theme', 'light'));
+    await mockApi(page);
+    await page.goto('/opciones?tab=auto');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expectVisualAuto(page, page);
+    await page.screenshot({ path: 'test-results/options-auto-visual-desktop-light.png', fullPage: true });
+  });
+
   test('la cantidad se escribe en USD de prima y se envía en contratos válidos', async ({ page }) => {
     const { orders } = await mockApi(page);
     await page.goto('/opciones');
@@ -181,9 +245,11 @@ test.describe('Opciones en escritorio', () => {
     const mapping = page.getByRole('list', { name: 'Qué abre cada dirección' });
     await expect(mapping).toContainText('Comprar call');
     await expect(mapping).toContainText('Comprar put');
+    const filtro = page.getByRole('group', { name: 'Filtrar señales' });
+    await filtro.getByRole('button', { name: 'Operadas' }).click();
+    await expect(filtro.getByRole('button', { name: 'Operadas' })).toHaveAttribute('aria-pressed', 'true');
+    await filtro.getByRole('button', { name: 'Ignoradas' }).click();
     await expect(page.getByText('Ya hay una posición abierta (máx. 1)')).toBeVisible();
-    await page.getByRole('group', { name: 'Filtrar señales' }).getByRole('button', { name: 'Operadas' }).click();
-    await expect(page.getByRole('group', { name: 'Filtrar señales' }).getByRole('button', { name: 'Operadas' })).toHaveAttribute('aria-pressed', 'true');
     await page.screenshot({ path: 'test-results/options-desktop-auto.png' });
 
     await page.getByRole('button', { name: 'Nuevo bot' }).click();
@@ -213,7 +279,7 @@ test.describe('Opciones en móvil (390px)', () => {
     await expect(sheet).toContainText(`BTC-${EXPIRY}-70000-C`);
     expect(await horizontalOverflow(page)).toBe(0);
     // La hoja entra con una animación: la captura espera a que termine.
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
+    await settleAnimations(page);
     await page.screenshot({ path: 'test-results/options-mobile-ticket.png' });
     // Cantidad en USD por defecto, con el cálculo aproximado en contratos.
     await expect(sheet.getByRole('button', { name: 'USD', pressed: true })).toBeVisible();
@@ -235,6 +301,22 @@ test.describe('Opciones en móvil (390px)', () => {
       expect(await horizontalOverflow(page)).toBe(0);
     }
     await page.screenshot({ path: 'test-results/options-mobile-backtesting.png' });
+    expect(errores).toEqual([]);
+  });
+
+  test('Trading automatizado: entrada pendiente, comisiones y señal con «Comisión» (captura visual)', async ({ page }) => {
+    const errores = [];
+    page.on('pageerror', (e) => errores.push(e.message));
+    await mockApi(page);
+    await page.goto('/opciones');
+    await page.getByRole('navigation', { name: 'Secciones de opciones' }).getByRole('link', { name: 'Auto' }).click();
+    await expect(page.getByText(/entrada pendiente · \d+:\d{2}/i).first()).toBeVisible();
+    await page.getByRole('list', { name: 'Bots' }).getByRole('button', { name: new RegExp(BOT.name.replace(/[()]/g, '\\$&')) }).click();
+    const detail = page.getByRole('dialog', { name: BOT.name });
+    await expect(detail).toBeVisible();
+    await settleAnimations(page);
+    await expectVisualAuto(page, detail);
+    await page.screenshot({ path: 'test-results/options-auto-visual-mobile.png' });
     expect(errores).toEqual([]);
   });
 
@@ -260,7 +342,7 @@ test.describe('Opciones en móvil (390px)', () => {
     await expect(detail.getByText('Al recibir la señal')).toBeVisible();
     await expect(detail.getByRole('list', { name: 'Señales' })).toContainText('Ignorada');
     expect(await horizontalOverflow(page)).toBe(0);
-    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
+    await settleAnimations(page);
     await page.screenshot({ path: 'test-results/options-mobile-auto-detail.png' });
     await detail.getByRole('button', { name: 'Volver' }).click();
     await expect(detail).toBeHidden();

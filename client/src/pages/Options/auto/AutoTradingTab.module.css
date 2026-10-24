@@ -129,7 +129,6 @@
 .cardMobile .cardName { font-size: 15px; }
 .cardMeta { font-size: 12px; color: var(--text-secondary); }
 .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.cardBottom { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
 .cardPnlBig { font-size: 15px; }
 
 .skeletons { display: flex; flex-direction: column; gap: 10px; }
@@ -209,31 +208,6 @@
 .filterBtn:hover:not(.filterBtnOn) { color: var(--text-bright); border-color: var(--border-strong); }
 .filterBtn:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 .filterBtnOn { border-color: var(--indigo); background: var(--indigo-dark-bg); color: var(--text-bright); }
-
-.decision { font-weight: 600; white-space: nowrap; }
-.dec_open { color: var(--green-pastel); }
-.dec_close { color: var(--amber-pastel); }
-.dec_skip { color: var(--text-secondary); font-weight: 500; }
-.dec_error { color: var(--red-light); }
-:global(:root[data-theme='light']) .dec_open { color: var(--green-hover); }
-:global(:root[data-theme='light']) .dec_close { color: var(--amber); }
-.signalDetailCell { color: var(--text-muted); min-width: 220px; }
-
-.signalCards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.signalCard {
-  padding: 10px 12px;
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-.signalCardRow { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
-.signalCard .decision { font-size: 13px; }
-.signalAlert { font-size: 12px; color: var(--text-secondary); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.signalTime { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
-.signalDetail { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 /* ── Formulario ───────────────────────────────────────────────── */
 .form { display: flex; flex-direction: column; gap: var(--sp-4); }
@@ -360,6 +334,7 @@
 .lastSignal:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 .lastSignalLabel { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
 .lastSignalRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.signalTime { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 .lastSignalText { font-size: 13px; color: var(--text-muted); overflow-wrap: anywhere; }
 
 .fab {
@@ -424,6 +399,18 @@
 .mobileSection { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .sectionHead { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .mobileH2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-bright); }
+.mobileCard {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.mobileActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.mobileActions > button, .mobileActions > div { flex: 1 1 auto; }
+.mobileActions > div > button { width: 100%; justify-content: center; }
+.mobileActions > button { justify-content: center; }
 .mobileDetail .filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--bg-input); border-radius: 12px; }
 .mobileDetail .filterBtn { min-height: 44px; border-color: transparent; border-radius: 9px; font-weight: 600; }
 .mobileDetail .filterBtnOn { border-color: var(--indigo); }
@@ -474,10 +461,6 @@
   display: flex; flex-direction: column; gap: 6px; padding: 12px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
 }
-.activityCardHead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.activitySymbol { font-weight: 600; color: var(--text-bright); overflow-wrap: anywhere; }
-.activityPnl { font-size: 24px; font-weight: 700; font-family: var(--font-mono, monospace); line-height: 1.2; }
-.activityPnl small { font-size: 13px; font-weight: 500; }
 .activityRow {
   display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
@@ -485,10 +468,13 @@
 .activityRowMain { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .attention { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: 13px; }
 .touchBtn { min-height: 44px; min-width: 44px; }
-.tpStop { display: flex; flex-direction: column; gap: 4px; }
-.tpStopTrack { position: relative; height: 6px; border-radius: 3px; background: var(--bg-input); }
-.tpStopDot { position: absolute; top: -3px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--indigo); }
-.tpStopLabels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono, monospace); }
+.posCardMobile { gap: 8px; min-width: 0; }
+.posCardMobile .posSym { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 14px; }
+.posCardMobile small { font-size: 12px; }
+.posSymbolLine { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-secondary); min-width: 0; }
+.posSymbolLine > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.posLegend { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono, monospace); overflow-wrap: anywhere; }
+.posCloseMobile { width: 100%; justify-content: center; }
 .usageList { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .usageItem { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .usageHead { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--text-secondary); }
@@ -500,7 +486,6 @@
 .simRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
 .simMenu { position: relative; display: inline-flex; flex-direction: column; gap: 6px; }
 .simMenuList { display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid var(--border, #2a3140); border-radius: 10px; background: var(--surface, #151a23); }
-.simTag { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px dashed currentColor; opacity: 0.85; }
 .atrTarget { display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; font-size: 13px; }
 
 .checkRow {
@@ -559,4 +544,21 @@
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.5;
+}
+
+/* ── Lista de escritorio con ayudas visuales (punto, chip, sparkline) ── */
+.cardTopMain { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cardTopMain .cardName { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cardRow { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; min-width: 0; }
+.cardRow .cardMeta { min-width: 0; overflow-wrap: anywhere; }
+
+/* ── Detalle de escritorio con ayudas visuales ──────────────────── */
+.detailHead { flex-direction: column; align-items: stretch; }
+.detailHeadRow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; }
+.titleRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.signalsPanel { min-width: 0; }
+.signalsStats { margin: 0; font-size: 12px; color: var(--text-secondary); }
+@media (max-width: 1100px) {
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
 }

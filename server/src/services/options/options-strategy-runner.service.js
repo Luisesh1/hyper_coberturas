@@ -32,8 +32,13 @@ const { fullSizeFokLimit } = require('./options-fok-depth');
 const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
 const { ensureAtrBandTarget } = require('./options-atr-band-target');
-const { estimateMargin, committedUsdt } = require('./options-committed-capital');
+const { midLimitPrice } = require('./options-mid-price');
+const { submitOutcomeText, isPendingSubmitStatus } = require('./options-live-submit-outcome');
+const { estimateMargin, committedUsdt, orderReservedUsdt, shadowEntriesAsOrders } = require('./options-committed-capital');
 const { botUnderlyings } = require('./bot-underlyings');
+const { positionDirection } = require('./templates/alert-signal');
+// Misma ventana y mismos textos de desenlace que una entrada real.
+const { WINDOW_MS, entrySignalResolution } = require('./options-live-execution.service');
 
 // Cierres por toma de ganancia: con un TP LIMIT residente no se cancela ni
 // se compite con él; deben alcanzar su objetivo con la cotización fresca.
@@ -58,6 +63,17 @@ function lazyLiveOrders() {
   // eslint-disable-next-line global-require
   const load = () => require('../../repositories/options-live-orders.repository');
   return { listByStrategy: (...args) => load().listByStrategy(...args) };
+}
+
+function lazyShadowEntries() {
+  // eslint-disable-next-line global-require
+  const load = () => require('../../repositories/options-shadow-entries.repository');
+  return {
+    insertEntry: (...args) => load().insertEntry(...args),
+    listPending: (...args) => load().listPending(...args),
+    resolveEntry: (...args) => load().resolveEntry(...args),
+    cancelEntries: (...args) => load().cancelEntries(...args),
+  };
 }
 
 function lazyCredentials() {
@@ -88,11 +104,54 @@ function positionUnderlying(position, fallback) {
   return parseSymbol(position.symbol)?.underlying || String(fallback || '').toUpperCase();
 }
 
-/** Órdenes de entrada no finales y con cantidad por ejecutar en `underlying`. */
-function pendingOpenCount(orders, underlying) {
+/**
+ * Sentido de una entrada por su lado y el tipo de su símbolo (inversa de
+ * `legFor`): compra de call o venta de put = alcista. null si no se sabe.
+ */
+function entryDirection(side, symbol, optionType) {
+  const type = parseSymbol(symbol)?.type || optionType;
+  if (!['BUY', 'SELL'].includes(side) || !['C', 'P'].includes(type)) return null;
+  return positionDirection({ side, type });
+}
+
+/**
+ * Real: órdenes de entrada no finales y con cantidad por ejecutar en
+ * `underlying`. Una con la cancelación ya pedida tiene sentido desconocido
+ * (null): la señal que pidió cancelarla espera en cola, y una señal
+ * posterior debe encolar su propia reevaluación en vez de darla por ocupada.
+ */
+function livePendingEntries(orders, underlying) {
   return orders.filter((o) => o.action === 'open' && o.status !== 'final'
     && Number(o.quantity) - Number(o.processedQty || 0) > 0
-    && positionUnderlying(o) === underlying).length;
+    && positionUnderlying(o) === underlying)
+    .map((o) => ({ id: Number(o.id),
+      direction: o.cancelRequested ? null : entryDirection(o.side, o.symbol, o.optionType) }));
+}
+
+/**
+ * Entradas pendientes de TODO el bot (cualquier subyacente): ocupan el
+ * máximo de posiciones compartido igual que una posición abierta.
+ */
+function livePendingCount(orders) {
+  return (orders || []).filter((o) => o.action === 'open' && o.status !== 'final'
+    && Number(o.quantity) - Number(o.processedQty || 0) > 0).length;
+}
+
+function shadowPendingCount(entries) {
+  return (entries || []).filter((e) => e.status === 'pending').length;
+}
+
+/** Sombra: entradas simuladas aún 'pending' en `underlying`. */
+function shadowPendingEntries(entries, underlying) {
+  return entries.filter((e) => e.status === 'pending' && positionUnderlying(e) === underlying)
+    .map((e) => ({ id: Number(e.id), direction: entryDirection(e.side, e.symbol, e.optionType) }));
+}
+
+/** Desenlace de una entrada simulada para su señal: el de la real, en «Sombra». */
+function shadowSignalResolution(outcome) {
+  const resolution = entrySignalResolution(outcome);
+  return { ...resolution, detail: resolution.detail.replace(/^Real: /, 'Sombra: '),
+    feesEstimated: resolution.decision === 'opened' };
 }
 
 function utcDayStart(ms) {
@@ -116,6 +175,13 @@ class OptionsStrategyRunner {
     this.liveOrders = deps.liveOrders || (this.repo === defaultRepo
       ? lazyLiveOrders()
       : { listByStrategy: async () => [] });
+    // Entradas simuladas pendientes (modo sombra), con la misma regla.
+    this.shadowEntries = deps.shadowEntries || (this.repo === defaultRepo
+      ? lazyShadowEntries()
+      : {
+        insertEntry: async () => { throw new Error('Sin almacén de entradas simuladas'); },
+        listPending: async () => [], resolveEntry: async () => null, cancelEntries: async () => [],
+      });
     this.notify = deps.notify || notifyTelegram;
     this.logger = deps.logger || logger;
     this.now = deps.now || Date.now;
@@ -160,6 +226,11 @@ class OptionsStrategyRunner {
           this.logger.error('options_exercise_reconcile_failed', { error: err.message });
         }
       }
+      try {
+        await this.processShadowEntries();
+      } catch (err) {
+        this.logger.error('options_shadow_entries_failed', { error: err.message });
+      }
     };
     this.reconcileInterval = setInterval(reconcile, RECONCILE_INTERVAL_MS);
     this.reconcileInterval.unref?.();
@@ -181,6 +252,11 @@ class OptionsStrategyRunner {
     const tickCtx = { now: this.now(), chains: new Map() };
     try {
       await this.settleExpired(tickCtx);
+      try {
+        await this.processShadowEntries();
+      } catch (err) {
+        this.logger.error('options_shadow_entries_failed', { error: err.message });
+      }
       const strategies = await this.repo.listActiveStrategies();
       for (const strategy of strategies) {
         try {
@@ -202,7 +278,8 @@ class OptionsStrategyRunner {
    * lo que produjeron: llenados (`booked`) y motivos de skip/hold/error.
    */
   async runForSignal(strategy, signal, { shadowOnly = false } = {}) {
-    const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
+    // shadowOnly ("Probar señal"): la sombra decide la señal aunque el bot sea real.
+    const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [], shadowOnly };
     const actions = await this.withLock(strategy.id,
       () => this.runStrategy(strategy, tickCtx, { shadowOnly }));
     return { actions, produced: tickCtx.produced };
@@ -269,8 +346,10 @@ class OptionsStrategyRunner {
       const spot = num(chain?.spot) ?? num(base?.spot);
       const orders = await this.liveOrders.listByStrategy(strategy.id);
       const actions = template.evaluate({
-        now: tickCtx.now, underlying, signal, spot, chain, positions: [], openCountAll: all.length,
-        pendingOpens: pendingOpenCount(orders, underlying),
+        now: tickCtx.now, underlying, signal, spot, chain, positions: [],
+        openCountAll: all.length + livePendingCount(orders),
+        pendingEntries: livePendingEntries(orders, underlying),
+        blockedUnderlyings: strategy.state?.blockedUnderlyings || {},
         params, mode: 'live',
         lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
         tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
@@ -283,6 +362,65 @@ class OptionsStrategyRunner {
         ...tickCtx, spot, underlying, params, positions: [], mode: 'live',
       }) || { status: 'not_submitted' };
     });
+  }
+
+  /**
+   * Señal contraria que canceló entradas reales pendientes: cuando todas sus
+   * órdenes son finales, se vuelve a evaluar SOLO en Real (la sombra ya la
+   * evaluó al llegar). Lo llenado ya son posiciones y sigue `onOpposite`
+   * (cierre, giro durable con queueReversal o ignorar).
+   * Estados: 'evaluated' | 'reversal_queued' | 'waiting' (nuevas entradas
+   * pendientes que cancelar) | 'underlying_removed' | 'disabled'.
+   */
+  async reevaluateSignal(strategyId, signal) {
+    const strategy = await this.repo.getStrategyById(strategyId);
+    if (!strategy || strategy.mode !== 'live' || strategy.template !== 'alert_signal' ||
+        !this.liveExecutor.enabled) return { status: 'disabled' };
+    try {
+      this.signalUnderlying(strategy, templates.getTemplate(strategy.template), signal);
+    } catch {
+      await this.resolveSignal(signal, 'ignored',
+        `Real: entrada cancelada; el bot ya no opera ${String(signal?.underlying || '').toUpperCase()}`);
+      return { status: 'underlying_removed' };
+    }
+    const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
+    const byMode = await this.withLock(strategyId,
+      () => this.runStrategy(strategy, tickCtx, { liveOnly: true }));
+    const live = byMode.live || [];
+    const produced = tickCtx.produced.filter((p) => p.mode === 'live');
+    if (live.some((a) => a.type === 'cancel_entries')) return { status: 'waiting', produced };
+    // El giro durable conserva la señal: la resuelve la entrada de la reentrada.
+    if (produced.some((p) => p.reason === 'reverse_queued')) return { status: 'reversal_queued', produced };
+    // Una entrada enviada enlaza la señal a su lote: se resuelve con sus fills.
+    const opened = produced.some((p) => p.type === 'open' && ['submitted', 'attention'].includes(p.reason));
+    if (!opened) {
+      const error = produced.find((p) => p.type === 'error');
+      const skipped = produced.find((p) => p.type === 'skip');
+      if (produced.some((p) => p.type === 'close')) {
+        await this.resolveSignal(signal, 'closed', 'Real: entrada cancelada; posición contraria cerrada');
+      } else if (error) {
+        await this.resolveSignal(signal, 'error', `Real: entrada cancelada; ${error.detail}`);
+      } else if (skipped?.reason === 'opposite_ignored') {
+        await this.resolveSignal(signal, 'ignored', 'Real: entrada cancelada; señal ignorada por la regla');
+      } else {
+        await this.resolveSignal(signal, 'ignored',
+          `Real: entrada cancelada; ${skipped?.detail || 'sin entrada válida'}`);
+      }
+    }
+    return { status: 'evaluated', produced };
+  }
+
+  /** Resuelve la fila de una señal (si la trae) sin romper el flujo si falla. */
+  async resolveSignal(signal, decision, detail) {
+    const signalId = Number(signal?.signalId);
+    if (!Number.isSafeInteger(signalId) || signalId <= 0 ||
+        typeof this.repo.resolveAutoSignal !== 'function') return null;
+    try {
+      return await this.repo.resolveAutoSignal(signalId, { decision, detail });
+    } catch (err) {
+      this.logger.warn('options_signal_resolve_failed', { signalId, error: err.message });
+      return null;
+    }
   }
 
   // ---------- datos de mercado (caché por pasada) ----------
@@ -442,7 +580,9 @@ class OptionsStrategyRunner {
    */
   async committedFor(strategy, mode, params, positions, { spot, underlying = strategy.underlying, tickCtx, orders: loaded } = {}) {
     if (params?.budgetUsdt == null) return undefined;
-    const orders = mode === 'live' ? loaded || await this.liveOrders.listByStrategy(strategy.id) : [];
+    // Real: órdenes de entrada del ledger. Sombra: las entradas simuladas
+    // pendientes que pase el llamador (con forma de orden).
+    const orders = loaded || (mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : []);
     const spots = { [String(underlying).toUpperCase()]: spot };
     for (const item of [...positions, ...orders]) {
       const key = parseSymbol(item.symbol)?.underlying;
@@ -487,23 +627,44 @@ class OptionsStrategyRunner {
     return { ...tickCtx, spot, underlying, positions, allPositions, params, mode };
   }
 
-  async runStrategy(strategy, tickCtx, { shadowOnly = false } = {}) {
+  async runStrategy(strategy, tickCtx, { shadowOnly = false, liveOnly = false } = {}) {
     const market = await this.strategyMarket(strategy, tickCtx);
     const { template, params, chain, spot } = market;
-    const modes = strategy.mode === 'live' && !shadowOnly ? ['shadow', 'live'] : ['shadow'];
+    let modes = strategy.mode === 'live' && !shadowOnly ? ['shadow', 'live'] : ['shadow'];
+    if (liveOnly) modes = modes.filter((m) => m === 'live');
     const byMode = {};
+    const botSignal = tickCtx.signal && template.id === 'alert_signal';
+    // Bloqueos de subyacente: los escribe el ejecutor real al conciliar, así
+    // que se leen frescos del repo (la estrategia de la pasada puede ser vieja).
+    let blockedUnderlyings;
+    if (botSignal && modes.includes('live')) {
+      const fresh = typeof this.repo.getStrategyById === 'function'
+        ? await this.repo.getStrategyById(strategy.id) : null;
+      blockedUnderlyings = (fresh || strategy).state?.blockedUnderlyings || {};
+    }
 
     for (const mode of modes) {
       const ctx = await this.modeContext(strategy, mode, tickCtx, market);
       const { positions, allPositions } = ctx;
-      const botSignal = tickCtx.signal && template.id === 'alert_signal';
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
       // Solo los bots por alertas limitan operaciones por día.
       const tradesToday = template.signalDriven
         ? await this.repo.countEventsSince(strategy.id, mode, 'open', utcDayStart(tickCtx.now))
         : undefined;
-      // Real: las entradas aún sin ejecutar también ocupan el subyacente.
+      // Las entradas aún sin ejecutar también ocupan el subyacente: órdenes
+      // reales no finales o entradas simuladas pendientes, según el modo.
       const orders = botSignal && mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : null;
+      const shadowPending = botSignal && mode === 'shadow'
+        ? await this.shadowEntries.listPending({ strategyId: strategy.id }) : null;
+      let pendingEntries;
+      let pendingCountAll = 0;
+      if (botSignal) {
+        pendingEntries = mode === 'live'
+          ? livePendingEntries(orders, market.underlying)
+          : shadowPendingEntries(shadowPending, market.underlying);
+        pendingCountAll = mode === 'live' ? livePendingCount(orders) : shadowPendingCount(shadowPending);
+      }
+      const reserved = mode === 'live' ? orders : (shadowPending ? shadowEntriesAsOrders(shadowPending) : null);
       const actions = template.evaluate({
         now: tickCtx.now,
         underlying: market.underlying,
@@ -511,15 +672,18 @@ class OptionsStrategyRunner {
         chain,
         positions,
         // Límites compartidos por todos los subyacentes del bot.
-        ...(botSignal ? { openCountAll: allPositions.length } : {}),
-        ...(orders ? { pendingOpens: pendingOpenCount(orders, market.underlying) } : {}),
+        // Las entradas pendientes de cualquier subyacente cuentan como posiciones.
+        ...(botSignal ? { openCountAll: allPositions.length + pendingCountAll } : {}),
+        ...(botSignal ? { pendingEntries } : {}),
+        // Un resto real no operable bloquea solo el libro real: la sombra sigue.
+        ...(botSignal && mode === 'live' ? { blockedUnderlyings } : {}),
         params,
         lastOpenedAt,
         mode,
         signal: tickCtx.signal || null,
         tradesToday,
         committedUsdt: tickCtx.signal
-          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx, orders })
+          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx, orders: reserved })
           : undefined,
       });
       byMode[mode] = actions;
@@ -544,6 +708,9 @@ class OptionsStrategyRunner {
           if (action.type === 'open' || action.type === 'close') {
             if (mode === 'live') await this.executeLive(strategy, action, ctx);
             else await this.executeShadow(strategy, action, ctx);
+          } else if (action.type === 'cancel_entries') {
+            if (mode === 'live') await this.cancelLiveEntries(strategy, action, ctx);
+            else await this.cancelShadowEntries(strategy, action, ctx);
           } else {
             await this.recordOutcome(strategy, mode, action, tickCtx);
           }
@@ -555,6 +722,50 @@ class OptionsStrategyRunner {
       }
     }
     return byMode;
+  }
+
+  /**
+   * Señal contraria con entradas reales pendientes: pide cancelar TODAS las
+   * del subyacente (cancelar solo reduce exposición, también con el envío
+   * apagado) y, con el envío activo, deja la señal en cola durable hasta
+   * que esas órdenes sean finales. Nunca abre nada aquí.
+   */
+  async cancelLiveEntries(strategy, action, ctx) {
+    const ledger = this.liveExecutor.repo;
+    if (typeof ledger?.requestCancelEntries !== 'function') {
+      throw new Error('Sin ledger de órdenes reales para cancelar las entradas pendientes');
+    }
+    const orderIds = await ledger.requestCancelEntries({
+      userId: strategy.userId, strategyId: strategy.id, underlying: ctx.underlying,
+    });
+    let queued = false;
+    if (action.reevaluate && this.liveExecutor.enabled) {
+      if (typeof ledger.queueSignalReevaluation !== 'function') {
+        throw new Error('Sin cola durable para reevaluar la señal');
+      }
+      queued = await ledger.queueSignalReevaluation(strategy, ctx.signal, orderIds);
+    }
+    ctx.produced?.push({ mode: 'live', type: 'cancel_entries', pending: true,
+      reason: queued ? 'reevaluation_queued' : 'entries_cancel_requested',
+      detail: queued
+        ? 'Cancelando la entrada pendiente; se reevalúa al conciliar'
+        : 'Cancelando la entrada pendiente; la señal no se reevaluará' });
+    this.logger.info('options_entries_cancel_requested', {
+      strategyId: strategy.id, underlying: ctx.underlying, orderIds, queued,
+    });
+  }
+
+  /** Sombra: las entradas simuladas se cancelan al momento (y su señal queda ignorada). */
+  async cancelShadowEntries(strategy, action, ctx) {
+    const canceled = await this.shadowEntries.cancelEntries(action.ids, ctx.now);
+    for (const entry of canceled || []) {
+      await this.resolveShadowEntrySignal(entry, shadowSignalResolution({ filled: 0, cancelRequested: true }));
+    }
+    ctx.produced?.push({ mode: 'shadow', type: 'cancel_entries', reason: action.reason,
+      detail: 'Entrada pendiente cancelada' });
+    this.logger.info('options_shadow_entries_canceled', {
+      strategyId: strategy.id, ids: action.ids, canceled: canceled?.length ?? 0,
+    });
   }
 
   /**
@@ -602,6 +813,10 @@ class OptionsStrategyRunner {
   }
 
   async executeShadow(strategy, action, ctx) {
+    // Igual que en real: un bot por alertas abre con una LIMIT al medio que espera.
+    if (action.type === 'open' && strategy.template === 'alert_signal') {
+      return this.openShadowEntry(strategy, action, ctx);
+    }
     const { quotes, missing } = await this.quoteLegs(action.legs);
     if (missing) {
       await this.recordOutcome(strategy, 'shadow', { type: 'error', reason: 'no_liquidity', detail: `Sin precio en el libro para ${missing}` }, ctx);
@@ -613,6 +828,128 @@ class OptionsStrategyRunner {
       return { ...leg, price, spot, fee: tradeFee({ spot, quantity: leg.quantity, price }) };
     });
     return this.book(strategy, 'shadow', action, filled, ctx);
+  }
+
+  /**
+   * Sombra de un bot por alertas: deja una entrada simulada pendiente al
+   * medio del libro fresco con el plazo de la real. La llena (o caduca)
+   * `processShadowEntries`. Solo enlaza la señal si la sombra la decide.
+   */
+  async openShadowEntry(strategy, action, ctx) {
+    const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
+    const legs = [];
+    for (let i = 0; !missing && i < action.legs.length; i++) {
+      const price = await this.midEntryPrice(action.legs[i], quotes[i].quote);
+      if (price == null) break;
+      legs.push({ ...action.legs[i], price, spot: num(quotes[i].quote?.spot) ?? ctx.spot });
+    }
+    if (legs.length !== action.legs.length) {
+      await this.recordOutcome(strategy, 'shadow', {
+        type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido',
+      }, ctx);
+      return null;
+    }
+    const decidesSignal = strategy.mode !== 'live' || ctx.shadowOnly === true;
+    const signalId = decidesSignal && Number.isSafeInteger(Number(ctx.signal?.signalId))
+      ? Number(ctx.signal.signalId) : null;
+    const entries = [];
+    for (const leg of legs) {
+      entries.push(await this.shadowEntries.insertEntry({
+        strategyId: strategy.id, userId: strategy.userId, autoSignalId: signalId,
+        alertEventId: ctx.signal?.eventId ?? null, symbol: leg.symbol, side: leg.side,
+        optionType: leg.optionType || parseSymbol(leg.symbol)?.type, quantity: leg.quantity,
+        limitPrice: leg.price, spot: leg.spot, deadlineAt: ctx.now + WINDOW_MS, createdAt: ctx.now,
+      }));
+    }
+    if (signalId != null) await this.markEstimatedSignalFee(legs, quotes, ctx);
+    ctx.produced?.push({ mode: 'shadow', type: 'open', pending: true, reason: 'shadow_entry_pending',
+      detail: 'Orden LIMIT al medio, esperando ejecución' });
+    this.logger.info('options_shadow_entry_pending', {
+      strategyId: strategy.id, ids: entries.map((e) => e.id), signalId,
+    });
+    return null;
+  }
+
+  /**
+   * Llena o caduca las entradas simuladas pendientes con la cotización
+   * fresca: BUY si ask ≤ límite, SELL si bid ≥ límite, completa o nada.
+   * Lo llaman el tick y el conciliador: cada entrada se procesa bajo el lock
+   * de su estrategia y `resolveEntry` solo pasa desde 'pending', así que
+   * dos pasadas a la vez no registran dos veces.
+   */
+  async processShadowEntries() {
+    const result = { filled: 0, expired: 0 };
+    const entries = await this.shadowEntries.listPending();
+    for (const entry of entries) {
+      try {
+        const outcome = await this.withLock(entry.strategyId, () => this.processShadowEntry(entry));
+        if (outcome === 'filled') result.filled += 1;
+        else if (outcome === 'expired' || outcome === 'canceled') result.expired += 1;
+      } catch (err) {
+        this.logger.warn('options_shadow_entry_failed', { entryId: entry.id, error: err.message });
+      }
+    }
+    return result;
+  }
+
+  async processShadowEntry(entry) {
+    const now = this.now();
+    const strategy = await this.repo.getStrategyById(entry.strategyId);
+    if (!strategy || !['shadow', 'live'].includes(strategy.mode)) {
+      const row = await this.shadowEntries.resolveEntry(entry.id, 'canceled', now);
+      if (!row) return null;
+      await this.resolveShadowEntrySignal(row, {
+        decision: 'ignored', detail: 'Sombra: Entrada cancelada; el bot no está activo',
+      });
+      return 'canceled';
+    }
+    if (now >= Number(entry.deadlineAt)) {
+      const row = await this.shadowEntries.resolveEntry(entry.id, 'expired', now);
+      if (!row) return null;
+      await this.resolveShadowEntrySignal(row, shadowSignalResolution({ filled: 0 }));
+      await this.recordOutcome(strategy, 'shadow', {
+        type: 'skip', reason: 'entry_expired', detail: 'Entrada sin ejecutar en 10 min',
+      }, { now });
+      return 'expired';
+    }
+    const quote = await this.quoteFor(entry.symbol, { fresh: true });
+    const limit = Number(entry.limitPrice);
+    const ask = num(quote?.ask);
+    const bid = num(quote?.bid);
+    const reached = entry.side === 'BUY' ? ask > 0 && ask <= limit : bid != null && bid >= limit;
+    if (!reached) return null;
+    const row = await this.shadowEntries.resolveEntry(entry.id, 'filled', now);
+    if (!row) return null;
+    let params = null;
+    try {
+      params = templates.validateParams(strategy.template, strategy.params);
+    } catch {
+      params = strategy.params || null;
+    }
+    const spot = num(quote?.spot) ?? num(entry.spot);
+    const leg = {
+      symbol: entry.symbol, side: entry.side, optionType: entry.optionType, quantity: entry.quantity,
+      price: limit, spot, fee: tradeFee({ spot, quantity: entry.quantity, price: limit }),
+    };
+    await this.book(strategy, 'shadow',
+      { type: 'open', reason: 'shadow_entry_filled', detail: 'Entrada LIMIT al medio ejecutada' },
+      [leg], { now, spot, params, positions: [] });
+    await this.resolveShadowEntrySignal(row, shadowSignalResolution({
+      filled: entry.quantity, requested: entry.quantity, side: entry.side,
+      symbol: entry.symbol, avgPrice: limit, feesUsdt: leg.fee,
+    }));
+    return 'filled';
+  }
+
+  /** Resuelve la señal enlazada a una entrada simulada; un fallo no rompe la pasada. */
+  async resolveShadowEntrySignal(entry, resolution) {
+    if (entry?.autoSignalId == null || typeof this.repo.resolveAutoSignal !== 'function') return null;
+    try {
+      return await this.repo.resolveAutoSignal(entry.autoSignalId, resolution);
+    } catch (err) {
+      this.logger.warn('options_signal_resolve_failed', { signalId: entry.autoSignalId, error: err.message });
+      return null;
+    }
   }
 
   /** Persiste un llenado (sombra o real): posiciones y evento. */
@@ -642,7 +979,9 @@ class OptionsStrategyRunner {
         if (!position) continue;
         const fees = position.feesUsdt + leg.fee;
         const pnl = grossPnl({ side: position.side, entryPrice: position.entryPrice, exitPrice: leg.price, quantity: position.quantity }) - fees;
-        await this.repo.closePosition(position.id, { exitPrice: leg.price, closedAt: ctx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: action.reason || null });
+        // Abierta solo ha pagado la entrada: su total es la comisión de entrada.
+        await this.repo.closePosition(position.id, { exitPrice: leg.price, closedAt: ctx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: action.reason || null,
+          entryFeeUsdt: position.feesUsdt, exitFeeUsdt: leg.fee });
       }
     }
     const event = await this.repo.insertEvent({
@@ -715,6 +1054,20 @@ class OptionsStrategyRunner {
       userMargin += margin;
       if (p.strategyId === strategy.id) strategyMargin += margin;
     }
+    // Las entradas no finales del usuario (cualquier bot) también reservan:
+    // lo pendiente al LIMIT (prima si compra, margen estimado si vende).
+    const ledger = this.liveExecutor.repo;
+    const pendingOrders = typeof ledger?.listOpenEntriesByUser === 'function'
+      ? await ledger.listOpenEntriesByUser(strategy.userId)
+      : (await this.liveOrders.listByStrategy(strategy.id)).map((o) => ({ ...o, strategyId: strategy.id }));
+    for (const o of pendingOrders || []) {
+      const meta = parseSymbol(o.symbol);
+      if (!meta) continue;
+      const spot = meta.underlying === String(ctx.underlying || strategy.underlying).toUpperCase() ? ctx.spot : await this.spotFor(meta.underlying, ctx);
+      const margin = orderReservedUsdt(o, spot);
+      userMargin += margin;
+      if (Number(o.strategyId) === Number(strategy.id)) strategyMargin += margin;
+    }
     if (!Number.isFinite(userMargin + newMargin)) {
       return { ok: false, reason: 'Spot no disponible para estimar el margen de las ventas' };
     }
@@ -771,12 +1124,30 @@ class OptionsStrategyRunner {
         detail: 'TP en cancelación; salida pendiente y persistida' });
       return { status: 'tp_cancel_requested', sent: 0 };
     }
+    // Solo los bots por alertas abren al medio; el resto de templates
+    // conserva el precio ejecutable (bid al vender, ask al comprar).
+    const midEntry = action.type === 'open' && strategy.template === 'alert_signal';
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
-      await this.recordOutcome(strategy, 'live', {
-        type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
-      }, ctx);
+      await this.recordOutcome(strategy, 'live', midEntry
+        ? { type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido' }
+        : { type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}` }, ctx);
       return null;
+    }
+    // Aperturas de bots por alertas: LIMIT GTC al medio del libro fresco,
+    // sobre la rejilla del contrato. Sin bid/ask, sin tick conocido o sin
+    // tick dentro del spread no hay entrada: nunca enviar un precio inválido.
+    if (midEntry) {
+      for (let i = 0; i < action.legs.length; i++) {
+        const mid = await this.midEntryPrice(action.legs[i], quotes[i].quote);
+        if (mid == null) {
+          await this.recordOutcome(strategy, 'live', {
+            type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido',
+          }, ctx);
+          return null;
+        }
+        quotes[i].price = mid;
+      }
     }
     // ONLY the explicit one-contract ETH pilot experiment may replace the
     // resting GTC TP with a synthetic full-size FOK close.
@@ -841,7 +1212,7 @@ class OptionsStrategyRunner {
         return null;
       }
     }
-    // El precio LIMIT es la cotización recién consultada, pero el fill
+    // El precio LIMIT es la cotización recién consultada (el medio al abrir un bot por alertas), pero el fill
     // SOLO se registra cuando Binance lo confirma en getUserTrades.
     const quoted = action.legs.map((leg, i) => ({
       ...leg, price: quotes[i].price,
@@ -887,13 +1258,54 @@ class OptionsStrategyRunner {
       }
     }
     const result = await this.liveExecutor.submit(strategy, { ...action, legs: quoted }, ctx);
+    if (action.type === 'open' && ['submitted', 'attention'].includes(result.status)) {
+      await this.markEstimatedSignalFee(quoted, quotes, ctx);
+    }
     if (result.status === 'submitted' || result.status === 'attention') {
       await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`, 'trade');
     }
+    // 'attention' (envío ambiguo) también queda pendiente: la conciliación
+    // con Binance resuelve la señal con lo que realmente se llenó.
     ctx.produced?.push({ mode: 'live', type: action.type,
-      pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
-      detail: result.status === 'submitted' ? 'Orden límite enviada; ejecución pendiente' : result.status });
+      pending: isPendingSubmitStatus(result.status), reason: result.status,
+      detail: submitOutcomeText(result.status, result.error) });
     return result;
+  }
+
+  /**
+   * Mientras la entrada real no se resuelve con sus fills, la señal muestra
+   * la comisión estimada al precio LIMIT enviado (se marca como estimada).
+   */
+  async markEstimatedSignalFee(legs, quotes, ctx) {
+    const signalId = ctx.signal?.signalId;
+    if (signalId == null || typeof this.repo.setAutoSignalFees !== 'function') return;
+    try {
+      const feesUsdt = legs.reduce((sum, leg, i) => sum + tradeFee({
+        spot: num(quotes[i]?.quote?.spot) ?? ctx.spot, quantity: leg.quantity, price: leg.price,
+      }), 0);
+      await this.repo.setAutoSignalFees(signalId, { feesUsdt, feesEstimated: true });
+    } catch (err) {
+      this.logger.warn('options_signal_fee_estimate_failed', { signalId, error: err.message });
+    }
+  }
+
+  /**
+   * Precio medio de entrada de una pata, o null. El tick sale de la
+   * cotización si lo trae; si no, del PRICE_FILTER del contrato.
+   */
+  async midEntryPrice(leg, quote) {
+    let tickSize = Number(quote?.tickSize) > 0 ? quote.tickSize : null;
+    let minPrice = tickSize != null ? quote.minPrice : null;
+    if (tickSize == null && typeof this.market.getPriceFilter === 'function') {
+      try {
+        const filter = await this.market.getPriceFilter(leg.symbol);
+        if (Number(filter?.tickSize) > 0) ({ tickSize, minPrice } = filter);
+      } catch (err) {
+        this.logger.warn('options_price_filter_failed', { symbol: leg.symbol, error: err.message });
+      }
+    }
+    if (tickSize == null) return null;
+    return midLimitPrice({ bid: quote?.bid, ask: quote?.ask, side: leg.side, tickSize, minPrice });
   }
 
   /** `kind`: 'trade' | 'error'. Respeta `params.notify` del bot (activo si falta). */
@@ -959,7 +1371,8 @@ class OptionsStrategyRunner {
         const fee = exerciseFee({ spot: indexPrice, quantity: p.quantity, intrinsicValue: value });
         const fees = p.feesUsdt + fee;
         const pnl = grossPnl({ side: p.side, entryPrice: p.entryPrice, exitPrice: value, quantity: p.quantity }) - fees;
-        await this.repo.closePosition(p.id, { exitPrice: value, closedAt: tickCtx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: 'expiry' });
+        await this.repo.closePosition(p.id, { exitPrice: value, closedAt: tickCtx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: 'expiry',
+          entryFeeUsdt: p.feesUsdt, exerciseFeeUsdt: fee });
         premium += signedPremium(p.side === 'SELL' ? 'BUY' : 'SELL', value, p.quantity);
         legs.push({ symbol: p.symbol, side: p.side === 'SELL' ? 'BUY' : 'SELL', quantity: p.quantity, price: value, fee });
         settled += 1;

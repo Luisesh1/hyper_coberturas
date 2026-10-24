@@ -32,22 +32,37 @@ describe('BotActivity', () => {
 
   it('posición abierta: prima total y fecha/hora de compra en escritorio y móvil', () => {
     const openedAt = new Date(2026, 9, 22, 14, 5).getTime();
-    const withDate = bot({ positions: [{ ...bot().positions[0], openedAt }] });
+    const withDate = bot({ positions: [{ ...bot().positions[0], openedAt, entryFeeUsdt: 0.5 }] });
     const { rerender } = render(<BotActivity bot={withDate} part="top" />);
-    expect(screen.getByRole('columnheader', { name: 'Prima' })).toBeTruthy();
-    expect(screen.getByRole('columnheader', { name: 'Ejecutada' })).toBeTruthy();
-    expect(screen.getByText('10,00 USDT')).toBeTruthy();
-    expect(screen.getByText('22 oct 14:05')).toBeTruthy();
+    expect(screen.getByText('Prima pagada').nextSibling.textContent).toBe('10,00');
+    expect(screen.getByText('Comisiones').nextSibling.textContent).toBe('0,50');
+    // P&L neto de comisiones: (12 − 10) × 1 − 0,5.
+    expect(screen.getByText('+1,50 USDT neto (+15,0 %)')).toBeTruthy();
+    expect(screen.getByText(/Ejecutada 22 oct 14:05/)).toBeTruthy();
+    expect(screen.getByText(/^Vencimiento 31 oct 08:00 UTC$/)).toBeTruthy();
+    expect(screen.getByText('TP').nextSibling.textContent).toBe('Simulado');
     rerender(<BotActivity bot={withDate} mobile part="top" />);
     expect(screen.getByText(/Prima 10,00 USDT/)).toBeTruthy();
     expect(screen.getByText(/22 oct 14:05/)).toBeTruthy();
   });
 
-  it('TP con su incremento porcentual debajo, en escritorio y móvil', () => {
+  it('escritorio: barra stop–entrada–ahora–TP; móvil: TP con su incremento porcentual', () => {
     const { rerender } = render(<BotActivity bot={bot()} part="top" />);
-    expect(screen.getByText('+80,0 %')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Precio actual 12 entre stop 5 y objetivo 18' })).toBeTruthy();
+    expect(screen.getByText('TP 18')).toBeTruthy();
     rerender(<BotActivity bot={bot()} mobile part="top" />);
     expect(screen.getByText(/TP 18,00 \(\+80,0 %\)/)).toBeTruthy();
+  });
+
+  it('real: estado del TP residente de la posición en Binance', () => {
+    const live = bot({
+      mode: 'live',
+      positions: [{ ...bot().positions[0], mode: 'live' }],
+      takeProfitOrders: [{ id: 3, positionId: 5, status: 'active', cancelRequested: false }],
+    });
+    render(<BotActivity bot={live} part="positions" />);
+    expect(screen.getByText('TP en Binance').nextSibling.textContent).toBe('GTC activo');
+    expect(screen.queryByText('Uso de límites')).toBeNull();
   });
 
   it('sin posiciones muestra el vacío', () => {

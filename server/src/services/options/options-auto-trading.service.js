@@ -13,12 +13,14 @@
  * Spec: docs/superpowers/specs/2026-10-15-alert-auto-trading-design.md
  */
 
+const { submitOutcomeText, isPendingSubmitStatus, SUBMIT_STATUSES } = require('./options-live-submit-outcome');
 const logger = require('../logger.service');
 const { AppError, ValidationError, NotFoundError } = require('../../errors/app-error');
 const defaultRepo = require('../../repositories/options-strategies.repository');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const { botUnderlyings, normalizeUnderlyings } = require('./bot-underlyings');
 const { parseSymbol } = require('./options-utils');
+const { dailyPnlSeries } = require('./options-pnl-series');
 
 const TEMPLATE_ID = 'alert_signal';
 const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
@@ -64,6 +66,8 @@ function signalDto(row) {
     decision: row.decision,
     detail: row.detail,
     simulated: row.simulated === true,
+    feesUsdt: row.feesUsdt ?? null,
+    feesEstimated: row.feesEstimated === true,
     createdAt: row.createdAt,
   };
 }
@@ -74,7 +78,13 @@ function signalDto(row) {
  */
 function decide(strategy, produced = [], { forceShadow = false } = {}) {
   const mode = strategy.mode === 'live' && !forceShadow ? 'live' : 'shadow';
-  const mine = produced.filter((p) => p.mode === mode);
+  // Resultados de envío real: nunca el código crudo; un envío ambiguo
+  // ('attention') deja la señal pendiente para que la resuelvan los fills.
+  const mine = produced.filter((p) => p.mode === mode).map((p) => (
+    mode === 'live' && ['open', 'close'].includes(p.type) && !p.booked && SUBMIT_STATUSES.includes(p.reason)
+      ? { ...p, pending: p.pending || isPendingSubmitStatus(p.reason),
+        detail: p.detail && p.detail !== p.reason ? p.detail : submitOutcomeText(p.reason) }
+      : p));
   const booked = mine.filter((p) => p.booked);
   const opened = booked.filter((p) => p.type === 'open');
   const closed = booked.filter((p) => p.type === 'close');
@@ -83,9 +93,12 @@ function decide(strategy, produced = [], { forceShadow = false } = {}) {
   const detail = details.join(' · ') || null;
   const prefix = mode === 'live' ? 'Real' : 'Sombra';
 
+  // Una entrada que aún espera (giro en sombra: cierre + LIMIT al medio)
+  // deja la señal pendiente; la resuelve el llenado o la caducidad.
+  const waitingOpen = mine.some((p) => p.type === 'open' && p.pending);
   if (opened.length && closed.length) return { decision: 'reversed', detail: `${prefix}: ${detail}` };
   if (opened.length) return { decision: 'opened', detail: `${prefix}: ${detail}` };
-  if (closed.length) return { decision: 'closed', detail: `${prefix}: ${detail}` };
+  if (closed.length && !waitingOpen) return { decision: 'closed', detail: `${prefix}: ${detail}` };
   const pending = mine.find((p) => p.pending);
   if (pending) return { decision: 'pending', detail: `${prefix}: ${detail || 'Orden LIMIT enviada, esperando ejecución'}` };
   const error = mine.find((p) => p.type === 'error');
@@ -148,6 +161,9 @@ function createOptionsAutoTradingService(deps = {}) {
   const alerts = deps.alerts || lazyAlerts();
   const strategies = deps.strategies || lazyStrategies();
   const liveOrders = deps.liveOrders || lazyLiveOrders();
+  const shadowEntries = deps.shadowEntries || (repo === defaultRepo
+    ? { listPending: (...args) => require('../../repositories/options-shadow-entries.repository').listPending(...args) }
+    : { listPending: async () => [] });
   const log = deps.logger || logger;
   const now = deps.now || Date.now;
   let unsubscribe = null;
@@ -184,6 +200,8 @@ function createOptionsAutoTradingService(deps = {}) {
         score: payload.score ?? null,
         eventId: payload.eventId ?? null,
         triggeredAt: payload.triggeredAt ?? null,
+        // Enlaza la entrada real con esta fila: el ejecutor la resuelve con los fills.
+        signalId: claim.id,
       });
       outcome = decide(bot, produced);
     } catch (err) {
@@ -306,15 +324,48 @@ function createOptionsAutoTradingService(deps = {}) {
       repo.lastAutoSignalsByUser(userId),
     ]);
     const byId = new Map(alertList.map((a) => [Number(a.id), a]));
-    return bots.map((bot) => ({
+    return Promise.all(bots.map(async (bot) => {
+      // `paused` se muestra con el libro sombra.
+      const book = bot.mode === 'live' ? 'live' : 'shadow';
+      const positions = (await repo.listPositions(bot.id)) || [];
+      let deadlines = [];
+      let pendingEntryUnknown = false;
+      try {
+        deadlines = book === 'live'
+          ? (await liveOrders.listByStrategy(bot.id)).filter((o) => o.action === 'open' && o.status !== 'final').map((o) => o.deadlineAt)
+          : (await shadowEntries.listPending({ strategyId: bot.id })).map((e) => e.deadlineAt);
+      } catch (err) {
+        deadlines = [];
+        pendingEntryUnknown = true;
+        log.warn('options_bot_pending_lookup_failed', { strategyId: bot.id, error: err.message });
+      }
+      deadlines = deadlines.filter((d) => d != null);
+      return {
       ...bot,
+      pnlSeries: dailyPnlSeries(positions, book, now()),
+      feesUsdt: Math.round(positions.filter((p) => p.mode === book).reduce((a, p) => a + (p.feesUsdt || 0), 0) * 100) / 100,
+      pendingEntry: deadlines.length ? { deadlineAt: Math.min(...deadlines) } : null,
+      pendingEntryUnknown,
+      blocked: Object.keys(bot.state?.blockedUnderlyings || {}).length > 0,
       underlyings: botUnderlyings(bot),
       alerts: (bot.params?.alertIds || [])
         .map((id) => byId.get(Number(id)))
         .filter(Boolean)
         .map((a) => ({ id: Number(a.id), name: a.name, direction: alertDirection(a), assetList: a.assetList || [] })),
       lastSignal: signalDto(lastSignals.find((s) => s.strategyId === bot.id)),
+      };
     }));
+  }
+
+  /** Quita el bloqueo de un subyacente del bot (tras revisar el motivo). */
+  async function unblockUnderlying(userId, id, underlyingRaw) {
+    const bot = await requireBot(userId, id);
+    const underlying = normalizeUnderlying(underlyingRaw);
+    if (!botUnderlyings(bot).includes(underlying)) {
+      throw new ValidationError(`El bot no opera ${underlying}`);
+    }
+    await repo.clearUnderlyingBlock(bot.id, underlying);
+    return botSummary(userId, bot.id);
   }
 
   async function botSummary(userId, id) {
@@ -556,6 +607,8 @@ function createOptionsAutoTradingService(deps = {}) {
         eventId: null,
         triggeredAt: at,
         simulated: true,
+        // La entrada simulada pendiente resuelve esta fila al llenarse o caducar.
+        signalId: claim.id,
       }, { shadowOnly: true });
       outcome = decide(bot, produced, { forceShadow: true });
     } catch (err) {
@@ -572,6 +625,7 @@ function createOptionsAutoTradingService(deps = {}) {
     simulateSignal,
     handleAlertTriggered,
     listBots,
+    unblockUnderlying,
     eligibleAlerts,
     createBot,
     cloneBot,

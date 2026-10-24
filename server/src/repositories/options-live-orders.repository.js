@@ -62,6 +62,12 @@ function compareExposure(rows, exchangePositions) {
     return true;
 }
 
+/** `{ signalId }` si la señal trae un id de fila válido; si no, nada. */
+function signalIdOf(signal) {
+  const id = Number(signal?.signalId);
+  return Number.isSafeInteger(id) && id > 0 ? { signalId: id } : {};
+}
+
 function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = {}) {
   // Reconciliación de posiciones contra el total de la cuenta Binance.
   const EXPOSURE_SQL = `SELECT symbol,side,COALESCE(SUM(quantity),0) AS quantity
@@ -74,7 +80,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return compareExposure(rows, exchangePositions);
   }
 
-  async function beginBatch({ strategy, action, legs, key, detail, deadlineAt, exchangePositions }) {
+  async function beginBatch({ strategy, action, legs, key, detail, deadlineAt, exchangePositions, autoSignalId = null }) {
     if (!legs.length || !['open', 'close'].includes(action)) throw new Error('Invalid live batch');
     return db.transaction(async (tx) => {
       // Locks entre réplicas: un solo lote sin conciliar por usuario,
@@ -88,11 +94,16 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       }
       await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
       const { rows: pending } = await tx.query(
-        "SELECT b.id FROM options_live_batches b WHERE b.user_id=$1 AND b.status <> 'completed' " +
-        "AND EXISTS (SELECT 1 FROM options_live_orders o WHERE o.batch_id=b.id AND o.purpose='standard') LIMIT 1",
+        "SELECT DISTINCT b.action FROM options_live_batches b WHERE b.user_id=$1 AND b.status <> 'completed' " +
+        "AND EXISTS (SELECT 1 FROM options_live_orders o WHERE o.batch_id=b.id AND o.purpose='standard')",
         [strategy.userId]
       );
-      if (pending.length) return null;
+      // Una entrada GTC puede quedar en reposo hasta diez minutos: no debe
+      // impedir un cierre (stop, salida, giro) de otra posición ni del
+      // parcial ya llenado. Cualquier otro lote sin conciliar sigue
+      // bloqueando, y la exposición se vuelve a verificar abajo bajo lock.
+      const onlyEntries = pending.every((p) => p.action === 'open');
+      if (pending.length && !(action === 'close' && onlyEntries)) return null;
       // Verificar la misma instantánea de Binance bajo lock de usuario,
       // contra el libro confirmado en la transacción. Si cambió desde
       // el preflight, abortar: jamás confiar en límites calculados antes.
@@ -194,9 +205,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       const time = now();
       const { rows: [batch] } = await tx.query(
         `INSERT INTO options_live_batches
-           (strategy_id,user_id,action_key,action,detail,created_at,deadline_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [strategy.id, strategy.userId, key, action, detail || null, time, deadlineAt]
+           (strategy_id,user_id,action_key,action,detail,created_at,deadline_at,auto_signal_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [strategy.id, strategy.userId, key, action, detail || null, time, deadlineAt, autoSignalId ?? null]
       );
       // Todo cierre real queda con intención durable, aun si el LIMIT
       // termina parcialmente ejecutado. Evita que el protector vuelva a
@@ -292,16 +303,92 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         "OR (action='open' AND symbol=ANY($4::text[])))",
         [strategy.userId, at, ids, held.map((p) => p.symbol)]
       );
+      // La misma señal ya en cola como reevaluación (entradas canceladas) se
+      // convierte en reentrada: conserva su created_at (caducidad desde la
+      // señal original) y espera ahora al cierre de estas posiciones.
       const savedSignal = {
         eventId,
         direction: signal.direction,
         // Bot multi-subyacente: la reentrada abre en el subyacente que giró.
         underlying: signal.underlying ?? null,
+        // Fila de la señal: la entrada diferida la enlaza y se resuelve con sus fills.
+        ...signalIdOf(signal),
       };
       await tx.query(
         `INSERT INTO options_live_reentries
          (strategy_id,user_id,alert_event_id,signal,wait_position_ids,created_at,updated_at)
          VALUES ($1,$2,$3,$4::jsonb,$5::bigint[],$6,$6)
+         ON CONFLICT (strategy_id,alert_event_id) DO UPDATE SET kind='reentry',
+           wait_position_ids=EXCLUDED.wait_position_ids,wait_order_ids='{}'::bigint[],
+           signal=EXCLUDED.signal,updated_at=EXCLUDED.updated_at
+         WHERE options_live_reentries.kind='reevaluate' AND options_live_reentries.status='pending'`,
+        [strategy.id, strategy.userId, eventId, JSON.stringify(savedSignal), ids, at]
+      );
+      return true;
+    });
+  }
+
+  /**
+   * Señal contraria con entradas reales pendientes: se piden sus
+   * cancelaciones y la señal espera, durable, a que TODAS esas órdenes sean
+   * finales para volver a evaluarse. Mismas comprobaciones que queueReversal.
+   * Devuelve false si el bot ya no es real/por alertas del usuario.
+   */
+  async function queueSignalReevaluation(strategy, signal, orderIds) {
+    const eventId = String(signal?.eventId ?? '');
+    const ids = Array.isArray(orderIds) ? orderIds.map(Number) : null;
+    if (!/^\d{1,20}$/.test(eventId) || !['bullish','bearish'].includes(signal?.direction) ||
+        !ids || ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+        new Set(ids).size !== ids.length) {
+      throw new Error('Invalid durable reevaluation event');
+    }
+    return db.transaction(async (tx) => {
+      const { rows: [owner] } = await tx.query(
+        'SELECT id,user_id,mode,template,underlying FROM options_strategies WHERE id=$1 FOR UPDATE', [strategy.id]
+      );
+      if (!owner || Number(owner.user_id) !== Number(strategy.userId) ||
+          owner.mode !== 'live' || owner.template !== 'alert_signal') return false;
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
+      if (ids.length) {
+        const { rows: owned } = await tx.query(
+          "SELECT id FROM options_live_orders WHERE id=ANY($1::bigint[]) AND user_id=$2 " +
+          "AND strategy_id=$3 AND action='open' FOR UPDATE", [ids, strategy.userId, strategy.id]
+        );
+        if (owned.length !== ids.length) throw new Error('Reevaluation orders do not belong to this strategy');
+      }
+      const savedSignal = {
+        eventId,
+        direction: signal.direction,
+        underlying: signal.underlying ?? null,
+        ...signalIdOf(signal),
+      };
+      // Solo la señal más reciente decide el subyacente: una reevaluación
+      // anterior aún pendiente (p. ej. B bajista mientras llega C alcista)
+      // queda sustituida y su señal se resuelve como ignorada.
+      const at = now();
+      const fallback = String(owner.underlying ?? '').toUpperCase();
+      const target = String(signal.underlying ?? fallback).toUpperCase();
+      const { rows: superseded } = await tx.query(
+        `UPDATE options_live_reentries SET status='expired',updated_at=$5
+          WHERE strategy_id=$1 AND kind='reevaluate' AND status='pending' AND alert_event_id<>$2
+            AND UPPER(COALESCE(signal->>'underlying',$4::text))=$3::text
+          RETURNING signal`,
+        [strategy.id, eventId, target, fallback, at]
+      );
+      const supersededIds = superseded
+        .map((r) => signalIdOf(typeof r.signal === 'string' ? JSON.parse(r.signal) : r.signal).signalId)
+        .filter((id) => id != null);
+      if (supersededIds.length) {
+        await tx.query(
+          `UPDATE options_auto_signals SET decision='ignored',detail=$3
+            WHERE id=ANY($1::bigint[]) AND strategy_id=$2 AND decision='pending'`,
+          [supersededIds, strategy.id, 'Real: sustituida por una señal posterior']
+        );
+      }
+      await tx.query(
+        `INSERT INTO options_live_reentries
+         (strategy_id,user_id,alert_event_id,signal,wait_position_ids,kind,wait_order_ids,created_at,updated_at)
+         VALUES ($1,$2,$3,$4::jsonb,'{}'::bigint[],'reevaluate',$5::bigint[],$6,$6)
          ON CONFLICT (strategy_id,alert_event_id) DO NOTHING`,
         [strategy.id, strategy.userId, eventId, JSON.stringify(savedSignal), ids, at]
       );
@@ -309,11 +396,18 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
 
+  /**
+   * Cola de reentradas pendientes. `ready`: para 'reentry', las posiciones
+   * de espera están cerradas; para 'reevaluate', ninguna orden de espera
+   * sigue sin ser final.
+   */
   async function listPendingReentries(limit = 50) {
     const { rows } = await db.query(
-      "SELECT r.id,r.strategy_id,r.user_id,r.alert_event_id,r.signal,r.created_at, " +
-      "NOT EXISTS (SELECT 1 FROM options_strategy_positions p " +
-      "WHERE p.id=ANY(r.wait_position_ids) AND p.closed_at IS NULL) AS ready " +
+      "SELECT r.id,r.strategy_id,r.user_id,r.alert_event_id,r.signal,r.created_at,r.kind,r.wait_order_ids, " +
+      "CASE WHEN r.kind='reevaluate' THEN NOT EXISTS (SELECT 1 FROM options_live_orders o " +
+      "WHERE o.id=ANY(r.wait_order_ids) AND o.status<>'final') " +
+      "ELSE NOT EXISTS (SELECT 1 FROM options_strategy_positions p " +
+      "WHERE p.id=ANY(r.wait_position_ids) AND p.closed_at IS NULL) END AS ready " +
       "FROM options_live_reentries r JOIN options_strategies s ON s.id=r.strategy_id " +
       "WHERE r.status='pending' AND s.mode='live' " +
       "ORDER BY r.created_at,r.id LIMIT $1", [limit]
@@ -322,6 +416,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       id: Number(r.id), strategyId: Number(r.strategy_id), userId: Number(r.user_id),
       eventId: String(r.alert_event_id), signal: typeof r.signal === 'string' ? JSON.parse(r.signal) : r.signal,
       createdAt: Number(r.created_at), ready: r.ready === true,
+      kind: r.kind || 'reentry', waitOrderIds: (r.wait_order_ids || []).map(Number),
     }));
   }
 
@@ -607,6 +702,70 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
 
   /**
+   * Señal contraria: pide cancelar TODAS las entradas no finales del bot en
+   * el subyacente (también las que ya tenían la cancelación pedida, que
+   * igualmente hay que esperar). Devuelve sus ids.
+   */
+  async function requestCancelEntries({ userId, strategyId, underlying }) {
+    const ids = [userId, strategyId].map(Number);
+    const u = String(underlying ?? '').trim().toUpperCase();
+    if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0) || !/^[A-Z0-9]{1,20}$/.test(u)) {
+      throw new Error('Invalid cancel entries request');
+    }
+    const { rows } = await db.query(
+      "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$4 " +
+      "WHERE user_id=$1 AND strategy_id=$2 AND action='open' AND purpose<>'take_profit' " +
+      "AND status<>'final' AND symbol LIKE $3 RETURNING id",
+      [ids[0], ids[1], u + '-%', now()]
+    );
+    return rows.map((r) => Number(r.id));
+  }
+
+  /**
+   * Resultado de un lote de entrada a partir de los fills conciliados:
+   * cantidad pedida y ejecutada, precio medio ponderado y comisiones.
+   */
+  async function batchEntryOutcome(batchId) {
+    return entryOutcomeWith(db, batchId);
+  }
+
+  // Mismo cálculo dentro de la transacción de finishOrder (q = db o tx).
+  async function entryOutcomeWith(q, batchId) {
+    const { rows: orders } = await q.query(
+      "SELECT b.id,b.auto_signal_id,o.id AS order_id,o.symbol,o.side,o.requested_qty," +
+      "o.cancel_requested,o.last_error " +
+      "FROM options_live_batches b JOIN options_live_orders o ON o.batch_id=b.id " +
+      "WHERE b.id=$1 AND b.action='open' ORDER BY o.id", [batchId]
+    );
+    if (!orders.length) return null;
+    const { rows: fills } = await q.query(
+      "SELECT f.quantity,f.price,f.fee_usdt FROM options_live_fills f " +
+      "JOIN options_live_orders o ON o.id=f.live_order_id WHERE o.batch_id=$1 ORDER BY f.id", [batchId]
+    );
+    const round = (x) => Number(x.toFixed(12));
+    let filled = 0;
+    let notional = 0;
+    let fees = 0;
+    for (const f of fills) {
+      filled += Number(f.quantity);
+      notional += Number(f.quantity) * Number(f.price);
+      fees += Number(f.fee_usdt || 0);
+    }
+    return {
+      autoSignalId: orders[0].auto_signal_id == null ? null : Number(orders[0].auto_signal_id),
+      requested: round(orders.reduce((acc, o) => acc + Number(o.requested_qty), 0)),
+      filled: round(filled),
+      avgPrice: filled > 0 ? round(notional / filled) : null,
+      feesUsdt: round(fees),
+      symbol: orders[0].symbol,
+      side: orders[0].side,
+      cancelRequested: orders.some((o) => o.cancel_requested === true),
+      // markRejected deja este prefijo: Binance rechazó el envío sin crear la orden.
+      rejected: orders.some((o) => /^Rechazada por Binance/.test(String(o.last_error || ''))),
+    };
+  }
+
+  /**
    * ¿Hay ya un cierre real en curso (orden de cierre no final que no sea el
    * TP, o salida diferida persistida) en alguna posición abierta objetivo?
    * Sin positionIds se miran todas las posiciones reales abiertas del bot.
@@ -631,6 +790,28 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       "WHERE user_id=$1 AND purpose='take_profit' AND status<>'final'", [userId]
     );
     return rows.map((r) => ({ clientOrderId: r.client_order_id, orderId: r.exchange_order_id }));
+  }
+
+  /**
+   * Órdenes propias del usuario que el ledger todavía no da por finales
+   * (cualquier propósito: entrada GTC en reposo, cierre, TP residente).
+   * Son las únicas órdenes abiertas en Binance que no bloquean un envío.
+   */
+  async function listOwnOpenOrderIds(userId) {
+    const { rows } = await db.query(
+      "SELECT client_order_id,exchange_order_id FROM options_live_orders " +
+      "WHERE user_id=$1 AND status<>'final'", [userId]
+    );
+    return rows.map((r) => ({ clientOrderId: r.client_order_id, orderId: r.exchange_order_id }));
+  }
+
+  /** Entradas no finales de todos los bots del usuario (reserva de margen). */
+  async function listOpenEntriesByUser(userId) {
+    const { rows } = await db.query(
+      "SELECT * FROM options_live_orders WHERE user_id=$1 AND action='open' " +
+      "AND purpose='standard' AND status<>'final' ORDER BY id", [userId]
+    );
+    return rows.map(map);
   }
 
   async function listUnresolved() {
@@ -854,10 +1035,10 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       if (locked.action === 'open') {
         await tx.query(
           `INSERT INTO options_strategy_positions
-           (strategy_id,user_id,mode,symbol,side,quantity,entry_price,opened_at,fees_usdt)
-           VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8)`,
+           (strategy_id,user_id,mode,symbol,side,quantity,entry_price,opened_at,fees_usdt,entry_fee_usdt)
+           VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9)`,
           [locked.strategy_id, locked.user_id, locked.symbol, locked.side,
-            quantity, trade.price, trade.at, trade.fee]
+            quantity, trade.price, trade.at, trade.fee, trade.fee]
         );
       } else {
         const { rows: [position] } = await tx.query(
@@ -876,6 +1057,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         const closeReason = locked.purpose === 'take_profit' ? 'take_profit' : null;
         const held = Number(position.quantity);
         if (quantity > held + 1e-9) throw new Error('Fill larger than open position');
+        // Una abierta solo ha pagado la entrada (fees_usdt = entry_fee_usdt):
+        // se reparte en proporción a la cantidad cerrada, y ambas filas
+        // conservan fees_usdt = entrada + salida.
         const allocatedEntryFee = Number(position.fees_usdt) * (quantity / held);
         const fees = allocatedEntryFee + trade.fee;
         const pnl = grossPnl({ side: position.side, entryPrice: position.entry_price,
@@ -883,21 +1067,23 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         if (Math.abs(held - quantity) < 1e-9) {
           await tx.query(
             `UPDATE options_strategy_positions
-             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5,close_reason=$6 WHERE id=$1`,
-            [position.id, trade.price, trade.at, pnl, fees, closeReason]
+             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5,close_reason=$6,
+                 entry_fee_usdt=$7,exit_fee_usdt=$8 WHERE id=$1`,
+            [position.id, trade.price, trade.at, pnl, fees, closeReason, allocatedEntryFee, trade.fee]
           );
         } else {
           await tx.query(
-            'UPDATE options_strategy_positions SET quantity=$2,fees_usdt=$3 WHERE id=$1',
+            'UPDATE options_strategy_positions SET quantity=$2,fees_usdt=$3,entry_fee_usdt=$3 WHERE id=$1',
             [position.id, held - quantity, Number(position.fees_usdt) - allocatedEntryFee]
           );
           await tx.query(
             `INSERT INTO options_strategy_positions
              (strategy_id,user_id,mode,symbol,side,quantity,entry_price,exit_price,
-              opened_at,closed_at,pnl_usdt,fees_usdt,close_reason)
-             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+              opened_at,closed_at,pnl_usdt,fees_usdt,close_reason,entry_fee_usdt,exit_fee_usdt)
+             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
             [position.strategy_id, position.user_id, position.symbol, position.side, quantity,
-              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees, closeReason]
+              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees, closeReason,
+              allocatedEntryFee, trade.fee]
           );
         }
       }
@@ -918,12 +1104,26 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
 
-  async function finishOrder(id, exchangeOrderId, executedQuantity) {
+  /**
+   * Finaliza una orden. En la MISMA transacción, opcionalmente:
+   * - `block` `{ underlying, reason, at }`: bloquea el subyacente del bot
+   *   (resto de entrada no operable), misma fusión jsonb que setUnderlyingBlock;
+   * - `resolveSignal(outcome) → { decision, detail, feesUsdt, feesEstimated }`:
+   *   si el lote de ENTRADA queda completo y enlazado a una señal, la resuelve
+   *   con los fills reales. Un fallo deshace también la finalización, así que
+   *   la siguiente pasada lo reintenta todo: nunca se pierde el bloqueo.
+   */
+  async function finishOrder(id, exchangeOrderId, executedQuantity, { block = null, resolveSignal = null } = {}) {
+    if (block) {
+      const u = String(block.underlying ?? '').trim().toUpperCase();
+      if (!/^[A-Z0-9]{1,20}$/.test(u) || !block.reason) throw new Error('Invalid underlying block');
+      block = { ...block, underlying: u };
+    }
     return db.transaction(async (tx) => {
       const { rows: [locked] } = await tx.query(
         'SELECT * FROM options_live_orders WHERE id=$1 FOR UPDATE', [id]
       );
-      if (!locked || locked.status === 'final') return;
+      if (!locked || locked.status === 'final') return null;
       // Sin identificador del exchange, solo puede finalizar una orden
       // que sigue en cola y nunca pasó por el estado sending.
       if (exchangeOrderId == null && locked.status !== 'queued') {
@@ -937,37 +1137,70 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
          exchange_order_id=COALESCE($2,exchange_order_id),updated_at=$3,reconcile_lease_until=0
          WHERE id=$1`, [id, exchangeOrderId == null ? null : String(exchangeOrderId), now()]
       );
+      if (block) {
+        const { rowCount } = await tx.query(
+          `UPDATE options_strategies
+              SET state = jsonb_set(
+                    COALESCE(state, '{}'::jsonb), '{blockedUnderlyings}',
+                    CASE WHEN jsonb_typeof(state->'blockedUnderlyings') = 'object'
+                         THEN state->'blockedUnderlyings' ELSE '{}'::jsonb END
+                      || jsonb_build_object($2::text, jsonb_build_object('reason', $3::text, 'at', $4::bigint)),
+                    true)
+            WHERE id = $1`,
+          [locked.strategy_id, block.underlying, String(block.reason), block.at ?? now()]
+        );
+        if (rowCount !== 1) throw new Error('Strategy missing: cannot block underlying');
+      }
+      const blocked = !!block;
       const { rows: [remaining] } = await tx.query(
         "SELECT COUNT(*)::int AS n FROM options_live_orders WHERE batch_id=$1 AND status<>'final'",
         [locked.batch_id]
       );
-      if (Number(remaining.n) === 0) {
-        await tx.query("UPDATE options_live_batches SET status='completed' WHERE id=$1", [locked.batch_id]);
-        const { rows: [batch] } = await tx.query(
-          'SELECT strategy_id,action_key,action FROM options_live_batches WHERE id=$1', [locked.batch_id]
+      const batchId = Number(locked.batch_id);
+      if (Number(remaining.n) !== 0) return { batchId, completed: false, blocked };
+      await tx.query("UPDATE options_live_batches SET status='completed' WHERE id=$1", [locked.batch_id]);
+      const { rows: [batch] } = await tx.query(
+        'SELECT strategy_id,action_key,action,auto_signal_id FROM options_live_batches WHERE id=$1', [locked.batch_id]
+      );
+      const autoSignalId = batch?.auto_signal_id == null ? null : Number(batch.auto_signal_id);
+      // Entrada enlazada a su señal: se resuelve aquí con los fills reales.
+      let signalResolved = false;
+      if (autoSignalId != null && batch?.action === 'open' && typeof resolveSignal === 'function') {
+        const outcome = await entryOutcomeWith(tx, locked.batch_id);
+        const r = outcome && resolveSignal(outcome);
+        if (!r || !['opened', 'ignored'].includes(r.decision)) throw new Error('Invalid entry signal resolution');
+        await tx.query(
+          `UPDATE options_auto_signals
+              SET decision = $2, detail = $3, fees_usdt = $4::numeric, fees_estimated = $5::boolean
+            WHERE id = $1 AND decision IN ('pending','opened')`,
+          [autoSignalId, r.decision, r.detail ?? null, Number(r.feesUsdt) || 0, r.feesEstimated === true]
         );
-        const match = /^alert:([0-9]+):(open|close)$/.exec(batch?.action_key || '');
-        if (match) {
-          const { rows: [fills] } = await tx.query(
-            'SELECT COALESCE(SUM(processed_qty),0) AS qty FROM options_live_orders WHERE batch_id=$1',
-            [locked.batch_id]
-          );
-          const executed = Number(fills.qty) > 0;
-          await tx.query(
-            `UPDATE options_auto_signals SET decision=$3,detail=$4
-             WHERE strategy_id=$1 AND alert_event_id=$2 AND decision='pending'`,
-            [batch.strategy_id, match[1],
-              executed ? (batch.action === 'open' ? 'opened' : 'closed') : 'ignored',
-              executed ? 'Ejecución real verificada con Binance (fills conciliados)'
-                : 'Sin ejecuciones tras la ventana LIMIT de diez minutos']
-          );
-        }
+        signalResolved = true;
       }
+      // Sin resolutor (o sin señal enlazada): texto genérico de siempre.
+      const match = !signalResolved && /^alert:([0-9]+):(open|close)$/.exec(batch?.action_key || '');
+      if (match) {
+        const { rows: [fills] } = await tx.query(
+          'SELECT COALESCE(SUM(processed_qty),0) AS qty FROM options_live_orders WHERE batch_id=$1',
+          [locked.batch_id]
+        );
+        const executed = Number(fills.qty) > 0;
+        await tx.query(
+          `UPDATE options_auto_signals SET decision=$3,detail=$4
+           WHERE strategy_id=$1 AND alert_event_id=$2 AND decision='pending'`,
+          [batch.strategy_id, match[1],
+            executed ? (batch.action === 'open' ? 'opened' : 'closed') : 'ignored',
+            executed ? 'Ejecución real verificada con Binance (fills conciliados)'
+              : 'Sin ejecuciones tras la ventana LIMIT de diez minutos']
+        );
+      }
+      return { batchId, completed: true, action: batch?.action ?? null, autoSignalId, blocked, signalResolved };
     });
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
-    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, requestCancel, hasPendingClose, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
+    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, listOwnOpenOrderIds, listOpenEntriesByUser, hasStandingTp, requestCancel, requestCancelEntries, hasPendingClose, queueReversal,
+    queueSignalReevaluation, batchEntryOutcome, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     claimIncidentNotificationToken, releaseIncidentNotification,

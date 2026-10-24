@@ -205,6 +205,9 @@ export const optionsApi = {
   cancelOrder:    (symbol, orderId)        =>
     request('DELETE', `/options/orders/${encodeURIComponent(symbol)}/${encodeURIComponent(orderId)}`),
   getTrades:      ({ days = 30 } = {})     => request('GET', `/options/trades${buildQueryString({ days })}`),
+  // Quita el bloqueo de un subyacente de un bot por alertas. → bot actualizado
+  unblockAutoBot: (id, underlying)         =>
+    request('POST', `/options/auto-bots/${encodeURIComponent(id)}/unblock`, { underlying }),
 };
 
 // ------------------------------------------------------------------

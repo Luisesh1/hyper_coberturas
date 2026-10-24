@@ -6,7 +6,9 @@
  * - `sell_against` (vender en contra): alcista → vende put, bajista → vende call.
  *
  * `evaluate(ctx)` es pura. Sin `ctx.signal` solo evalúa salidas (tick del
- * runner). Con señal: (1) posición contraria según `onOpposite`, (2) límites
+ * runner). Con señal: (0) subyacente bloqueado y entradas pendientes
+ * (`ctx.pendingEntries`: la contraria se cancela con `cancel_entries`),
+ * (1) posición contraria según `onOpposite`, (2) límites
  * de posiciones abiertas y operaciones del día, (3) apertura por delta en el
  * vencimiento más cercano a `expiryDays`, dentro del rango opcional
  * `expiryMinDays`..`expiryMaxDays` (la cadena la elige el runner).
@@ -399,19 +401,48 @@ function openFor(ctx, direction, openCount, released = 0) {
 function evaluate(ctx) {
   const { positions = [], params, signal } = ctx;
   if (!signal) return exits(ctx);
+  const label = ctx.underlying || 'este subyacente';
+
+  // 1. Un resto de entrada no operable bloquea el subyacente hasta que el
+  // usuario lo revise y lo desbloquee.
+  if (ctx.underlying && ctx.blockedUnderlyings?.[ctx.underlying]) {
+    return [skip('underlying_blocked', `Resto no operable en ${ctx.underlying}: revísalo y desbloquéalo`)];
+  }
 
   const direction = signal.direction;
   if (!DIRECTIONS.includes(direction)) return [skip('neutral', 'Alerta neutral')];
 
-  // 1. Posición contraria (solo las de este subyacente: `ctx.positions`).
-  const opposite = positions.filter((p) => positionDirection(p) !== direction);
   const actions = [];
+  // 2. Entradas pendientes (LIMIT al medio) de este subyacente y modo. Una
+  // contraria (o de sentido desconocido) se cancela: en Real la señal espera,
+  // durable, a que la cancelación sea final y se reevalúa con lo que se
+  // haya llenado; en Sombra se cancela al momento y la evaluación sigue.
+  let pending = Array.isArray(ctx.pendingEntries) ? ctx.pendingEntries : [];
+  if (pending.some((e) => e.direction !== direction)) {
+    const live = ctx.mode === 'live';
+    const cancel = {
+      type: 'cancel_entries',
+      reason: 'opposite_signal',
+      ids: pending.map((e) => e.id),
+      reevaluate: live,
+      detail: live
+        ? `Señal ${DIRECTION_LABEL[direction]}: cancela la entrada pendiente en ${label} y se reevalúa al confirmarse`
+        : `Señal ${DIRECTION_LABEL[direction]}: cancela la entrada pendiente en ${label}`,
+    };
+    if (live) return [cancel];
+    actions.push(cancel);
+    pending = [];
+  }
+
+  // Posición contraria (solo las de este subyacente: `ctx.positions`).
+  const opposite = positions.filter((p) => positionDirection(p) !== direction);
   // Bot multi-subyacente: el máximo de posiciones cuenta todo el bot.
   let openCount = Number.isFinite(ctx.openCountAll) ? ctx.openCountAll : positions.length;
   let released = 0;
   if (opposite.length) {
     if (params.onOpposite === 'ignore') {
-      return [skip('opposite_ignored', `Señal ${DIRECTION_LABEL[direction]} ignorada: hay posición en sentido contrario`)];
+      actions.push(skip('opposite_ignored', `Señal ${DIRECTION_LABEL[direction]} ignorada: hay posición en sentido contrario`));
+      return actions;
     }
     actions.push({
       type: 'close',
@@ -425,19 +456,18 @@ function evaluate(ctx) {
     if (params.budgetUsdt != null) released = opposite.reduce((sum, p) => sum + positionCommittedUsdt(p, ctx.spot), 0);
   }
 
-  // 2. Una sola opción por subyacente: hasta que la abierta se cierre o
+  // 3. Una sola opción por subyacente: hasta que la abierta se cierre o
   // expire (y la orden de entrada pendiente se resuelva) no se abre otra.
-  const label = ctx.underlying || 'este subyacente';
   if (positions.length > opposite.length) {
     actions.push(skip('underlying_busy', `Ya hay una opción abierta en ${label}: se espera a que se cierre o expire`));
     return actions;
   }
-  if (ctx.pendingOpens > 0) {
+  if (pending.length) {
     actions.push(skip('underlying_busy', `Hay una orden de entrada pendiente en ${label}`));
     return actions;
   }
 
-  // 3 y 4. Límites y apertura.
+  // 4. Límites y apertura.
   actions.push(openFor(ctx, direction, openCount, released));
   return actions;
 }

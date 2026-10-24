@@ -83,6 +83,8 @@ const closeAutoBotSchema = z.object({
   confirm: z.literal(true),
 });
 
+const unblockAutoBotSchema = z.object({ underlying });
+
 const simulateAutoBotSchema = z.object({
   direction: z.enum(['bullish', 'bearish']),
   // Bot multi-subyacente: en cuál simular (por defecto el primero).
@@ -91,6 +93,7 @@ const simulateAutoBotSchema = z.object({
 
 module.exports = {
   simulateAutoBotSchema,
+  unblockAutoBotSchema,
   createAutoBotSchema,
   closeAutoBotSchema,
   updateAutoBotSchema,

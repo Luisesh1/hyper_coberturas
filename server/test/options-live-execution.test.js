@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { OptionsLiveExecution, normalizeTrade, actionKey, WINDOW_MS } =
+const { OptionsLiveExecution, normalizeTrade, actionKey, WINDOW_MS, orderTimeInForce } =
   require('../src/services/options/options-live-execution.service');
 
 const strategy = { id: 1, userId: 7, template: 'alert_signal' };
@@ -9,19 +9,22 @@ const context = (time = 100_000, eventId = 77) =>
   ({ now: time, signal: { eventId, direction: 'bullish' } });
 const silent = { warn() {}, info() {}, error() {} };
 
-function fixture({ now = 100_000, onSubmit } = {}) {
+function fixture({ now = 100_000, onSubmit, leg: l = leg } = {}) {
   const clock = { time: now };
   const orders = [];
   const fills = [];
-  const calls = { post: [], get: [], cancel: [], trades: [] };
+  const calls = { post: [], get: [], cancel: [], trades: [], info: 0 };
   let nextId = 1;
   const repo = {
     orders, fills,
     async assertExchangeExposure() { return true; },
-    async beginBatch({ action, legs, key, deadlineAt }) {
+    batches: [],
+    async beginBatch({ action, legs, key, deadlineAt, autoSignalId = null }) {
       if (orders.some((o) => o.key === key || o.status !== 'final')) return null;
+      const batchId = repo.batches.length + 1;
+      repo.batches.push({ id: batchId, action, autoSignalId });
       return legs.map((l) => {
-        const o = { ...l, id: nextId++, userId: 7, strategyId: 1, action,
+        const o = { ...l, id: nextId++, batchId, userId: 7, strategyId: 1, action,
           clientOrderId: 'HC' + nextId, orderId: null, status: 'queued', key,
           quantity: l.quantity, limitPrice: l.price, processedQty: 0,
           createdAt: clock.time, deadlineAt };
@@ -62,20 +65,76 @@ function fixture({ now = 100_000, onSubmit } = {}) {
       fills.push({ ...t, orderId: o.id });
       return true;
     },
-    async finishOrder(id, orderId, qty) {
+    // Simula la transacción: si falla, ni se finaliza ni se bloquea.
+    blocks: [], resolvedSignals: [], failBlock: false, finishCalls: [],
+    async finishOrder(id, orderId, qty, opts = {}) {
+      repo.finishCalls.push({ id, opts });
       const o = orders.find((x) => x.id === id);
+      if (o.status === 'final') return null;
       assert.ok(Math.abs(o.processedQty - qty) < 1e-8);
+      if (opts.block && repo.failBlock) throw new Error('db down');
+      const batch = repo.batches.find((b) => b.id === o.batchId);
+      const completed = orders.filter((x) => x.batchId === o.batchId && x.id !== id)
+        .every((x) => x.status === 'final');
+      let resolution = null;
+      if (completed && batch.autoSignalId != null && opts.resolveSignal) {
+        resolution = opts.resolveSignal(await repo.batchEntryOutcome(o.batchId));
+      }
+      // commit
       o.status = 'final';
       o.orderId = orderId == null ? null : String(orderId);
+      if (opts.block) repo.blocks.push({ strategyId: o.strategyId, ...opts.block });
+      if (resolution) repo.resolvedSignals.push({ id: batch.autoSignalId, ...resolution });
+      const blocked = !!opts.block;
+      return completed
+        ? { batchId: o.batchId, completed, action: batch.action, autoSignalId: batch.autoSignalId, blocked,
+          signalResolved: !!resolution }
+        : { batchId: o.batchId, completed, blocked };
+    },
+    async batchEntryOutcome(batchId) {
+      const batch = repo.batches.find((b) => b.id === batchId);
+      const mine = orders.filter((o) => o.batchId === batchId);
+      if (!batch || batch.action !== 'open' || !mine.length) return null;
+      const got = fills.filter((f) => mine.some((o) => o.id === f.orderId));
+      const filled = got.reduce((a, f) => a + f.quantity, 0);
+      const notional = got.reduce((a, f) => a + f.quantity * f.price, 0);
+      const round = (x) => Number(x.toFixed(12));
+      return {
+        autoSignalId: batch.autoSignalId,
+        requested: round(mine.reduce((a, o) => a + o.quantity, 0)),
+        filled: round(filled), avgPrice: filled > 0 ? round(notional / filled) : null,
+        feesUsdt: round(got.reduce((a, f) => a + f.fee, 0)),
+        symbol: mine[0].symbol, side: mine[0].side,
+        cancelRequested: mine.some((o) => o.cancelRequested === true),
+        rejected: mine.some((o) => /^Rechazada por Binance/.test(o.error || '')),
+      };
+    },
+    incidents: [],
+    async claimIncidentNotification(userId, kind, resource) {
+      if (repo.incidents.some((i) => i.kind === kind && i.resource === resource)) return false;
+      repo.incidents.push({ userId, kind, resource });
+      return true;
     },
   };
-  const state = { status: 'NEW', executedQty: '0', quantity: String(leg.quantity), type: 'LIMIT', timeInForce: 'GTC' };
+  const strategiesRepo = {
+    resolved: [], fees: [], blocks: [],
+    async resolveAutoSignal(id, patch) { strategiesRepo.resolved.push({ id, ...patch }); return { id }; },
+    async setAutoSignalFees(id, patch) { strategiesRepo.fees.push({ id, ...patch }); return { id }; },
+    async setUnderlyingBlock(strategyId, underlying, patch) {
+      strategiesRepo.blocks.push({ strategyId, underlying, ...patch }); return { id: strategyId };
+    },
+  };
+  const notes = [];
+  const state = { status: 'NEW', executedQty: '0', quantity: String(l.quantity), type: 'LIMIT', timeInForce: 'GTC' };
   let allTrades = [];
   let openOrders = [];
   const client = {
     async getExchangeInfo() {
-      return { optionSymbols: [60000, 61000, 62000].map((strike) => ({
-        symbol: `BTC-261030-${strike}-C`, status: 'TRADING',
+      calls.info += 1;
+      const symbols = [60000, 61000, 62000].map((strike) => `BTC-261030-${strike}-C`);
+      if (!symbols.includes(l.symbol)) symbols.push(l.symbol);
+      return { optionSymbols: symbols.map((symbol) => ({
+        symbol, status: 'TRADING',
         quoteAsset: 'USDT', expiryDate: 9999999999999,
         filters: [{ filterType: 'PRICE_FILTER', minPrice: '0',
           maxPrice: '1000000', tickSize: '0.01', minQty: '0.01',
@@ -90,7 +149,7 @@ function fixture({ now = 100_000, onSubmit } = {}) {
     async getOrder(payload) {
       calls.get.push(payload);
       return { orderId: '4611875134427365377', clientOrderId: orders[0].clientOrderId,
-        symbol: leg.symbol, side: leg.side, ...state };
+        symbol: l.symbol, side: l.side, ...state };
     },
     async getUserTrades(payload) {
       calls.trades.push(payload);
@@ -107,17 +166,21 @@ function fixture({ now = 100_000, onSubmit } = {}) {
     },
   };
   const credentials = { async getClientForUser() { return client; } };
-  const engine = new OptionsLiveExecution({ repo, credentials, logger: silent, enabled: true, now: () => clock.time });
-  const submit = (eventId = 77) =>
-    engine.submit(strategy, { type: 'open', legs: [leg], detail: 'señal' }, context(clock.time, eventId));
+  const engine = new OptionsLiveExecution({ repo, credentials, logger: silent, enabled: true, now: () => clock.time,
+    targetRepo: strategiesRepo, notify: async (userId, text) => { notes.push({ userId, text }); } });
+  const submit = (eventId = 77, signalId) =>
+    engine.submit(strategy, { type: 'open', legs: [l], detail: 'señal' },
+      { now: clock.time, signal: { eventId, direction: 'bullish', ...(signalId == null ? {} : { signalId }) } });
   const setState = (status, executedQty) => Object.assign(state, { status, executedQty: String(executedQty) });
   const setTrades = (list) => { allTrades = list; };
   const setOpenOrders = (list) => { openOrders = list; };
-  return { engine, repo, orders, fills, clock, calls, client, submit, setState, setTrades, setOpenOrders };
+  const setExchangeInfo = (fn) => { client.getExchangeInfo = fn; };
+  return { engine, repo, orders, fills, clock, calls, client, submit, setState, setTrades, setOpenOrders,
+    strategiesRepo, notes, setExchangeInfo };
 }
-function trade(quantity, tradeId = '300') {
-  return { orderId: '4611875134427365377', tradeId, symbol: leg.symbol,
-    side: leg.side, quantity: String(quantity), price: '98', fee: '-0.15',
+function trade(quantity, tradeId = '300', l = leg) {
+  return { orderId: '4611875134427365377', tradeId, symbol: l.symbol,
+    side: l.side, quantity: String(quantity), price: '98', fee: '-0.15',
     quoteAsset: 'USDT', time: 101_000 };
 }
 
@@ -344,4 +407,293 @@ test('un -1007 de Binance (estado desconocido) sigue tratándose como envío amb
   const f = fixture({ onSubmit: async () => { throw binanceError('BINANCE_OPTIONS_REJECTED', 400, -1007); } });
   assert.equal((await f.submit()).status, 'attention');
   assert.equal(f.orders[0].status, 'attention');
+});
+
+// Aperturas al medio: GTC en cualquier subyacente; ETH conserva FOK al cerrar.
+const ethLeg = { symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.2, price: 715 };
+
+test('ETH open is GTC; ETH close stays FOK and the resting TP GTC', () => {
+  assert.equal(orderTimeInForce({ symbol: 'ETH-261031-2500-C', action: 'open' }), 'GTC');
+  assert.equal(orderTimeInForce({ symbol: 'BTC-261031-60000-C', action: 'open' }), 'GTC');
+  assert.equal(orderTimeInForce({ symbol: 'ETH-261031-2500-C', action: 'close' }), 'FOK');
+  assert.equal(orderTimeInForce({ symbol: 'ETH-261031-2500-C', action: 'close', purpose: 'take_profit' }), 'GTC');
+  assert.equal(orderTimeInForce({ symbol: 'BTC-261031-60000-C', action: 'close' }), 'GTC');
+});
+
+test('ETH open is posted to Binance as GTC', async () => {
+  const f = fixture({ leg: ethLeg });
+  assert.equal((await f.submit()).status, 'submitted');
+  assert.equal(f.calls.post[0].timeInForce, 'GTC');
+  assert.equal(f.calls.post[0].price, 715);
+  assert.equal(f.calls.post[0].reduceOnly, false);
+});
+
+test('partial GTC open is not an anomaly: finalizes with the confirmed quantity', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit();
+  f.setTrades([trade(0.1, '300', ethLeg)]);
+  f.setState('PARTIALLY_FILLED', 0.1);
+  let result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].processedQty, 0.1);
+  assert.notEqual(f.orders[0].status, 'attention');
+  f.clock.time += WINDOW_MS + 1;
+  result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.calls.cancel.length, 1);
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.orders[0].processedQty, 0.1);
+  assert.equal(f.calls.post.length, 1);
+});
+
+// ---------- señal → entrada real: resolución con comisión real ----------
+
+const btcSignalLeg = { symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: 0.35, price: 712 };
+const fillOf = (quantity, fee, tradeId, l = btcSignalLeg) => ({ ...trade(quantity, tradeId, l), price: '712', fee: String(-fee) });
+
+test('submit links the batch to the bot signal (autoSignalId)', async () => {
+  const f = fixture({ leg: btcSignalLeg });
+  await f.submit(77, 31);
+  assert.equal(f.repo.batches[0].autoSignalId, 31);
+  const g = fixture({ leg: btcSignalLeg });
+  await g.submit(78);
+  assert.equal(g.repo.batches[0].autoSignalId, null);
+});
+
+test('signal resolves to opened with real fee', async () => {
+  const f = fixture({ leg: btcSignalLeg });
+  await f.submit(77, 31);
+  f.setTrades([fillOf(0.35, 7.14, '300')]);
+  f.setState('FILLED', 0.35);
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].status, 'final');
+  assert.deepEqual(f.repo.resolvedSignals, [{
+    id: 31, decision: 'opened',
+    detail: 'Real: Compra 0,35 BTC-261030-60000-C a 712 · comisión 7,14 USDT',
+    feesUsdt: 7.14, feesEstimated: false,
+  }]);
+  assert.equal(f.repo.blocks.length, 0);
+});
+
+test('partial entry resolves to opened with the partial note', async () => {
+  const f = fixture({ leg: btcSignalLeg });
+  await f.submit(77, 31);
+  f.setTrades([fillOf(0.1, 2.04, '300')]);
+  f.setState('PARTIALLY_FILLED', 0.1);
+  await f.engine.reconcilePending();
+  assert.equal(f.repo.resolvedSignals.length, 0, 'no se resuelve antes del final');
+  f.clock.time += WINDOW_MS + 1;
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[0].status, 'final');
+  assert.deepEqual(f.repo.resolvedSignals, [{
+    id: 31, decision: 'opened',
+    detail: 'Real: Compra 0,10 BTC-261030-60000-C a 712 · comisión 2,04 USDT · parcial: 0,10 de 0,35',
+    feesUsdt: 2.04, feesEstimated: false,
+  }]);
+});
+
+test('unfilled entry resolves as not executed', async () => {
+  const f = fixture({ leg: btcSignalLeg });
+  await f.submit(77, 31);
+  f.clock.time += WINDOW_MS + 1;
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].status, 'final');
+  assert.deepEqual(f.repo.resolvedSignals, [{
+    id: 31, decision: 'ignored', detail: 'Real: Entrada sin ejecutar en 10 min',
+    feesUsdt: 0, feesEstimated: false,
+  }]);
+});
+
+test('unfilled entry cancelled by an opposite signal says so', async () => {
+  const f = fixture({ leg: btcSignalLeg });
+  await f.submit(77, 31);
+  f.orders[0].cancelRequested = true;
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.resolvedSignals[0].decision, 'ignored');
+  assert.equal(f.repo.resolvedSignals[0].detail, 'Real: Entrada cancelada por señal contraria');
+});
+
+test('entry rejected by Binance resolves as rejected, not as a contrary signal', async () => {
+  const f = fixture({ leg: btcSignalLeg,
+    onSubmit: async () => { throw binanceError('BINANCE_OPTIONS_REJECTED', 400, -2010); } });
+  await f.submit(77, 31);
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.resolvedSignals[0].decision, 'ignored');
+  assert.equal(f.repo.resolvedSignals[0].detail, 'Real: Entrada rechazada por Binance');
+});
+
+test('a batch without a linked signal is not resolved', async () => {
+  const f = fixture({ leg: btcSignalLeg });
+  await f.submit(77);
+  f.setTrades([fillOf(0.35, 7.14, '300')]);
+  f.setState('FILLED', 0.35);
+  await f.engine.reconcilePending();
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.resolvedSignals.length, 0);
+});
+
+test('partial inoperable fill blocks the underlying', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit(77, 31);
+  f.setTrades([{ ...trade(0.005, '300', ethLeg), price: '715', fee: '-0.1' }]);
+  f.setState('PARTIALLY_FILLED', 0.005);
+  await f.engine.reconcilePending();
+  f.clock.time += WINDOW_MS + 1;
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].status, 'final', 'no queda en atención: no bloquea otros lotes');
+  assert.equal(f.repo.blocks.length, 1);
+  assert.equal(f.strategiesRepo.blocks.length, 0, 'el bloqueo va en la transacción de finishOrder');
+  assert.ok(f.repo.finishCalls.at(-1).opts.block);
+  assert.match(f.notes[0].text, /no abrirá más en ETH/);
+  const [block] = f.repo.blocks;
+  assert.equal(block.strategyId, 1);
+  assert.equal(block.underlying, 'ETH');
+  assert.equal(block.reason, 'Resto no operable de 0,005 contratos en ETH-261031-2500-C');
+  assert.equal(block.at, f.clock.time);
+  assert.deepEqual(f.repo.incidents.map((i) => i.kind), ['ENTRY_REMAINDER_INOPERABLE']);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /Resto no operable de 0,005 contratos en ETH-261031-2500-C/);
+  assert.equal(f.repo.resolvedSignals[0].decision, 'opened');
+  await f.engine.reconcilePending();
+  assert.equal(f.notes.length, 1, 'un único aviso');
+});
+
+test('orderable partial fill does not block the underlying', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit(77, 31);
+  f.setTrades([trade(0.1, '300', ethLeg)]);
+  f.setState('PARTIALLY_FILLED', 0.1);
+  await f.engine.reconcilePending();
+  f.clock.time += WINDOW_MS + 1;
+  await f.engine.reconcilePending();
+  assert.equal(f.repo.blocks.length, 0);
+  assert.equal(f.notes.length, 0);
+});
+
+test('unknown lot filters fail safe: block the underlying and alert', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit(77, 31);
+  f.setTrades([trade(0.1, '300', ethLeg)]);
+  f.setState('PARTIALLY_FILLED', 0.1);
+  await f.engine.reconcilePending();
+  f.setExchangeInfo(async () => { throw new Error('exchangeInfo down'); });
+  f.clock.time += WINDOW_MS + 1;
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.blocks.length, 1);
+  assert.equal(f.repo.blocks[0].underlying, 'ETH');
+  assert.match(f.repo.blocks[0].reason, /^Resto no operable de 0,10 contratos en ETH-261031-2500-C/);
+  assert.equal(f.notes.length, 1);
+});
+
+test('two 0.005 fills of a 0.01 entry block the underlying (per position row)', async () => {
+  const leg01 = { ...ethLeg, quantity: 0.01 };
+  const f = fixture({ leg: leg01 });
+  await f.submit(77, 31);
+  f.setTrades([{ ...trade(0.005, '300', leg01), price: '715', fee: '-0.1' },
+    { ...trade(0.005, '301', leg01), price: '715', fee: '-0.1', time: 101_500 }]);
+  f.setState('FILLED', 0.01);
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.blocks.length, 1);
+  assert.equal(f.repo.blocks[0].underlying, 'ETH');
+  assert.equal(f.repo.blocks[0].reason, 'Resto no operable de 0,01 contratos en ETH-261031-2500-C (2 posiciones)');
+  assert.equal(f.notes.length, 1);
+  assert.equal(f.repo.resolvedSignals[0].decision, 'opened');
+});
+
+test('a single full fill needs no lot filters and never blocks', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit(77, 31);
+  const before = f.calls.info;
+  f.setExchangeInfo(async () => { throw new Error('exchangeInfo down'); });
+  f.setTrades([trade(0.2, '300', ethLeg)]);
+  f.setState('FILLED', 0.2);
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.calls.info, before);
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.blocks.length, 0);
+  assert.equal(f.notes.length, 0);
+});
+
+test('if the block cannot be written the order is not finalized and the alert says NOT blocked; next pass retries', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit(77, 31);
+  f.setTrades([{ ...trade(0.005, '300', ethLeg), price: '715', fee: '-0.1' }]);
+  f.setState('PARTIALLY_FILLED', 0.005);
+  await f.engine.reconcilePending();
+  f.clock.time += WINDOW_MS + 1;
+  f.repo.failBlock = true;
+  let result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 1);
+  assert.notEqual(f.orders[0].status, 'final');
+  assert.equal(f.repo.blocks.length, 0);
+  assert.equal(f.repo.resolvedSignals.length, 0);
+  assert.equal(f.notes.length, 1);
+  assert.match(f.notes[0].text, /NO se pudo bloquear ETH; revisa manualmente/);
+  assert.doesNotMatch(f.notes[0].text, /no abrirá más/);
+  f.repo.failBlock = false;
+  result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.blocks.length, 1);
+  assert.equal(f.repo.resolvedSignals.length, 1);
+  assert.match(f.notes.at(-1).text, /no abrirá más en ETH/);
+});
+
+test('a crash after the commit (alert fails) no longer loses the block or the resolution', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit(77, 31);
+  f.setTrades([{ ...trade(0.005, '300', ethLeg), price: '715', fee: '-0.1' }]);
+  f.setState('PARTIALLY_FILLED', 0.005);
+  await f.engine.reconcilePending();
+  f.clock.time += WINDOW_MS + 1;
+  f.engine.notify = async () => { throw new Error('telegram down'); };
+  const result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.repo.blocks.length, 1);
+  assert.equal(f.repo.resolvedSignals.length, 1);
+});
+
+test('una entrada GTC propia en reposo no bloquea un cierre de otra posición ni del parcial', async () => {
+  const f = fixture();
+  // Entrada BTC propia en reposo (no final) en el ledger y en Binance.
+  f.repo.listOwnOpenOrderIds = async () => [{ clientOrderId: 'HCENTRY', orderId: '777' }];
+  f.repo.listRestingTpOrderIds = async () => [];
+  f.setOpenOrders([{ symbol: leg.symbol, clientOrderId: 'HCENTRY', orderId: '777', status: 'PARTIALLY_FILLED' }]);
+  // El lote de cierre lo admite el repositorio (probado aparte): aquí solo el preflight.
+  f.repo.beginBatch = async ({ legs, deadlineAt }) => legs.map((l, i) => ({
+    ...l, id: 100 + i, batchId: 50, clientOrderId: 'HCCLOSE' + i, quantity: l.quantity,
+    limitPrice: l.price, deadlineAt, status: 'queued' }));
+  f.repo.markSending = async (id) => ({ id });
+  f.repo.markActive = async () => {};
+  const other = { symbol: 'BTC-261030-61000-C', side: 'SELL', quantity: 0.5, price: 100, positionId: 41 };
+  const partial = { ...leg, side: 'SELL', quantity: 0.2, positionId: 42 };
+  for (const l of [other, partial]) {
+    const res = await f.engine.submit(strategy, { type: 'close', reason: 'stop_loss', legs: [l] },
+      { now: f.clock.time });
+    assert.equal(res.status, 'submitted');
+  }
+  assert.equal(f.calls.post.length, 2);
+  assert.equal(f.calls.post.every((p) => p.reduceOnly === true), true);
+});
+
+test('con la entrada propia en reposo, una orden ajena sigue bloqueando', async () => {
+  const f = fixture();
+  f.repo.listOwnOpenOrderIds = async () => [{ clientOrderId: 'HCENTRY', orderId: '777' }];
+  f.setOpenOrders([
+    { symbol: leg.symbol, clientOrderId: 'HCENTRY', orderId: '777', status: 'NEW' },
+    { symbol: leg.symbol, clientOrderId: 'manual', orderId: '555', status: 'NEW' },
+  ]);
+  await assert.rejects(f.submit(), /no gestionadas por la app/);
+  assert.equal(f.calls.post.length, 0);
 });

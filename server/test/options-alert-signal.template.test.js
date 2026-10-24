@@ -441,7 +441,7 @@ test('alert_signal: una sola opción por subyacente — misma dirección con pos
 
 test('alert_signal: una sola opción por subyacente — orden de entrada pendiente bloquea', () => {
   const p = params({ maxOpenPositions: 5 });
-  const actions = alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain: chainFor(p.expiryDays), positions: [], pendingOpens: 1, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  const actions = alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain: chainFor(p.expiryDays), positions: [], pendingEntries: [{ id: 5, direction: 'bullish' }], params: p, mode: 'live', signal: { direction: 'bullish' }, tradesToday: 0 });
   assert.deepEqual(actions.map((a) => a.reason), ['underlying_busy']);
   assert.match(actions[0].detail, /pendiente/);
 });
@@ -455,5 +455,60 @@ test('alert_signal: una sola opción por subyacente — onOpposite reverse cierr
 test('alert_signal: una sola opción por subyacente — sin posiciones en este subyacente abre aunque otro tenga', () => {
   const p = params({ maxOpenPositions: 2 });
   const [open] = alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain: chainFor(p.expiryDays), positions: [], openCountAll: 1, params: p, signal: { direction: 'bullish' }, tradesToday: 0 });
+  assert.equal(open.type, 'open');
+});
+
+// ---------- entradas pendientes (LIMIT al medio) ----------
+
+function withPending(p, { mode, pendingEntries, positions = [], blockedUnderlyings, direction = 'bullish' }) {
+  return alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain: chainFor(p.expiryDays), positions,
+    pendingEntries, blockedUnderlyings, params: p, mode, signal: { direction }, tradesToday: 0 });
+}
+
+test('opposite pending entry in live only cancels and reevaluates', () => {
+  const p = params({ onOpposite: 'reverse', maxOpenPositions: 5 });
+  const actions = withPending(p, { mode: 'live', pendingEntries: [{ id: 41, direction: 'bearish' }],
+    positions: [position({ side: 'BUY', type: 'P' })] });
+  assert.equal(actions.length, 1);
+  assert.deepEqual({ ...actions[0], detail: undefined },
+    { type: 'cancel_entries', reason: 'opposite_signal', ids: [41], reevaluate: true, detail: undefined });
+  assert.match(actions[0].detail, /BTC/);
+});
+
+test('opposite pending entry in shadow cancels then reverses', () => {
+  const p = params({ onOpposite: 'reverse', maxOpenPositions: 5 });
+  const actions = withPending(p, { mode: 'shadow', pendingEntries: [{ id: 7, direction: 'bearish' }] });
+  assert.deepEqual(actions.map((a) => a.type), ['cancel_entries', 'open']);
+  assert.deepEqual(actions[0].ids, [7]);
+  assert.equal(actions[0].reevaluate, false);
+  assert.match(actions[1].legs[0].symbol, /-C$/);
+});
+
+test('opposite pending entry in shadow with an opposite position follows onOpposite', () => {
+  const put = position({ side: 'BUY', type: 'P' });
+  const reverse = withPending(params({ onOpposite: 'reverse', maxOpenPositions: 5 }),
+    { mode: 'shadow', pendingEntries: [{ id: 7, direction: 'bearish' }], positions: [put] });
+  assert.deepEqual(reverse.map((a) => a.type), ['cancel_entries', 'close', 'open']);
+  const ignore = withPending(params({ onOpposite: 'ignore', maxOpenPositions: 5 }),
+    { mode: 'shadow', pendingEntries: [{ id: 7, direction: 'bearish' }], positions: [put] });
+  assert.deepEqual(ignore.map((a) => a.reason), ['opposite_signal', 'opposite_ignored']);
+});
+
+test('same-direction pending entry keeps the underlying busy in both modes', () => {
+  const p = params({ maxOpenPositions: 5 });
+  for (const mode of ['live', 'shadow']) {
+    const actions = withPending(p, { mode, pendingEntries: [{ id: 3, direction: 'bullish' }] });
+    assert.deepEqual(actions.map((a) => a.reason), ['underlying_busy']);
+  }
+});
+
+test('blocked underlying skips', () => {
+  const p = params({ maxOpenPositions: 5 });
+  const actions = withPending(p, { mode: 'live', pendingEntries: [{ id: 9, direction: 'bearish' }],
+    blockedUnderlyings: { BTC: { reason: 'remainder_not_orderable', at: NOW } } });
+  assert.deepEqual(actions, [{ type: 'skip', reason: 'underlying_blocked',
+    detail: 'Resto no operable en BTC: revísalo y desbloquéalo' }]);
+  // Otro subyacente bloqueado no afecta.
+  const [open] = withPending(p, { mode: 'live', pendingEntries: [], blockedUnderlyings: { ETH: { reason: 'x' } } });
   assert.equal(open.type, 'open');
 });

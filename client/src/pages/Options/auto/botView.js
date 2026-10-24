@@ -198,6 +198,12 @@ export function normalizeBot(raw = {}) {
     structure: normalizeStructure(params.structure),
     statusLabel: statusLabel(base.status),
     lastSignal: raw.lastSignal || raw.last_signal ? normalizeSignal(raw.lastSignal || raw.last_signal) : null,
+    pnlSeries: Array.isArray(raw.pnlSeries) ? raw.pnlSeries.map(toNumber).filter((n) => n !== null) : [],
+    feesUsdt: toNumber(raw.feesUsdt),
+    pendingEntry: raw.pendingEntry && toMs(raw.pendingEntry.deadlineAt) !== null
+      ? { ...raw.pendingEntry, deadlineAt: toMs(raw.pendingEntry.deadlineAt) } : null,
+    pendingEntryUnknown: raw.pendingEntryUnknown === true,
+    blocked: raw.blocked === true,
   };
 }
 
@@ -245,6 +251,8 @@ export function normalizeSignal(raw = {}, i = 0) {
     tone: DECISION_TONE[decision] || 'skip',
     detail: raw.detail || '',
     simulated: raw.simulated === true,
+    feesUsdt: toNumber(raw.feesUsdt),
+    feesEstimated: raw.feesEstimated === true,
     at: toMs(pick(raw, 'createdAt', 'created_at', 'at', 't')),
   };
 }
@@ -648,5 +656,149 @@ export function describeParams(bot) {
         text: buy ? !premium : !margin,
       },
     ],
+  };
+}
+
+// ── Estado, flujo, comisiones y escalera de entrada ───────────────────
+// Ventana de supervisión de una entrada GTC (igual que el servidor).
+export const ENTRY_WINDOW_MS = 10 * 60_000;
+
+export function formatCountdown(ms) {
+  const total = Math.max(0, Math.ceil((toNumber(ms) ?? 0) / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+// Fracción de la ventana que queda (0–1).
+export function entryProgress(remainingMs) {
+  return Math.min(1, Math.max(0, (toNumber(remainingMs) ?? 0) / ENTRY_WINDOW_MS));
+}
+
+const isOpenPosition = (p) => p && p.closedAt == null;
+const qtyText = (n) => formatNumber(n, { decimals: 4, minDecimals: 0 });
+
+// Estado «ahora» del bot, por prioridad: blocked > pending > position > waiting > paused.
+// `detail` es opcional (la lista solo trae el resumen del bot).
+export function botStatus(bot = {}, detail = null, now = Date.now()) {
+  const blockedKeys = Object.keys(detail?.blockedUnderlyings || {});
+  if (blockedKeys.length || bot.blocked === true) {
+    return {
+      kind: 'blocked',
+      title: blockedKeys.length ? `Bloqueado: revisa ${blockedKeys.join(', ')}` : 'Bloqueado: revisa el subyacente',
+      detail: 'El bot no abre entradas hasta que lo desbloquees.',
+    };
+  }
+  // Libro del bot: real → live; sombra y pausado → shadow (posiciones y
+  // entradas pendientes). Un bot real no muestra la entrada de su sombra.
+  const book = bot.mode === 'live' ? 'live' : 'shadow';
+  const hasDetailEntries = Array.isArray(detail?.pendingEntries);
+  const entries = hasDetailEntries
+    ? detail.pendingEntries.filter((e) => e && (e.mode || 'shadow') === book)
+    : [];
+  const first = [...entries].sort((a, b) => (toMs(a.deadlineAt) ?? Infinity) - (toMs(b.deadlineAt) ?? Infinity))[0];
+  // El resumen de la lista (ya calculado por el servidor para el libro del
+  // bot) solo vale cuando aún no hay detalle.
+  const listEntry = hasDetailEntries ? null : bot.pendingEntry;
+  const deadlineAt = first ? toMs(first.deadlineAt) : (listEntry ? toMs(listEntry.deadlineAt) : null);
+  if (first || listEntry) {
+    const remainingMs = deadlineAt === null ? 0 : Math.max(0, deadlineAt - now);
+    const title = first
+      ? `Entrada pendiente · ${String(first.side).toUpperCase() === 'SELL' ? 'venta' : 'compra'} ${qtyText(first.quantity)} ${first.symbol}`
+      : 'Entrada pendiente';
+    return {
+      kind: 'pending',
+      title,
+      detail: 'Si no se ejecuta a tiempo, se cancela y el bot espera la siguiente señal.',
+      deadlineAt,
+      remainingMs,
+      progress: entryProgress(remainingMs),
+    };
+  }
+  // Solo cuentan las posiciones del libro del bot. Con detalle manda el
+  // detalle; el «in_position» de la lista solo vale cuando aún no hay detalle.
+  const inPosition = Array.isArray(detail?.positions)
+    ? detail.positions.some((p) => isOpenPosition(p) && (p.mode || 'shadow') === book)
+    : bot.status === 'in_position';
+  if (inPosition) {
+    return { kind: 'position', title: 'En posición', detail: 'Vigilando el take profit y el stop.' };
+  }
+  if (bot.mode === 'paused') {
+    return { kind: 'paused', title: 'Pausado', detail: 'No reacciona a señales.' };
+  }
+  if (bot.pendingEntryUnknown === true && !detail) {
+    return { kind: 'waiting', title: 'Esperando señal', detail: 'Estado de la entrada desconocido' };
+  }
+  return { kind: 'waiting', title: 'Esperando señal', detail: 'Sin posición ni entrada pendiente.' };
+}
+
+// Las cuatro etapas del bot, con el texto de la maqueta.
+export function flowSteps(bot = {}) {
+  const p = bot.params || {};
+  const structure = normalizeStructure(bot.structure || p.structure);
+  const buy = structure === 'buy_with';
+  const defs = { ...COMMON_DEFAULTS, ...STRUCTURE_DEFAULTS[structure] };
+  const v = (key) => toNumber(p[key]) ?? defs[key];
+  const n0 = (x) => formatNumber(x, { decimals: 0 });
+  const alert = (bot.alerts || [])[0];
+  const threshold = toNumber(alert?.thresholdPercent ?? alert?.threshold);
+  const signalName = alert?.name ? `${alert.name}${threshold !== null ? ` · umbral ${n0(threshold)} %` : ''}` : 'Alertas del bot';
+  const atr = p.takeProfitMode === 'atr_band' && buy;
+  return [
+    { key: 'signal', title: 'Señal', value: '▲ Alcista / ▼ Bajista', subtitle: signalName },
+    {
+      key: 'contract', title: 'Contrato', value: buy ? 'Compra call / put' : 'Venta put / call',
+      subtitle: `Δ ≈ ${formatNumber(Math.abs(v('targetDelta')), { decimals: 2 })} · vence ~${n0(v('expiryDays'))} d`,
+    },
+    { key: 'entry', title: 'Entrada', value: 'GTC al precio medio', subtitle: 'espera 10 min; si no, se cancela' },
+    atr
+      ? { key: 'exit', title: 'Salida', value: 'TP banda ATR (GTC)', subtitle: 'sin stop; se mantiene hasta vencer' }
+      : {
+        key: 'exit', title: 'Salida',
+        value: p.takeProfitMode === 'volatility'
+          ? `TP volatilidad · Stop ${buy ? '−' : ''}${n0(v('stopLossPct'))} %`
+          : `TP ${buy ? '+' : ''}${n0(v('takeProfitPct'))} % · Stop ${buy ? '−' : ''}${n0(v('stopLossPct'))} %`,
+        subtitle: `o ${n0(v('exitHoursBeforeExpiry'))} h antes del vencimiento`,
+      },
+  ];
+}
+
+// Comisiones del periodo: total, % de la prima operada y desglose.
+export function feeSummary(kpis = {}) {
+  const total = toNumber(kpis?.feesUsdt);
+  const premium = toNumber(kpis?.premiumUsdt);
+  const pct = toNumber(kpis?.feesPctOfPremium) ?? (total !== null && premium > 0 ? (total / premium) * 100 : null);
+  const b = kpis?.feeBreakdown;
+  const parts = [];
+  if (b) {
+    parts.push(
+      { key: 'entry', label: 'entrada', usdt: toNumber(b.entryUsdt) ?? 0 },
+      { key: 'exit', label: 'salida', usdt: toNumber(b.exitUsdt) ?? 0 },
+      { key: 'exercise', label: 'ejercicio', usdt: toNumber(b.exerciseUsdt) ?? 0 },
+    );
+    const un = toNumber(b.unallocatedUsdt);
+    if (un > 0) parts.push({ key: 'unallocated', label: 'sin desglose (histórico)', usdt: un });
+  }
+  return { total, pct, label: pct === null ? '' : `${formatPct(pct, { decimals: 1 })} de la prima operada`, parts };
+}
+
+export function signalFeeText(signal = {}) {
+  const fee = toNumber(signal?.feesUsdt);
+  if (fee === null) return null;
+  return `${signal.feesEstimated ? 'Comisión est.' : 'Comisión'} ${formatUsdt(fee)} USDT`;
+}
+
+// Posición del límite entre bid y ask (0–100 %) y ahorro por contrato frente
+// al lado agresivo (ask al comprar, bid al vender).
+export function ladder(entry = {}) {
+  const bid = toNumber(entry.bid);
+  const ask = toNumber(entry.ask);
+  const limit = toNumber(entry.limitPrice);
+  if (bid === null || ask === null || limit === null || bid <= 0 || ask < bid) return null;
+  const sell = String(entry.side || '').toUpperCase() === 'SELL';
+  const round = (x) => Math.round(x * 1e8) / 1e8;
+  return {
+    bidPct: 0,
+    midPct: ask === bid ? 50 : Math.min(100, Math.max(0, ((limit - bid) / (ask - bid)) * 100)),
+    askPct: 100,
+    savingPerContract: round(sell ? limit - bid : ask - limit),
   };
 }
