@@ -365,3 +365,12 @@ test('processBot passes the claimed signal id to the runner as signalId', async 
   assert.ok(seen[0].signalId != null);
   assert.equal(seen[0].eventId, 501);
 });
+
+test('decide: señal contraria que cancela la entrada real queda pendiente con texto legible', () => {
+  const produced = [
+    { mode: 'live', type: 'cancel_entries', pending: true, reason: 'reevaluation_queued',
+      detail: 'Cancelando la entrada pendiente; se reevalúa al conciliar' },
+  ];
+  assert.deepEqual(decide({ mode: 'live' }, produced),
+    { decision: 'pending', detail: 'Real: Cancelando la entrada pendiente; se reevalúa al conciliar' });
+});

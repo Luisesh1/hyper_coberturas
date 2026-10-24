@@ -333,6 +333,8 @@ class OptionsStrategyRunner {
     try {
       this.signalUnderlying(strategy, templates.getTemplate(strategy.template), signal);
     } catch {
+      await this.resolveSignal(signal, 'ignored',
+        `Real: entrada cancelada; el bot ya no opera ${String(signal?.underlying || '').toUpperCase()}`);
       return { status: 'underlying_removed' };
     }
     const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
@@ -341,8 +343,38 @@ class OptionsStrategyRunner {
     const live = byMode.live || [];
     const produced = tickCtx.produced.filter((p) => p.mode === 'live');
     if (live.some((a) => a.type === 'cancel_entries')) return { status: 'waiting', produced };
+    // El giro durable conserva la señal: la resuelve la entrada de la reentrada.
     if (produced.some((p) => p.reason === 'reverse_queued')) return { status: 'reversal_queued', produced };
+    // Una entrada enviada enlaza la señal a su lote: se resuelve con sus fills.
+    const opened = produced.some((p) => p.type === 'open' && ['submitted', 'attention'].includes(p.reason));
+    if (!opened) {
+      const error = produced.find((p) => p.type === 'error');
+      const skipped = produced.find((p) => p.type === 'skip');
+      if (produced.some((p) => p.type === 'close')) {
+        await this.resolveSignal(signal, 'closed', 'Real: entrada cancelada; posición contraria cerrada');
+      } else if (error) {
+        await this.resolveSignal(signal, 'error', `Real: entrada cancelada; ${error.detail}`);
+      } else if (skipped?.reason === 'opposite_ignored') {
+        await this.resolveSignal(signal, 'ignored', 'Real: entrada cancelada; señal ignorada por la regla');
+      } else {
+        await this.resolveSignal(signal, 'ignored',
+          `Real: entrada cancelada; ${skipped?.detail || 'sin entrada válida'}`);
+      }
+    }
     return { status: 'evaluated', produced };
+  }
+
+  /** Resuelve la fila de una señal (si la trae) sin romper el flujo si falla. */
+  async resolveSignal(signal, decision, detail) {
+    const signalId = Number(signal?.signalId);
+    if (!Number.isSafeInteger(signalId) || signalId <= 0 ||
+        typeof this.repo.resolveAutoSignal !== 'function') return null;
+    try {
+      return await this.repo.resolveAutoSignal(signalId, { decision, detail });
+    } catch (err) {
+      this.logger.warn('options_signal_resolve_failed', { signalId, error: err.message });
+      return null;
+    }
   }
 
   // ---------- datos de mercado (caché por pasada) ----------
@@ -557,7 +589,7 @@ class OptionsStrategyRunner {
     // Bloqueos de subyacente: los escribe el ejecutor real al conciliar, así
     // que se leen frescos del repo (la estrategia de la pasada puede ser vieja).
     let blockedUnderlyings;
-    if (botSignal) {
+    if (botSignal && modes.includes('live')) {
       const fresh = typeof this.repo.getStrategyById === 'function'
         ? await this.repo.getStrategyById(strategy.id) : null;
       blockedUnderlyings = (fresh || strategy).state?.blockedUnderlyings || {};
@@ -588,7 +620,9 @@ class OptionsStrategyRunner {
         positions,
         // Límites compartidos por todos los subyacentes del bot.
         ...(botSignal ? { openCountAll: allPositions.length } : {}),
-        ...(botSignal ? { pendingEntries, blockedUnderlyings } : {}),
+        ...(botSignal ? { pendingEntries } : {}),
+        // Un resto real no operable bloquea solo el libro real: la sombra sigue.
+        ...(botSignal && mode === 'live' ? { blockedUnderlyings } : {}),
         params,
         lastOpenedAt,
         mode,
@@ -660,8 +694,8 @@ class OptionsStrategyRunner {
     ctx.produced?.push({ mode: 'live', type: 'cancel_entries', pending: true,
       reason: queued ? 'reevaluation_queued' : 'entries_cancel_requested',
       detail: queued
-        ? 'Entrada pendiente en cancelación; la señal se reevalúa al confirmarse'
-        : 'Entrada pendiente en cancelación; la señal no se reevaluará' });
+        ? 'Cancelando la entrada pendiente; se reevalúa al conciliar'
+        : 'Cancelando la entrada pendiente; la señal no se reevaluará' });
     this.logger.info('options_entries_cancel_requested', {
       strategyId: strategy.id, underlying: ctx.underlying, orderIds, queued,
     });

@@ -161,6 +161,15 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       Object.assign(s, { decision, detail: detail ?? null });
       return clone(s);
     },
+    // Igual que el repo real: solo resuelve una señal 'pending' u 'opened'.
+    async resolveAutoSignal(id, { decision, detail, feesUsdt, feesEstimated } = {}) {
+      const s = signals.find((x) => x.id === id);
+      if (!s || !['pending', 'opened'].includes(s.decision)) return null;
+      Object.assign(s, { decision, detail: detail ?? null });
+      if (feesUsdt != null) s.feesUsdt = feesUsdt;
+      if (feesEstimated != null) s.feesEstimated = feesEstimated;
+      return clone(s);
+    },
     async listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {
       const ok = (d) => (filter === 'traded' ? ['opened', 'closed', 'reversed'].includes(d) : filter === 'ignored' ? d === 'ignored' : true);
       return signals

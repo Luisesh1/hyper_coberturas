@@ -293,7 +293,7 @@ class OptionsLiveExecution {
     // Nunca activa una orden: exige contrato, precio y permiso exactos.
     enforcePilotEntry({ strategy, action: { ...action, legs }, now: this.now() });
     // Solo una entrada se enlaza con su señal (la resuelve resolveEntrySignal).
-    // Reentradas/reevaluaciones diferidas no traen signalId: quedan sin enlace.
+    // Reentradas/reevaluaciones diferidas traen el signalId guardado en la cola.
     const signalId = Number(ctx.signal?.signalId);
     const orders = await this.repo.beginBatch({
       strategy, action: action.type, legs, key: actionKey(strategy, action, ctx),
@@ -1085,6 +1085,22 @@ class OptionsLiveExecution {
     return { sent };
   }
 
+  /** La señal en cola que caduca sin abrir queda resuelta como ignorada. */
+  async resolveExpiredSignal(request) {
+    const signalId = Number(request.signal?.signalId);
+    if (!Number.isSafeInteger(signalId) || signalId <= 0 ||
+        typeof this.targetRepo?.resolveAutoSignal !== 'function') return;
+    try {
+      await this.targetRepo.resolveAutoSignal(signalId, {
+        decision: 'ignored',
+        detail: request.kind === 'reevaluate'
+          ? 'Real: reevaluación caducada sin abrir' : 'Real: giro caducado sin abrir',
+      });
+    } catch (err) {
+      this.logger.warn('options_expired_signal_resolve_failed', { signalId, error: err.message });
+    }
+  }
+
   async processDeferredReentries() {
     if (!this.enabled || typeof this.repo.listPendingReentries !== 'function') return { sent: 0, expired: 0, reevaluated: 0 };
     const reentries = await this.repo.listPendingReentries(50);
@@ -1098,6 +1114,7 @@ class OptionsLiveExecution {
         if (this.now() - request.createdAt > 30 * 60_000) {
           await this.repo.markReentry(request.id, 'expired');
           expired++;
+          await this.resolveExpiredSignal(request);
           if (typeof this.repo.claimIncidentNotification === 'function' &&
               await this.repo.claimIncidentNotification(request.userId,
                 'REVERSAL_EXPIRED', String(request.id))) {

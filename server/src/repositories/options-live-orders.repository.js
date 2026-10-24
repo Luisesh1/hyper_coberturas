@@ -62,6 +62,12 @@ function compareExposure(rows, exchangePositions) {
     return true;
 }
 
+/** `{ signalId }` si la señal trae un id de fila válido; si no, nada. */
+function signalIdOf(signal) {
+  const id = Number(signal?.signalId);
+  return Number.isSafeInteger(id) && id > 0 ? { signalId: id } : {};
+}
+
 function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = {}) {
   // Reconciliación de posiciones contra el total de la cuenta Binance.
   const EXPOSURE_SQL = `SELECT symbol,side,COALESCE(SUM(quantity),0) AS quantity
@@ -300,6 +306,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         direction: signal.direction,
         // Bot multi-subyacente: la reentrada abre en el subyacente que giró.
         underlying: signal.underlying ?? null,
+        // Fila de la señal: la entrada diferida la enlaza y se resuelve con sus fills.
+        ...signalIdOf(signal),
       };
       await tx.query(
         `INSERT INTO options_live_reentries
@@ -347,6 +355,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         eventId,
         direction: signal.direction,
         underlying: signal.underlying ?? null,
+        ...signalIdOf(signal),
       };
       await tx.query(
         `INSERT INTO options_live_reentries

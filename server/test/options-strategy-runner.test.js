@@ -883,10 +883,10 @@ test('blocked underlying: the runner passes the fresh block to the template', as
   // El ejecutor bloquea en el repo después de cargar la estrategia.
   env.repo.strategies[0].state = { blockedUnderlyings: { BTC: { reason: 'remainder_not_orderable', at: FRIDAY_9 } } };
   const { actions } = await env.runner.runForSignal(env.strategy, { eventId: '501', direction: 'bullish' });
-  for (const mode of ['shadow', 'live']) {
-    assert.deepEqual(actions[mode], [{ type: 'skip', reason: 'underlying_blocked',
-      detail: 'Resto no operable en BTC: revísalo y desbloquéalo' }]);
-  }
+  assert.deepEqual(actions.live, [{ type: 'skip', reason: 'underlying_blocked',
+    detail: 'Resto no operable en BTC: revísalo y desbloquéalo' }]);
+  // El bloqueo es del libro real: la sombra sigue evaluando y abre.
+  assert.equal(actions.shadow[0].type, 'open');
   assert.equal(env.credentials.orders.length, 0);
 });
 
@@ -925,4 +925,56 @@ test('reevaluateSignal: new pending entries keep the request waiting; disabled o
   env.runner.liveExecutor.enabled = false;
   assert.equal((await env.runner.reevaluateSignal(env.strategy.id, { eventId: '501', direction: 'bullish' })).status, 'disabled');
   assert.equal(env.credentials.orders.length, 0);
+});
+
+// ---------- la señal reevaluada se resuelve ----------
+
+async function reevaluationSetup(params, { position = true } = {}) {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5, ...params } });
+  cancelEnv(env);
+  if (position) {
+    await env.repo.insertPosition({ strategyId: env.strategy.id, userId: 7, mode: 'live', symbol: PENDING_PUT,
+      side: 'BUY', quantity: 0.004, entryPrice: 100, openedAt: FRIDAY_9, feesUsdt: 0 });
+  }
+  const claim = await env.repo.claimAutoSignal({ strategyId: env.strategy.id, userId: 7, alertEventId: '501',
+    direction: 'bullish', decision: 'pending', detail: 'Real: Cancelando la entrada pendiente; se reevalúa al conciliar' });
+  const signal = { eventId: '501', direction: 'bullish', underlying: 'BTC', signalId: claim.id };
+  return { ...env, signal, row: () => env.repo.signals.find((x) => x.id === claim.id) };
+}
+
+test('reevaluation that only closes resolves the signal as closed', async () => {
+  const env = await reevaluationSetup({ onOpposite: 'close' });
+  const result = await env.runner.reevaluateSignal(env.strategy.id, env.signal);
+  assert.equal(result.status, 'evaluated');
+  assert.equal(env.credentials.orders.length, 1);
+  assert.equal(env.credentials.orders[0].reduceOnly, true);
+  assert.deepEqual({ d: env.row().decision, t: env.row().detail },
+    { d: 'closed', t: 'Real: entrada cancelada; posición contraria cerrada' });
+});
+
+test('reevaluation ignored by the rule resolves the signal as ignored', async () => {
+  const env = await reevaluationSetup({ onOpposite: 'ignore' });
+  await env.runner.reevaluateSignal(env.strategy.id, env.signal);
+  assert.equal(env.credentials.orders.length, 0);
+  assert.deepEqual({ d: env.row().decision, t: env.row().detail },
+    { d: 'ignored', t: 'Real: entrada cancelada; señal ignorada por la regla' });
+});
+
+test('reevaluation that opens links the batch to the signal and leaves it pending', async () => {
+  const env = await reevaluationSetup({}, { position: false });
+  const seen = [];
+  const submit = env.runner.liveExecutor.submit;
+  env.runner.liveExecutor.submit = async (strategy, action, ctx) => { seen.push(ctx.signal?.signalId); return submit(strategy, action, ctx); };
+  await env.runner.reevaluateSignal(env.strategy.id, env.signal);
+  assert.deepEqual(seen, [env.signal.signalId]);
+  // La resuelve el ejecutor con los fills del lote (Task 4).
+  assert.equal(env.row().decision, 'pending');
+});
+
+test('reevaluation skipped for another reason resolves ignored with that reason', async () => {
+  const env = await reevaluationSetup({ maxTradesPerDay: 1 }, { position: false });
+  await env.repo.insertEvent({ strategyId: env.strategy.id, userId: 7, mode: 'live', action: 'open', detail: 'x', createdAt: FRIDAY_9 });
+  await env.runner.reevaluateSignal(env.strategy.id, env.signal);
+  assert.equal(env.row().decision, 'ignored');
+  assert.match(env.row().detail, /^Real: entrada cancelada; Máximo de 1 operación/);
 });

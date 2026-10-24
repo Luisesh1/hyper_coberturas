@@ -62,7 +62,7 @@ const NOW = 2_000_000_000_000;
 const silent = { warn() {}, info() {}, error() {} };
 
 function reevaluationEngine(rows, { status = 'evaluated' } = {}) {
-  const calls = { reevaluated: [], reentries: [], marked: [], notified: [] };
+  const calls = { reevaluated: [], reentries: [], marked: [], notified: [], resolved: [] };
   const db = { async query(sql) { calls.sql = sql; return { rows: rows() }; } };
   const base = createOptionsLiveOrdersRepository({ db, now: () => NOW });
   const repo = {
@@ -75,7 +75,8 @@ function reevaluationEngine(rows, { status = 'evaluated' } = {}) {
     async reevaluateSignal(strategyId, signal) { calls.reevaluated.push({ strategyId, signal }); return { status }; },
     async executeDeferredReentry(strategyId, signal) { calls.reentries.push({ strategyId, signal }); return { status: 'submitted' }; },
   };
-  const engine = new OptionsLiveExecution({ enabled: true, repo, runner, now: () => NOW, logger: silent,
+  const targetRepo = { async resolveAutoSignal(id, outcome) { calls.resolved.push([id, outcome]); return {}; } };
+  const engine = new OptionsLiveExecution({ enabled: true, repo, runner, targetRepo, now: () => NOW, logger: silent,
     notify: async (userId, text) => calls.notified.push({ userId, text }), settlement: {} });
   return { engine, calls };
 }
@@ -144,4 +145,41 @@ test('reversal from a reevaluation turns the pending request into a reentry', as
   const insert = calls.find((o) => o.sql.includes('INSERT INTO options_live_reentries'));
   assert.match(insert.sql, /ON CONFLICT \(strategy_id,alert_event_id\) DO UPDATE SET kind='reentry'/);
   assert.match(insert.sql, /WHERE options_live_reentries\.kind='reevaluate' AND options_live_reentries\.status='pending'/);
+});
+
+test('expired reevaluation resolves its signal; without signalId nothing is resolved', async () => {
+  const signal = { eventId: '9002', direction: 'bullish', underlying: 'BTC', signalId: 61 };
+  const { engine, calls } = reevaluationEngine(() => [reevaluateRow({ signal, created_at: String(NOW - 31 * 60_000) })]);
+  await engine.processDeferredReentries();
+  assert.deepEqual(calls.resolved, [[61, { decision: 'ignored', detail: 'Real: reevaluación caducada sin abrir' }]]);
+  const plain = reevaluationEngine(() => [reevaluateRow({ created_at: String(NOW - 31 * 60_000) })]);
+  await plain.engine.processDeferredReentries();
+  assert.deepEqual(plain.calls.resolved, []);
+});
+
+test('queued signals keep their signalId (reevaluation and reversal)', async () => {
+  const inserts = [];
+  const db = {
+    async transaction(fn) {
+      return fn({
+        async query(sql, args) {
+          if (sql.includes('FROM options_strategies')) return { rows: [{ id: 4, user_id: 7, mode: 'live', template: 'alert_signal' }] };
+          if (sql.includes('FROM options_strategy_positions')) return {
+            rows: [{ id: '91', user_id: '7', strategy_id: '4', symbol: SYMBOL, side: 'BUY', quantity: '0.1' }],
+          };
+          if (sql.includes('SELECT id FROM options_live_orders')) return { rows: [{ id: '31' }] };
+          if (sql.includes('INSERT INTO options_live_reentries')) inserts.push(JSON.parse(args[3]));
+          return { rows: [], rowCount: 1 };
+        },
+      });
+    },
+  };
+  const repo = createOptionsLiveOrdersRepository({ db, now: () => 1000 });
+  const signal = { eventId: '9002', direction: 'bullish', underlying: 'BTC', signalId: 61, alertName: 'x' };
+  await repo.queueSignalReevaluation({ id: 4, userId: 7 }, signal, [31]);
+  await repo.queueReversal({ id: 4, userId: 7 }, signal,
+    { type: 'close', legs: [{ positionId: 91, symbol: SYMBOL, side: 'SELL', quantity: 0.1 }] });
+  await repo.queueSignalReevaluation({ id: 4, userId: 7 }, { ...signal, signalId: 'bad' }, [31]);
+  const saved = { eventId: '9002', direction: 'bullish', underlying: 'BTC' };
+  assert.deepEqual(inserts, [{ ...saved, signalId: 61 }, { ...saved, signalId: 61 }, saved]);
 });
