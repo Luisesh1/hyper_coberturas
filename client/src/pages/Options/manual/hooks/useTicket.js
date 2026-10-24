@@ -2,7 +2,9 @@ import { useCallback, useMemo, useState } from 'react';
 import { parseNumberInput, stepNumber } from '../../../TradingView/components/stepperMath';
 import {
   computeTicket, hasTick, parseSymbol, priceStep, qtyStep, quoteFor, snapToTick, stepOnTick, tickError, QTY_MIN,
+  usdStep, usdToContracts,
 } from '../ticketMath';
+import { fmtNum } from '../../format';
 
 const EMPTY = {
   symbol: null,
@@ -10,6 +12,10 @@ const EMPTY = {
   strike: null,
   side: 'BUY',
   priceText: '',
+  // La cantidad se escribe en USD de prima (por defecto) o en contratos. En
+  // USD se convierte a contratos válidos al vuelo y se envía ya redondeada.
+  qtyUnit: 'USD',
+  usdText: '100',
   qtyText: '0.1',
   postOnly: false,
   reduceOnly: false,
@@ -69,7 +75,29 @@ export function useTicket(chain) {
   const setFlag = useCallback((name, value) => setT((p) => ({ ...p, [name]: value })), []);
 
   const price = parseNumberInput(t.priceText);
-  const qty = parseNumberInput(t.qtyText);
+  const usd = parseNumberInput(t.usdText);
+  const inUsd = t.qtyUnit === 'USD';
+  const qty = inUsd ? usdToContracts(usd, price) : parseNumberInput(t.qtyText);
+  const qtyError = inUsd && qty === 0
+    ? `Mínimo ${QTY_MIN} contratos ≈ ${fmtNum(QTY_MIN * price, 2)} USD.`
+    : null;
+
+  const setUsdText = useCallback((usdText) => setT((p) => ({ ...p, usdText })), []);
+
+  // Al cambiar de unidad se convierte el valor para no perder el tamaño.
+  const setQtyUnit = useCallback((qtyUnit) => {
+    setT((p) => {
+      if (p.qtyUnit === qtyUnit) return p;
+      const px = parseNumberInput(p.priceText);
+      if (qtyUnit === 'USD') {
+        const q = parseNumberInput(p.qtyText);
+        const next = q != null && px != null ? trimNumber(Number((q * px).toFixed(2))) : p.usdText;
+        return { ...p, qtyUnit, usdText: next };
+      }
+      const q = usdToContracts(parseNumberInput(p.usdText), px);
+      return { ...p, qtyUnit, qtyText: q ? trimNumber(q) : p.qtyText };
+    });
+  }, []);
 
   const stepPrice = useCallback((direction) => {
     setT((p) => {
@@ -86,6 +114,11 @@ export function useTicket(chain) {
 
   const stepQty = useCallback((direction) => {
     setT((p) => {
+      if (p.qtyUnit === 'USD') {
+        const current = parseNumberInput(p.usdText) ?? 0;
+        const step = usdStep(direction < 0 && current > 0 ? current - 1 : current);
+        return { ...p, usdText: trimNumber(stepNumber(current, direction, { step, min: 0 })) };
+      }
       const current = parseNumberInput(p.qtyText) ?? QTY_MIN;
       const step = qtyStep(current, direction);
       const next = stepNumber(current, direction, { step, min: QTY_MIN });
@@ -108,7 +141,7 @@ export function useTicket(chain) {
 
   const priceError = summary.valid ? tickError(price, leg) : null;
 
-  const order = t.symbol && summary.valid && !priceError
+  const order = t.symbol && summary.valid && !priceError && !qtyError
     ? {
         symbol: t.symbol,
         side: t.side,
@@ -128,11 +161,15 @@ export function useTicket(chain) {
     qty,
     summary,
     priceError,
+    usd,
+    qtyError,
     order,
     pick,
     setSide,
     setPriceText,
     setQtyText,
+    setUsdText,
+    setQtyUnit,
     setFlag,
     stepPrice,
     stepQty,

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import BottomSheet from '../../TradingView/components/BottomSheet';
 import { fmtNum, fmtPrice, fmtSigned } from '../format';
-import { OrderFlags, SideSegment, submitLabelOf } from './OrderTicket';
+import { OrderFlags, QtyHint, QtyUnitToggle, SideSegment, submitLabelOf } from './OrderTicket';
 import styles from './ManualTrading.module.css';
 
 function Stepper({ id, label, value, onText, onStep, downLabel, upLabel }) {
@@ -49,15 +49,29 @@ export default function MobileTicketSheet({ open, onClose, ticket, configured, p
         upLabel="Subir precio"
       />
       {ticket.priceError && <p className={styles.ticketError} role="alert">{ticket.priceError}</p>}
-      <Stepper
-        id="opt-ticket-qty"
-        label="Contratos"
-        value={ticket.qtyText}
-        onText={ticket.setQtyText}
-        onStep={ticket.stepQty}
-        downLabel="Menos contratos"
-        upLabel="Más contratos"
-      />
+      <QtyUnitToggle ticket={ticket} className={`${styles.unitToggle} ${styles.unitToggleWide}`} />
+      {ticket.qtyUnit === 'USD' ? (
+        <Stepper
+          id="opt-ticket-usd"
+          label="Prima (USD)"
+          value={ticket.usdText}
+          onText={ticket.setUsdText}
+          onStep={ticket.stepQty}
+          downLabel="Menos USD"
+          upLabel="Más USD"
+        />
+      ) : (
+        <Stepper
+          id="opt-ticket-qty"
+          label="Contratos"
+          value={ticket.qtyText}
+          onText={ticket.setQtyText}
+          onStep={ticket.stepQty}
+          downLabel="Menos contratos"
+          upLabel="Más contratos"
+        />
+      )}
+      <QtyHint ticket={ticket} />
 
       <OrderFlags ticket={ticket} />
 

@@ -107,8 +107,8 @@ describe('ManualTradingTab · escritorio', () => {
     expect(within(ticket).getByLabelText('Precio límite (USDT)').value).toBe('900');
     expect(within(ticket).getByRole('button', { name: 'Vender', pressed: true })).toBeTruthy();
     expect(within(ticket).getByRole('button', { name: 'Vender call' }).disabled).toBe(false);
-    // Venta de 0,1 → prima cobrada +90,00 y break-even 70.900
-    expect(within(ticket).getByText('+90,00 USDT')).toBeTruthy();
+    // 100 USD por defecto a 900 → 0,11 contratos → prima cobrada +99,00
+    expect(within(ticket).getByText('+99,00 USDT')).toBeTruthy();
     expect(within(ticket).getByText('70.900')).toBeTruthy();
   });
 
@@ -129,6 +129,7 @@ describe('ManualTradingTab · escritorio', () => {
     renderTab();
     await user.click(await screen.findByRole('button', { name: 'Comprar call 70.000 a 920' }));
     const ticket = screen.getByRole('complementary', { name: 'Ticket de orden' });
+    await user.click(within(ticket).getByRole('button', { name: 'Contratos' }));
     const qty = within(ticket).getByLabelText('Cantidad (contratos)');
     await user.clear(qty);
     await user.type(qty, '0,5');
@@ -147,6 +148,50 @@ describe('ManualTradingTab · escritorio', () => {
       symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.5, price: 915, postOnly: true, reduceOnly: false,
     }));
     await waitFor(() => expect(addNotification).toHaveBeenCalledWith('success', 'Orden enviada'));
+  });
+
+  it('la cantidad en USD se convierte a contratos válidos y se envía redondeada', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: 'Comprar call 70.000 a 920' }));
+    const ticket = screen.getByRole('complementary', { name: 'Ticket de orden' });
+    expect(within(ticket).getByRole('button', { name: 'USD', pressed: true })).toBeTruthy();
+    const usd = within(ticket).getByLabelText('Cantidad (USD)');
+    await user.clear(usd);
+    await user.type(usd, '250');
+    // 250 / 920 = 0,2717 → 0,27 contratos → 248,40 USDT de prima real
+    expect(within(ticket).getByText('≈ 0,27 contratos · prima 248,40 USDT')).toBeTruthy();
+
+    await user.click(within(ticket).getByRole('button', { name: 'Comprar call' }));
+    await user.click(await screen.findByRole('button', { name: 'Enviar orden' }));
+    await waitFor(() => expect(optionsApi.placeOrder).toHaveBeenCalledWith(expect.objectContaining({
+      symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.27, price: 920,
+    })));
+  });
+
+  it('un monto en USD por debajo del mínimo avisa y bloquea el envío', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: 'Comprar call 70.000 a 920' }));
+    const ticket = screen.getByRole('complementary', { name: 'Ticket de orden' });
+    const usd = within(ticket).getByLabelText('Cantidad (USD)');
+    await user.clear(usd);
+    await user.type(usd, '1');
+    expect(within(ticket).getByRole('alert').textContent).toBe('Mínimo 0.01 contratos ≈ 9,20 USD.');
+    expect(within(ticket).getByRole('button', { name: 'Comprar call' }).disabled).toBe(true);
+  });
+
+  it('cambiar de unidad convierte el valor sin perder el tamaño', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: 'Comprar call 70.000 a 920' }));
+    const ticket = screen.getByRole('complementary', { name: 'Ticket de orden' });
+    await user.click(within(ticket).getByRole('button', { name: 'Contratos' }));
+    // 100 USD a 920 → 0,11 contratos
+    expect(within(ticket).getByLabelText('Cantidad (contratos)').value).toBe('0.11');
+    expect(within(ticket).getByText('≈ 101,20 USDT de prima')).toBeTruthy();
+    await user.click(within(ticket).getByRole('button', { name: 'USD' }));
+    expect(within(ticket).getByLabelText('Cantidad (USD)').value).toBe('101.2');
   });
 
   it('muestra el error del backend si la orden falla', async () => {
@@ -236,8 +281,8 @@ describe('ManualTradingTab · móvil', () => {
     const sheet = screen.getByRole('dialog', { name: 'Nueva orden' });
     expect(within(sheet).getByText('BTC-261031-70000-C')).toBeTruthy();
     expect(within(sheet).getByLabelText('Precio límite').value).toBe('920');
-    await user.click(within(sheet).getByRole('button', { name: 'Más contratos' }));
-    expect(within(sheet).getByLabelText('Contratos').value).toBe('0.2');
+    await user.click(within(sheet).getByRole('button', { name: 'Más USD' }));
+    expect(within(sheet).getByLabelText('Prima (USD)').value).toBe('110');
     await user.click(within(sheet).getByRole('button', { name: 'Subir precio' }));
     // Paso de precio según magnitud: 920 → 1 USDT
     expect(within(sheet).getByLabelText('Precio límite').value).toBe('921');
@@ -245,7 +290,8 @@ describe('ManualTradingTab · móvil', () => {
     await user.click(within(sheet).getByRole('button', { name: /^Comprar call · / }));
     await user.click(await screen.findByRole('button', { name: 'Enviar orden' }));
     await waitFor(() => expect(optionsApi.placeOrder).toHaveBeenCalledWith(expect.objectContaining({
-      symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.2, price: 921,
+      // 110 USD a 921 → 0,1194 → 0,12 contratos
+      symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.12, price: 921,
     })));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Nueva orden' })).toBeNull());
   });

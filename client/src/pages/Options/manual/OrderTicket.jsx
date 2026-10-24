@@ -29,6 +29,39 @@ export function SideSegment({ side, onChange, className = styles.segment }) {
   );
 }
 
+// Unidad en la que se escribe la cantidad: prima en USD o contratos.
+export function QtyUnitToggle({ ticket, className = styles.unitToggle }) {
+  return (
+    <div role="group" aria-label="Unidad de cantidad" className={className}>
+      {[['USD', 'USD'], ['CONTRACTS', 'Contratos']].map(([unit, label]) => (
+        <button
+          key={unit}
+          type="button"
+          className={`${styles.unitBtn} ${ticket.qtyUnit === unit ? styles.unitOn : ''}`}
+          aria-pressed={ticket.qtyUnit === unit}
+          onClick={() => ticket.setQtyUnit(unit)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Cálculo aproximado de la cantidad en la otra unidad. En USD dice cuántos
+// contratos (ya redondeados) se enviarán y la prima real resultante.
+export function QtyHint({ ticket }) {
+  if (ticket.qtyError) return <p className={styles.ticketError} role="alert">{ticket.qtyError}</p>;
+  const { qty, price } = ticket;
+  const ok = Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price > 0;
+  const text = !ok
+    ? '—'
+    : ticket.qtyUnit === 'USD'
+      ? `≈ ${fmtNum(qty, 2)} contratos · prima ${fmtNum(qty * price, 2)} USDT`
+      : `≈ ${fmtNum(qty * price, 2)} USDT de prima`;
+  return <p className={`${styles.qtyHint} ${styles.mono}`} aria-live="polite">{text}</p>;
+}
+
 export function OrderFlags({ ticket }) {
   return (
     <div className={styles.checks}>
@@ -49,6 +82,7 @@ export default function OrderTicket({ ticket, configured, pending, onSubmit }) {
   const s = ticket.summary;
   const hasLeg = !!ticket.symbol;
   const canSubmit = configured && !!ticket.order && !pending;
+  const usdMode = ticket.qtyUnit === 'USD';
 
   return (
     <aside aria-label="Ticket de orden" className={`${styles.card} ${styles.ticket}`}>
@@ -74,18 +108,23 @@ export default function OrderTicket({ ticket, configured, pending, onSubmit }) {
                 aria-invalid={ticket.price == null || !!ticket.priceError}
               />
             </label>
-            <label className={styles.field}>
-              Cantidad (contratos)
+            <div className={styles.field}>
+              <div className={styles.fieldHead}>
+                <span>Cantidad</span>
+                <QtyUnitToggle ticket={ticket} />
+              </div>
               <input
                 className={styles.input}
                 inputMode="decimal"
-                value={ticket.qtyText}
-                onChange={(e) => ticket.setQtyText(e.target.value)}
-                aria-invalid={ticket.qty == null}
+                aria-label={usdMode ? 'Cantidad (USD)' : 'Cantidad (contratos)'}
+                value={usdMode ? ticket.usdText : ticket.qtyText}
+                onChange={(e) => (usdMode ? ticket.setUsdText : ticket.setQtyText)(e.target.value)}
+                aria-invalid={!ticket.qty}
               />
-            </label>
+            </div>
           </div>
           {ticket.priceError && <p className={styles.ticketError} role="alert">{ticket.priceError}</p>}
+          <QtyHint ticket={ticket} />
 
           <OrderFlags ticket={ticket} />
 
