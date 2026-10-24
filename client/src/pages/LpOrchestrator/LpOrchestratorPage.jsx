@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { settingsApi, lpOrchestratorApi, uniswapApi } from '../../services/api';
 import { useWalletConnection, useWalletState } from '../../hooks/useWalletConnection';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
@@ -55,6 +56,8 @@ export default function LpOrchestratorPage() {
   const [issueModalFor, setIssueModalFor] = useState(null);
   const [editConfigFor, setEditConfigFor] = useState(null);
   const [resolvingIssueId, setResolvingIssueId] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [highlightedId, setHighlightedId] = useState(null);
   const { dialog, confirm } = useConfirmAction();
   const walletConn = useWalletConnection();
 
@@ -528,6 +531,33 @@ export default function LpOrchestratorPage() {
     node.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
+  // Enlace profundo `?focus=<id>` (p. ej. desde Metricas): limpia filtros que
+  // pudieran ocultar la tarjeta, la centra y la resalta unos segundos.
+  const focusParam = Number(searchParams.get('focus')) || null;
+  useEffect(() => {
+    if (!focusParam || !orchestrators.length) return;
+    const target = orchestrators.find((o) => o.id === focusParam);
+    if (!target) {
+      if (!isLoading) setSearchParams({}, { replace: true });
+      return;
+    }
+    if (!visibleOrchestrators.some((o) => o.id === focusParam)) {
+      setFilter('all');
+      setSearchTerm('');
+      if (target.status !== 'active') setShowInactive(true);
+      return;
+    }
+    focusOrchestrator(target);
+    setHighlightedId(target.id);
+    setSearchParams({}, { replace: true });
+  }, [focusParam, orchestrators, visibleOrchestrators, isLoading, focusOrchestrator, setSearchParams]);
+
+  useEffect(() => {
+    if (highlightedId == null) return undefined;
+    const timer = setTimeout(() => setHighlightedId(null), 2500);
+    return () => clearTimeout(timer);
+  }, [highlightedId]);
+
   const positionActionDefaults = useMemo(() => {
     if (!activeAction) return {};
     const orch = activeAction.orchestrator;
@@ -694,7 +724,11 @@ export default function LpOrchestratorPage() {
 
       <div className={styles.grid}>
         {visibleOrchestrators.map((orch) => (
-          <div key={orch.id} id={`orchestrator-${orch.id}`} className={styles.gridItem}>
+          <div
+            key={orch.id}
+            id={`orchestrator-${orch.id}`}
+            className={`${styles.gridItem} ${highlightedId === orch.id ? styles.gridItemFocused : ''}`}
+          >
           <OrchestratorCard
             orchestrator={orch}
             isEvaluating={evaluatingId === orch.id}

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import Sparkline from './Sparkline';
 import WalletDetail from './WalletDetail';
 import { fmtPct, fmtSignedUsd, fmtUsd } from '../lib/format';
@@ -74,6 +75,23 @@ export default function WalletRow({ wallet, points, change, range, expanded, onT
         </button>
         <CopyButton text={wallet.address} />
       </div>
+
+      {wallet.openOrchestrators?.length > 0 && (
+        <div className={styles.rowOrchestrators}>
+          {wallet.openOrchestrators.map((orch) => (
+            <Link
+              key={orch.id}
+              to={`/lp-orchestrator?focus=${orch.id}`}
+              className={styles.orchestratorLink}
+              title={`Abrir el orquestador #${orch.id}`}
+            >
+              <span className={styles.orchestratorDot} aria-hidden="true" />
+              <span className={styles.orchestratorName}>{orch.name}</span>
+              <span className={styles.orchestratorId}>#{orch.id}</span>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {expanded && (
         <div className={styles.rowDetail}>

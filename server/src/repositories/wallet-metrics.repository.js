@@ -98,6 +98,25 @@ async function listForUser(userId, { includeArchived = false } = {}, executor) {
   return rows.map(mapWallet);
 }
 
+/**
+ * Orquestadores abiertos (status 'active') del usuario agrupados por wallet
+ * en minusculas: `{ [address]: [{ id, name }] }`, del mas reciente al mas viejo.
+ */
+async function listOpenOrchestratorsByWallet(userId, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT id, name, lower(wallet_address) AS address
+       FROM lp_orchestrators
+      WHERE user_id = $1 AND status = 'active'
+      ORDER BY created_at DESC, id DESC`,
+    [userId]
+  );
+  const byWallet = {};
+  for (const row of rows) {
+    (byWallet[row.address] ||= []).push({ id: Number(row.id), name: row.name });
+  }
+  return byWallet;
+}
+
 async function getForUser(userId, id, executor) {
   const { rows } = await exec(executor).query(
     'SELECT * FROM tracked_wallets WHERE user_id = $1 AND id = $2',
@@ -216,6 +235,7 @@ module.exports = {
   listKnownV4PositionIds,
   syncFromOrchestrators,
   listForUser,
+  listOpenOrchestratorsByWallet,
   getForUser,
   listActiveForCapture,
   setStatus,
