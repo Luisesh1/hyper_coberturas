@@ -62,8 +62,8 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
 
   const dir = path.join(__dirname, '../src/db/migrations');
   const files = fs.readdirSync(dir).filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
-  const before046 = files.filter((f) => parseInt(f, 10) < 46);
-  for (const f of before046) await scoped.query(fs.readFileSync(path.join(dir, f), 'utf8'));
+  const before048 = files.filter((f) => parseInt(f, 10) < 48);
+  for (const f of before048) await scoped.query(fs.readFileSync(path.join(dir, f), 'utf8'));
 
   const { rows: [user] } = await scoped.query(
     `INSERT INTO users (username, password_hash, name, created_at, updated_at)
@@ -123,7 +123,7 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
   await scoped.query(`UPDATE lp_orchestrators SET last_evaluation_json = '' WHERE id = $1`, [emptyJsonId]);
   const stoppedId = await insertOrch({ status: 'stopped', position: null, accounting: { lpFeesUsd: 2 } });
 
-  await scoped.query(fs.readFileSync(path.join(dir, files.find((f) => parseInt(f, 10) === 46)), 'utf8'));
+  await scoped.query(fs.readFileSync(path.join(dir, files.find((f) => f.startsWith('048_lp_orchestrator_segments'))), 'utf8'));
 
   const db = {
     query: (text, params) => scoped.query(text, params),

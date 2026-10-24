@@ -88,7 +88,7 @@ SELECT o.id, 1, 'closed', 'approximate', o.created_at,
 
 -- Extraccion defensiva del rango: JSON invalido o valores no numericos dan NULL
 -- en vez de abortar la migracion.
-CREATE FUNCTION pg_temp.seg046_range(ev text, bound text) RETURNS numeric AS $f$
+CREATE FUNCTION pg_temp.seg048_range(ev text, bound text) RETURNS numeric AS $f$
 BEGIN
   RETURN NULLIF(ev::jsonb #>> ARRAY['poolSnapshot', bound], '')::numeric;
 EXCEPTION WHEN OTHERS THEN
@@ -106,8 +106,8 @@ INSERT INTO lp_orchestrator_segments (
 SELECT o.id, 2, 'open', 'exact', o.active_position_identifier, o.active_pool_address,
        o.active_protected_pool_id,
        (EXTRACT(EPOCH FROM now()) * 1000)::bigint,
-       pg_temp.seg046_range(o.last_evaluation_json, 'rangeLowerPrice'),
-       pg_temp.seg046_range(o.last_evaluation_json, 'rangeUpperPrice'),
+       pg_temp.seg048_range(o.last_evaluation_json, 'rangeLowerPrice'),
+       pg_temp.seg048_range(o.last_evaluation_json, 'rangeUpperPrice'),
        'deploy', '{}', o.accounting_json,
        (EXTRACT(EPOCH FROM now()) * 1000)::bigint,
        (EXTRACT(EPOCH FROM now()) * 1000)::bigint
@@ -119,4 +119,4 @@ UPDATE lp_orchestrators o
   FROM lp_orchestrator_segments s
  WHERE s.orchestrator_id = o.id AND s.seq = 2 AND s.status = 'open';
 
-DROP FUNCTION pg_temp.seg046_range(text, text);
+DROP FUNCTION pg_temp.seg048_range(text, text);

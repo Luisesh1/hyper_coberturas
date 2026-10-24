@@ -24,7 +24,7 @@ tramo nuevo). El reinicio del estado de decisión de la cobertura ocurre en
 ## Global Constraints
 
 - Trabajar en el worktree `~/Documentos/CODE/testbotCobertura-tramos`, rama `feat/orchestrator-segments`; nunca cambiar de rama en el checkout principal.
-- La siguiente migración libre es **046** (`server/src/db/migrations/046_lp_orchestrator_segments.sql`). El migrador registra por número.
+- La siguiente migración libre es **048** (`server/src/db/migrations/048_lp_orchestrator_segments.sql`). El migrador registra por número.
 - Acciones que abren tramo: `modify-range`, `rebalance`, `increase-liquidity`, `decrease-liquidity`, `reinvest-fees`; además `attachLp` (crear, adoptar o `retry-commit`). `close-to-usdc`/`close-keep-assets` solo cierran. `collect-fees` no abre tramo.
 - Motivos de cierre: `range_exit_below`, `range_exit_above`, `manual_rerange`, `capital_change`, `lp_closed`, `policy_change` (reservado), `unknown`.
 - Motivos de apertura: `create`, `adopt`, `rerange`, `capital_change`, `attach`, `backfill`, `deploy`.
@@ -113,10 +113,10 @@ Añade un caso de `estimateSigningDriftUsd` con un snapshot ETH/USDC real tomado
 
 ---
 
-### Task 2: Migración 046 y repositorio de tramos
+### Task 2: Migración 048 y repositorio de tramos
 
 **Files:**
-- Create: `server/src/db/migrations/046_lp_orchestrator_segments.sql`
+- Create: `server/src/db/migrations/048_lp_orchestrator_segments.sql`
 - Create: `server/src/repositories/lp-orchestrator-segment.repository.js`
 - Modify: `server/src/repositories/lp-orchestrator.repository.js` (mapear `active_segment_id` → `activeSegmentId`; `appendActionLog` acepta `entry.segmentId`)
 - Modify: `server/src/repositories/protected-pool-delta-rebalance.repository.js` (aceptar y guardar `segmentId` al insertar)
@@ -131,7 +131,7 @@ Añade un caso de `estimateSigningDriftUsd` con un snapshot ETH/USDC real tomado
   - `markClosing(segmentId, { at }) -> id|null` (solo desde `open`)
   - `reopen(segmentId) -> id|null` (solo desde `closing`)
   - `close(segmentId, { closedAt, closePrice, closeValueUsd, closeReason, closeTxHashes, accounting, hedgeCloseQty, coverage }) -> id|null` (solo desde `open|closing`)
-  - `replaceHistorical(orchestratorId, segments[]) -> void`: borra los tramos **cerrados** del orquestador con `open_reason IN ('deploy','backfill')` (el histórico sembrado por la 046 o un backfill anterior; nunca el tramo vivo) e inserta los dados por delante, renumerando `seq` de todos para mantener el orden temporal. Lo usa la Task 8.
+  - `replaceHistorical(orchestratorId, segments[]) -> void`: borra los tramos **cerrados** del orquestador con `open_reason IN ('deploy','backfill')` (el histórico sembrado por la 048 o un backfill anterior; nunca el tramo vivo) e inserta los dados por delante, renumerando `seq` de todos para mantener el orden temporal. Lo usa la Task 8.
   - El objeto `segment` usa camelCase de todas las columnas del spec más `baselineAccounting`.
 - Produces (orquestador): `updateActiveSegment(userId, id, segmentId, executor)` en `lp-orchestrator.repository.js`.
 
@@ -143,13 +143,13 @@ Contenido de la migración (decidido):
 
 - [ ] **Step 1: Write the failing tests:**
   - (a) `mapRow` convierte JSON y numéricos.
-  - (b) Integración, gateada: aplica las migraciones `008`, `014`, `016`, `017`, `018` y `046` en un esquema temporal (o toda la carpeta si es más simple). Inserta un orquestador activo con `accounting_json` `{"lpFeesUsd":5}` y aplica la 046. Hay 2 tramos, el `seq=1` lleva `lpFeesUsd: 5` y el `seq=2` tiene baseline 5.
+  - (b) Integración, gateada: aplica las migraciones `008`, `014`, `016`, `017`, `018` y `048` en un esquema temporal (o toda la carpeta si es más simple). Inserta un orquestador activo con `accounting_json` `{"lpFeesUsd":5}` y aplica la 048. Hay 2 tramos, el `seq=1` lleva `lpFeesUsd: 5` y el `seq=2` tiene baseline 5.
   - (c) `create` de un segundo tramo vivo viola el índice parcial.
   - (d) `markClosing` → `reopen` → `close` respeta las transiciones (devuelve null fuera de orden).
 - [ ] **Step 2: Run** `cd server && node --test test/lp-orchestrator-segment.repository.test.js`. Expected: FAIL. Con `SEGMENTS_TEST_DATABASE_URL` sin definir, solo corre (a).
 - [ ] **Step 3: Implement** la migración y el repositorio.
 - [ ] **Step 4: Run** de nuevo, y además con la base de Docker: `SEGMENTS_TEST_DATABASE_URL=postgres://testbot:<pass>@localhost:<puerto>/testbot` (lee usuario y puerto de `docker-compose.yml`; el test usa un esquema desechable). Expected: PASS.
-- [ ] **Step 5: Commit** `feat(db): lp orchestrator segments table (046)`.
+- [ ] **Step 5: Commit** `feat(db): lp orchestrator segments table (048)`.
 
 ---
 
@@ -300,7 +300,7 @@ Contenido de la migración (decidido):
 - Fila por tramo: `#seq`, fechas, rango, motivo de cierre, P&L neto y % cubierto medio. Al desplegar: el desglose de P&L con los mismos rótulos que `AccountingPanel` y la lista de reajustes del short. A 390 px, la fila apila sus datos en dos líneas.
 
 - [ ] **Step 1: Write the failing tests:**
-  - API: la lista viene en orden `seq desc`, con `totals.differenceUsd === 0` en un orquestador sin backfill (la siembra de la 046 cuadra).
+  - API: la lista viene en orden `seq desc`, con `totals.differenceUsd === 0` en un orquestador sin backfill (la siembra de la 048 cuadra).
   - `segmentsSummary`: devuelve los rótulos exactos de cada motivo.
   - `SegmentsSection`: pinta la insignia «aproximado» y la línea de diferencia solo si es ≠ 0.
   - E2E (escritorio y 390 px, con la API simulada como en `orchestrator-price-at-open.spec.js`): la sección muestra 3 tramos y la «Apertura» de la tarjeta está dentro del rango.
@@ -319,7 +319,7 @@ Contenido de la migración (decidido):
 - Test: `server/test/lp-orchestrator-segment-backfill.test.js`
 
 **Interfaces:**
-- `buildHistoricalSegments({ orchestrator, actionLog, rebalances, historicalSegment }) -> { segments, differenceUsd }`, puro. `historicalSegment` es el tramo cerrado sembrado por la 046 (`open_reason='deploy'`, `status='closed'`) o, si ya hubo backfill, la suma de los tramos `backfill`:
+- `buildHistoricalSegments({ orchestrator, actionLog, rebalances, historicalSegment }) -> { segments, differenceUsd }`, puro. `historicalSegment` es el tramo cerrado sembrado por la 048 (`open_reason='deploy'`, `status='closed'`) o, si ya hubo backfill, la suma de los tramos `backfill`:
   - Corta en `attach_lp`, `tx_finalized` de `SEGMENT_OPENING_ACTIONS ∪ SEGMENT_CLOSING_ACTIONS` y `kill_lp`, siempre **antes** de `historicalSegment.closedAt` (el despliegue).
   - Por tramo: `lpFeesUsd`/`priceDriftUsd` = suma de `accountingDelta` de las filas `kind='decision'` del intervalo; `gasSpentUsd`/`swapSlippageUsd` = `accountingDelta` del `tx_finalized` que lo abre; cobertura con `summarizeCoverage`. El P&L del hedge histórico no se puede partir: va a la diferencia.
   - Todos `accuracy='approximate'`, `open_reason='backfill'`.
@@ -345,6 +345,6 @@ Contenido de la migración (decidido):
 
 - [ ] **Step 1:** `cd server && npm run check` y `cd client && npm run lint && npx vitest run`. Expected: todo verde.
 - [ ] **Step 2:** levanta Docker desde el worktree y ejecuta `npm run test:e2e -- e2e/orchestrator-segments.spec.js e2e/lp-orchestrator-responsive.spec.js e2e/orchestrator-price-at-open.spec.js`. Expected: PASS.
-- [ ] **Step 3:** aplica la 046 en la base local (`docker exec testbot-server npm run migrate`) y comprueba con `GET /api/lp-orchestrators/:id/segments` que `differenceUsd = 0` en todos los orquestadores locales.
+- [ ] **Step 3:** aplica la 048 en la base local (`docker exec testbot-server npm run migrate`) y comprueba con `GET /api/lp-orchestrators/:id/segments` que `differenceUsd = 0` en todos los orquestadores locales.
 - [ ] **Step 4:** actualiza la nota del vault: qué se construyó, decisiones y cómo correr el backfill en producción (dry-run primero; lo ejecuta el usuario). Commit en `~/ObsidianVault`.
 - [ ] **Step 5: Commit** del worktree si quedó algo pendiente.

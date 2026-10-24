@@ -97,7 +97,7 @@ registra como evento del tramo abierto.
 
 ## Modelo
 
-Tabla nueva `lp_orchestrator_segments` (migración 046):
+Tabla nueva `lp_orchestrator_segments` (migración 048):
 
 - `id`, `orchestrator_id` (FK, cascade), `seq` (1, 2, 3… por orquestador,
   único con `orchestrator_id`).
@@ -261,7 +261,7 @@ con `--dry-run` y `--orchestrator <id>`):
   despliegue queda aproximada; el builder decide si eso es un tramo partido o
   un campo `exact_since`).
 - **El total nunca cambia por desplegar** (decisión de Claude, por el
-  anti-objetivo). La migración 046 crea para cada orquestador un tramo
+  anti-objetivo). La migración 048 crea para cada orquestador un tramo
   `historico` (`approximate`) con su `accounting_json` actual, cerrado en el
   despliegue, y abre el tramo vivo desde ahí. El backfill, cuando el usuario lo
   escriba, **sustituye** ese tramo histórico por los tramos reconstruidos más
@@ -288,7 +288,7 @@ con `--dry-run` y `--orchestrator <id>`):
 ## Restricciones
 
 - Node/Express + PostgreSQL 16; migraciones numeradas (la siguiente libre es
-  046). Tests con `node --test` en `server/test/` y Vitest en el cliente; E2E
+  048). Tests con `node --test` en `server/test/` y Vitest en el cliente; E2E
   Playwright contra Docker en `localhost:5174`.
 - Trabajo en el worktree `~/Documentos/CODE/testbotCobertura-tramos`; otras
   sesiones comparten el checkout principal.

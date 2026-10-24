@@ -179,7 +179,7 @@ test('backfill sobre una copia de los datos reales', { skip }, async (t) => {
 
   const dir = path.join(__dirname, '../src/db/migrations');
   const files = fs.readdirSync(dir).filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
-  for (const f of files.filter((n) => parseInt(n, 10) < 46)) {
+  for (const f of files.filter((n) => parseInt(n, 10) < 48)) {
     await scoped.query(fs.readFileSync(path.join(dir, f), 'utf8'));
   }
 
@@ -209,7 +209,7 @@ test('backfill sobre una copia de los datos reales', { skip }, async (t) => {
   const nOrch = await copy('lp_orchestrators');
   await copy('lp_orchestrator_action_log');
   await copy('protected_pool_delta_rebalance_log');
-  await scoped.query(fs.readFileSync(path.join(dir, files.find((n) => parseInt(n, 10) === 46)), 'utf8'));
+  await scoped.query(fs.readFileSync(path.join(dir, files.find((n) => n.startsWith('048_lp_orchestrator_segments'))), 'utf8'));
 
   const snapshot = async () => {
     const out = {};
