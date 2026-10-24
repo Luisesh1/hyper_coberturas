@@ -114,10 +114,39 @@ function makeNotifier() {
 }
 
 /**
+ * db falsa con transacción de verdad: guarda una copia del estado de los
+ * repos en memoria y la restaura si `fn` lanza (como un ROLLBACK). Pasa un
+ * cliente no nulo, como el pool real.
+ */
+function makeRollbackDb(repo, segRepo) {
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  return {
+    transactions: 0,
+    async transaction(fn) {
+      this.transactions += 1;
+      const saved = {
+        orchestrators: clone([...repo.orchestrators.entries()]),
+        log: clone(repo.log),
+        segments: clone(segRepo.segments),
+      };
+      try {
+        return await fn({ fakeClient: true });
+      } catch (err) {
+        repo.orchestrators.clear();
+        for (const [k, v] of saved.orchestrators) repo.orchestrators.set(Number(k), v);
+        repo.log.splice(0, repo.log.length, ...saved.log);
+        segRepo.segments.splice(0, segRepo.segments.length, ...saved.segments);
+        throw err;
+      }
+    },
+  };
+}
+
+/**
  * Orquestador con un LP vivo desde un `attachLp` real (abre el tramo 1).
  * `protection` (opcional) es la fila de la protección 42 vinculada.
  */
-async function setup({ protection = null, pools = {}, scanPools = null, accountingDeps } = {}) {
+async function setup({ protection = null, pools = {}, scanPools = null, accountingDeps, transactional = false } = {}) {
   const repo = makeFakeRepo();
   const segRepo = makeSegmentFakeRepo();
   const evaluateCalls = [];
@@ -178,7 +207,7 @@ async function setup({ protection = null, pools = {}, scanPools = null, accounti
     costEstimator: { estimateModifyRangeCost: async () => ({ totalCostUsd: 0 }), invalidate: () => {} },
     notifier: makeNotifier(),
     logger: silentLogger,
-    db: fakeDb,
+    db: transactional ? makeRollbackDb(repo, segRepo) : fakeDb,
     ...(accountingDeps ? { accounting: accountingDeps } : {}),
   });
 
@@ -455,6 +484,136 @@ test('un reintento tras un corte confirmado que falló antes del log no corta ot
   assert.equal(segs[0].closeReason, 'manual_rerange');
   assert.equal(segs[1].status, 'open');
   assertSegmentsSumToTotal(ctx);
+});
+
+test('I3: un fallo entre el corte y updateActiveLp revierte todo y el reintento corta una vez', async () => {
+  const pools = { 777: lp('777'), 888: lp('888') };
+  const ctx = await setup({ pools, transactional: true });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+  const before = JSON.parse(JSON.stringify({
+    orch: ctx.orch(), segments: ctx.ordered(), log: ctx.repo.log,
+  }));
+
+  const realUpdateActiveLp = ctx.repo.updateActiveLp;
+  let failOnce = true;
+  ctx.repo.updateActiveLp = async (...args) => {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error('proceso caido entre el corte y updateActiveLp');
+    }
+    return realUpdateActiveLp(...args);
+  };
+
+  await assert.rejects(() => ctx.finalize('modify-range', {
+    newId: '888', snapshot: pools[888], gasCostUsd: 0.5, txHashes: ['0xatomic'],
+  }));
+  // Nada persistido: ni tramo nuevo, ni gas, ni tokenId, ni log tx_finalized.
+  assert.deepEqual(ctx.ordered(), before.segments);
+  assert.deepEqual(ctx.orch().accounting, before.orch.accounting);
+  assert.equal(ctx.orch().activePositionIdentifier, '777');
+  assert.equal(ctx.orch().activeSegmentId, before.orch.activeSegmentId);
+  assert.deepEqual(ctx.orch().lastEvaluation, before.orch.lastEvaluation);
+  assert.equal(ctx.repo.log.filter((e) => e.kind === 'tx_finalized').length, 0);
+
+  await ctx.finalize('modify-range', {
+    newId: '888', snapshot: pools[888], gasCostUsd: 0.5, txHashes: ['0xatomic'],
+  });
+  const segs = ctx.ordered();
+  assert.equal(segs.length, 2, 'exactamente un corte');
+  assert.equal(segs[0].closeReason, 'manual_rerange');
+  assert.equal(segs[1].positionIdentifier, '888');
+  assert.equal(ctx.orch().activePositionIdentifier, '888');
+  assert.equal(ctx.orch().activeSegmentId, segs[1].id);
+  const total = accounting.normalizeAccounting(ctx.orch().accounting);
+  assert.equal(total.gasSpentUsd, 0.5, 'el gas entra una sola vez');
+  assert.equal(total.lpCount, accounting.normalizeAccounting(before.orch.accounting).lpCount + 1);
+  assert.equal(ctx.repo.log.filter((e) => e.kind === 'tx_finalized').length, 1);
+  assert.equal(ctx.orch().phase, 'lp_active');
+
+  // Un tick posterior no ve un tokenId "nuevo": no hay tramo fantasma.
+  await ctx.service.evaluateOne(1, ctx.id);
+  assert.equal(ctx.ordered().length, 2);
+  assertSegmentsSumToTotal(ctx);
+});
+
+test('I3: un fallo al escribir el log tx_finalized revierte el corte (el log es el marcador)', async () => {
+  const pools = { 777: lp('777'), 888: lp('888') };
+  const ctx = await setup({ pools, transactional: true });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+  const realAppend = ctx.repo.appendActionLog;
+  let failOnce = true;
+  ctx.repo.appendActionLog = async (entry, ...rest) => {
+    if (entry.kind === 'tx_finalized' && failOnce) {
+      failOnce = false;
+      throw new Error('db caida justo antes del log');
+    }
+    return realAppend(entry, ...rest);
+  };
+  await assert.rejects(() => ctx.finalize('modify-range', {
+    newId: '888', snapshot: pools[888], gasCostUsd: 0.5, txHashes: ['0xlog'],
+  }));
+  assert.equal(ctx.ordered().length, 1);
+  assert.equal(ctx.orch().activePositionIdentifier, '777');
+  await ctx.finalize('modify-range', { newId: '888', snapshot: pools[888], gasCostUsd: 0.5, txHashes: ['0xlog'] });
+  assert.equal(ctx.ordered().length, 2);
+  assert.equal(accounting.normalizeAccounting(ctx.orch().accounting).gasSpentUsd, 0.5);
+  assertSegmentsSumToTotal(ctx);
+});
+
+test('I3: el cierre del LP es atómico con su cambio de fase y su log', async () => {
+  const pools = { 777: lp('777') };
+  const ctx = await setup({ pools, transactional: true });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+  const realUpdatePhase = ctx.repo.updatePhase;
+  let failOnce = true;
+  ctx.repo.updatePhase = async (userId, id, patch, ...rest) => {
+    if (patch.phase === 'idle' && failOnce) {
+      failOnce = false;
+      throw new Error('caida al pasar a idle');
+    }
+    return realUpdatePhase(userId, id, patch, ...rest);
+  };
+  await assert.rejects(() => ctx.finalize('close-keep-assets', { gasCostUsd: 0.3, txHashes: ['0xclose'] }));
+  assert.equal(ctx.ordered()[0].status, 'open', 'el tramo sigue vivo');
+  assert.equal(ctx.orch().activePositionIdentifier, '777');
+  await ctx.finalize('close-keep-assets', { gasCostUsd: 0.3, txHashes: ['0xclose'] });
+  const segs = ctx.ordered();
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].status, 'closed');
+  assert.equal(segs[0].closeReason, 'lp_closed');
+  assert.equal(ctx.orch().phase, 'idle');
+  assert.equal(accounting.normalizeAccounting(ctx.orch().accounting).gasSpentUsd, 0.3);
+});
+
+test('I3: killLp con el LP ya cerrado corta el tramo atómicamente con la fase idle', async () => {
+  const pools = { 777: lp('777') };
+  const ctx = await setup({ pools, transactional: true });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+  ctx.service._reconcileActivePosition = async () => ({ pool: null, oldIdentifier: '777' });
+  const realAppend = ctx.repo.appendActionLog;
+  let failOnce = true;
+  ctx.repo.appendActionLog = async (entry, ...rest) => {
+    if (entry.kind === 'recovery' && failOnce) {
+      failOnce = false;
+      throw new Error('caida antes del log de recovery');
+    }
+    return realAppend(entry, ...rest);
+  };
+  await assert.rejects(() => ctx.service.killLp({ userId: 1, orchestratorId: ctx.id }));
+  assert.equal(ctx.ordered()[0].status, 'open');
+  assert.equal(ctx.orch().activePositionIdentifier, '777');
+
+  const result = await ctx.service.killLp({ userId: 1, orchestratorId: ctx.id });
+  assert.equal(result.alreadyClosed, true);
+  assert.equal(ctx.ordered().length, 1);
+  assert.equal(ctx.ordered()[0].status, 'closed');
+  assert.equal(ctx.ordered()[0].closeReason, 'lp_closed');
+  assert.equal(ctx.orch().activePositionIdentifier, null);
+  assert.equal(ctx.orch().phase, 'idle');
 });
 
 test('reinvest-fees: las fees cobradas son del tramo viejo, el gas del nuevo', async () => {

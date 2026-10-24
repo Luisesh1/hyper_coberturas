@@ -181,11 +181,11 @@ class LpOrchestratorService {
    * vivo se abrió sin hashes. Se les pone el motivo y los hashes reales; los
    * repos solo tocan lo que siga como `unknown` / sin hashes.
    */
-  async _relabelReconciledCut(orch, live, { action, openReason, txHashes }) {
+  async _relabelReconciledCut(orch, live, { action, openReason, txHashes }, executor) {
     const hashes = txHashes?.length ? txHashes : null;
-    const segments = await this.segmentRepo.listByOrchestrator(orch.id);
+    const segments = await this.segmentRepo.listByOrchestrator(orch.id, executor);
     const predecessor = (segments || []).find((s) => s.seq === live.seq - 1 && s.status === 'closed') || null;
-    await this._withTransaction(async (client) => {
+    const write = async (client) => {
       if (predecessor && predecessor.closeReason === 'unknown') {
         const snap = orch.lastEvaluation?.poolSnapshot || null;
         const snapOfOldLp = snap && snap.identifier != null
@@ -207,7 +207,9 @@ class LpOrchestratorService {
       if (!live.openTxHashes || live.openTxHashes.length === 0) {
         await this.segmentRepo.relabelOpen(live.id, { openReason, openTxHashes: hashes }, client);
       }
-    });
+    };
+    if (executor !== undefined) await write(executor);
+    else await this._withTransaction(write);
     this.logger.info('lp_orchestrator_segment_cut_relabelled', {
       orchestratorId: orch.id, liveSegmentId: live.id, predecessorId: predecessor?.id ?? null, action,
     });
@@ -1067,25 +1069,30 @@ class LpOrchestratorService {
           reason: 'lp_already_closed_on_chain',
         });
       }
-      // El LP ya no existe: su tramo se cierra aquí y no se abre otro.
-      const closedCut = await this._cutSegment(orch, {
-        action: null,
-        closeReason: 'lp_closed',
-        newSnapshot: null,
-      });
-      await this.repo.updateActiveLp(userId, orchestratorId, {
-        activePositionIdentifier: null,
-        activePoolAddress: null,
-        activeProtectedPoolId: null,
-        phase: 'idle',
-      });
-      await this.repo.appendActionLog({
-        orchestratorId,
-        segmentId: closedCut.closedSegmentId,
-        kind: 'recovery',
-        reason: 'lp_already_closed_on_chain',
-        payload: { previousIdentifier: reconcile.oldIdentifier, mode },
-        createdAt: Date.now(),
+      // El LP ya no existe: su tramo se cierra aquí y no se abre otro. Corte,
+      // fase idle y log en una sola transacción: sin tramo vivo con el
+      // orquestador aún apuntando al LP, ni al revés.
+      await this._withTransaction(async (client) => {
+        const closedCut = await this._cutSegment(orch, {
+          action: null,
+          closeReason: 'lp_closed',
+          newSnapshot: null,
+          executor: client,
+        });
+        await this.repo.updateActiveLp(userId, orchestratorId, {
+          activePositionIdentifier: null,
+          activePoolAddress: null,
+          activeProtectedPoolId: null,
+          phase: 'idle',
+        }, client);
+        await this.repo.appendActionLog({
+          orchestratorId,
+          segmentId: closedCut.closedSegmentId,
+          kind: 'recovery',
+          reason: 'lp_already_closed_on_chain',
+          payload: { previousIdentifier: reconcile.oldIdentifier, mode },
+          createdAt: Date.now(),
+        }, client);
       });
       this.logger.info('lp_orchestrator_kill_skipped_already_closed', {
         orchestratorId,
@@ -1263,153 +1270,167 @@ class LpOrchestratorService {
     const isClosingAction = SEGMENT_CLOSING_ACTIONS.has(action);
     const finalizePrice = refreshedSnapshot?.priceCurrent ?? expected?.priceCurrent ?? null;
 
-    // Corte de tramo ANTES de aplicar gas y swaps: así esos costes caen en el
-    // tramo nuevo (son el coste de abrirlo). La idempotencia de arriba evita
-    // que un finalize repetido corte dos veces. Los cierres cortan más abajo,
-    // tras el flush final del hedge: no hay tramo nuevo donde dejar el gas ni
-    // los fills de la desactivación.
-    //
-    // Las fees cobradas en el ajuste (reinvest-fees) son del tramo VIEJO: se
-    // aplican antes del corte. Gas y slippage, después.
-    let cut = null;
-    let costAfterCut = txCost;
-    if (SEGMENT_OPENING_ACTIONS.has(action)) {
-      const openReason = isCapitalAction ? 'capital_change' : 'rerange';
-      const live = await this._loadLiveSegment(orch);
-      const alreadyCutByThisTx = Boolean(live) && Array.isArray(live.openTxHashes)
-        && live.openTxHashes.some((h) => incomingTxHashes.includes(String(h)));
-      const alreadyOnNewLp = Boolean(live && newPositionIdentifier)
-        && live.positionIdentifier != null
-        && String(live.positionIdentifier) === String(newPositionIdentifier);
-      if (alreadyCutByThisTx || alreadyOnNewLp) {
-        // Ya se cortó: la reconciliación / `_evaluateOne` vio el tokenId nuevo
-        // antes que este finalize, o un intento previo de este mismo finalize
-        // confirmó su corte y falló después. No se corta otra vez: se pone el
-        // motivo real a lo que quedó como `unknown` y el gas cae en el vivo.
-        await this._relabelReconciledCut(orch, live, {
-          action, openReason, txHashes: incomingTxHashes,
-        });
-        // En un reintento las fees ya entraron con el corte confirmado.
-        if (alreadyCutByThisTx) costAfterCut = { ...txCost, collectedFeesUsd: 0 };
-      } else {
-        const preCutAccounting = txCost.collectedFeesUsd
-          ? this.accounting.applyTxCostDelta(orch.accounting, { collectedFeesUsd: txCost.collectedFeesUsd })
-          : orch.accounting;
-        cut = await this._cutSegment(orch, {
-          action,
-          finalizePrice,
-          txHashes: incomingTxHashes.length ? incomingTxHashes : null,
-          newSnapshot: refreshedSnapshot,
-          newPositionIdentifier: newPositionIdentifier || orch.activePositionIdentifier,
-          openReason,
-          accounting: preCutAccounting,
-        });
-        costAfterCut = { ...txCost, collectedFeesUsd: 0 };
-        orch = {
-          ...orch,
-          accounting: cut.accounting,
-          strategyState: cut.strategyState,
-          lastEvaluation: cut.lastEvaluation,
-          activeSegmentId: cut.openedSegmentId,
-        };
-      }
-    }
-    let logSegmentId = orch.activeSegmentId ?? null;
-
-    let newAccounting = this.accounting.applyTxCostDelta(orch.accounting, costAfterCut);
-    if (isNewLp) {
-      // re-range cuenta como nuevo LP a efectos de lpCount
-      newAccounting = this.accounting.incrementLpCount(newAccounting);
-    }
-    await this.repo.updateAccounting(userId, orchestratorId, newAccounting);
-
-    // Si hubo un cambio de capital (increase/decrease liquidity), reseteamos
-    // el baseline de price-drift en `lastEvaluation.poolSnapshot.currentValueUsd`
-    // sumando el delta. Así el próximo `_evaluateOne` no contabiliza el
-    // capital agregado/retirado como deriva de precio.
-    // Si el corte ya dejó el snapshot del LP nuevo como baseline, no se suma
-    // otra vez el delta de capital.
-    if (capitalDeltaUsd !== 0 && orch.lastEvaluation?.poolSnapshot && !cut?.replacedSnapshot) {
-      const prevValue = Number(orch.lastEvaluation.poolSnapshot.currentValueUsd) || 0;
-      const adjustedSnapshot = {
-        ...orch.lastEvaluation.poolSnapshot,
-        currentValueUsd: prevValue + capitalDeltaUsd,
-      };
-      await this.repo.updateStrategyState(userId, orchestratorId, {
-        lastEvaluation: {
-          ...orch.lastEvaluation,
-          poolSnapshot: adjustedSnapshot,
-        },
+    // Cierres: desactivar la protección y leer el flush final del hedge son
+    // efectos/lecturas externas, así que van ANTES de la transacción. El
+    // resultado es puro (un delta sobre la contabilidad) y se aplica dentro.
+    let finalHedgeFlush = null;
+    if (isClosingAction && orch.activeProtectedPoolId) {
+      await this._deactivateLinkedProtection(userId, orch.activeProtectedPoolId, {
+        orchestratorId,
+        reason: action,
       });
-    }
-
-    if (isNewLp) {
-      await this.repo.updateActiveLp(userId, orchestratorId, {
-        activePositionIdentifier: String(newPositionIdentifier),
-        activePoolAddress: refreshedSnapshot?.poolAddress || orch.activePoolAddress,
-        activeProtectedPoolId: orch.activeProtectedPoolId,
-      });
-    }
-
-    // Acciones de cierre dejan el orquestador en idle
-    let nextPhase = 'lp_active';
-    if (isClosingAction) {
-      if (orch.activeProtectedPoolId) {
-        await this._deactivateLinkedProtection(userId, orch.activeProtectedPoolId, {
-          orchestratorId,
-          reason: action,
-        });
-      }
       // Flush final del hedge state al accounting del orquestador antes de
       // deslindar la protección. Sin esto, los fills reconciliados durante
       // la desactivación (realized PnL, fees) se pierden porque el
       // orquestador ya no lee la protección después de limpiar el link.
-      if (orch.activeProtectedPoolId) {
-        try {
-          const protection = await this.protectedPoolRepo.getById(userId, orch.activeProtectedPoolId);
-          const finalHedgeState = this.accounting.readHedgeStateFromProtection(protection);
-          if (finalHedgeState) {
-            const prevBaseline = orch.strategyState?.hedgeBaseline || null;
-            const result = this.accounting.applyHedgeStateDelta(newAccounting, prevBaseline, finalHedgeState);
-            newAccounting = result.accounting;
-          }
-          // Mismo flush para cada contrafactual: sus snapshots mueren con la
-          // protección y cada política conserva un baseline independiente.
-          const finalShadowStates = this.accounting.readShadowStatesFromProtection(protection);
-          const shadowResult = this.accounting.applyShadowStatesDelta(
-            newAccounting, orch.strategyState?.shadowBaselines || {}, finalShadowStates
-          );
-          newAccounting = shadowResult.accounting;
-          // Zeroize unrealized ya que el hedge se está cerrando
-          const zeroResult = this.accounting.applyHedgeStateDelta(newAccounting, null, null);
-          newAccounting = zeroResult.accounting;
-          // Igual para cada contrafactual: el acumulado queda, el mark del LP
-          // que acaba de cerrarse no.
-          newAccounting = this.accounting.applyShadowStatesDelta(newAccounting, {}, {}).accounting;
-        } catch (err) {
-          this.logger.warn('lp_orchestrator_final_hedge_flush_failed', {
-            orchestratorId: orch.id, protectedPoolId: orch.activeProtectedPoolId, error: err.message,
+      try {
+        const protection = await this.protectedPoolRepo.getById(userId, orch.activeProtectedPoolId);
+        finalHedgeFlush = {
+          hedgeState: this.accounting.readHedgeStateFromProtection(protection),
+          shadowStates: this.accounting.readShadowStatesFromProtection(protection),
+        };
+      } catch (err) {
+        this.logger.warn('lp_orchestrator_final_hedge_flush_failed', {
+          orchestratorId: orch.id, protectedPoolId: orch.activeProtectedPoolId, error: err.message,
+        });
+      }
+    }
+
+    // Todo lo que persiste el finalize va en UNA transacción: corte del tramo,
+    // contabilidad (gas, lpCount), baseline de capital, tokenId activo, fase y
+    // el log `tx_finalized` (el marcador de idempotencia). Una caída a mitad
+    // no deja el tramo vivo en el tokenId nuevo con el orquestador en el
+    // viejo (tramo fantasma en el tick siguiente) ni reaplica el gas en el
+    // reintento: o entra todo o no entra nada.
+    const preTxOrch = orch;
+    const nextPhase = isClosingAction ? 'idle' : 'lp_active';
+    const criticalFailure = !verification.ok && verification.severity === 'critical';
+    const committed = await this._withTransaction(async (client) => {
+      let txOrch = preTxOrch;
+      // Corte de tramo ANTES de aplicar gas y swaps: así esos costes caen en el
+      // tramo nuevo (son el coste de abrirlo). La idempotencia de arriba evita
+      // que un finalize repetido corte dos veces. Los cierres cortan más abajo,
+      // tras el flush final del hedge: no hay tramo nuevo donde dejar el gas ni
+      // los fills de la desactivación.
+      //
+      // Las fees cobradas en el ajuste (reinvest-fees) son del tramo VIEJO: se
+      // aplican antes del corte. Gas y slippage, después.
+      let cut = null;
+      let costAfterCut = txCost;
+      if (SEGMENT_OPENING_ACTIONS.has(action)) {
+        const openReason = isCapitalAction ? 'capital_change' : 'rerange';
+        const live = await this._loadLiveSegment(txOrch, client);
+        const alreadyCutByThisTx = Boolean(live) && Array.isArray(live.openTxHashes)
+          && live.openTxHashes.some((h) => incomingTxHashes.includes(String(h)));
+        const alreadyOnNewLp = Boolean(live && newPositionIdentifier)
+          && live.positionIdentifier != null
+          && String(live.positionIdentifier) === String(newPositionIdentifier);
+        if (alreadyCutByThisTx || alreadyOnNewLp) {
+          // Ya se cortó: la reconciliación / `_evaluateOne` vio el tokenId nuevo
+          // antes que este finalize. No se corta otra vez: se pone el motivo
+          // real a lo que quedó como `unknown` y el gas cae en el vivo.
+          await this._relabelReconciledCut(txOrch, live, {
+            action, openReason, txHashes: incomingTxHashes,
+          }, client);
+          // Si el corte ya llevaba los hashes de este tx, sus fees ya entraron.
+          if (alreadyCutByThisTx) costAfterCut = { ...txCost, collectedFeesUsd: 0 };
+        } else {
+          const preCutAccounting = txCost.collectedFeesUsd
+            ? this.accounting.applyTxCostDelta(txOrch.accounting, { collectedFeesUsd: txCost.collectedFeesUsd })
+            : txOrch.accounting;
+          cut = await this._cutSegment(txOrch, {
+            action,
+            finalizePrice,
+            txHashes: incomingTxHashes.length ? incomingTxHashes : null,
+            newSnapshot: refreshedSnapshot,
+            newPositionIdentifier: newPositionIdentifier || txOrch.activePositionIdentifier,
+            openReason,
+            accounting: preCutAccounting,
+            executor: client,
           });
+          costAfterCut = { ...txCost, collectedFeesUsd: 0 };
+          txOrch = {
+            ...txOrch,
+            accounting: cut.accounting,
+            strategyState: cut.strategyState,
+            lastEvaluation: cut.lastEvaluation,
+            activeSegmentId: cut.openedSegmentId,
+          };
         }
       }
-      // Commit atómico del cierre: tramo + accounting + activeLp reset + strategyState.
-      await this._withTransaction(async (client) => {
+      let logSegmentId = txOrch.activeSegmentId ?? null;
+
+      let newAccounting = this.accounting.applyTxCostDelta(txOrch.accounting, costAfterCut);
+      if (isNewLp) {
+        // re-range cuenta como nuevo LP a efectos de lpCount
+        newAccounting = this.accounting.incrementLpCount(newAccounting);
+      }
+
+      if (isClosingAction) {
+        if (finalHedgeFlush) {
+          try {
+            if (finalHedgeFlush.hedgeState) {
+              const prevBaseline = txOrch.strategyState?.hedgeBaseline || null;
+              newAccounting = this.accounting.applyHedgeStateDelta(
+                newAccounting, prevBaseline, finalHedgeFlush.hedgeState
+              ).accounting;
+            }
+            // Mismo flush para cada contrafactual: sus snapshots mueren con la
+            // protección y cada política conserva un baseline independiente.
+            newAccounting = this.accounting.applyShadowStatesDelta(
+              newAccounting, txOrch.strategyState?.shadowBaselines || {}, finalHedgeFlush.shadowStates
+            ).accounting;
+            // Zeroize unrealized ya que el hedge se está cerrando
+            newAccounting = this.accounting.applyHedgeStateDelta(newAccounting, null, null).accounting;
+            // Igual para cada contrafactual: el acumulado queda, el mark del LP
+            // que acaba de cerrarse no.
+            newAccounting = this.accounting.applyShadowStatesDelta(newAccounting, {}, {}).accounting;
+          } catch (err) {
+            this.logger.warn('lp_orchestrator_final_hedge_flush_failed', {
+              orchestratorId: txOrch.id, protectedPoolId: txOrch.activeProtectedPoolId, error: err.message,
+            });
+          }
+        }
         // El flush de arriba ya hizo la foto del hedge (paso 1 del corte):
         // el corte no la repite. Gas, fills de la desactivación y deriva de
         // la firma quedan en el tramo que se cierra; no se abre otro.
-        const closeCut = await this._cutSegment(orch, {
+        const closeCut = await this._cutSegment(txOrch, {
           action,
           finalizePrice,
           txHashes: incomingTxHashes.length ? incomingTxHashes : null,
           newSnapshot: null,
           accounting: newAccounting,
           skipHedgeSnapshot: true,
-          hedgeQty: orch.activeProtectedPoolId ? 0 : null,
+          hedgeQty: txOrch.activeProtectedPoolId ? 0 : null,
           executor: client,
         });
         logSegmentId = closeCut.closedSegmentId;
         newAccounting = closeCut.accounting;
-        await this.repo.updateAccounting(userId, orchestratorId, newAccounting, client);
+      }
+
+      await this.repo.updateAccounting(userId, orchestratorId, newAccounting, client);
+
+      // Si hubo un cambio de capital (increase/decrease liquidity), reseteamos
+      // el baseline de price-drift en `lastEvaluation.poolSnapshot.currentValueUsd`
+      // sumando el delta. Así el próximo `_evaluateOne` no contabiliza el
+      // capital agregado/retirado como deriva de precio.
+      // Si el corte ya dejó el snapshot del LP nuevo como baseline, no se suma
+      // otra vez el delta de capital.
+      if (capitalDeltaUsd !== 0 && txOrch.lastEvaluation?.poolSnapshot && !cut?.replacedSnapshot) {
+        const prevValue = Number(txOrch.lastEvaluation.poolSnapshot.currentValueUsd) || 0;
+        await this.repo.updateStrategyState(userId, orchestratorId, {
+          lastEvaluation: {
+            ...txOrch.lastEvaluation,
+            poolSnapshot: {
+              ...txOrch.lastEvaluation.poolSnapshot,
+              currentValueUsd: prevValue + capitalDeltaUsd,
+            },
+          },
+        }, client);
+      }
+
+      if (isClosingAction) {
+        // Commit del cierre: tramo + accounting + activeLp reset + strategyState.
         await this.repo.updateActiveLp(userId, orchestratorId, {
           activePositionIdentifier: null,
           activePoolAddress: null,
@@ -1420,47 +1441,62 @@ class LpOrchestratorService {
         // attachLp empezará un hedge fresco y un nuevo conteo de tiempo en rango.
         await this.repo.updateStrategyState(userId, orchestratorId, {
           strategyState: {
-            ...orch.strategyState, hedgeBaseline: null, shadowBaselines: {}, timeTracking: null,
+            ...txOrch.strategyState, hedgeBaseline: null, shadowBaselines: {}, timeTracking: null,
           },
         }, client);
-      });
-      nextPhase = 'idle';
+      } else if (isNewLp) {
+        await this.repo.updateActiveLp(userId, orchestratorId, {
+          activePositionIdentifier: String(newPositionIdentifier),
+          activePoolAddress: refreshedSnapshot?.poolAddress || txOrch.activePoolAddress,
+          activeProtectedPoolId: txOrch.activeProtectedPoolId,
+        }, client);
+      }
+
+      if (criticalFailure) {
+        await this.repo.updatePhase(userId, orchestratorId, {
+          phase: 'failed',
+          lastError: `verification_failed:${verification.drifts.map((d) => d.kind).join(',')}`,
+          nextEligibleAttemptAt: Date.now() + FAILED_COOLDOWN_MS,
+          cooldownReason: 'verification_failed',
+        }, client);
+      } else {
+        await this.repo.updatePhase(userId, orchestratorId, {
+          phase: nextPhase,
+          lastError: null,
+          nextEligibleAttemptAt: null,
+          cooldownReason: null,
+        }, client);
+      }
+
+      await this.repo.appendActionLog({
+        orchestratorId,
+        segmentId: logSegmentId,
+        kind: 'tx_finalized',
+        action,
+        positionIdentifier: newPositionIdentifier || txOrch.activePositionIdentifier,
+        txHashes: finalizeResult?.txHashes || null,
+        verificationStatus: verification.ok ? 'ok' : verification.severity,
+        driftDetails: verification.drifts,
+        realizedCostUsd: txCost.gasCostUsd + txCost.slippageCostUsd,
+        accountingDelta: txCost,
+        createdAt: Date.now(),
+      }, client);
+
+      return { orch: txOrch };
+    });
+    orch = committed.orch;
+
+    // Tras el commit: avisos y efectos no críticos.
+    if (isClosingAction) {
       this.notifier.lpKilled(orch).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
     }
-
-    if (!verification.ok && verification.severity === 'critical') {
-      await this.repo.updatePhase(userId, orchestratorId, {
-        phase: 'failed',
-        lastError: `verification_failed:${verification.drifts.map((d) => d.kind).join(',')}`,
-        nextEligibleAttemptAt: Date.now() + FAILED_COOLDOWN_MS,
-        cooldownReason: 'verification_failed',
-      });
+    if (criticalFailure) {
       this.notifier.verificationFailed(orch, { drifts: verification.drifts, action }).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
     } else {
-      await this.repo.updatePhase(userId, orchestratorId, {
-        phase: nextPhase,
-        lastError: null,
-        nextEligibleAttemptAt: null,
-        cooldownReason: null,
-      });
       // Una acción exitosa resuelve el estado urgent: limpiamos el alert.
       await this.repo.clearUrgentAlert(userId, orchestratorId).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
       this.notifier.actionFinalized(orch, { action, drifts: verification.drifts }).catch((err) => logger.warn('lp_orch_non_critical_failure', { error: err.message }));
     }
-
-    await this.repo.appendActionLog({
-      orchestratorId,
-      segmentId: logSegmentId,
-      kind: 'tx_finalized',
-      action,
-      positionIdentifier: newPositionIdentifier || orch.activePositionIdentifier,
-      txHashes: finalizeResult?.txHashes || null,
-      verificationStatus: verification.ok ? 'ok' : verification.severity,
-      driftDetails: verification.drifts,
-      realizedCostUsd: txCost.gasCostUsd + txCost.slippageCostUsd,
-      accountingDelta: txCost,
-      createdAt: Date.now(),
-    });
 
     // Si cambió el rango o el capital del LP, refrescar el snapshot de la
     // protección y forzar la evaluación del hedge: el delta del LP depende de
