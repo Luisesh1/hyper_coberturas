@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MOBILE_QUERY, useMediaQuery } from '../../TradingView/useMediaQuery';
 import { optionsStrategiesApi } from '../optionsAutomationApi';
 import { autoBotsApi } from '../autoTradingApi';
+import { optionsApi } from '../../../services/api';
 import LiveConfirmDialog from '../strategies/LiveConfirmDialog';
 import Sheet from '../strategies/common/Sheet';
 import { PlusIcon } from '../strategies/common/icons';
@@ -67,6 +68,7 @@ export default function AutoTradingTab({ underlying } = {}) {
   const [cloning, setCloning] = useState(false);
   const [cloneError, setCloneError] = useState(null);
   const [sim, setSim] = useState({ pending: false, notice: null });
+  const [unblock, setUnblock] = useState({ pending: null, error: null });
   // Bloqueo síncrono: un doble clic no puede lanzar dos peticiones antes
   // de que React vuelva a pintar los botones deshabilitados.
   const actionInFlight = useRef(false);
@@ -142,6 +144,7 @@ export default function AutoTradingTab({ underlying } = {}) {
     setUnlink({ pending: false, error: null });
     setCancel({ pendingId: null, notice: null });
     setSim({ pending: false, notice: null });
+    setUnblock({ pending: null, error: null });
     if (!detailVisible) return;
     setDetail((prev) => (prev?.id === selectedId ? prev : null));
     loadDetail(selectedId);
@@ -389,6 +392,34 @@ export default function AutoTradingTab({ underlying } = {}) {
     }
   };
 
+  // Quita el bloqueo de un subyacente (tras revisar a mano una entrada
+  // parcial inoperable). El servidor devuelve el resumen del bot.
+  const unblockUnderlying = async (u) => {
+    if (!shown || actionInFlight.current) return;
+    const id = shown.id;
+    actionInFlight.current = true;
+    setUnblock({ pending: u, error: null });
+    try {
+      await optionsApi.unblockAutoBot(id, u);
+      if (mounted.current) {
+        setUnblock({ pending: null, error: null });
+        const remaining = Object.keys(shown.blockedUnderlyings || {}).filter((k) => k !== u).length;
+        setDetail((d) => {
+          if (!d || d.id !== id || !d.blockedUnderlyings) return d;
+          const rest = { ...d.blockedUnderlyings };
+          delete rest[u];
+          return { ...d, blockedUnderlyings: rest };
+        });
+        setBots((list) => list.map((b) => (b.id === id ? { ...b, blocked: remaining > 0 } : b)));
+      }
+      refresh(id);
+    } catch (err) {
+      if (mounted.current) setUnblock({ pending: null, error: err });
+    } finally {
+      actionInFlight.current = false;
+    }
+  };
+
   // ── Piezas comunes ───────────────────────────────────────────────────
   const signalsReady = shown && signals.id === shown.id && signals.filter === signalsFilter;
   const detailProps = shown && {
@@ -415,8 +446,11 @@ export default function AutoTradingTab({ underlying } = {}) {
     onCloseAll: () => openClose(undefined),
     onCancelOrder: cancelOrder,
     onSimulate: simulate,
-    actionBusy: closeDialog.submitting || cancel.pendingId !== null || sim.pending,
+    onUnblock: unblockUnderlying,
+    unblocking: unblock.pending,
+    actionBusy: closeDialog.submitting || cancel.pendingId !== null || sim.pending || unblock.pending !== null,
     actionNotice: sim.notice || cancel.notice
+      || (unblock.error ? { error: true, message: `No se pudo desbloquear: ${unblock.error.message}` } : null)
       || (cloneError ? { error: true, message: `No se pudo clonar el bot: ${cloneError.message}` } : null),
   };
 

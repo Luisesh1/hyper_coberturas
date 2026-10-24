@@ -83,6 +83,7 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
         stopPrice,
         tpBreakdown: atrBand ? atrBandBreakdown(p) : null,
         hoursToExpiry: exp === null ? null : Math.max(0, Math.round((exp - now) / 3600000)),
+        expiresAt: exp,
         feesUsdt: positionFees(p),
         tone: tone(pnlUsdt),
       };

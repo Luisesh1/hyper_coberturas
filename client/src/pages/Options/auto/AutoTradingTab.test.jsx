@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AutoTradingTab, { SIGNALS_POLL_MS } from './AutoTradingTab';
 import { optionsStrategiesApi } from '../optionsAutomationApi';
 import { autoBotsApi } from '../autoTradingApi';
+import { optionsApi } from '../../../services/api';
 
 vi.mock('../optionsAutomationApi', () => ({
   optionsStrategiesApi: {
@@ -15,6 +16,11 @@ vi.mock('../optionsAutomationApi', () => ({
 vi.mock('../autoTradingApi', () => ({
   SIGNAL_FILTERS: ['all', 'traded', 'ignored'],
   autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn(), simulate: vi.fn(), clone: vi.fn() },
+}));
+
+vi.mock('../../../services/api', async (importOriginal) => ({
+  ...(await importOriginal()),
+  optionsApi: { unblockAutoBot: vi.fn() },
 }));
 
 const ALERT_UP = { id: 11, name: 'BTC · MACD cruce alcista 15m', direction: 'bullish', assetList: ['BTCUSDT'], thresholdPercent: 70 };
@@ -127,7 +133,9 @@ describe('AutoTradingTab · escritorio', () => {
     expect(within(mapping).getByText('Comprar put')).toBeTruthy();
     expect(await screen.findByText('Ya hay una posición abierta (máx. 1)')).toBeTruthy();
     expect(screen.getByText('1 alcistas · 1 bajistas')).toBeTruthy();
-    expect(screen.getByText('6 / 9')).toBeTruthy();
+    expect(screen.getByText('6 de 9 operaciones')).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Cómo opera el bot' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Estado actual' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: 'Sombra' }).getAttribute('aria-checked')).toBe('true');
 
     fireEvent.click(within(list).getByRole('button', { name: /Breakout SOL/ }));
@@ -401,6 +409,40 @@ describe('AutoTradingTab · cierre manual y cancelación', () => {
     expect(await screen.findByRole('heading', { name: 'Breakout SOL' })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Cerrar todas las posiciones' })).toBeNull());
     expect(autoBotsApi.close).not.toHaveBeenCalled();
+  });
+});
+
+describe('AutoTradingTab · estado actual', () => {
+  it('bloqueado: «Desbloquear ETH» llama a optionsApi.unblockAutoBot y recarga', async () => {
+    withActivity({ blockedUnderlyings: { ETH: { reason: 'partial_inoperable', at: NOW } } });
+    optionsApi.unblockAutoBot.mockResolvedValue({ id: 1, blocked: false });
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    expect(await screen.findByRole('heading', { name: 'Bloqueado: revisa ETH' })).toBeTruthy();
+    const calls = optionsStrategiesApi.get.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Desbloquear ETH' }));
+    await waitFor(() => expect(optionsApi.unblockAutoBot).toHaveBeenCalledWith(1, 'ETH'));
+    await waitFor(() => expect(optionsStrategiesApi.get.mock.calls.length).toBeGreaterThan(calls));
+  });
+
+  it('un error al desbloquear se muestra', async () => {
+    withActivity({ blockedUnderlyings: { ETH: { reason: 'partial_inoperable', at: NOW } } });
+    optionsApi.unblockAutoBot.mockRejectedValue(new Error('boom'));
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Desbloquear ETH' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/No se pudo desbloquear: boom/);
+  });
+
+  it('entrada pendiente: la franja cuenta atrás y la tarjeta de la lista lleva su chip', async () => {
+    const deadlineAt = Date.now() + 372_000;
+    const base = autoBotsApi.list.getMockImplementation();
+    autoBotsApi.list.mockImplementation(async () => (await base()).map((b) => (b.id === 1 ? { ...b, pendingEntry: { deadlineAt } } : b)));
+    withActivity({ pendingEntries: [{ id: 4, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.05, executedQty: 0, limitPrice: 712, deadlineAt, bid: 700, ask: 725, feesEstUsdt: 1.02 }] });
+    renderTab();
+    expect(await screen.findByRole('heading', { name: /Entrada pendiente · compra 0,05 BTC-261031-70000-C/ })).toBeTruthy();
+    expect(screen.getByText('límite 712')).toBeTruthy();
+    const card = within(screen.getByRole('list', { name: 'Bots' })).getByRole('button', { name: /Momentum BTC/ });
+    expect(within(card).getByText(/^Entrada \d:\d\d$/)).toBeTruthy();
   });
 });
 
