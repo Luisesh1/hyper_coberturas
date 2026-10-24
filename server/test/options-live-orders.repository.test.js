@@ -548,3 +548,47 @@ test('live partial close allocates entry fee proportionally and keeps the breakd
   // Entre las dos filas se conserva la comisión de entrada original.
   assert.ok(Math.abs(remainingFees + entry - 1.2) < 1e-12);
 });
+
+test('lote: con solo una ENTRADA sin resolver se admite un cierre; otra entrada o un cierre pendiente bloquean', async () => {
+  const held = { id: '91', strategy_id: '5', user_id: '7', mode: 'live',
+    symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: '0.1' };
+  let unresolved = [];
+  const inserts = [];
+  const tx = {
+    async query(sql) {
+      if (sql.includes('FROM options_strategies')) return { rows: [{ id: 5, user_id: 7, mode: 'live', underlying: 'BTC' }] };
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (sql.includes("b.status <> 'completed'")) return { rows: unresolved };
+      if (sql.includes('action_key=$2')) return { rows: [] };
+      if (sql.includes('FROM options_strategy_positions') && sql.includes('GROUP BY')) {
+        return { rows: [{ symbol: held.symbol, side: held.side, quantity: held.quantity }] };
+      }
+      if (sql.includes('FROM options_strategy_positions') && sql.includes('FOR UPDATE')) return { rows: [held] };
+      if (sql.includes("purpose='take_profit'")) return { rows: [] };
+      if (sql.includes('options_live_exit_requests')) return { rows: [] };
+      if (sql.includes('INSERT INTO options_live_batches')) { inserts.push(sql); return { rows: [{ id: '9' }] }; }
+      if (sql.includes('INSERT INTO options_live_orders')) return { rows: [{
+        id: '2', batch_id: '9', strategy_id: '5', user_id: '7', action: 'close', position_id: '91',
+        symbol: held.symbol, side: 'SELL', requested_qty: '0.1', limit_price: '100', processed_qty: '0',
+        client_order_id: 'HC9L0', status: 'queued', purpose: 'standard', created_at: '1000', deadline_at: '601000',
+      }] };
+      return { rows: [] };
+    },
+  };
+  const repo = createOptionsLiveOrdersRepository({ db: { transaction: (fn) => fn(tx) }, now: () => 1000 });
+  const exchangePositions = [{ symbol: held.symbol, side: 'LONG', quantity: '0.1' }];
+  const close = { strategy: { id: 5, userId: 7 }, action: 'close', key: 'close:1:91', deadlineAt: 601000,
+    exchangePositions, legs: [{ positionId: 91, symbol: held.symbol, side: 'SELL', quantity: 0.1, price: 100 }] };
+  const open = { strategy: { id: 5, userId: 7 }, action: 'open', key: 'alert:9:open', deadlineAt: 601000,
+    exchangePositions, legs: [{ symbol: 'BTC-261030-61000-C', side: 'BUY', quantity: 0.1, price: 100 }] };
+  unresolved = [{ id: '3', action: 'open' }];
+  const orders = await repo.beginBatch(close);
+  assert.equal(orders.length, 1);
+  assert.equal(inserts.length, 1);
+  assert.equal(await repo.beginBatch(open), null);
+  unresolved = [{ id: '3', action: 'open' }, { id: '4', action: 'close' }];
+  assert.equal(await repo.beginBatch(close), null);
+  unresolved = [{ id: '4', action: 'close' }];
+  assert.equal(await repo.beginBatch(close), null);
+  assert.equal(inserts.length, 1);
+});

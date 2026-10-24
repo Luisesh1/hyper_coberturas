@@ -663,3 +663,37 @@ test('a crash after the commit (alert fails) no longer loses the block or the re
   assert.equal(f.repo.blocks.length, 1);
   assert.equal(f.repo.resolvedSignals.length, 1);
 });
+
+test('una entrada GTC propia en reposo no bloquea un cierre de otra posición ni del parcial', async () => {
+  const f = fixture();
+  // Entrada BTC propia en reposo (no final) en el ledger y en Binance.
+  f.repo.listOwnOpenOrderIds = async () => [{ clientOrderId: 'HCENTRY', orderId: '777' }];
+  f.repo.listRestingTpOrderIds = async () => [];
+  f.setOpenOrders([{ symbol: leg.symbol, clientOrderId: 'HCENTRY', orderId: '777', status: 'PARTIALLY_FILLED' }]);
+  // El lote de cierre lo admite el repositorio (probado aparte): aquí solo el preflight.
+  f.repo.beginBatch = async ({ legs, deadlineAt }) => legs.map((l, i) => ({
+    ...l, id: 100 + i, batchId: 50, clientOrderId: 'HCCLOSE' + i, quantity: l.quantity,
+    limitPrice: l.price, deadlineAt, status: 'queued' }));
+  f.repo.markSending = async (id) => ({ id });
+  f.repo.markActive = async () => {};
+  const other = { symbol: 'BTC-261030-61000-C', side: 'SELL', quantity: 0.5, price: 100, positionId: 41 };
+  const partial = { ...leg, side: 'SELL', quantity: 0.2, positionId: 42 };
+  for (const l of [other, partial]) {
+    const res = await f.engine.submit(strategy, { type: 'close', reason: 'stop_loss', legs: [l] },
+      { now: f.clock.time });
+    assert.equal(res.status, 'submitted');
+  }
+  assert.equal(f.calls.post.length, 2);
+  assert.equal(f.calls.post.every((p) => p.reduceOnly === true), true);
+});
+
+test('con la entrada propia en reposo, una orden ajena sigue bloqueando', async () => {
+  const f = fixture();
+  f.repo.listOwnOpenOrderIds = async () => [{ clientOrderId: 'HCENTRY', orderId: '777' }];
+  f.setOpenOrders([
+    { symbol: leg.symbol, clientOrderId: 'HCENTRY', orderId: '777', status: 'NEW' },
+    { symbol: leg.symbol, clientOrderId: 'manual', orderId: '555', status: 'NEW' },
+  ]);
+  await assert.rejects(f.submit(), /no gestionadas por la app/);
+  assert.equal(f.calls.post.length, 0);
+});

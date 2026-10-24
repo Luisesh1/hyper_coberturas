@@ -94,11 +94,16 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       }
       await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
       const { rows: pending } = await tx.query(
-        "SELECT b.id FROM options_live_batches b WHERE b.user_id=$1 AND b.status <> 'completed' " +
-        "AND EXISTS (SELECT 1 FROM options_live_orders o WHERE o.batch_id=b.id AND o.purpose='standard') LIMIT 1",
+        "SELECT DISTINCT b.action FROM options_live_batches b WHERE b.user_id=$1 AND b.status <> 'completed' " +
+        "AND EXISTS (SELECT 1 FROM options_live_orders o WHERE o.batch_id=b.id AND o.purpose='standard')",
         [strategy.userId]
       );
-      if (pending.length) return null;
+      // Una entrada GTC puede quedar en reposo hasta diez minutos: no debe
+      // impedir un cierre (stop, salida, giro) de otra posición ni del
+      // parcial ya llenado. Cualquier otro lote sin conciliar sigue
+      // bloqueando, y la exposición se vuelve a verificar abajo bajo lock.
+      const onlyEntries = pending.every((p) => p.action === 'open');
+      if (pending.length && !(action === 'close' && onlyEntries)) return null;
       // Verificar la misma instantánea de Binance bajo lock de usuario,
       // contra el libro confirmado en la transacción. Si cambió desde
       // el preflight, abortar: jamás confiar en límites calculados antes.
@@ -764,6 +769,19 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.map((r) => ({ clientOrderId: r.client_order_id, orderId: r.exchange_order_id }));
   }
 
+  /**
+   * Órdenes propias del usuario que el ledger todavía no da por finales
+   * (cualquier propósito: entrada GTC en reposo, cierre, TP residente).
+   * Son las únicas órdenes abiertas en Binance que no bloquean un envío.
+   */
+  async function listOwnOpenOrderIds(userId) {
+    const { rows } = await db.query(
+      "SELECT client_order_id,exchange_order_id FROM options_live_orders " +
+      "WHERE user_id=$1 AND status<>'final'", [userId]
+    );
+    return rows.map((r) => ({ clientOrderId: r.client_order_id, orderId: r.exchange_order_id }));
+  }
+
   async function listUnresolved() {
     const { rows } = await db.query(
       "SELECT * FROM options_live_orders WHERE status <> 'final' " +
@@ -1149,7 +1167,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
-    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, requestCancel, requestCancelEntries, hasPendingClose, queueReversal,
+    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, listOwnOpenOrderIds, hasStandingTp, requestCancel, requestCancelEntries, hasPendingClose, queueReversal,
     queueSignalReevaluation, batchEntryOutcome, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
