@@ -772,17 +772,20 @@ class OptionsStrategyRunner {
         detail: 'TP en cancelación; salida pendiente y persistida' });
       return { status: 'tp_cancel_requested', sent: 0 };
     }
+    // Solo los bots por alertas abren al medio; el resto de templates
+    // conserva el precio ejecutable (bid al vender, ask al comprar).
+    const midEntry = action.type === 'open' && strategy.template === 'alert_signal';
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
-      await this.recordOutcome(strategy, 'live', action.type === 'open'
+      await this.recordOutcome(strategy, 'live', midEntry
         ? { type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido' }
         : { type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}` }, ctx);
       return null;
     }
-    // Aperturas: LIMIT GTC al medio del libro fresco, sobre la rejilla del
-    // contrato. Sin bid/ask, sin tick conocido o sin tick dentro del spread
-    // no hay entrada: nunca enviar un precio que Binance no admita.
-    if (action.type === 'open') {
+    // Aperturas de bots por alertas: LIMIT GTC al medio del libro fresco,
+    // sobre la rejilla del contrato. Sin bid/ask, sin tick conocido o sin
+    // tick dentro del spread no hay entrada: nunca enviar un precio inválido.
+    if (midEntry) {
       for (let i = 0; i < action.legs.length; i++) {
         const mid = await this.midEntryPrice(action.legs[i], quotes[i].quote);
         if (mid == null) {
@@ -857,7 +860,7 @@ class OptionsStrategyRunner {
         return null;
       }
     }
-    // El precio LIMIT es la cotización recién consultada (el medio al abrir), pero el fill
+    // El precio LIMIT es la cotización recién consultada (el medio al abrir un bot por alertas), pero el fill
     // SOLO se registra cuando Binance lo confirma en getUserTrades.
     const quoted = action.legs.map((leg, i) => ({
       ...leg, price: quotes[i].price,

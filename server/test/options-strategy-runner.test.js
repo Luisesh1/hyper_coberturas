@@ -5,7 +5,6 @@ const { OptionsStrategyRunner, estimateMargin } = require('../src/services/optio
 const { buildSyntheticChain, syntheticExpiries } = require('../src/services/options/options-synthetic-chain');
 const { parseSymbol, tradeFee, HOUR_MS, DAY_MS } = require('../src/services/options/options-utils');
 const { createFakeOptionsRepo } = require('./support/options-fake-repo');
-const { midLimitPrice } = require('../src/services/options/options-mid-price');
 
 const FRIDAY_9 = Date.UTC(2026, 9, 16, 9);
 const SPOT = 60000;
@@ -162,9 +161,8 @@ test('modo real: acepta órdenes LIMIT sin inventar posiciones ni fills', async 
   for (const order of credentials.orders) {
     const quote = await market.getQuote(order.symbol);
     assert.equal(order.side, 'SELL');
-    // Apertura real: LIMIT al medio del libro, redondeado hacia abajo al vender.
-    assert.equal(order.price, midLimitPrice({ bid: quote.bid, ask: quote.ask, side: 'SELL', tickSize: '0.01', minPrice: '0.01' }));
-    assert.ok(order.price >= quote.bid && order.price <= quote.ask);
+    // Template que no es por alertas: conserva el precio ejecutable (bid).
+    assert.equal(order.price, quote.bid);
     assert.equal(order.reduceOnly, false);
     assert.equal(order.quantity, 0.01);
   }
@@ -677,7 +675,7 @@ const midLeg = (quantity = 0.1) => ({ symbol: MID_SYMBOL, side: 'BUY', quantity,
 const midCtx = (params) => ({ now: FRIDAY_9, spot: SPOT, positions: [], produced: [], params });
 
 async function midSetup(book = { bid: 700, ask: 725 }, { filter = { tickSize: '5', minPrice: '5', maxPrice: '100000' } } = {}) {
-  const env = await setup({ mode: 'live' });
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1] } });
   const original = env.market.getQuote;
   env.market.getQuote = async (symbol, opts) => ({ ...(await original(symbol, opts)), ...book });
   env.market.getPriceFilter = async () => filter;
@@ -754,4 +752,15 @@ test('live SELL open without ask is skipped with no_mid_price', async () => {
   await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [{ ...midLeg(), side: 'SELL' }] }, ctx);
   assert.equal(credentials.orders.length, 0);
   assert.equal(ctx.produced.find((p) => p.type === 'skip').reason, 'no_mid_price');
+});
+
+test('non-alert live open keeps the executable price, not the mid', async () => {
+  const { runner, strategy, credentials, market } = await setup({ mode: 'live' });
+  assert.equal(strategy.template, 'short_strangle');
+  const original = market.getQuote;
+  market.getQuote = async (symbol, opts) => ({ ...(await original(symbol, opts)), bid: 700, ask: 725 });
+  market.getPriceFilter = async () => ({ tickSize: '5', minPrice: '5', maxPrice: '100000' });
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg()] }, midCtx({ capitalUsdt: 1000 }));
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [{ ...midLeg(), side: 'SELL' }] }, midCtx({ capitalUsdt: 1e6 }));
+  assert.deepEqual(credentials.orders.map((o) => o.price), [725, 700]);
 });
