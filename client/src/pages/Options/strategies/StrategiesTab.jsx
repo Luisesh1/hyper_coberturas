@@ -7,7 +7,7 @@ import StrategyForm from './StrategyForm';
 import LiveConfirmDialog from './LiveConfirmDialog';
 import Sheet from './common/Sheet';
 import { PlusIcon, StrategyIcon } from './common/icons';
-import { useVisibleInterval } from './common/useVisibleInterval';
+import { useVisibleInterval } from '../../../hooks/useVisibleInterval';
 import { formatUsdt } from './common/format';
 import { normalizeStrategy, sumPnl } from './strategyView';
 import ui from './common/ui.module.css';

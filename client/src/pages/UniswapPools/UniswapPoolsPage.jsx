@@ -4,6 +4,7 @@ import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
 import { useWalletConnection, useWalletState } from '../../hooks/useWalletConnection';
+import { useVisibleInterval } from '../../hooks/useVisibleInterval';
 import { mergeResultProtections } from './utils/pool-sorting';
 import { getPoolSortScore } from './utils/pool-sorting';
 import { sortProtectedPools } from './utils/pool-sorting';
@@ -139,40 +140,34 @@ export default function UniswapPoolsPage() {
   const accountsRef = useRef(accounts);
   useEffect(() => { accountsRef.current = accounts; }, [accounts]);
 
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      if (!accountsRef.current.length) return;
-      try {
-        const updatedAccounts = await Promise.all(
-          accountsRef.current.map(async (account) => {
-            try {
-              const accountData = await tradingApi.getAccount({ accountId: account.id });
-              return {
-                ...account,
-                balanceUsd: accountData.accountValue || 0,
-                totalMarginUsed: accountData.totalMarginUsed || 0,
-                withdrawable: accountData.withdrawable || 0,
-                lastUpdatedAt: accountData.lastUpdatedAt,
-              };
-            } catch (err) {
-              return account;
-            }
-          })
-        );
-        setAccounts(updatedAccounts);
-      } catch (err) {
+  useVisibleInterval(async () => {
+    if (!accountsRef.current.length) return;
+    try {
+      const updatedAccounts = await Promise.all(
+        accountsRef.current.map(async (account) => {
+          try {
+            const accountData = await tradingApi.getAccount({ accountId: account.id });
+            return {
+              ...account,
+              balanceUsd: accountData.accountValue || 0,
+              totalMarginUsed: accountData.totalMarginUsed || 0,
+              withdrawable: accountData.withdrawable || 0,
+              lastUpdatedAt: accountData.lastUpdatedAt,
+            };
+          } catch (err) {
+            return account;
+          }
+        })
+      );
+      setAccounts(updatedAccounts);
+    } catch (err) {
         console.error('Error refreshing account balances:', err);
       }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []); // deps vacío — el intervalo no se reinicia
+  }, 30000);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadProtectedPools().catch(() => {});
-    }, PROTECTED_POOLS_REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [loadProtectedPools]);
+  useVisibleInterval(() => {
+    loadProtectedPools().catch(() => {});
+  }, PROTECTED_POOLS_REFRESH_INTERVAL_MS);
 
   useEffect(() => {
     setResult((prev) => mergeResultProtections(prev, protectedPools));

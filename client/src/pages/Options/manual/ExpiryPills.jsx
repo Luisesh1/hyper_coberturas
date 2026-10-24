@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useVisibleInterval } from '../strategies/common/useVisibleInterval';
+import { useVisibleInterval } from '../../../hooks/useVisibleInterval';
 import { ExpiryBadges } from './ChainBadges';
 import styles from './ManualTrading.module.css';
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { walletMetricsApi } from '../../services/api';
+import { useVisibleInterval } from '../../hooks/useVisibleInterval';
 import MetricsFilterBar, { RANGE_OPTIONS } from './components/MetricsFilterBar';
 import PortfolioStrip from './components/PortfolioStrip';
 import WalletRow from './components/WalletRow';
@@ -38,11 +39,8 @@ export default function MetricasPage() {
     }
   }, []);
 
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => clearInterval(t);
-  }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh]);
+  useVisibleInterval(refresh, POLL_INTERVAL_MS);
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();

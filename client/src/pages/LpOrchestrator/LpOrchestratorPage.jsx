@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { settingsApi, lpOrchestratorApi, uniswapApi } from '../../services/api';
 import { useWalletConnection, useWalletState } from '../../hooks/useWalletConnection';
 import { useConfirmAction } from '../../hooks/useConfirmAction';
+import { useVisibleInterval } from '../../hooks/useVisibleInterval';
 import { ConfirmDialog } from '../../components/shared/ConfirmDialog';
 import { EmptyState } from '../../components/shared/EmptyState';
 import OrchestratorCard from './components/OrchestratorCard';
@@ -96,10 +97,7 @@ export default function LpOrchestratorPage() {
   useEffect(() => { refresh().catch(() => {}); }, [refresh]);
 
   // Polling cada 30 s
-  useEffect(() => {
-    const timer = setInterval(() => { refresh().catch(() => {}); }, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [refresh]);
+  useVisibleInterval(() => { refresh().catch(() => {}); }, POLL_INTERVAL_MS);
 
   const handleEvaluate = async (orch) => {
     setEvaluatingId(orch.id);
