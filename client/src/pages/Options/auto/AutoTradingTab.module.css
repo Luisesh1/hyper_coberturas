@@ -129,7 +129,6 @@
 .cardMobile .cardName { font-size: 15px; }
 .cardMeta { font-size: 12px; color: var(--text-secondary); }
 .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.cardBottom { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
 .cardPnlBig { font-size: 15px; }
 
 .skeletons { display: flex; flex-direction: column; gap: 10px; }
@@ -335,6 +334,7 @@
 .lastSignal:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
 .lastSignalLabel { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
 .lastSignalRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.signalTime { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 .lastSignalText { font-size: 13px; color: var(--text-muted); overflow-wrap: anywhere; }
 
 .fab {
