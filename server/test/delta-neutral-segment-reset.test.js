@@ -103,8 +103,11 @@ test('resetForNewSegment espera a la evaluacion en curso antes de escribir', asy
     },
     logger: { info() {}, warn() {}, error() {} },
   });
-  service.evaluationLocks = new Map([[7, new Promise((resolve) => { release = resolve; })
-    .then(() => order.push(['evaluation-done']))]]);
+  // Como el candado real: la entrada se retira sola al terminar la evaluacion.
+  service.evaluationLocks = new Map();
+  service.evaluationLocks.set(7, new Promise((resolve) => { release = resolve; })
+    .then(() => order.push(['evaluation-done']))
+    .finally(() => service.evaluationLocks.delete(7)));
   service.shadowStates.set('7:net_profit_v1', { actualQty: 1, shadowPolicyState: { x: 1 } });
   service.shadowStates.set('70:net_profit_v1', { actualQty: 1, shadowPolicyState: { x: 1 } });
 
@@ -138,7 +141,12 @@ test('net_profit_v2: tras el reset decide rebalance sobre el LP nuevo, sin presu
   };
   const before = decideNetProfitV1({ ...base, state: staleState });
   assert.equal(before.decision, 'hold', 'con el estado heredado la politica retiene');
-  assert.ok(['daily_rotation_budget', 'upper_rearm_confirming', 'upper_exit_confirming'].includes(before.gate));
+  assert.equal(before.gate, 'upper_rearm_confirming');
+  const budgetOnly = decideNetProfitV1({
+    ...base,
+    state: { rotationBudgetDay: 0, rotationBudgetCount: 4, rotationBudgetNotionalUsd: 100 },
+  });
+  assert.equal(budgetOnly.gate, 'daily_rotation_budget');
 
   const reset = resetDecisionStateForNewSegment({
     ...ACCUMULATORS, netProfitPolicyState: staleState, netProfitPolicyGate: before.gate,
@@ -175,4 +183,145 @@ test('finalize invoca el reset al abrir tramo (con y sin cambio de tokenId) y to
   await updateProtectionRecords({ ...args, action: 'collect-fees', newPositionIdentifier: '123' });
 
   assert.deepEqual(resets, [7, 7], 'solo delta_neutral y solo acciones que abren tramo');
+});
+
+test('carrera: evaluacion en curso, forzado encolado y reset a la vez dejan el estado reiniciado', async () => {
+  const row = { id: 7, userId: 1, strategyState: { ...dirtyState(), netProfitPolicyState: { stale: true } } };
+  const persisted = [];
+  const service = new ProtectedPoolDeltaNeutralService({
+    protectedPoolRepository: {
+      getById: async () => ({ ...row, strategyState: { ...row.strategyState } }),
+      updateStrategyState: async (_u, _id, payload) => {
+        persisted.push(payload.strategyState);
+        row.strategyState = payload.strategyState;
+      },
+    },
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  let evaluations = 0;
+  let releaseFirst;
+  // Cada evaluacion lee la fila, cede el turno y reescribe lo leido (como el
+  // motor real, que arrastra el netProfitPolicyState que encontro).
+  service._withProtectionEvaluationLock = async () => {
+    evaluations += 1;
+    const read = { ...row.strategyState };
+    if (evaluations === 1) await new Promise((resolve) => { releaseFirst = resolve; });
+    await new Promise((r) => setImmediate(r));
+    row.strategyState = { ...read, pendingForceReason: null };
+    persisted.push(row.strategyState);
+    return 'ok';
+  };
+
+  const inFlight = service.evaluateProtection({ id: 7, userId: 1 });
+  const forced = service.evaluateProtection({ id: 7, userId: 1 }, { forceRebalance: true, forceReason: 'x' });
+  const reset = service.resetForNewSegment({ id: 7, userId: 1 });
+  await new Promise((r) => setImmediate(r));
+  releaseFirst();
+  await Promise.all([inFlight, forced, reset]);
+
+  assert.equal(service.evaluationLocks.size, 0);
+  assert.equal(row.strategyState.netProfitPolicyState, undefined, 'el estado viejo no sobrevive al reset');
+  assert.equal(row.strategyState.minDwellUntil, undefined);
+  assert.deepEqual(row.strategyState.shadowSnapshots.net_profit_v1.shadowPolicyState, {});
+});
+
+// --- Motor completo ----------------------------------------------------------
+
+const NOW_MS = Date.now();
+const PRICE = 2500;
+
+function enginePool(strategyState) {
+  const addr = (n) => `0x${String(n).padStart(40, '0')}`;
+  return {
+    id: 55, userId: 1, accountId: 8, status: 'active', protectionMode: 'delta_neutral',
+    inferredAsset: 'ETH', network: 'arbitrum', version: 'v3', positionIdentifier: '999',
+    walletAddress: addr(1), poolAddress: addr(2), leverage: 7,
+    rangeLowerPrice: 2000, rangeUpperPrice: 3000, priceCurrent: PRICE,
+    snapshotStatus: 'ready', snapshotFreshAt: NOW_MS, minOrderNotionalUsd: 11,
+    policyVersion: 'net_profit_v2', targetHedgeRatio: 0.6,
+    poolSnapshot: {
+      mode: 'lp_position', version: 'v3', network: 'arbitrum', identifier: '999', positionIdentifier: '999',
+      owner: addr(1), creator: addr(1), poolAddress: addr(2), token0Address: addr(3), token1Address: addr(4),
+      token0: { symbol: 'WETH', address: addr(3), decimals: 18 },
+      token1: { symbol: 'USDC', address: addr(4), decimals: 6 },
+      tickLower: 74000, tickUpper: 79000, liquidity: '2000000000000',
+      rangeLowerPrice: 2000, rangeUpperPrice: 3000, priceCurrent: PRICE, currentValueUsd: 2500,
+      inRange: true, unclaimedFees0: 0.01, unclaimedFees1: 12, snapshotFreshAt: NOW_MS,
+    },
+    strategyState,
+  };
+}
+
+function engineService(row, executions) {
+  const service = new ProtectedPoolDeltaNeutralService({
+    protectedPoolRepository: {
+      getById: async () => row,
+      updateStrategyState: async (_u, _id, payload) => { row.strategyState = payload.strategyState; },
+    },
+    protectionDecisionLogRepository: { create: async () => {} },
+    hlRegistry: {
+      getOrCreate: async () => ({
+        getPosition: async () => ({ coin: 'ETH', szi: '-0.0001', leverage: { type: 'isolated', value: 7 } }),
+        getClearinghouseState: async () => ({ withdrawable: '1000' }),
+        getCandleSnapshot: async () => [],
+      }),
+    },
+    getTradingService: async () => ({}),
+    marketService: { getAssetContexts: async () => [] },
+    logger: { info() {}, warn() {}, error() {} },
+    centerDeadZonePct: 0,
+    hyperliquidStreamService: {
+      trackProtection() {}, start() {}, stop() {},
+      getMidPrice: async () => null, getBbo: async () => null, getActiveAssetCtx: async () => null,
+      getClearinghouseState: async () => null, getDiagnostics: () => ({ enabled: false }),
+    },
+    rpcBudgetManager: { canSpend: () => ({ allowed: true, snapshot: null }), getSnapshot: () => null, record() {} },
+  });
+  service._fetchSpot = async () => ({ priceCurrent: PRICE });
+  service._executeRebalance = async ({ strategyState, reason }) => {
+    executions.push(reason);
+    return { ...strategyState, executed: true };
+  };
+  return service;
+}
+
+function previousRangeState() {
+  return {
+    lastRebalanceAt: Date.now() - (13 * 60 * 60_000),
+    lastSnapshotPrice: PRICE,
+    modelConfidence: 'high',
+    executionIntent: 'live',
+    policyVersion: 'net_profit_v2',
+    netProfitPolicyState: {
+      rotationBudgetDay: Math.floor(Date.now() / 86_400_000),
+      rotationBudgetCount: 4,
+      rotationBudgetNotionalUsd: 100,
+      upperExitConfirmed: true,
+      upperExitStartedAt: Date.now() - 60_000,
+    },
+  };
+}
+
+const HELD_GATES = ['daily_rotation_budget', 'upper_rearm_confirming', 'upper_exit_confirming', 'upper_exit_latched'];
+
+test('motor: sin reset, el estado del rango anterior retiene la decision (control)', async () => {
+  const row = enginePool(previousRangeState());
+  const executions = [];
+  const state = await engineService(row, executions).evaluateProtection(row);
+  assert.ok(HELD_GATES.includes(state.netProfitPolicyGate), `gate inesperado: ${state.netProfitPolicyGate}`);
+  assert.deepEqual(executions, []);
+});
+
+test('motor: tras resetForNewSegment la politica decide sobre el LP nuevo', async () => {
+  const row = enginePool(previousRangeState());
+  const executions = [];
+  const service = engineService(row, executions);
+
+  await service.resetForNewSegment(row);
+  assert.equal(row.strategyState.pendingForceReason, 'segment_opened');
+  const state = await service.evaluateProtection(row);
+
+  assert.ok(!HELD_GATES.includes(state.netProfitPolicyGate), `gate heredado: ${state.netProfitPolicyGate}`);
+  assert.deepEqual(executions, ['net_profit_v2']);
+  assert.equal(state.executed, true);
 });

@@ -1309,17 +1309,29 @@ class ProtectedPoolDeltaNeutralService {
   async resetForNewSegment(protection) {
     const protectionId = Number(protection?.id);
     if (!Number.isInteger(protectionId) || protectionId <= 0) return;
-    const inFlight = this.evaluationLocks.get(protectionId);
-    if (inFlight) await Promise.resolve(inFlight).catch(() => null);
+    // El reset ocupa el candado en proceso: una evaluacion en curso termina
+    // antes, los ticks normales reusan esta promesa y un forzado se encola
+    // detras, asi que ninguno lee la fila vieja ni la reescribe despues.
+    let lock;
+    while ((lock = this.evaluationLocks.get(protectionId))) {
+      await Promise.resolve(lock).catch(() => null);
+    }
+    let release;
+    const mine = new Promise((resolve) => { release = resolve; });
+    this.evaluationLocks.set(protectionId, mine);
+    try {
+      const fresh = (await this.repo.getById(protection.userId, protectionId)) || protection;
+      await this.repo.updateStrategyState(fresh.userId ?? protection.userId, protectionId, {
+        strategyState: resetDecisionStateForNewSegment(fresh.strategyState),
+      });
 
-    const fresh = (await this.repo.getById(protection.userId, protectionId)) || protection;
-    await this.repo.updateStrategyState(fresh.userId ?? protection.userId, protectionId, {
-      strategyState: resetDecisionStateForNewSegment(fresh.strategyState),
-    });
-
-    const prefix = `${protectionId}:`;
-    for (const [key, entry] of this.shadowStates.entries()) {
-      if (key.startsWith(prefix)) this.shadowStates.set(key, { ...(entry || {}), shadowPolicyState: {} });
+      const prefix = `${protectionId}:`;
+      for (const [key, entry] of this.shadowStates.entries()) {
+        if (key.startsWith(prefix)) this.shadowStates.set(key, { ...(entry || {}), shadowPolicyState: {} });
+      }
+    } finally {
+      if (this.evaluationLocks.get(protectionId) === mine) this.evaluationLocks.delete(protectionId);
+      release();
     }
   }
 
