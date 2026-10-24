@@ -383,14 +383,7 @@
 }
 .input:focus { outline: none; border-color: var(--indigo); }
 
-/* Cantidad: cabecera con selector de unidad (USD | Contratos). */
-.fieldHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-width: 0;
-}
+/* Cantidad: selector de unidad (USD | Contratos). */
 .unitToggle {
   display: inline-grid;
   grid-auto-flow: column;
@@ -413,6 +406,7 @@
 }
 .unitBtn:focus-visible { outline: 2px solid var(--indigo); outline-offset: 1px; }
 .unitOn { background: var(--indigo); color: var(--text-bright); }
+.unitToggleFill { display: grid; width: 100%; box-sizing: border-box; }
 /* En la hoja móvil el selector ocupa todo el ancho con objetivos táctiles de 44px. */
 .unitToggleWide { display: grid; width: 100%; padding: 4px; }
 .unitToggleWide .unitBtn { min-height: 44px; font-size: 14px; }
