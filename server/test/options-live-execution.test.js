@@ -664,12 +664,20 @@ test('a crash after the commit (alert fails) no longer loses the block or the re
   assert.equal(f.repo.resolvedSignals.length, 1);
 });
 
-test('una entrada GTC propia en reposo no bloquea un cierre de otra posición ni del parcial', async () => {
+test('una entrada GTC propia en reposo no bloquea el cierre de otra posición; el del mismo contrato se difiere y la cancela', async () => {
   const f = fixture();
   // Entrada BTC propia en reposo (no final) en el ledger y en Binance.
   f.repo.listOwnOpenOrderIds = async () => [{ clientOrderId: 'HCENTRY', orderId: '777' }];
   f.repo.listRestingTpOrderIds = async () => [];
   f.setOpenOrders([{ symbol: leg.symbol, clientOrderId: 'HCENTRY', orderId: '777', status: 'PARTIALLY_FILLED' }]);
+  // Mismo criterio que deferExitIfProtected real: una entrada propia no final
+  // en el contrato del cierre difiere la salida y pide cancelar la entrada.
+  const deferred = [];
+  f.repo.deferExitIfProtected = async (_s, action) => {
+    const hit = action.legs.some((l) => l.symbol === leg.symbol);
+    if (hit) deferred.push(action.legs.map((l) => l.positionId));
+    return hit;
+  };
   // El lote de cierre lo admite el repositorio (probado aparte): aquí solo el preflight.
   f.repo.beginBatch = async ({ legs, deadlineAt }) => legs.map((l, i) => ({
     ...l, id: 100 + i, batchId: 50, clientOrderId: 'HCCLOSE' + i, quantity: l.quantity,
@@ -678,13 +686,18 @@ test('una entrada GTC propia en reposo no bloquea un cierre de otra posición ni
   f.repo.markActive = async () => {};
   const other = { symbol: 'BTC-261030-61000-C', side: 'SELL', quantity: 0.5, price: 100, positionId: 41 };
   const partial = { ...leg, side: 'SELL', quantity: 0.2, positionId: 42 };
-  for (const l of [other, partial]) {
-    const res = await f.engine.submit(strategy, { type: 'close', reason: 'stop_loss', legs: [l] },
-      { now: f.clock.time });
-    assert.equal(res.status, 'submitted');
-  }
-  assert.equal(f.calls.post.length, 2);
-  assert.equal(f.calls.post.every((p) => p.reduceOnly === true), true);
+  const otherRes = await f.engine.submit(strategy, { type: 'close', reason: 'stop_loss', legs: [other] },
+    { now: f.clock.time });
+  assert.equal(otherRes.status, 'submitted');
+  const partialRes = await f.engine.submit(strategy, { type: 'close', reason: 'stop_loss', legs: [partial] },
+    { now: f.clock.time });
+  assert.equal(partialRes.status, 'tp_cancel_requested');
+  assert.deepEqual(deferred, [[42]]);
+  // Solo sale el cierre del otro contrato; el del parcial espera a que la
+  // entrada quede cancelada y conciliada (listReadyExitRequests).
+  assert.equal(f.calls.post.length, 1);
+  assert.equal(f.calls.post[0].symbol, other.symbol);
+  assert.equal(f.calls.post[0].reduceOnly, true);
 });
 
 test('con la entrada propia en reposo, una orden ajena sigue bloqueando', async () => {

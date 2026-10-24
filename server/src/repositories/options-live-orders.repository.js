@@ -124,14 +124,22 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
           [ids]
         );
         const byId = new Map(held.map((p) => [Number(p.id), p]));
-        // Se protege la carrera: TP creado después del preflight y antes
-        // de esta transacción. Bajo el mismo advisory lock, guardar la
-        // intención de salida y cancelar TP en lugar de enviar doble cierre.
-        const { rows: protectedTp } = await tx.query(
-          "SELECT id FROM options_live_orders WHERE position_id=ANY($1::bigint[]) " +
-          "AND purpose='take_profit' AND status<>'final' LIMIT 1", [ids]
+        // Se protege la carrera: TP o entrada propia en el mismo contrato
+        // registrados después del preflight (deferExitIfProtected) y antes de
+        // esta transacción. Bajo el mismo advisory lock, guardar la intención
+        // de salida y cancelarlos en lugar de enviar el cierre: un TP daría
+        // doble cierre, y una entrada en reposo podría cruzarse con él o
+        // seguir comprando lo que el stop acaba de cerrar.
+        const symbols = [...new Set(held.map((p) => p.symbol))];
+        const { rows: protectedOrders } = await tx.query(
+          "SELECT id,purpose FROM options_live_orders WHERE user_id=$1 AND status<>'final' AND " +
+          "((position_id=ANY($2::bigint[]) AND purpose='take_profit') " +
+          "OR (action='open' AND symbol=ANY($3::text[])))",
+          [strategy.userId, ids, symbols]
         );
-        if (protectedTp.length) {
+        if (protectedOrders.length) {
+          const reason = protectedOrders.some((o) => o.purpose === 'take_profit')
+            ? 'tp_race_cancel' : 'entry_race_cancel';
           const time = now();
           for (const leg of legs) {
             const p = byId.get(Number(leg.positionId));
@@ -144,15 +152,17 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
             await tx.query(
               `INSERT INTO options_live_exit_requests
                (position_id,strategy_id,user_id,reason,created_at,updated_at)
-               VALUES ($1,$2,$3,'tp_race_cancel',$4,$4)
+               VALUES ($1,$2,$3,'${reason}',$4,$4)
                ON CONFLICT (position_id) DO UPDATE SET updated_at=EXCLUDED.updated_at`,
               [p.id, strategy.id, strategy.userId, time]
             );
           }
           await tx.query(
             "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$2 " +
-            "WHERE position_id=ANY($1::bigint[]) AND purpose='take_profit' AND status<>'final'",
-            [ids, time]
+            "WHERE user_id=$1 AND status<>'final' AND " +
+            "((position_id=ANY($3::bigint[]) AND purpose='take_profit') " +
+            "OR (action='open' AND symbol=ANY($4::text[])))",
+            [strategy.userId, time, ids, symbols]
           );
           return null;
         }

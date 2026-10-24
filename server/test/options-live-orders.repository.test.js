@@ -638,3 +638,44 @@ test('lote: con solo una ENTRADA sin resolver se admite un cierre; otra entrada 
   assert.equal(await repo.beginBatch(close), null);
   assert.equal(inserts.length, 1);
 });
+
+test('lote: un cierre sobre el contrato de una entrada propia en reposo se difiere y pide cancelarla', async () => {
+  // Carrera: la entrada se registró después del preflight (deferExitIfProtected)
+  // y antes de esta transacción. Enviar el cierre podría cruzarse con la propia
+  // compra o dejarla comprando lo que el stop acaba de cerrar.
+  const held = { id: '91', strategy_id: '5', user_id: '7', mode: 'live',
+    symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: '0.1' };
+  const calls = [];
+  const tx = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.includes('FROM options_strategies')) return { rows: [{ id: 5, user_id: 7, mode: 'live', underlying: 'BTC' }] };
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (sql.includes("b.status <> 'completed'")) return { rows: [{ action: 'open' }] };
+      if (sql.includes('FROM options_strategy_positions') && sql.includes('GROUP BY')) {
+        return { rows: [{ symbol: held.symbol, side: held.side, quantity: held.quantity }] };
+      }
+      if (sql.includes('FROM options_strategy_positions') && sql.includes('FOR UPDATE')) return { rows: [held] };
+      if (sql.startsWith('SELECT') && sql.includes('FROM options_live_orders') && sql.includes("action='open'")) {
+        return { rows: [{ id: '44', purpose: 'standard' }] };
+      }
+      if (sql.startsWith('SELECT') && sql.includes('FROM options_live_orders')) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  const repo = createOptionsLiveOrdersRepository({ db: { transaction: (fn) => fn(tx) }, now: () => 1000 });
+  const result = await repo.beginBatch({
+    strategy: { id: 5, userId: 7 }, action: 'close', key: 'close:1:91', deadlineAt: 601000,
+    exchangePositions: [{ symbol: held.symbol, side: 'LONG', quantity: '0.1' }],
+    legs: [{ positionId: 91, symbol: held.symbol, side: 'SELL', quantity: 0.1, price: 100 }],
+  });
+  assert.equal(result, null);
+  const exit = calls.find((c) => c.sql.includes('INSERT INTO options_live_exit_requests'));
+  assert.ok(exit, 'la salida queda registrada para reintentarse al conciliar la entrada');
+  assert.match(exit.sql, /entry_race_cancel/);
+  const cancel = calls.find((c) => c.sql.startsWith('UPDATE options_live_orders SET cancel_requested=TRUE'));
+  assert.ok(cancel, 'se pide cancelar la entrada en reposo');
+  assert.match(cancel.sql, /action='open' AND symbol=ANY/);
+  assert.deepEqual(cancel.params[3], [held.symbol]);
+  assert.equal(calls.some((c) => c.sql.includes('INSERT INTO options_live_batches')), false);
+});
