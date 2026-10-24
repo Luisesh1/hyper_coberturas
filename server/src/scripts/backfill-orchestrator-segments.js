@@ -26,7 +26,7 @@ function parseJson(value) {
 
 async function loadActionLog(q, orchestratorId, before) {
   const { rows } = await q.query(
-    `SELECT id, kind, action, position_identifier, tx_hashes_json, accounting_delta_json, created_at
+    `SELECT id, kind, action, position_identifier, tx_hashes_json, accounting_delta_json, payload_json, created_at
        FROM lp_orchestrator_action_log
       WHERE orchestrator_id = $1
         AND kind IN ('decision','tx_finalized','attach_lp','kill_lp')
@@ -41,20 +41,22 @@ async function loadActionLog(q, orchestratorId, before) {
     positionIdentifier: r.position_identifier || null,
     txHashes: parseJson(r.tx_hashes_json),
     accountingDelta: parseJson(r.accounting_delta_json),
+    payload: parseJson(r.payload_json),
     createdAt: Number(r.created_at),
   }));
 }
 
-async function loadRebalances(q, protectedPoolId, before) {
-  if (protectedPoolId == null) return [];
+async function loadRebalances(q, protectedPoolIds, before) {
+  if (!protectedPoolIds.length) return [];
   const { rows } = await q.query(
-    `SELECT created_at, actual_qty_after, target_qty_after
+    `SELECT protected_pool_id, created_at, actual_qty_after, target_qty_after
        FROM protected_pool_delta_rebalance_log
-      WHERE protected_pool_id = $1 AND created_at < $2
+      WHERE protected_pool_id = ANY($1::int[]) AND created_at < $2
       ORDER BY created_at ASC, id ASC`,
-    [protectedPoolId, before]
+    [protectedPoolIds, before]
   );
   return rows.map((r) => ({
+    protectedPoolId: Number(r.protected_pool_id),
     createdAt: Number(r.created_at),
     actualQtyAfter: r.actual_qty_after != null ? Number(r.actual_qty_after) : null,
     targetQtyAfter: r.target_qty_after != null ? Number(r.target_qty_after) : null,
@@ -70,10 +72,12 @@ async function backfillOrchestrator(database, orch, { apply = false } = {}) {
   const historicalSegment = resolveHistoricalSegment(existing);
   if (!historicalSegment) return { orchestratorId: orch.id, skipped: true, segments: [], differenceUsd: 0 };
 
-  const [actionLog, rebalances] = await Promise.all([
-    loadActionLog(database, orch.id, historicalSegment.closedAt),
-    loadRebalances(database, orch.active_protected_pool_id != null ? Number(orch.active_protected_pool_id) : null, historicalSegment.closedAt),
-  ]);
+  const actionLog = await loadActionLog(database, orch.id, historicalSegment.closedAt);
+  const poolIds = [...new Set(actionLog
+    .filter((r) => r.kind === 'attach_lp')
+    .map((r) => Number(r.payload?.protectedPoolId))
+    .filter((id) => Number.isInteger(id) && id > 0))];
+  const rebalances = await loadRebalances(database, poolIds, historicalSegment.closedAt);
   const result = buildHistoricalSegments({
     orchestrator: orch, actionLog, rebalances, historicalSegment,
   });
@@ -101,7 +105,7 @@ async function backfillOrchestrator(database, orch, { apply = false } = {}) {
 
 async function runBackfill(database, { orchestratorId = null, apply = false } = {}) {
   const { rows } = await database.query(
-    `SELECT id, active_protected_pool_id FROM lp_orchestrators
+    `SELECT id FROM lp_orchestrators
       WHERE ($1::int IS NULL OR id = $1) ORDER BY id`,
     [orchestratorId]
   );
@@ -144,6 +148,9 @@ async function main() {
   const db = require('../db');
   try {
     await db.ensureConnection();
+    if (apply) {
+      console.log('--apply: una transaccion por orquestador. Un fallo aborta los orquestadores restantes; los anteriores quedan confirmados.');
+    }
     printResults(await runBackfill(db.pool, { orchestratorId, apply }), apply);
   } finally {
     await db.pool.end().catch(() => {});

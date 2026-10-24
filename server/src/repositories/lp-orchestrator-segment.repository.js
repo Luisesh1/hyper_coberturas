@@ -258,7 +258,7 @@ async function relabelOpen(segmentId, { openReason, openTxHashes } = {}, executo
 }
 
 /**
- * Sustituye el historico sembrado (cerrado, open_reason deploy/backfill) por
+ * Sustituye el historico sembrado (cerrado, open_reason deploy/backfill/backfill_diff) por
  * `segments` y renumera `seq` de todos los tramos por orden temporal. Nunca
  * toca el tramo vivo. Debe ejecutarse dentro de una transaccion.
  */
@@ -269,7 +269,7 @@ async function replaceHistorical(orchestratorId, segments, executor) {
       WHERE orchestrator_id = $1
         AND status = 'closed'
         AND accuracy = 'approximate'
-        AND open_reason IN ('deploy','backfill')`,
+        AND open_reason IN ('deploy','backfill','backfill_diff')`,
     [orchestratorId]
   );
   const now = Date.now();

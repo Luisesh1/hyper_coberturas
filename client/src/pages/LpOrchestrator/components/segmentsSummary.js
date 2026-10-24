@@ -52,8 +52,25 @@ function formatDates(segment) {
   return `${formatSegmentDate(segment.openedAt)} → ${end}`;
 }
 
+export const DIFFERENCE_TITLE = 'Diferencia de reconstrucción';
+
+export function isDifferenceSegment(segment) {
+  return segment?.openReason === 'backfill_diff';
+}
+
 export function segmentRowModel(segment) {
   const net = Number(segment.accounting?.totalNetPnlUsd);
+  if (isDifferenceSegment(segment)) {
+    // Fila sintética de la reconstrucción: solo el importe, sin periodo ni rango.
+    return {
+      difference: true,
+      title: DIFFERENCE_TITLE,
+      netText: Number.isFinite(net) ? formatSignedUsd(net) : '—',
+      netTone: signTone(net),
+      approximate: false,
+      live: false,
+    };
+  }
   let reason;
   if (segment.status === 'open') reason = 'En curso';
   else if (segment.status === 'closing') reason = 'Ajustando';

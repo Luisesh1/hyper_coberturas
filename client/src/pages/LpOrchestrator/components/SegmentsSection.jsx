@@ -71,6 +71,14 @@ function SegmentDetail({ orchestratorId, segment }) {
 function SegmentRow({ orchestratorId, segment }) {
   const [open, setOpen] = useState(false);
   const row = segmentRowModel(segment);
+  if (row.difference) {
+    return (
+      <li className={`${styles.item} ${styles.gap}`}>
+        <span>{row.title}</span>
+        <strong className={styles[row.netTone]}>{row.netText}</strong>
+      </li>
+    );
+  }
   return (
     <li className={styles.item}>
       <button

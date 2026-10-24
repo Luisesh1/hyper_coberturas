@@ -47,6 +47,20 @@ describe('SegmentsSection', () => {
     expect(screen.getAllByText('aproximado')).toHaveLength(1);
   });
 
+  it('un tramo backfill_diff se pinta como «Diferencia de reconstrucción» con su importe', async () => {
+    mockList([seg(2), seg(1, {
+      openReason: 'backfill_diff', accuracy: 'approximate', closeReason: 'unknown',
+      rangeLowerPrice: null, rangeUpperPrice: null, accounting: { totalNetPnlUsd: -2.5 },
+    })]);
+    render(<SegmentsSection orchestratorId={5} />);
+    await open();
+    expect(await screen.findByText('Diferencia de reconstrucción')).toBeTruthy();
+    expect(screen.getByText('-$2.5')).toBeTruthy();
+    expect(screen.queryByText('#1')).toBeNull();
+    expect(screen.queryByText('Sin registrar')).toBeNull();
+    expect(screen.queryByText('aproximado')).toBeNull();
+  });
+
   it('la línea «Diferencia de reconstrucción» solo aparece si es distinta de cero', async () => {
     mockList([seg(1)], 0);
     const { unmount } = render(<SegmentsSection orchestratorId={5} />);

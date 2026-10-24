@@ -50,6 +50,23 @@ describe('segmentRowModel', () => {
   });
 });
 
+describe('fila de diferencia (backfill_diff)', () => {
+  it('se muestra como «Diferencia de reconstrucción» solo con su importe', () => {
+    const row = segmentRowModel({
+      id: 9, seq: 1, status: 'closed', accuracy: 'approximate', openReason: 'backfill_diff',
+      openedAt: 1, closedAt: 2, closeReason: 'unknown', accounting: { totalNetPnlUsd: -2.5 },
+    });
+    expect(row.difference).toBe(true);
+    expect(row.title).toBe('Diferencia de reconstrucción');
+    expect(row.netText).toBe('-$2.5');
+    expect(row.netTone).toBe('negative');
+    expect(row).not.toHaveProperty('range');
+    expect(row).not.toHaveProperty('reason');
+    expect(row).not.toHaveProperty('dates');
+    expect(row.approximate).toBe(false);
+  });
+});
+
 describe('hasReconstructionGap', () => {
   it('solo cuenta una diferencia distinta de cero a la precisión de céntimo', () => {
     expect(hasReconstructionGap(0)).toBe(false);

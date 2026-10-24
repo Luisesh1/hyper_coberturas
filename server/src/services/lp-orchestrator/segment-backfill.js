@@ -15,6 +15,8 @@ const {
   summarizeCoverage,
 } = require('./segments');
 
+// Marca persistida de la fila de diferencia (no hay columna de etiqueta).
+const DIFFERENCE_OPEN_REASON = 'backfill_diff';
 const DIFFERENCE_LABEL = 'Diferencia de reconstrucción';
 // Evita que el ruido de coma flotante cambie el resultado entre ejecuciones.
 const PRECISION = 1e9;
@@ -82,7 +84,12 @@ function sumDecisions(actionLog, from, to) {
   return { lpFeesUsd, priceDriftUsd };
 }
 
-function makeSegment({ actionLog, rebalances, start, end, closeCut, deployAt }) {
+function poolIdOf(row) {
+  const id = Number(row?.payload?.protectedPoolId);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function makeSegment({ actionLog, rebalances, start, end, closeCut, deployAt, protectedPoolId }) {
   const { lpFeesUsd, priceDriftUsd } = sumDecisions(actionLog, start.at, end);
   const opener = start.row?.kind === 'tx_finalized' ? start.row.accountingDelta : null;
   const closer = closeCut?.row?.kind === 'tx_finalized' ? closeCut.row.accountingDelta : null;
@@ -103,8 +110,10 @@ function makeSegment({ actionLog, rebalances, start, end, closeCut, deployAt }) 
       : classifyCloseReason({ action: closeCut.row.action });
     if (closeCut.type === 'open' && closeCut.row.kind === 'attach_lp') closeReason = 'unknown';
   }
+  // Sin pool conocido no hay dato de cobertura: null, no "0 reajustes".
   const inInterval = (Array.isArray(rebalances) ? rebalances : [])
-    .filter((r) => Number(r.createdAt) >= start.at && Number(r.createdAt) < end);
+    .filter((r) => Number(r.protectedPoolId) === protectedPoolId
+      && Number(r.createdAt) >= start.at && Number(r.createdAt) < end);
   return {
     accuracy: 'approximate',
     openReason: 'backfill',
@@ -115,7 +124,10 @@ function makeSegment({ actionLog, rebalances, start, end, closeCut, deployAt }) 
     closeTxHashes: closeCut ? hashesOf(closeCut.row) : null,
     accounting,
     baselineAccounting: {},
-    coverage: summarizeCoverage(inInterval, { openedAt: start.at, closedAt: end }),
+    protectedPoolId,
+    coverage: protectedPoolId == null
+      ? null
+      : summarizeCoverage(inInterval, { openedAt: start.at, closedAt: end }),
     deployAt,
   };
 }
@@ -137,18 +149,23 @@ function buildHistoricalSegments({ actionLog = [], rebalances = [], historicalSe
   const log = Array.isArray(actionLog) ? actionLog : [];
   const segments = [];
   let current = null; // { at, row }
+  // Pool del ultimo attach_lp; los tramos posteriores lo heredan hasta el siguiente attach.
+  let poolId = null;
   for (const cut of cuts) {
     if (current) {
       segments.push(makeSegment({
         actionLog: log, rebalances, start: current, end: cut.at, closeCut: cut, deployAt,
+        protectedPoolId: current.poolId,
       }));
       current = null;
     }
-    if (cut.type === 'open') current = { at: cut.at, row: cut.row };
+    if (cut.row.kind === 'attach_lp') poolId = poolIdOf(cut.row);
+    if (cut.type === 'open') current = { at: cut.at, row: cut.row, poolId };
   }
   if (current) {
     segments.push(makeSegment({
       actionLog: log, rebalances, start: current, end: deployAt, closeCut: null, deployAt,
+      protectedPoolId: current.poolId,
     }));
   }
   segments.forEach((s) => { delete s.deployAt; });
@@ -160,7 +177,7 @@ function buildHistoricalSegments({ actionLog = [], rebalances = [], historicalSe
     : (segments[0]?.openedAt ?? deployAt);
   segments.push({
     accuracy: 'approximate',
-    openReason: 'backfill',
+    openReason: DIFFERENCE_OPEN_REASON,
     closeReason: 'unknown',
     label: DIFFERENCE_LABEL,
     openedAt: Math.min(startAt, segments[0]?.openedAt ?? startAt),
@@ -183,7 +200,7 @@ function resolveHistoricalSegment(segments) {
   const closed = (segments || []).filter((s) => s.status === 'closed' && s.accuracy === 'approximate');
   const seeded = closed.find((s) => s.openReason === 'deploy');
   if (seeded) return seeded;
-  const backfill = closed.filter((s) => s.openReason === 'backfill');
+  const backfill = closed.filter((s) => s.openReason === 'backfill' || s.openReason === DIFFERENCE_OPEN_REASON);
   if (!backfill.length) return null;
   return {
     openedAt: Math.min(...backfill.map((s) => s.openedAt)),
@@ -196,6 +213,7 @@ function resolveHistoricalSegment(segments) {
 
 module.exports = {
   DIFFERENCE_LABEL,
+  DIFFERENCE_OPEN_REASON,
   buildHistoricalSegments,
   resolveHistoricalSegment,
 };

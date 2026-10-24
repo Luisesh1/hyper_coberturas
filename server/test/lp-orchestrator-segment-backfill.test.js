@@ -22,7 +22,7 @@ const hist = (total = 20) => ({
 
 function log() {
   return [
-    { id: 1, kind: 'attach_lp', action: 'create-position', createdAt: 1000, txHashes: ['0xa'] },
+    { id: 1, kind: 'attach_lp', action: 'create-position', createdAt: 1000, txHashes: ['0xa'], payload: { protectedPoolId: 7 } },
     { id: 2, kind: 'decision', createdAt: 1500, accountingDelta: { lpFeesDelta: 1, priceDriftDelta: -0.5 } },
     {
       id: 3, kind: 'tx_finalized', action: 'modify-range', createdAt: 2000, txHashes: ['0xb'],
@@ -102,14 +102,46 @@ test('kill redirigido a collect-fees no corta; sin eventos solo queda la diferen
 
 test('la cobertura de cada tramo usa solo los rebalanceos de su intervalo', () => {
   const rebalances = [
-    { createdAt: 1200, actualQtyAfter: 1, targetQtyAfter: 1 },
-    { createdAt: 2200, actualQtyAfter: 0.5, targetQtyAfter: 1 },
+    { protectedPoolId: 7, createdAt: 1200, actualQtyAfter: 1, targetQtyAfter: 1 },
+    { protectedPoolId: 7, createdAt: 2200, actualQtyAfter: 0.5, targetQtyAfter: 1 },
+    { protectedPoolId: 8, createdAt: 2300, actualQtyAfter: 9, targetQtyAfter: 9 },
   ];
   const all = buildHistoricalSegments({ actionLog: log(), rebalances, historicalSegment: hist() });
   const segments = all.segments.filter((s) => !s.label);
   assert.equal(segments[0].coverage.adjustments, 1);
   assert.equal(segments[1].coverage.adjustments, 1);
   assert.equal(segments[2].coverage.adjustments, 0);
+  // El pool del attach se hereda en los tramos siguientes.
+  assert.deepEqual(segments.map((s) => s.protectedPoolId), [7, 7, 7]);
+});
+
+test('un nuevo attach cambia el pool y sin pool conocido la cobertura es null', () => {
+  const rows = [
+    { id: 1, kind: 'attach_lp', createdAt: 1000, payload: { protectedPoolId: 7 } },
+    { id: 2, kind: 'kill_lp', action: 'close-to-usdc', createdAt: 2000 },
+    { id: 3, kind: 'attach_lp', createdAt: 3000, payload: { protectedPoolId: 8 } },
+    { id: 4, kind: 'tx_finalized', action: 'modify-range', createdAt: 4000, txHashes: ['0x1'] },
+    { id: 5, kind: 'kill_lp', action: 'close-to-usdc', createdAt: 5000 },
+    { id: 6, kind: 'attach_lp', createdAt: 6000, payload: { protectedPoolId: null } },
+  ];
+  const rebalances = [
+    { protectedPoolId: 7, createdAt: 1500, actualQtyAfter: 1, targetQtyAfter: 1 },
+    { protectedPoolId: 8, createdAt: 3500, actualQtyAfter: 1, targetQtyAfter: 1 },
+    { protectedPoolId: 8, createdAt: 4500, actualQtyAfter: 1, targetQtyAfter: 1 },
+  ];
+  const real = buildHistoricalSegments({ actionLog: rows, rebalances, historicalSegment: hist() })
+    .segments.filter((s) => !s.label);
+  assert.deepEqual(real.map((s) => s.protectedPoolId), [7, 8, 8, null]);
+  assert.deepEqual(real.map((s) => s.coverage && s.coverage.adjustments), [1, 1, 1, null]);
+});
+
+test('la fila de diferencia se marca backfill_diff y se suma al resolver el historico', () => {
+  const first = buildHistoricalSegments({ actionLog: log(), rebalances: [], historicalSegment: hist(20) });
+  const diff = first.segments.find((s) => s.label);
+  assert.equal(diff.openReason, 'backfill_diff');
+  assert.equal(diff.protectedPoolId, undefined);
+  const resolved = resolveHistoricalSegment(first.segments.map((s) => ({ ...s, status: 'closed' })));
+  assert.ok(Math.abs(resolved.accounting.totalNetPnlUsd - 20) < 1e-9);
 });
 
 test('aplicar dos veces da la misma salida (historico = suma de backfill)', () => {
@@ -215,6 +247,13 @@ test('backfill sobre una copia de los datos reales', { skip }, async (t) => {
 
   await runBackfill(scoped, { apply: true });
   const once = await snapshot();
+  for (const r of dry) {
+    const stored = (await segmentRepo.listByOrchestrator(r.orchestratorId, scoped))
+      .filter((s) => s.openReason === 'backfill_diff');
+    assert.equal(stored.length, 1, `orquestador ${r.orchestratorId}: una fila de diferencia`);
+    assert.equal(stored[0].status, 'closed');
+    assert.equal(stored[0].accuracy, 'approximate');
+  }
   const second = await runBackfill(scoped, { apply: true });
   assert.deepEqual(await snapshot(), once);
   for (const r of second) {
