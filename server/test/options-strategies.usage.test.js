@@ -171,13 +171,36 @@ test('usage.committedUsdt: con presupuesto, posiciones del libro + entradas pend
   const detail = await service.get(USER, s.id);
   // 12 (posición) + 0,01 × 1000 (pendiente) = 22.
   assert.equal(detail.usage.committedUsdt, 22);
+  assert.equal(detail.usage.reservedUsdt, 10);
 });
 
-test('usage.committedUsdt: null si el bot no tiene presupuesto', async () => {
+test('usage.committedUsdt: sin presupuesto también se calcula (KPI «en uso»)', async () => {
   const { repo, service } = setup();
   const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'shadow', params: { alertIds: [1] } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
   const detail = await service.get(USER, s.id);
-  assert.equal(detail.usage.committedUsdt, null);
+  assert.equal(detail.usage.committedUsdt, 12);
+  assert.equal(detail.usage.reservedUsdt, 0);
+});
+
+test('usage.reservedUsdt: la parte de entradas pendientes; en sombra cuentan las simuladas como en el runner', async () => {
+  const repo = createFakeOptionsRepo({ now: () => NOW });
+  const shadowPending = [{ id: 4, strategyId: 0, status: 'pending', symbol: 'BTC-261031-71000-C', side: 'BUY',
+    optionType: 'C', quantity: 0.02, limitPrice: 1000, deadlineAt: NOW + 60_000 }];
+  const service = createOptionsStrategiesService({
+    repo, now: () => NOW,
+    credentials: { async getClientForUser() { return {}; }, async getLimits() { return {}; } },
+    market: { async getChain() { return { spot: 68000 }; }, async getQuote() { return { delta: 0.3 }; } },
+    liveOrders: { async listByStrategy() { return []; } },
+    shadowEntries: { async listPending() { return shadowPending; } },
+  });
+  const s = await repo.createStrategy({ userId: USER, name: 'bot', template: 'alert_signal', underlying: 'BTC', mode: 'shadow',
+    params: { alertIds: [1], budgetUsdt: 100, budgetFractions: 4 } });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.01, entryPrice: 1200, openedAt: NOW - 3600e3 });
+  const detail = await service.get(USER, s.id);
+  // 12 (posición) + 0,02 × 1000 (entrada simulada pendiente) = 32.
+  assert.equal(detail.usage.committedUsdt, 32);
+  assert.equal(detail.usage.reservedUsdt, 20);
 });
 
 test('usage de un bot multi-subyacente: margen y comprometido con el spot del subyacente de cada posición', async () => {

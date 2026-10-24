@@ -61,4 +61,15 @@ function committedUsdt({ positions = [], orders = [], spot, spots = null }) {
   return total;
 }
 
-module.exports = { estimateMargin, positionCommittedUsdt, orderReservedUsdt, committedUsdt };
+/**
+ * Entradas simuladas pendientes (sombra) con la forma de una orden de
+ * entrada real: la sombra reserva presupuesto igual que Real.
+ */
+function shadowEntriesAsOrders(entries) {
+  return (Array.isArray(entries) ? entries : []).filter((e) => e.status === 'pending').map((e) => ({
+    id: Number(e.id), action: 'open', status: 'active', symbol: e.symbol, side: e.side,
+    quantity: Number(e.quantity), processedQty: 0, limitPrice: Number(e.limitPrice),
+  }));
+}
+
+module.exports = { estimateMargin, positionCommittedUsdt, orderReservedUsdt, committedUsdt, shadowEntriesAsOrders };

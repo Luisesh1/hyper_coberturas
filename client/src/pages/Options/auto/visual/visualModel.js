@@ -78,6 +78,15 @@ export function pnlCurve(equity, now = Date.now(), days = 30) {
   return { shadow: series('shadow'), live: eq.hasLive ? series('live') : [] };
 }
 
+// Curva del libro activo a partir del `pnlSeries` de la lista (acumulado
+// diario, el más antiguo primero) mientras el equity del detalle no llega.
+function seriesCurve(values) {
+  const pts = list(values).map(toNumber).filter((v) => v !== null);
+  if (pts.length < 2) return [];
+  const base = pts[0];
+  return pts.map((v, i) => ({ x: i / (pts.length - 1), y: round(v - base) }));
+}
+
 // Modelo de las cuatro tarjetas KPI del libro activo (real si el bot está en real).
 export function kpiCardsModel(bot = {}, now = Date.now()) {
   const mode = bot.mode === 'live' ? 'live' : 'shadow';
@@ -95,19 +104,35 @@ export function kpiCardsModel(bot = {}, now = Date.now()) {
   const usage = bot.usage || {};
   const open = list(bot.positions).filter((p) => p.closedAt == null && (p.mode || 'shadow') === mode);
   const pending = list(bot.pendingEntries).filter((e) => (e.mode || 'shadow') === mode);
-  const used = round(open.reduce((a, p) => a + (toNumber(p.entryPrice) ?? 0) * (toNumber(p.quantity) ?? 0), 0));
-  const reserved = round(pending.reduce((a, e) => a + (toNumber(e.limitPrice) ?? 0)
+  // «Usado» = lo comprometido según el servidor (prima si compra, margen
+  // estimado si vende, la misma cifra que aplica el runner) menos lo
+  // reservado por entradas pendientes. Sin esa cifra, la prima pagada.
+  const premiumUsed = round(open.reduce((a, p) => a + (toNumber(p.entryPrice) ?? 0) * (toNumber(p.quantity) ?? 0), 0));
+  const pendingPremium = round(pending.reduce((a, e) => a + (toNumber(e.limitPrice) ?? 0)
     * Math.max(0, (toNumber(e.quantity) ?? 0) - (toNumber(e.executedQty) ?? 0)), 0));
+  const committed = toNumber(usage.committedUsdt);
+  const reserved = committed !== null ? (toNumber(usage.reservedUsdt) ?? pendingPremium) : pendingPremium;
+  const used = committed !== null ? round(Math.max(0, committed - reserved)) : premiumUsed;
   const budget = toNumber(params.budgetUsdt);
   const fractions = toNumber(params.budgetFractions);
+  const pnlValue = mode === 'live' ? pnlLive : pnlShadow;
+  const equityLoaded = Array.isArray(bot.equity);
+  let curve = pnlCurve(bot.equity, now);
+  if (!equityLoaded) {
+    const fromList = seriesCurve(bot.pnlSeries);
+    curve = mode === 'live' ? { live: fromList, shadow: [] } : { live: [], shadow: fromList };
+  }
 
   return {
     mode,
     pnl: {
-      value: mode === 'live' ? pnlLive : pnlShadow,
+      value: pnlValue,
       live: pnlLive,
       shadow: pnlShadow,
-      curve: pnlCurve(bot.equity, now),
+      curve,
+      // «Sin operaciones cerradas» solo cuando el equity del detalle ya
+      // llegó y el P&L es nulo o cero; mientras carga, la curva va vacía.
+      empty: !curve.live.length && !curve.shadow.length && equityLoaded && !(pnlValue ?? 0),
     },
     win: {
       pct: few ? null : winRate,

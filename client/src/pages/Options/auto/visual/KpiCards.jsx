@@ -22,7 +22,9 @@ function Card({ label, children, className = '' }) {
 function PnlCurve({ pnl, mode, height = H, emptyText = 'Sin operaciones cerradas en 30 días' }) {
   const { live, shadow } = pnl.curve;
   const all = [...live, ...shadow].map((p) => p.y);
-  if (!all.length) return <div className={styles.curveEmpty} style={{ height }}>{emptyText}</div>;
+  if (!all.length) {
+    return <div className={styles.curveEmpty} style={{ height }}>{pnl.empty ? emptyText : null}</div>;
+  }
   const min = Math.min(0, ...all);
   const max = Math.max(0, ...all);
   const span = max - min || 1;
@@ -161,7 +163,7 @@ function BudgetCard({ budget: b, compact }) {
           </div>
         </>
       ) : (
-        <span className={styles.kpiValue}>{n2(b.used + b.reserved)} <span className={styles.kpiValueSub}>{compact ? 'USDT' : 'USDT · sin presupuesto total'}</span></span>
+        <span className={styles.kpiValue}>{n2(b.used + b.reserved)} <span className={styles.kpiValueSub}>{compact ? 'USDT en uso' : 'USDT en uso · sin tope de presupuesto'}</span></span>
       )}
       <span className={styles.kpiSub}>{sub}</span>
       {!compact && (

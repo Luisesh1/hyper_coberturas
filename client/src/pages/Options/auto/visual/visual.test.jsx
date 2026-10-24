@@ -146,6 +146,47 @@ describe('KpiCards', () => {
     expect(container.querySelectorAll('[role="img"]').length).toBeGreaterThanOrEqual(4);
   });
 
+  it('fila de la lista (sin equity): curva desde pnlSeries y nunca «Sin operaciones» junto a un P&L', () => {
+    const row = normalizeBot({ id: 1, template: 'alert_signal', mode: 'live', pnl30d: { shadow: 100, live: 214.6 },
+      pnlSeries: [0, 50, 120, 214.6] });
+    const model = kpiCardsModel(row, NOW);
+    expect(model.pnl.value).toBe(214.6);
+    expect(model.pnl.curve.live.length).toBe(4);
+    expect(model.pnl.curve.live.at(-1)).toEqual({ x: 1, y: 214.6 });
+    render(<KpiCards model={model} />);
+    expect(screen.queryByText('Sin operaciones cerradas en 30 días')).toBeNull();
+    expect(screen.getByLabelText(/Curva de P&L 30 días/)).toBeTruthy();
+  });
+
+  it('el texto vacío solo aparece con el equity del detalle cargado y P&L nulo o cero', () => {
+    const loading = kpiCardsModel({ mode: 'live', pnlLive: 80 }, NOW);
+    const { unmount } = render(<KpiCards model={loading} />);
+    expect(screen.queryByText('Sin operaciones cerradas en 30 días')).toBeNull();
+    unmount();
+    const empty = kpiCardsModel({ mode: 'live', equity: [], kpis: { live: { pnl30dUsdt: 0 } } }, NOW);
+    render(<KpiCards model={empty} />);
+    expect(screen.getByText('Sin operaciones cerradas en 30 días')).toBeTruthy();
+  });
+
+  it('presupuesto: «usado» sale de usage.committedUsdt (margen de las ventas), no de la prima', () => {
+    const sold = {
+      ...bot,
+      positions: [{ id: 1, mode: 'live', symbol: 'BTC-261024-70000-P', side: 'SELL', quantity: 0.2, entryPrice: 750, closedAt: null }],
+      usage: { ordersToday: 2, committedUsdt: 1449.2, reservedUsdt: 249.2 },
+    };
+    const model = kpiCardsModel(sold, NOW);
+    expect(model.budget.used).toBe(1200);
+    expect(model.budget.reserved).toBe(249.2);
+    render(<KpiCards model={model} />);
+    expect(screen.getByLabelText('Presupuesto: 1.200 usado y 249,2 reservado de 600 USDT')).toBeTruthy();
+  });
+
+  it('presupuesto sin tope: «X USDT en uso · sin tope de presupuesto»', () => {
+    const free = { ...bot, params: { maxTradesPerDay: 4 }, positions: [], usage: { committedUsdt: 249.2, reservedUsdt: 0 } };
+    render(<KpiCards model={kpiCardsModel(free, NOW)} />);
+    expect(screen.getByText(/249,2/).textContent).toBe('249,2 USDT en uso · sin tope de presupuesto');
+  });
+
   it('con pocas operaciones el acierto es n/a', () => {
     const few = { ...bot, kpis: { live: { cycles: 2, winRatePct: 50, closedTrades: 2 } } };
     render(<KpiCards model={kpiCardsModel(few, NOW)} />);

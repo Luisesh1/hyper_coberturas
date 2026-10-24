@@ -10,7 +10,7 @@ const templates = require('./templates');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const { DAY_MS, parseSymbol, tradeFee } = require('./options-utils');
 const { estimateMargin, legDeltaExposure, utcDayStart, lazyMarket } = require('./options-strategy-runner.service');
-const { committedUsdt: computeCommitted } = require('./options-committed-capital');
+const { committedUsdt: computeCommitted, shadowEntriesAsOrders } = require('./options-committed-capital');
 
 const MODES = ['paused', 'shadow', 'live'];
 const LIMIT_KEYS = ['maxMarginUsdt', 'maxDailyLossUsdt', 'maxNetDelta', 'maxOrdersPerDay'];
@@ -145,7 +145,7 @@ const round2 = (v) => Math.round(v * 1e4) / 1e4;
  * estrategia está en `live`, si no el de sombra. El margen y la delta piden
  * datos de mercado: si fallan quedan en null en vez de romper el detalle.
  */
-async function limitsUsage({ repo, market, strategy, positions, at, quotes = new Map(), orders = [] }) {
+async function limitsUsage({ repo, market, strategy, positions, at, quotes = new Map(), orders = [], shadowPending = [] }) {
   const mode = strategy.mode === 'live' ? 'live' : 'shadow';
   const since = utcDayStart(at);
   const open = positions.filter((p) => p.mode === mode && p.closedAt == null);
@@ -158,7 +158,9 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
   let netDelta = null;
   // Spot por subyacente (un bot puede operar varios): cada posición y orden
   // se valora con el de su símbolo. Uno que falle queda sin spot (null).
-  const bookOrders = mode === 'live' ? orders : [];
+  // Reservas de entradas pendientes del libro: órdenes reales o, en sombra,
+  // las entradas simuladas (el mismo cálculo que el runner).
+  const bookOrders = mode === 'live' ? orders : shadowEntriesAsOrders(shadowPending);
   const underlyings = new Set([String(strategy.underlying).toUpperCase()]);
   for (const item of [...open, ...bookOrders]) {
     const u = parseSymbol(item.symbol)?.underlying;
@@ -185,14 +187,15 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
     netDelta = round2(open.reduce((acc, p) => acc + legDeltaExposure({ side: p.side, delta: quotes.get(p.id)?.delta, quantity: p.quantity }), 0));
   } catch { netDelta = null; }
 
-  // Presupuesto total del bot: el mismo cálculo que el runner pasa al template.
-  let committedUsdt = null;
-  if (strategy.params?.budgetUsdt != null) {
-    const total = computeCommitted({ positions: open, orders: bookOrders, spot, spots });
-    committedUsdt = Number.isFinite(total) ? round2(total) : null;
-  }
+  // Comprometido del bot: el mismo cálculo que el runner pasa al template
+  // (con o sin presupuesto: el KPI muestra lo «en uso»). `reservedUsdt` es
+  // la parte de entradas pendientes.
+  const total = computeCommitted({ positions: open, orders: bookOrders, spot, spots });
+  const reserved = computeCommitted({ positions: [], orders: bookOrders, spot, spots });
+  const committedUsdt = Number.isFinite(total) ? round2(total) : null;
+  const reservedUsdt = committedUsdt !== null && Number.isFinite(reserved) ? round2(reserved) : null;
 
-  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta, committedUsdt };
+  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta, committedUsdt, reservedUsdt };
 }
 
 function createOptionsStrategiesService(deps = {}) {
@@ -332,7 +335,7 @@ function createOptionsStrategiesService(deps = {}) {
           entryFeeUsdt: p.entryFeeUsdt ?? null, exitFeeUsdt: p.exitFeeUsdt ?? null,
           exerciseFeeUsdt: p.exerciseFeeUsdt ?? null,
         })),
-      usage: await limitsUsage({ repo, market, strategy, positions, at, quotes, orders: standingOrders }),
+      usage: await limitsUsage({ repo, market, strategy, positions, at, quotes, orders: standingOrders, shadowPending }),
       events,
     };
   }

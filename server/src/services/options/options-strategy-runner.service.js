@@ -34,7 +34,7 @@ const { isPilotSyntheticTpEligible, fixedTargetPrice } =
 const { ensureAtrBandTarget } = require('./options-atr-band-target');
 const { midLimitPrice } = require('./options-mid-price');
 const { submitOutcomeText, isPendingSubmitStatus } = require('./options-live-submit-outcome');
-const { estimateMargin, committedUsdt, orderReservedUsdt } = require('./options-committed-capital');
+const { estimateMargin, committedUsdt, orderReservedUsdt, shadowEntriesAsOrders } = require('./options-committed-capital');
 const { botUnderlyings } = require('./bot-underlyings');
 const { positionDirection } = require('./templates/alert-signal');
 // Misma ventana y mismos textos de desenlace que una entrada real.
@@ -139,17 +139,6 @@ function livePendingCount(orders) {
 
 function shadowPendingCount(entries) {
   return (entries || []).filter((e) => e.status === 'pending').length;
-}
-
-/**
- * Entradas simuladas pendientes con la forma de una orden de entrada real
- * (`orderReservedUsdt`): la sombra reserva presupuesto igual que Real.
- */
-function shadowEntriesAsOrders(entries) {
-  return (entries || []).filter((e) => e.status === 'pending').map((e) => ({
-    id: Number(e.id), action: 'open', status: 'active', symbol: e.symbol, side: e.side,
-    quantity: Number(e.quantity), processedQty: 0, limitPrice: Number(e.limitPrice),
-  }));
 }
 
 /** Sombra: entradas simuladas aún 'pending' en `underlying`. */
