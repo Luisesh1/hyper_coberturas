@@ -233,6 +233,7 @@ async function replaceHistorical(orchestratorId, segments, executor) {
     `DELETE FROM lp_orchestrator_segments
       WHERE orchestrator_id = $1
         AND status = 'closed'
+        AND accuracy = 'approximate'
         AND open_reason IN ('deploy','backfill')`,
     [orchestratorId]
   );

@@ -86,6 +86,16 @@ SELECT o.id, 1, 'closed', 'approximate', o.created_at,
        (EXTRACT(EPOCH FROM now()) * 1000)::bigint
   FROM lp_orchestrators o;
 
+-- Extraccion defensiva del rango: JSON invalido o valores no numericos dan NULL
+-- en vez de abortar la migracion.
+CREATE FUNCTION pg_temp.seg046_range(ev text, bound text) RETURNS numeric AS $f$
+BEGIN
+  RETURN NULLIF(ev::jsonb #>> ARRAY['poolSnapshot', bound], '')::numeric;
+EXCEPTION WHEN OTHERS THEN
+  RETURN NULL;
+END;
+$f$ LANGUAGE plpgsql;
+
 -- Tramo vivo (seq=2) para los activos con LP; arranca con el acumulado actual
 -- como baseline.
 INSERT INTO lp_orchestrator_segments (
@@ -96,19 +106,17 @@ INSERT INTO lp_orchestrator_segments (
 SELECT o.id, 2, 'open', 'exact', o.active_position_identifier, o.active_pool_address,
        o.active_protected_pool_id,
        (EXTRACT(EPOCH FROM now()) * 1000)::bigint,
-       NULLIF(ev.j #>> '{poolSnapshot,rangeLowerPrice}', '')::numeric,
-       NULLIF(ev.j #>> '{poolSnapshot,rangeUpperPrice}', '')::numeric,
+       pg_temp.seg046_range(o.last_evaluation_json, 'rangeLowerPrice'),
+       pg_temp.seg046_range(o.last_evaluation_json, 'rangeUpperPrice'),
        'deploy', '{}', o.accounting_json,
        (EXTRACT(EPOCH FROM now()) * 1000)::bigint,
        (EXTRACT(EPOCH FROM now()) * 1000)::bigint
   FROM lp_orchestrators o
-  CROSS JOIN LATERAL (
-    SELECT CASE WHEN o.last_evaluation_json IS NULL THEN NULL
-                ELSE o.last_evaluation_json::jsonb END AS j
-  ) ev
  WHERE o.status = 'active' AND o.active_position_identifier IS NOT NULL;
 
 UPDATE lp_orchestrators o
    SET active_segment_id = s.id
   FROM lp_orchestrator_segments s
  WHERE s.orchestrator_id = o.id AND s.seq = 2 AND s.status = 'open';
+
+DROP FUNCTION pg_temp.seg046_range(text, text);

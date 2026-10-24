@@ -109,6 +109,18 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
   const hedgedId = await insertOrch({
     status: 'active', position: 'tokH', pool: '0xpool', accounting: {}, protectedPoolId: hedgedPoolId,
   });
+  const badJsonId = await insertOrch({
+    status: 'active', position: 'tokBad', pool: '0xpool', accounting: {}, evaluation: null,
+  });
+  await scoped.query(`UPDATE lp_orchestrators SET last_evaluation_json = 'not json' WHERE id = $1`, [badJsonId]);
+  const badNumId = await insertOrch({
+    status: 'active', position: 'tokNum', pool: '0xpool', accounting: {},
+    evaluation: { poolSnapshot: { rangeLowerPrice: 'abc', rangeUpperPrice: 5 } },
+  });
+  const emptyJsonId = await insertOrch({
+    status: 'active', position: 'tokEmpty', pool: '0xpool', accounting: {}, evaluation: null,
+  });
+  await scoped.query(`UPDATE lp_orchestrators SET last_evaluation_json = '' WHERE id = $1`, [emptyJsonId]);
   const stoppedId = await insertOrch({ status: 'stopped', position: null, accounting: { lpFeesUsd: 2 } });
 
   await scoped.query(fs.readFileSync(path.join(dir, files.find((f) => parseInt(f, 10) === 46)), 'utf8'));
@@ -146,6 +158,18 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
     assert.equal((await repo.getActive(stoppedId, db)), null);
     const o = await scoped.query('SELECT active_segment_id FROM lp_orchestrators WHERE id=$1', [stoppedId]);
     assert.equal(o.rows[0].active_segment_id, null);
+  });
+
+  await t.test('JSON invalido o no numerico en last_evaluation_json deja el rango en NULL', async () => {
+    for (const id of [badJsonId, emptyJsonId]) {
+      const live = await repo.getActive(id, db);
+      assert.ok(live, 'tramo vivo sembrado');
+      assert.equal(live.rangeLowerPrice, null);
+      assert.equal(live.rangeUpperPrice, null);
+    }
+    const num = await repo.getActive(badNumId, db);
+    assert.equal(num.rangeLowerPrice, null);
+    assert.equal(num.rangeUpperPrice, 5);
   });
 
   await t.test('un segundo tramo vivo viola el indice parcial', async () => {
@@ -211,17 +235,21 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
   await t.test('replaceHistorical sustituye el sembrado, no toca el vivo y renumera', async () => {
     const before = await repo.listByOrchestrator(activeId, db);
     const live = before.find((s) => s.status === 'open');
+    // El sembrado vivo, ya cerrado en un test previo, es exacto con open_reason 'deploy':
+    // no es historico reconstruido y debe sobrevivir.
+    const exactDeploy = before.filter((s) => s.status === 'closed' && s.accuracy === 'exact' && s.openReason === 'deploy');
+    assert.equal(exactDeploy.length, 1);
     await repo.replaceHistorical(activeId, [
       { openedAt: 10, closedAt: 15, openReason: 'backfill', closeReason: 'manual_rerange', accounting: { lpFeesUsd: 1 }, baselineAccounting: {} },
       { openedAt: 15, closedAt: 20, openReason: 'backfill', closeReason: 'unknown', accounting: { lpFeesUsd: 2 }, baselineAccounting: {} },
     ], db);
     const after = (await repo.listByOrchestrator(activeId, db)).reverse();
-    // Quedan: 2 backfill + el cerrado con manual_rerange (open_reason deploy, seq 2 antes) ya
-    // se borra por ser deploy cerrado; el vivo (open_reason rerange) se conserva.
+    // El historico sembrado (approximate/deploy) se sustituye; el vivo se conserva.
     assert.deepEqual(after.map((s) => s.seq), after.map((_, i) => i + 1));
     assert.ok(after.some((s) => s.id === live.id));
     assert.equal(after.filter((s) => s.openReason === 'backfill').length, 2);
-    assert.equal(after.filter((s) => s.openReason === 'deploy').length, 0);
+    assert.equal(after.filter((s) => s.openReason === 'deploy' && s.accuracy === 'approximate').length, 0);
+    assert.ok(after.some((s) => s.id === exactDeploy[0].id && s.status === 'closed'));
     const times = after.map((s) => s.openedAt);
     assert.deepEqual(times, [...times].sort((a, b) => a - b));
     assert.equal(after.find((s) => s.id === live.id).status, 'open');
