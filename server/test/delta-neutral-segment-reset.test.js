@@ -119,7 +119,16 @@ test('resetForNewSegment espera a la evaluacion en curso antes de escribir', asy
 
   assert.deepEqual(order.map((o) => o[0]), ['evaluation-done', 'write']);
   const written = order[1][1];
-  assert.deepEqual(Object.keys(written), ['strategyState'], 'sin columnas de decision');
+  // Las columnas de decision quedan coherentes con el estado reiniciado: el
+  // repo anula cooldown_reason/last_decision_reason si no se pasan, y
+  // next_eligible_attempt_at se limpia explicitamente (va con COALESCE).
+  assert.deepEqual(Object.keys(written).sort(), [
+    'clearNextEligibleAttemptAt', 'cooldownReason', 'lastDecisionReason', 'strategyState',
+  ]);
+  assert.equal(written.clearNextEligibleAttemptAt, true);
+  assert.equal(written.cooldownReason, null);
+  assert.equal(written.lastDecisionReason, null);
+  assert.equal(written.strategyState.nextEligibleAttemptAt ?? null, null);
   assert.equal(written.strategyState.pendingForceReason, 'segment_opened');
   assert.deepEqual(service.shadowStates.get('7:net_profit_v1'), { actualQty: 1, shadowPolicyState: {} });
   assert.deepEqual(service.shadowStates.get('70:net_profit_v1').shadowPolicyState, { x: 1 },

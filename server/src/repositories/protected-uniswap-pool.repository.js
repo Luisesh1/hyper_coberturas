@@ -879,6 +879,9 @@ async function updateStrategyState(userId, id, {
   trackingErrorQty,
   trackingErrorUsd,
   executionMode,
+  // `nextEligibleAttemptAt` va con COALESCE (null = conservar); para anularlo
+  // de verdad hay que pedirlo explicitamente.
+  clearNextEligibleAttemptAt = false,
   updatedAt = Date.now(),
 }, executor) {
   const { rows } = await exec(executor).query(
@@ -890,7 +893,8 @@ async function updateStrategyState(userId, id, {
             snapshot_status = COALESCE($7, snapshot_status),
             snapshot_fresh_at = COALESCE($8, snapshot_fresh_at),
             snapshot_hash = COALESCE($9, snapshot_hash),
-            next_eligible_attempt_at = COALESCE($10, next_eligible_attempt_at),
+            next_eligible_attempt_at = CASE WHEN $18::boolean THEN NULL
+                                            ELSE COALESCE($10, next_eligible_attempt_at) END,
             cooldown_reason = $11,
             last_decision = COALESCE($12, last_decision),
             last_decision_reason = $13,
@@ -918,6 +922,7 @@ async function updateStrategyState(userId, id, {
       trackingErrorUsd ?? null,
       executionMode ?? null,
       updatedAt,
+      clearNextEligibleAttemptAt === true,
     ]
   );
 

@@ -1321,8 +1321,14 @@ class ProtectedPoolDeltaNeutralService {
     this.evaluationLocks.set(protectionId, mine);
     try {
       const fresh = (await this.repo.getById(protection.userId, protectionId)) || protection;
+      // Columnas coherentes con el estado reiniciado (que borra el motivo, el
+      // cooldown y nextEligibleAttemptAt): el repo anula cooldown_reason y
+      // last_decision_reason, y next_eligible_attempt_at se pide explicito.
       await this.repo.updateStrategyState(fresh.userId ?? protection.userId, protectionId, {
         strategyState: resetDecisionStateForNewSegment(fresh.strategyState),
+        cooldownReason: null,
+        lastDecisionReason: null,
+        clearNextEligibleAttemptAt: true,
       });
 
       const prefix = `${protectionId}:`;

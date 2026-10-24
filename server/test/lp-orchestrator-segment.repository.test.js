@@ -231,6 +231,27 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
     assert.equal(await repo.fillOpenPrice(hist.id, 3, db), null, 'no toca tramos cerrados');
   });
 
+  await t.test('updateStrategyState: clearNextEligibleAttemptAt anula la columna; sin el flag se conserva', async () => {
+    const poolRepo = require('../src/repositories/protected-uniswap-pool.repository');
+    await scoped.query(
+      `UPDATE protected_uniswap_pools SET next_eligible_attempt_at = 123, cooldown_reason = 'x',
+         last_decision_reason = 'y' WHERE id = $1`, [hedgedPoolId]
+    );
+    const col = async () => (await scoped.query(
+      'SELECT next_eligible_attempt_at, cooldown_reason, last_decision_reason FROM protected_uniswap_pools WHERE id=$1',
+      [hedgedPoolId]
+    )).rows[0];
+    await poolRepo.updateStrategyState(user.id, hedgedPoolId, { strategyState: { a: 1 }, cooldownReason: 'x' }, db);
+    assert.equal(Number((await col()).next_eligible_attempt_at), 123, 'COALESCE conserva el valor sin el flag');
+    await poolRepo.updateStrategyState(user.id, hedgedPoolId, {
+      strategyState: { a: 2 }, cooldownReason: null, lastDecisionReason: null, clearNextEligibleAttemptAt: true,
+    }, db);
+    const after = await col();
+    assert.equal(after.next_eligible_attempt_at, null);
+    assert.equal(after.cooldown_reason, null);
+    assert.equal(after.last_decision_reason, null);
+  });
+
   await t.test('un segundo tramo vivo viola el indice parcial', async () => {
     await assert.rejects(
       repo.create({ orchestratorId: activeId, baselineAccounting: {} }, db),
