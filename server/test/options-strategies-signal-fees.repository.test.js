@@ -53,6 +53,13 @@ test('setAutoSignalFees fija comisión y si es estimada', async () => {
   assert.deepEqual(db.calls[0].args, [31, 7.14, true]);
 });
 
+test('setAutoSignalFees solo toca señales pendientes: una estimación no pisa la comisión real', async () => {
+  const db = capturingDb([]);
+  const repo = createOptionsStrategiesRepository({ db });
+  assert.equal(await repo.setAutoSignalFees(31, { feesUsdt: 7.14, feesEstimated: true }), null);
+  assert.match(db.calls[0].sql, /WHERE id = \$1 AND decision = 'pending'/);
+});
+
 test('setUnderlyingBlock fusiona en state.blockedUnderlyings en SQL sin pisar otras claves', async () => {
   const db = capturingDb([{ id: '4', user_id: '7', name: 'B', template: 'alert_signal', underlying: 'BTC',
     params: {}, limits: {}, mode: 'live', created_at: '1', updated_at: '1',

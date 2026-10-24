@@ -825,6 +825,22 @@ test('non-alert live open keeps the executable price, not the mid', async () => 
   assert.deepEqual(credentials.orders.map((o) => o.price), [725, 700]);
 });
 
+test('live submit outcomes leave readable text; attention stays pending', async () => {
+  const { runner, strategy } = await midSetup();
+  const texts = {};
+  for (const status of ['attention', 'rejected', 'deadline', 'duplicate_or_unresolved']) {
+    runner.liveExecutor.submit = async () => ({ status, sent: 0, error: 'Binance -2010' });
+    const ctx = midCtx({ capitalUsdt: 1000 });
+    await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg(0.1)] }, ctx);
+    const p = ctx.produced.find((x) => x.type === 'open');
+    texts[status] = p;
+    assert.notEqual(p.detail, status);
+  }
+  assert.equal(texts.attention.pending, true);
+  assert.equal(texts.rejected.pending, false);
+  assert.match(texts.rejected.detail, /Binance -2010/);
+});
+
 test('pending signal shows estimated fee', async () => {
   const { runner, strategy, credentials, repo } = await midSetup();
   const fees = [];

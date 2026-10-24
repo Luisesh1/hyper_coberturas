@@ -1123,9 +1123,11 @@ class OptionsLiveExecution {
           if (typeof this.repo.claimIncidentNotification === 'function' &&
               await this.repo.claimIncidentNotification(request.userId,
                 'REVERSAL_EXPIRED', String(request.id))) {
-            await this.notify(request.userId,
-              '<b>ALERTA · Giro caducado</b>\n' +
-              'La salida tardó demasiado. No se abrió una posición nueva.');
+            await this.notify(request.userId, request.kind === 'reevaluate'
+              ? '<b>ALERTA · Reevaluación caducada</b>\n' +
+                'La entrada pendiente tardó demasiado en cancelarse. No se abrió una posición nueva.'
+              : '<b>ALERTA · Giro caducado</b>\n' +
+                'La salida tardó demasiado. No se abrió una posición nueva.');
           }
           continue;
         }

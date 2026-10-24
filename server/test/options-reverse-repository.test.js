@@ -110,8 +110,19 @@ test('stale reevaluation expires without opening', async () => {
   assert.deepEqual(calls.reevaluated, []);
   assert.deepEqual(calls.marked, [[5, 'expired']]);
   assert.equal(calls.notified.length, 1);
-  assert.match(calls.notified[0].text, /Giro caducado/);
+  assert.match(calls.notified[0].text, /Reevaluación caducada/);
+  assert.match(calls.notified[0].text, /La entrada pendiente tardó demasiado en cancelarse/);
   assert.match(calls.notified[0].text, /No se abrió una posición nueva/);
+  assert.doesNotMatch(calls.notified[0].text, /Giro caducado|La salida tardó demasiado/);
+});
+
+test('stale reversal reentry keeps the «Giro caducado» alert', async () => {
+  const { engine, calls } = reevaluationEngine(() => [reevaluateRow({ kind: 'reentry', ready: false,
+    created_at: String(NOW - 31 * 60_000) })]);
+  await engine.processDeferredReentries();
+  assert.equal(calls.notified.length, 1);
+  assert.match(calls.notified[0].text, /Giro caducado/);
+  assert.match(calls.notified[0].text, /La salida tardó demasiado/);
 });
 
 test('reevaluation that queues a reversal or keeps waiting leaves the request pending', async () => {

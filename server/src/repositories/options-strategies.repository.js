@@ -485,7 +485,7 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
   async function setAutoSignalFees(id, { feesUsdt, feesEstimated } = {}) {
     const { rows } = await db.query(
       `UPDATE options_auto_signals SET fees_usdt = $2, fees_estimated = $3
-        WHERE id = $1 RETURNING *`,
+        WHERE id = $1 AND decision = 'pending' RETURNING *`,
       [id, feesUsdt ?? null, feesEstimated === true]
     );
     return rows[0] ? mapAutoSignal(rows[0]) : null;

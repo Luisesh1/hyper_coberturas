@@ -13,6 +13,7 @@
  * Spec: docs/superpowers/specs/2026-10-15-alert-auto-trading-design.md
  */
 
+const { submitOutcomeText, isPendingSubmitStatus, SUBMIT_STATUSES } = require('./options-live-submit-outcome');
 const logger = require('../logger.service');
 const { AppError, ValidationError, NotFoundError } = require('../../errors/app-error');
 const defaultRepo = require('../../repositories/options-strategies.repository');
@@ -77,7 +78,13 @@ function signalDto(row) {
  */
 function decide(strategy, produced = [], { forceShadow = false } = {}) {
   const mode = strategy.mode === 'live' && !forceShadow ? 'live' : 'shadow';
-  const mine = produced.filter((p) => p.mode === mode);
+  // Resultados de envío real: nunca el código crudo; un envío ambiguo
+  // ('attention') deja la señal pendiente para que la resuelvan los fills.
+  const mine = produced.filter((p) => p.mode === mode).map((p) => (
+    mode === 'live' && ['open', 'close'].includes(p.type) && !p.booked && SUBMIT_STATUSES.includes(p.reason)
+      ? { ...p, pending: p.pending || isPendingSubmitStatus(p.reason),
+        detail: p.detail && p.detail !== p.reason ? p.detail : submitOutcomeText(p.reason) }
+      : p));
   const booked = mine.filter((p) => p.booked);
   const opened = booked.filter((p) => p.type === 'open');
   const closed = booked.filter((p) => p.type === 'close');

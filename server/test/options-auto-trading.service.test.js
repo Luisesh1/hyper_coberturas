@@ -215,6 +215,27 @@ test('handleAlertTriggered: un error del runner queda como decisión error', asy
   assert.match(repo.signals[0].detail, /Error al procesar la señal: sin cadena/);
 });
 
+test('decide: un envío real sin confirmar (attention) deja la señal pendiente con texto legible', () => {
+  const produced = [{ mode: 'live', type: 'open', reason: 'attention', detail: 'attention' }];
+  const out = decide({ mode: 'live' }, produced);
+  assert.equal(out.decision, 'pending');
+  assert.doesNotMatch(out.detail, /attention/);
+  assert.match(out.detail, /^Real: /);
+});
+
+test('decide: rechazo y ventana expirada se explican en español, sin códigos', () => {
+  const rejected = decide({ mode: 'live' }, [{ mode: 'live', type: 'open', reason: 'rejected', detail: 'rejected' }]);
+  assert.equal(rejected.decision, 'ignored');
+  assert.doesNotMatch(rejected.detail, /\brejected\b/);
+  assert.match(rejected.detail, /rechaz/i);
+  const deadline = decide({ mode: 'live' }, [{ mode: 'live', type: 'open', reason: 'deadline', detail: 'deadline' }]);
+  assert.equal(deadline.decision, 'ignored');
+  assert.doesNotMatch(deadline.detail, /\bdeadline\b/);
+  assert.match(deadline.detail, /ventana/i);
+  const dup = decide({ mode: 'live' }, [{ mode: 'live', type: 'open', reason: 'duplicate_or_unresolved', detail: 'duplicate_or_unresolved' }]);
+  assert.doesNotMatch(dup.detail, /duplicate_or_unresolved/);
+});
+
 test('decide: en real manda el libro real (bloqueo por límite → ignored)', () => {
   const produced = [
     { mode: 'shadow', type: 'open', booked: true, detail: 'Señal alcista: compra 65000C' },

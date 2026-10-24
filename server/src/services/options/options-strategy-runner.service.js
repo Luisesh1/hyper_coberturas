@@ -33,6 +33,7 @@ const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
 const { ensureAtrBandTarget } = require('./options-atr-band-target');
 const { midLimitPrice } = require('./options-mid-price');
+const { submitOutcomeText, isPendingSubmitStatus } = require('./options-live-submit-outcome');
 const { estimateMargin, committedUsdt, orderReservedUsdt } = require('./options-committed-capital');
 const { botUnderlyings } = require('./bot-underlyings');
 const { positionDirection } = require('./templates/alert-signal');
@@ -1274,9 +1275,11 @@ class OptionsStrategyRunner {
     if (result.status === 'submitted' || result.status === 'attention') {
       await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`, 'trade');
     }
+    // 'attention' (envío ambiguo) también queda pendiente: la conciliación
+    // con Binance resuelve la señal con lo que realmente se llenó.
     ctx.produced?.push({ mode: 'live', type: action.type,
-      pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
-      detail: result.status === 'submitted' ? 'Orden límite enviada; ejecución pendiente' : result.status });
+      pending: isPendingSubmitStatus(result.status), reason: result.status,
+      detail: submitOutcomeText(result.status, result.error) });
     return result;
   }
 
