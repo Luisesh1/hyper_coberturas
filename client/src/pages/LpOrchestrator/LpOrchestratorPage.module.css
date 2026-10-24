@@ -362,3 +362,14 @@
   flex: 1;
   min-width: 0;
 }
+.gridItemFocused {
+  border-radius: 14px;
+  animation: gridItemFocus 2.5s ease-out;
+}
+@keyframes gridItemFocus {
+  0%, 60% { box-shadow: 0 0 0 2px var(--uni-cyan); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gridItemFocused { animation: none; box-shadow: 0 0 0 2px var(--uni-cyan); }
+}

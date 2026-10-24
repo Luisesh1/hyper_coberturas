@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // lightweight-charts no se dibuja en jsdom: aqui interesa que la fila abierta
@@ -146,5 +147,18 @@ describe('MetricasPage', () => {
 
     expect(screen.getByText('Archivada')).toBeTruthy();
     expect(await screen.findByRole('button', { name: 'Reactivar seguimiento' })).toBeTruthy();
+  });
+
+  it('enlaza los orquestadores abiertos de la wallet con su id', async () => {
+    walletMetricsApi.list.mockResolvedValue([
+      { ...WALLETS[0], openOrchestrators: [{ id: 42, name: 'ETH/USDC Arbitrum' }] },
+      WALLETS[1],
+    ]);
+    render(<MemoryRouter><MetricasPage /></MemoryRouter>);
+
+    const link = await screen.findByRole('link', { name: /ETH\/USDC Arbitrum/ });
+    expect(link.getAttribute('href')).toBe('/lp-orchestrator?focus=42');
+    expect(link.textContent).toContain('#42');
+    expect(screen.getAllByRole('link')).toHaveLength(1);
   });
 });

@@ -9,9 +9,10 @@ const router = Router();
 router.use(authenticate);
 
 /** Resumen de la ultima captura sin el desglose por item (lista ligera). */
-function summarize(wallet, lastDetail) {
+function summarize(wallet, lastDetail, openOrchestrators = []) {
   return {
     ...wallet,
+    openOrchestrators,
     latest: lastDetail
       ? {
         capturedAt: lastDetail.capturedAt,
@@ -43,13 +44,14 @@ router.get('/', asyncHandler(async (req, res) => {
   await walletMetricsRepo.syncFromOrchestrators();
   const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
   const wallets = await walletMetricsRepo.listForUser(req.user.userId, { includeArchived });
-  const details = await Promise.all(
-    wallets.map((w) => walletMetricsRepo.getForUser(req.user.userId, w.id))
-  );
+  const [details, openByWallet] = await Promise.all([
+    Promise.all(wallets.map((w) => walletMetricsRepo.getForUser(req.user.userId, w.id))),
+    walletMetricsRepo.listOpenOrchestratorsByWallet(req.user.userId),
+  ]);
   walletMetricsService.triggerDueCapture();
   res.json({
     success: true,
-    data: wallets.map((w, i) => summarize(w, details[i]?.lastDetail || null)),
+    data: wallets.map((w, i) => summarize(w, details[i]?.lastDetail || null, openByWallet[w.address] || [])),
   });
 }));
 

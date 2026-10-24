@@ -581,6 +581,53 @@
 
 .rowHeaderWrap .rowHeader { padding-right: 40px; }
 
+/* Orquestadores abiertos de la wallet: enlaces fuera del boton de la fila. */
+.rowOrchestrators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 10px 36px;
+  margin-top: -4px;
+}
+
+.orchestratorLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  color: var(--uni-text-1, var(--uni-text-0));
+  text-decoration: none;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+}
+
+.orchestratorLink:hover { background: rgba(56, 189, 248, 0.16); color: var(--uni-text-0); }
+.orchestratorLink:focus-visible { outline: 2px solid var(--uni-cyan); outline-offset: 2px; }
+
+.orchestratorDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--uni-green, #22c55e);
+}
+
+.orchestratorName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orchestratorId {
+  flex: none;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--uni-text-3, #7d93a9);
+}
+
 .copyBtn {
   position: absolute;
   right: 8px;
@@ -820,6 +867,8 @@
   .rowHeader > .rowNumber:nth-of-type(3) { grid-area: value; }
   .rowHeader > .rowNumber:nth-of-type(4) { grid-area: change; }
   .copyBtn { top: 12px; transform: none; width: 36px; height: 36px; }
+  .rowOrchestrators { padding: 0 12px 12px; margin-top: -2px; }
+  .orchestratorLink { min-height: 32px; padding: 4px 11px; font-size: 0.78rem; }
 
   .rowDetail { padding: 0 6px 8px; }
   .card { padding: 12px; }
