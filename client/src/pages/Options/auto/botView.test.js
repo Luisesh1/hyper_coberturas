@@ -440,7 +440,7 @@ describe('varios subyacentes', () => {
 
 describe('botStatus', () => {
   const now = 1_800_000_000_000;
-  const pendingDetail = { pendingEntries: [{ id: 1, symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.35, limitPrice: 712, deadlineAt: now + 372_000 }] };
+  const pendingDetail = { pendingEntries: [{ id: 1, mode: 'live', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.35, limitPrice: 712, deadlineAt: now + 372_000 }] };
   it('entrada pendiente a 6:12 → pending con progreso ≈ 0,62', () => {
     const s = botStatus({ mode: 'live' }, pendingDetail, now);
     expect(s.kind).toBe('pending');
@@ -461,6 +461,20 @@ describe('botStatus', () => {
     expect(botStatus({ mode: 'live', status: 'in_position' }, null, now).kind).toBe('position');
     expect(botStatus({ mode: 'live', status: 'waiting' }, null, now).kind).toBe('waiting');
     expect(botStatus({ mode: 'paused' }, null, now).kind).toBe('paused');
+  });
+  it('solo cuenta las entradas pendientes del libro del bot (real → live; sombra/pausado → shadow)', () => {
+    const entry = { id: 1, symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.35, deadlineAt: now + 60_000 };
+    const shadowEntry = { pendingEntries: [{ ...entry, mode: 'shadow' }] };
+    const liveEntry = { pendingEntries: [{ ...entry, mode: 'live' }] };
+    expect(botStatus({ mode: 'live' }, shadowEntry, now).kind).toBe('waiting');
+    expect(botStatus({ mode: 'live' }, liveEntry, now).kind).toBe('pending');
+    expect(botStatus({ mode: 'shadow' }, liveEntry, now).kind).toBe('waiting');
+    expect(botStatus({ mode: 'shadow' }, shadowEntry, now).kind).toBe('pending');
+    expect(botStatus({ mode: 'paused' }, shadowEntry, now).kind).toBe('pending');
+    // Sin modo se toma como sombra (misma regla que las posiciones).
+    expect(botStatus({ mode: 'live' }, { pendingEntries: [entry] }, now).kind).toBe('waiting');
+    // Con detalle manda el detalle: el resumen de la lista no reaparece.
+    expect(botStatus({ mode: 'live', pendingEntry: { deadlineAt: now + 1 } }, shadowEntry, now).kind).toBe('waiting');
   });
   it('solo cuentan las posiciones abiertas del modo del bot (real → live; sombra/pausado → shadow)', () => {
     const shadowOnly = { positions: [{ mode: 'shadow', closedAt: null }] };

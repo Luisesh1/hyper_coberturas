@@ -687,10 +687,19 @@ export function botStatus(bot = {}, detail = null, now = Date.now()) {
       detail: 'El bot no abre entradas hasta que lo desbloquees.',
     };
   }
-  const entries = Array.isArray(detail?.pendingEntries) ? detail.pendingEntries : [];
+  // Libro del bot: real → live; sombra y pausado → shadow (posiciones y
+  // entradas pendientes). Un bot real no muestra la entrada de su sombra.
+  const book = bot.mode === 'live' ? 'live' : 'shadow';
+  const hasDetailEntries = Array.isArray(detail?.pendingEntries);
+  const entries = hasDetailEntries
+    ? detail.pendingEntries.filter((e) => e && (e.mode || 'shadow') === book)
+    : [];
   const first = [...entries].sort((a, b) => (toMs(a.deadlineAt) ?? Infinity) - (toMs(b.deadlineAt) ?? Infinity))[0];
-  const deadlineAt = first ? toMs(first.deadlineAt) : (bot.pendingEntry ? toMs(bot.pendingEntry.deadlineAt) : null);
-  if (first || bot.pendingEntry) {
+  // El resumen de la lista (ya calculado por el servidor para el libro del
+  // bot) solo vale cuando aún no hay detalle.
+  const listEntry = hasDetailEntries ? null : bot.pendingEntry;
+  const deadlineAt = first ? toMs(first.deadlineAt) : (listEntry ? toMs(listEntry.deadlineAt) : null);
+  if (first || listEntry) {
     const remainingMs = deadlineAt === null ? 0 : Math.max(0, deadlineAt - now);
     const title = first
       ? `Entrada pendiente · ${String(first.side).toUpperCase() === 'SELL' ? 'venta' : 'compra'} ${qtyText(first.quantity)} ${first.symbol}`
@@ -704,10 +713,8 @@ export function botStatus(bot = {}, detail = null, now = Date.now()) {
       progress: entryProgress(remainingMs),
     };
   }
-  // Solo cuentan las posiciones del libro del bot: real → live; sombra y
-  // pausado → shadow. Con detalle manda el detalle; el «in_position» de la
-  // lista solo vale cuando aún no hay detalle.
-  const book = bot.mode === 'live' ? 'live' : 'shadow';
+  // Solo cuentan las posiciones del libro del bot. Con detalle manda el
+  // detalle; el «in_position» de la lista solo vale cuando aún no hay detalle.
   const inPosition = Array.isArray(detail?.positions)
     ? detail.positions.some((p) => isOpenPosition(p) && (p.mode || 'shadow') === book)
     : bot.status === 'in_position';
