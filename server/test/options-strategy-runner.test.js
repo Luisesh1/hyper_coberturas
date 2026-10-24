@@ -593,7 +593,7 @@ function pendingEntry(strategyId, overrides = {}) {
 }
 
 test('presupuesto: una orden de entrada pendiente de 10 USDT en Real cuenta como comprometida', async () => {
-  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { ...BUDGET_PARAMS, maxOpenPositions: 5 } });
   const asked = [];
   runner.liveOrders = { async listByStrategy(id) { asked.push(id); return [pendingEntry(id)]; } };
   const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
@@ -606,7 +606,7 @@ test('presupuesto: una orden de entrada pendiente de 10 USDT en Real cuenta como
 });
 
 test('presupuesto: lo ejecutado o cancelado de una orden no reserva; la orden final tampoco', async () => {
-  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { ...BUDGET_PARAMS, maxOpenPositions: 5 } });
   runner.liveOrders = { async listByStrategy(id) {
     return [pendingEntry(id, { processedQty: 0.005 }), pendingEntry(id, { id: 2, status: 'final' }),
       pendingEntry(id, { id: 3, action: 'close' })];
@@ -627,7 +627,7 @@ test('presupuesto: las posiciones abiertas del modo comprometen su prima', async
 });
 
 test('presupuesto: la reentrada diferida también resta lo reservado', async () => {
-  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: BUDGET_PARAMS });
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal', params: { ...BUDGET_PARAMS, maxOpenPositions: 5 } });
   runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id)]; } };
   const result = await runner.executeDeferredReentry(strategy.id, { direction: 'bullish' });
   assert.equal(result.status, 'no_valid_entry');
@@ -640,6 +640,59 @@ test('presupuesto: sin budgetUsdt las órdenes ya ejecutadas o cerradas no bloqu
   } };
   const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
   assert.equal(actions.live[0].type, 'open');
+});
+
+test('máximo de posiciones del bot: una entrada real pendiente en otro subyacente cuenta', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal',
+    params: { alertIds: [1], maxOpenPositions: 1 } });
+  runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id)]; } };
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(actions.live[0].reason, 'max_open_positions');
+  // La sombra no tiene entradas pendientes: abre.
+  assert.equal(actions.shadow[0].type, 'open');
+});
+
+test('máximo de posiciones del bot: la reentrada diferida cuenta las entradas pendientes', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal',
+    params: { alertIds: [1], maxOpenPositions: 1, onOpposite: 'reverse' } });
+  runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id)]; } };
+  const result = await runner.executeDeferredReentry(strategy.id, { direction: 'bullish' });
+  assert.equal(result.status, 'no_valid_entry');
+});
+
+test('máximo de posiciones del bot: una entrada simulada pendiente en otro subyacente cuenta en sombra', async () => {
+  const { runner, strategy, shadowEntries } = await setup({ template: 'alert_signal',
+    params: { alertIds: [1], maxOpenPositions: 1 } });
+  await shadowEntries.insertEntry({ strategyId: strategy.id, userId: 7, symbol: 'ETH-261023-3200-C',
+    side: 'BUY', optionType: 'C', quantity: 0.01, limitPrice: 1000, deadlineAt: FRIDAY_9 + 600_000 });
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  assert.equal(actions.shadow[0].reason, 'max_open_positions');
+});
+
+test('presupuesto: una entrada simulada pendiente reserva presupuesto en sombra como en Real', async () => {
+  const { runner, strategy, shadowEntries } = await setup({ template: 'alert_signal',
+    params: { ...BUDGET_PARAMS, maxOpenPositions: 5 } });
+  await shadowEntries.insertEntry({ strategyId: strategy.id, userId: 7, symbol: 'ETH-261023-3200-C',
+    side: 'BUY', optionType: 'C', quantity: 0.01, limitPrice: 1000, deadlineAt: FRIDAY_9 + 600_000 });
+  const { actions } = await runner.runForSignal(strategy, { direction: 'bullish' });
+  const skipped = actions.shadow.find((a) => a.type === 'skip');
+  assert.equal(skipped?.reason, 'budget_exhausted');
+  assert.equal(skipped.detail, 'Presupuesto comprometido: 10 de 10 USDT');
+});
+
+test('límites reales: el margen incluye las entradas pendientes del usuario', async () => {
+  const { runner, strategy } = await setup({ mode: 'live', template: 'alert_signal',
+    params: { alertIds: [1] }, globalLimits: { maxMarginUsdt: 15 } });
+  runner.liveExecutor.repo.listOpenEntriesByUser = async (userId) => {
+    assert.equal(userId, 7);
+    return [pendingEntry(99, { symbol: 'ETH-261023-3200-C' })];
+  };
+  const leg = { symbol: 'BTC-261023-65000-C', side: 'BUY', optionType: 'C', strike: 65000, quantity: 0.01, price: 600 };
+  const blocked = await runner.checkLiveLimits(strategy, [leg], { now: FRIDAY_9, spot: 60000, underlying: 'BTC', chains: new Map() });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /Margen estimado 16\.00 USDT supera el límite global/);
+  runner.liveExecutor.repo.listOpenEntriesByUser = async () => [];
+  assert.equal((await runner.checkLiveLimits(strategy, [leg], { now: FRIDAY_9, spot: 60000, underlying: 'BTC', chains: new Map() })).ok, true);
 });
 
 test('una opción por subyacente: una entrada pendiente en Real bloquea otra en el mismo subyacente', async () => {

@@ -33,7 +33,7 @@ const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
 const { ensureAtrBandTarget } = require('./options-atr-band-target');
 const { midLimitPrice } = require('./options-mid-price');
-const { estimateMargin, committedUsdt } = require('./options-committed-capital');
+const { estimateMargin, committedUsdt, orderReservedUsdt } = require('./options-committed-capital');
 const { botUnderlyings } = require('./bot-underlyings');
 const { positionDirection } = require('./templates/alert-signal');
 // Misma ventana y mismos textos de desenlace que una entrada real.
@@ -125,6 +125,30 @@ function livePendingEntries(orders, underlying) {
     && positionUnderlying(o) === underlying)
     .map((o) => ({ id: Number(o.id),
       direction: o.cancelRequested ? null : entryDirection(o.side, o.symbol, o.optionType) }));
+}
+
+/**
+ * Entradas pendientes de TODO el bot (cualquier subyacente): ocupan el
+ * máximo de posiciones compartido igual que una posición abierta.
+ */
+function livePendingCount(orders) {
+  return (orders || []).filter((o) => o.action === 'open' && o.status !== 'final'
+    && Number(o.quantity) - Number(o.processedQty || 0) > 0).length;
+}
+
+function shadowPendingCount(entries) {
+  return (entries || []).filter((e) => e.status === 'pending').length;
+}
+
+/**
+ * Entradas simuladas pendientes con la forma de una orden de entrada real
+ * (`orderReservedUsdt`): la sombra reserva presupuesto igual que Real.
+ */
+function shadowEntriesAsOrders(entries) {
+  return (entries || []).filter((e) => e.status === 'pending').map((e) => ({
+    id: Number(e.id), action: 'open', status: 'active', symbol: e.symbol, side: e.side,
+    quantity: Number(e.quantity), processedQty: 0, limitPrice: Number(e.limitPrice),
+  }));
 }
 
 /** Sombra: entradas simuladas aún 'pending' en `underlying`. */
@@ -332,7 +356,8 @@ class OptionsStrategyRunner {
       const spot = num(chain?.spot) ?? num(base?.spot);
       const orders = await this.liveOrders.listByStrategy(strategy.id);
       const actions = template.evaluate({
-        now: tickCtx.now, underlying, signal, spot, chain, positions: [], openCountAll: all.length,
+        now: tickCtx.now, underlying, signal, spot, chain, positions: [],
+        openCountAll: all.length + livePendingCount(orders),
         pendingEntries: livePendingEntries(orders, underlying),
         blockedUnderlyings: strategy.state?.blockedUnderlyings || {},
         params, mode: 'live',
@@ -565,7 +590,9 @@ class OptionsStrategyRunner {
    */
   async committedFor(strategy, mode, params, positions, { spot, underlying = strategy.underlying, tickCtx, orders: loaded } = {}) {
     if (params?.budgetUsdt == null) return undefined;
-    const orders = mode === 'live' ? loaded || await this.liveOrders.listByStrategy(strategy.id) : [];
+    // Real: órdenes de entrada del ledger. Sombra: las entradas simuladas
+    // pendientes que pase el llamador (con forma de orden).
+    const orders = loaded || (mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : []);
     const spots = { [String(underlying).toUpperCase()]: spot };
     for (const item of [...positions, ...orders]) {
       const key = parseSymbol(item.symbol)?.underlying;
@@ -637,12 +664,17 @@ class OptionsStrategyRunner {
       // Las entradas aún sin ejecutar también ocupan el subyacente: órdenes
       // reales no finales o entradas simuladas pendientes, según el modo.
       const orders = botSignal && mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : null;
+      const shadowPending = botSignal && mode === 'shadow'
+        ? await this.shadowEntries.listPending({ strategyId: strategy.id }) : null;
       let pendingEntries;
+      let pendingCountAll = 0;
       if (botSignal) {
         pendingEntries = mode === 'live'
           ? livePendingEntries(orders, market.underlying)
-          : shadowPendingEntries(await this.shadowEntries.listPending({ strategyId: strategy.id }), market.underlying);
+          : shadowPendingEntries(shadowPending, market.underlying);
+        pendingCountAll = mode === 'live' ? livePendingCount(orders) : shadowPendingCount(shadowPending);
       }
+      const reserved = mode === 'live' ? orders : (shadowPending ? shadowEntriesAsOrders(shadowPending) : null);
       const actions = template.evaluate({
         now: tickCtx.now,
         underlying: market.underlying,
@@ -650,7 +682,8 @@ class OptionsStrategyRunner {
         chain,
         positions,
         // Límites compartidos por todos los subyacentes del bot.
-        ...(botSignal ? { openCountAll: allPositions.length } : {}),
+        // Las entradas pendientes de cualquier subyacente cuentan como posiciones.
+        ...(botSignal ? { openCountAll: allPositions.length + pendingCountAll } : {}),
         ...(botSignal ? { pendingEntries } : {}),
         // Un resto real no operable bloquea solo el libro real: la sombra sigue.
         ...(botSignal && mode === 'live' ? { blockedUnderlyings } : {}),
@@ -660,7 +693,7 @@ class OptionsStrategyRunner {
         signal: tickCtx.signal || null,
         tradesToday,
         committedUsdt: tickCtx.signal
-          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx, orders })
+          ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx, orders: reserved })
           : undefined,
       });
       byMode[mode] = actions;
@@ -1030,6 +1063,20 @@ class OptionsStrategyRunner {
       const margin = p.side === 'SELL' ? estimateMargin({ ...p, type: meta.type, strike: meta.strike, price: p.entryPrice, spot }) : 0;
       userMargin += margin;
       if (p.strategyId === strategy.id) strategyMargin += margin;
+    }
+    // Las entradas no finales del usuario (cualquier bot) también reservan:
+    // lo pendiente al LIMIT (prima si compra, margen estimado si vende).
+    const ledger = this.liveExecutor.repo;
+    const pendingOrders = typeof ledger?.listOpenEntriesByUser === 'function'
+      ? await ledger.listOpenEntriesByUser(strategy.userId)
+      : (await this.liveOrders.listByStrategy(strategy.id)).map((o) => ({ ...o, strategyId: strategy.id }));
+    for (const o of pendingOrders || []) {
+      const meta = parseSymbol(o.symbol);
+      if (!meta) continue;
+      const spot = meta.underlying === String(ctx.underlying || strategy.underlying).toUpperCase() ? ctx.spot : await this.spotFor(meta.underlying, ctx);
+      const margin = orderReservedUsdt(o, spot);
+      userMargin += margin;
+      if (Number(o.strategyId) === Number(strategy.id)) strategyMargin += margin;
     }
     if (!Number.isFinite(userMargin + newMargin)) {
       return { ok: false, reason: 'Spot no disponible para estimar el margen de las ventas' };

@@ -805,6 +805,15 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return rows.map((r) => ({ clientOrderId: r.client_order_id, orderId: r.exchange_order_id }));
   }
 
+  /** Entradas no finales de todos los bots del usuario (reserva de margen). */
+  async function listOpenEntriesByUser(userId) {
+    const { rows } = await db.query(
+      "SELECT * FROM options_live_orders WHERE user_id=$1 AND action='open' " +
+      "AND purpose='standard' AND status<>'final' ORDER BY id", [userId]
+    );
+    return rows.map(map);
+  }
+
   async function listUnresolved() {
     const { rows } = await db.query(
       "SELECT * FROM options_live_orders WHERE status <> 'final' " +
@@ -1190,7 +1199,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
-    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, listOwnOpenOrderIds, hasStandingTp, requestCancel, requestCancelEntries, hasPendingClose, queueReversal,
+    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, listOwnOpenOrderIds, listOpenEntriesByUser, hasStandingTp, requestCancel, requestCancelEntries, hasPendingClose, queueReversal,
     queueSignalReevaluation, batchEntryOutcome, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
