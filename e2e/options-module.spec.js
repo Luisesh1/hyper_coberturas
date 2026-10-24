@@ -150,6 +150,25 @@ test.describe('Opciones en escritorio', () => {
     expect(errores).toEqual([]);
   });
 
+  test('la cantidad se escribe en USD de prima y se envía en contratos válidos', async ({ page }) => {
+    const { orders } = await mockApi(page);
+    await page.goto('/opciones');
+    await page.getByRole('region', { name: 'Cadena de opciones' }).getByRole('button', { name: /Comprar call 70\.000/ }).click();
+    const ticket = page.getByRole('complementary', { name: 'Ticket de orden' });
+    await expect(ticket.getByRole('button', { name: 'USD', pressed: true })).toBeVisible();
+
+    const ask = leg(70000, 'C').ask;
+    const contracts = Math.round((250 * 100) / ask) / 100;
+    await ticket.getByLabel('Cantidad (USD)').fill('250');
+    await expect(ticket).toContainText(`≈ ${contracts.toFixed(2).replace('.', ',')} contratos`);
+    await ticket.screenshot({ path: 'test-results/options-desktop-ticket-usd.png' });
+
+    await ticket.getByRole('button', { name: /Comprar call/ }).click();
+    await page.getByRole('dialog').getByRole('button', { name: /Confirmar|Enviar|Comprar/ }).last().click();
+    await expect.poll(() => orders.length).toBe(1);
+    expect(orders[0]).toMatchObject({ symbol: `BTC-${EXPIRY}-70000-C`, side: 'BUY', quantity: contracts, price: ask });
+  });
+
   test('Trading automatizado: bot, señales y formulario «Nuevo bot»', async ({ page }) => {
     const errores = [];
     page.on('pageerror', (e) => errores.push(e.message));
@@ -196,6 +215,15 @@ test.describe('Opciones en móvil (390px)', () => {
     // La hoja entra con una animación: la captura espera a que termine.
     await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
     await page.screenshot({ path: 'test-results/options-mobile-ticket.png' });
+    // Cantidad en USD por defecto, con el cálculo aproximado en contratos.
+    await expect(sheet.getByRole('button', { name: 'USD', pressed: true })).toBeVisible();
+    await sheet.getByRole('button', { name: 'Más USD' }).click();
+    await expect(sheet.getByLabel('Prima (USD)')).toHaveValue('110');
+    await expect(sheet).toContainText(/≈ \d+,\d{2} contratos · prima/);
+    await sheet.getByRole('button', { name: 'Contratos' }).click();
+    await expect(sheet.getByLabel('Contratos', { exact: true })).toBeVisible();
+    expect(await horizontalOverflow(page)).toBe(0);
+    await page.screenshot({ path: 'test-results/options-mobile-ticket-units.png' });
     await sheet.getByRole('button', { name: 'Cerrar' }).last().click();
 
     for (const [tab, check] of [

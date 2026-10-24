@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeTicket, parseSymbol, priceStep, qtyStep, quoteFor, snapToTick, stepOnTick, tickError } from './ticketMath';
+import { computeTicket, parseSymbol, priceStep, qtyStep, quoteFor, snapToTick, stepOnTick, tickError, usdStep, usdToContracts } from './ticketMath';
 import { fmtIv, fmtNum, fmtPrice, fmtSigned } from '../format';
 
 describe('ticketMath', () => {
@@ -96,5 +96,34 @@ describe('format', () => {
     expect(fmtIv(0.523)).toBe('52,3 %');
     expect(fmtIv(52.3)).toBe('52,3 %');
     expect(fmtNum(null)).toBe('—');
+  });
+});
+
+describe('cantidad en USD', () => {
+  it('convierte la prima en USD a contratos válidos (paso 0,01, el más cercano)', () => {
+    // 100 / 270 = 0,3703… → 0,37
+    expect(usdToContracts(100, 270)).toBe(0.37);
+    // 100 / 920 = 0,1086… → 0,11
+    expect(usdToContracts(100, 920)).toBe(0.11);
+    // 0,3750 → 0,38 (redondeo al más cercano, no hacia abajo)
+    expect(usdToContracts(37.5, 100)).toBe(0.38);
+  });
+
+  it('por debajo de medio paso da 0 contratos: no alcanza el mínimo', () => {
+    expect(usdToContracts(1, 270)).toBe(0);
+  });
+
+  it('sin monto o precio válido no hay conversión', () => {
+    expect(usdToContracts(null, 270)).toBeNull();
+    expect(usdToContracts(100, null)).toBeNull();
+    expect(usdToContracts(100, 0)).toBeNull();
+    expect(usdToContracts(-5, 270)).toBeNull();
+  });
+
+  it('el paso del stepper en USD crece con la magnitud del monto', () => {
+    expect(usdStep(0)).toBe(1);
+    expect(usdStep(50)).toBe(1);
+    expect(usdStep(100)).toBe(10);
+    expect(usdStep(2500)).toBe(100);
   });
 });

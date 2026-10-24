@@ -83,7 +83,27 @@ export function qtyStep(qty, direction = 1) {
   return q >= QTY_COARSE_STEP ? QTY_COARSE_STEP : QTY_STEP;
 }
 
-// Símbolo Binance: BTC-261031-72000-C → { underlying, expiry, strike, type }.
+// Prima en USD → contratos válidos: el múltiplo de QTY_STEP más cercano a
+// usd / precio. Devuelve 0 si el monto no llega a medio paso y null sin
+// monto o precio utilizable. Se opera en centésimas enteras (1 / QTY_STEP)
+// para que 37,5 / 100 redondee a 0,38 y no a 0,37 por coma flotante.
+export function usdToContracts(usd, price) {
+  const u = Number(usd);
+  const p = Number(price);
+  if (usd == null || price == null || !Number.isFinite(u) || !Number.isFinite(p) || u < 0 || p <= 0) return null;
+  const steps = Math.round((u * Math.round(1 / QTY_STEP)) / p);
+  return steps / Math.round(1 / QTY_STEP);
+}
+
+// Paso del stepper en USD: una décima de la magnitud del monto, mínimo 1
+// (50 → 1, 100 → 10, 2500 → 100).
+export function usdStep(usd) {
+  const n = Math.abs(Number(usd));
+  if (!Number.isFinite(n) || n < 10) return 1;
+  return Math.max(1, 10 ** (Math.floor(Math.log10(n)) - 1));
+}
+
+// Símbolo Binance:BTC-261031-72000-C → { underlying, expiry, strike, type }.
 export function parseSymbol(symbol) {
   const parts = String(symbol || '').split('-');
   if (parts.length !== 4) return null;
