@@ -83,9 +83,12 @@ function decide(strategy, produced = [], { forceShadow = false } = {}) {
   const detail = details.join(' · ') || null;
   const prefix = mode === 'live' ? 'Real' : 'Sombra';
 
+  // Una entrada que aún espera (giro en sombra: cierre + LIMIT al medio)
+  // deja la señal pendiente; la resuelve el llenado o la caducidad.
+  const waitingOpen = mine.some((p) => p.type === 'open' && p.pending);
   if (opened.length && closed.length) return { decision: 'reversed', detail: `${prefix}: ${detail}` };
   if (opened.length) return { decision: 'opened', detail: `${prefix}: ${detail}` };
-  if (closed.length) return { decision: 'closed', detail: `${prefix}: ${detail}` };
+  if (closed.length && !waitingOpen) return { decision: 'closed', detail: `${prefix}: ${detail}` };
   const pending = mine.find((p) => p.pending);
   if (pending) return { decision: 'pending', detail: `${prefix}: ${detail || 'Orden LIMIT enviada, esperando ejecución'}` };
   const error = mine.find((p) => p.type === 'error');
@@ -558,6 +561,8 @@ function createOptionsAutoTradingService(deps = {}) {
         eventId: null,
         triggeredAt: at,
         simulated: true,
+        // La entrada simulada pendiente resuelve esta fila al llenarse o caducar.
+        signalId: claim.id,
       }, { shadowOnly: true });
       outcome = decide(bot, produced, { forceShadow: true });
     } catch (err) {

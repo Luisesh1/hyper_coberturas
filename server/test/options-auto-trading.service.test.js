@@ -10,6 +10,7 @@ const {
 const { buildSyntheticChain, syntheticExpiries } = require('../src/services/options/options-synthetic-chain');
 const { parseSymbol, tradeFee, HOUR_MS } = require('../src/services/options/options-utils');
 const { createFakeOptionsRepo } = require('./support/options-fake-repo');
+const { createFakeShadowEntries, fillShadowEntries } = require('./support/options-fake-shadow-entries');
 
 const NOW = Date.UTC(2026, 9, 16, 9);
 const SPOT = 60000;
@@ -34,6 +35,8 @@ function fakeMarket({ now = NOW, spot = SPOT } = {}) {
       if (!row) throw new Error('símbolo desconocido');
       return { ...(meta.type === 'C' ? row.call : row.put), ...meta, spot: state.spot };
     },
+    // Las aperturas de los bots por alertas van al medio de la rejilla.
+    async getPriceFilter() { return { tickSize: '0.01', minPrice: '0.01' }; },
   };
 }
 
@@ -60,7 +63,10 @@ async function setup({ params = {}, mode = 'shadow', underlying = 'BTC' } = {}) 
     async getClientForUser() { return { async placeOrder(o) { orders.push(o); return { orderId: orders.length, avgPrice: '0' }; } }; },
     async getLimits() { return { maxMarginUsdt: 1e6, maxDailyLossUsdt: 1e6, maxLiveStrategies: 5, notifyTelegram: false }; },
   };
-  const runner = new OptionsStrategyRunner({ repo, market, credentials, notify: async () => {}, logger: silent, now: () => clock.now });
+  const shadowEntries = createFakeShadowEntries({ now: () => clock.now });
+  const runner = new OptionsStrategyRunner({ repo, market, credentials, shadowEntries, notify: async () => {}, logger: silent, now: () => clock.now });
+  // Llena las entradas simuladas pendientes (libro cruzado un instante).
+  const fill = () => fillShadowEntries({ runner, market });
   const emitter = fakeEmitter();
   const service = createOptionsAutoTradingService({ repo, runner, alertEvents: emitter, logger: silent, now: () => clock.now, alerts: { listAlerts: async () => [] } });
   const bot = await repo.createStrategy({
@@ -72,7 +78,7 @@ async function setup({ params = {}, mode = 'shadow', underlying = 'BTC' } = {}) 
     limits: {},
     mode,
   });
-  return { clock, repo, market, runner, emitter, service, bot, orders };
+  return { clock, repo, market, runner, emitter, service, bot, orders, shadowEntries, fill };
 }
 
 const signal = (overrides = {}) => ({
@@ -100,31 +106,38 @@ test('assetToUnderlying quita el sufijo de cotización y exige un subyacente de 
   assert.equal(assetToUnderlying(''), null);
 });
 
-test('runForSignal en sombra: compra la call al ask con comisión y la registra', async () => {
-  const { repo, runner, bot, orders } = await setup();
+test('runForSignal en sombra: la compra de la call espera al medio y se registra al llenarse', async () => {
+  const { repo, runner, bot, orders, shadowEntries, fill, market } = await setup();
   const { actions, produced } = await runner.runForSignal(await repo.getStrategy(USER, bot.id), { direction: 'bullish' });
   assert.deepEqual(actions.shadow.map((a) => a.type), ['open']);
   assert.equal(actions.live, undefined);
+  assert.equal(repo.positions.length, 0);
+  assert.equal(produced.filter((x) => x.booked).length, 0);
+  assert.ok(produced.some((x) => x.mode === 'shadow' && x.pending));
+  const [entry] = shadowEntries.entries;
+  const quote = await market.getQuote(entry.symbol);
+  assert.ok(entry.limitPrice > quote.bid && entry.limitPrice <= quote.ask, 'LIMIT al medio del libro');
+  assert.deepEqual(await fill(), { filled: 1, expired: 0 });
   const [p] = repo.positions;
   assert.equal(repo.positions.length, 1);
   assert.equal(p.mode, 'shadow');
   assert.equal(p.side, 'BUY');
   assert.equal(parseSymbol(p.symbol).type, 'C');
-  const leg = actions.shadow[0].legs[0];
-  assert.ok(p.entryPrice >= leg.price, 'compra al ask del libro');
+  assert.equal(p.entryPrice, entry.limitPrice);
   assert.equal(p.feesUsdt, tradeFee({ spot: SPOT, quantity: p.quantity, price: p.entryPrice }));
-  assert.equal(produced.filter((x) => x.booked).length, 1);
   assert.equal(repo.events.at(-1).action, 'open');
   assert.equal(orders.length, 0, 'la sombra no envía órdenes');
 });
 
 test('handleAlertTriggered: abre, registra la decisión y no procesa dos veces el mismo evento', async () => {
-  const { repo, service, bot } = await setup();
+  const { repo, service, bot, fill } = await setup();
   const [first] = await service.handleAlertTriggered(signal());
-  assert.equal(first.decision, 'opened');
-  assert.match(first.detail, /^Sombra: Señal alcista: compra \d+C/);
+  assert.deepEqual(first, { strategyId: bot.id, decision: 'pending', detail: 'Sombra: Orden LIMIT al medio, esperando ejecución' });
+  await fill();
   assert.equal(repo.signals.length, 1);
   assert.equal(repo.signals[0].decision, 'opened');
+  assert.match(repo.signals[0].detail, /^Sombra: Compra .*C a [\d.,]+ · comisión/);
+  assert.equal(repo.signals[0].feesEstimated, true);
   assert.equal(repo.signals[0].alertEventId, 501);
   assert.equal(repo.signals[0].strategyId, bot.id);
 
@@ -138,9 +151,13 @@ test('handleAlertTriggered: abre, registra la decisión y no procesa dos veces e
   assert.equal(capped.decision, 'ignored');
   assert.match(capped.detail, /Ya hay una opción abierta en BTC/);
 
-  // Bajista con reverse: cierra la call y compra put.
+  // Bajista con reverse: cierra la call y deja la compra de la put al medio.
   const [rev] = await service.handleAlertTriggered(signal({ eventId: 503, direction: 'bearish' }));
-  assert.equal(rev.decision, 'reversed');
+  assert.equal(rev.decision, 'pending');
+  assert.match(rev.detail, /Orden LIMIT al medio, esperando ejecución/);
+  assert.equal(repo.positions.filter((x) => x.closedAt == null).length, 0);
+  await fill();
+  assert.equal(repo.signals.find((x) => x.alertEventId === 503).decision, 'opened');
   const open = repo.positions.filter((x) => x.closedAt == null);
   assert.equal(open.length, 1);
   assert.equal(parseSymbol(open[0].symbol).type, 'P');
@@ -149,12 +166,14 @@ test('handleAlertTriggered: abre, registra la decisión y no procesa dos veces e
 test('handleAlertTriggered: onOpposite close → closed; ignore → ignored', async () => {
   const closeBot = await setup({ params: { onOpposite: 'close' } });
   await closeBot.service.handleAlertTriggered(signal());
+  await closeBot.fill();
   const [closed] = await closeBot.service.handleAlertTriggered(signal({ eventId: 600, direction: 'bearish' }));
   assert.equal(closed.decision, 'closed');
   assert.equal(closeBot.repo.positions.filter((x) => x.closedAt == null).length, 0);
 
   const ignoreBot = await setup({ params: { onOpposite: 'ignore' } });
   await ignoreBot.service.handleAlertTriggered(signal());
+  await ignoreBot.fill();
   const [ignored] = await ignoreBot.service.handleAlertTriggered(signal({ eventId: 601, direction: 'bearish' }));
   assert.equal(ignored.decision, 'ignored');
   assert.match(ignored.detail, /sentido contrario/);
@@ -224,8 +243,9 @@ test('start sin emisor inyectado lo carga perezosamente y no rompe si aún no ex
 });
 
 test('el tick de 5 min evalúa las salidas de los bots (toma de ganancia)', async () => {
-  const { clock, repo, market, runner, service } = await setup();
+  const { clock, repo, market, runner, service, fill } = await setup();
   await service.handleAlertTriggered(signal());
+  await fill();
   assert.equal(repo.positions.filter((x) => x.closedAt == null).length, 1);
 
   // Sin cambios: el tick mantiene la posición y no abre nada sin señal.
@@ -243,16 +263,19 @@ test('el tick de 5 min evalúa las salidas de los bots (toma de ganancia)', asyn
 
 test('integración: un disparo real de alerts/alert-events llega al bot y abre en sombra', async () => {
   const alertEvents = require('../src/services/alerts/alert-events');
-  const { repo, runner, bot } = await setup();
+  const { repo, runner, bot, fill } = await setup();
   // Sin `alertEvents` inyectado: start() carga el emisor real de las alertas.
   const service = createOptionsAutoTradingService({ repo, runner, logger: silent, now: () => NOW, alerts: { listAlerts: async () => [] } });
   assert.notEqual(service.start(), false);
   try {
     alertEvents.emitAlertTriggered(signal({ eventId: 9001 }));
     // Los listeners corren de forma asíncrona.
-    for (let i = 0; i < 50 && !(await repo.listAutoSignals(bot.id)).some((s) => s.decision !== 'ignored'); i += 1) {
+    for (let i = 0; i < 50 && !(await repo.listAutoSignals(bot.id)).some((s) => s.decision !== 'ignored'
+      && s.detail !== 'Procesando…'); i += 1) {
       await new Promise((r) => setTimeout(r, 10));
     }
+    assert.equal((await repo.listAutoSignals(bot.id))[0].decision, 'pending');
+    await fill();
     const [row] = await repo.listAutoSignals(bot.id);
     assert.equal(row.decision, 'opened');
     assert.equal(row.alertEventId, 9001);
@@ -264,8 +287,9 @@ test('integración: un disparo real de alerts/alert-events llega al bot y abre e
 });
 
 test('cierre manual en sombra: cierra con el runner real y deja un solo evento «Cierre manual»', async () => {
-  const { repo, service, bot } = await setup();
+  const { repo, service, bot, fill } = await setup();
   await service.handleAlertTriggered(signal());
+  await fill();
   assert.equal(repo.positions.filter((p) => p.closedAt == null).length, 1);
   const before = repo.events.length;
 
@@ -316,10 +340,12 @@ test('cierre manual en Real: registra el evento y explica por qué no se envió'
 });
 
 test('simular en un bot Real: solo corre la sombra, no envía órdenes y la fila queda simulated', async () => {
-  const { repo, service, bot, orders } = await setup({ mode: 'live' });
+  const { repo, service, bot, orders, fill } = await setup({ mode: 'live' });
   const res = await service.simulateSignal(USER, bot.id, { direction: 'bullish' });
-  assert.equal(res.decision, 'opened');
+  assert.equal(res.decision, 'pending');
   assert.match(res.detail, /Sombra/);
+  await fill();
+  assert.equal(repo.signals[0].decision, 'opened');
   assert.equal(orders.length, 0, 'no se llama a submit real');
   assert.deepEqual(repo.positions.map((p) => p.mode), ['shadow']);
   const [row] = await repo.listAutoSignals(bot.id);
@@ -373,4 +399,14 @@ test('decide: señal contraria que cancela la entrada real queda pendiente con t
   ];
   assert.deepEqual(decide({ mode: 'live' }, produced),
     { decision: 'pending', detail: 'Real: Cancelando la entrada pendiente; se reevalúa al conciliar' });
+});
+
+test('decide: giro en sombra con la entrada al medio esperando queda pendiente', () => {
+  const produced = [
+    { mode: 'shadow', type: 'close', booked: true, detail: 'Señal bajista: cierra 60000C' },
+    { mode: 'shadow', type: 'open', pending: true, reason: 'shadow_entry_pending', detail: 'Orden LIMIT al medio, esperando ejecución' },
+  ];
+  assert.deepEqual(decide({ mode: 'shadow' }, produced), {
+    decision: 'pending', detail: 'Sombra: Señal bajista: cierra 60000C · Orden LIMIT al medio, esperando ejecución',
+  });
 });

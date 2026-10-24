@@ -10,6 +10,7 @@ const { OptionsStrategyRunner } = require('../src/services/options/options-strat
 const { buildSyntheticChain, syntheticExpiries } = require('../src/services/options/options-synthetic-chain');
 const { parseSymbol } = require('../src/services/options/options-utils');
 const { createFakeOptionsRepo } = require('./support/options-fake-repo');
+const { createFakeShadowEntries } = require('./support/options-fake-shadow-entries');
 
 const NOW = Date.UTC(2026, 9, 16, 9);
 const SPOT = 60000;
@@ -69,20 +70,23 @@ test('el rango del bot restringe vencimientos en modo sombra; el de la señal se
       if (!row) throw new Error('Strike desconocido');
       return { ...(meta.type === 'C' ? row.call : row.put), spot: SPOT };
     },
+    async getPriceFilter() { return { tickSize: '0.01', minPrice: '0.01' }; },
   };
-  const runner = new OptionsStrategyRunner({ repo, market, logger: log, now: () => NOW });
+  const shadowEntries = createFakeShadowEntries({ now: () => NOW });
+  const runner = new OptionsStrategyRunner({ repo, market, shadowEntries, logger: log, now: () => NOW });
   const service = createOptionsAutoTradingService({ repo, runner, logger: log, now: () => NOW, alerts: { listAlerts: async () => [] } });
   const bot = await repo.createStrategy({ userId: 7, name: 'Prueba en sombra', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [11], expiryMinDays: 2, expiryMaxDays: 4 }, limits: {}, mode: 'shadow' });
   const narrow = await repo.createStrategy({ userId: 7, name: 'Fuera de rango', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [12], expiryMinDays: 90, expiryMaxDays: 91 }, limits: {}, mode: 'shadow' });
   const payload = { userId: 7, alertId: 11, alertName: 'BTC 15m', direction: 'bullish', asset: 'BTCUSDT', optionExpiryMinDays: 90, optionExpiryMaxDays: 91, eventId: 1 };
   const [accepted] = await service.handleAlertTriggered(payload);
-  assert.equal(accepted.decision, 'opened');
-  const [position] = await repo.listOpenPositions(bot.id, 'shadow');
+  // La entrada en sombra espera al medio: el vencimiento es el de su contrato.
+  assert.equal(accepted.decision, 'pending');
+  const [position] = await shadowEntries.listPending({ strategyId: bot.id });
   assert.ok(position);
   const code = parseSymbol(position.symbol).expiry;
   const dte = expiries.find((e) => e.code === code).dte;
   assert.ok(dte >= 2 && dte <= 4, `vencimiento fuera de rango: ${dte} días`);
   const [rejected] = await service.handleAlertTriggered({ ...payload, alertId: 12, eventId: 2, optionExpiryMinDays: 2, optionExpiryMaxDays: 4 });
   assert.equal(rejected.decision, 'ignored');
-  assert.equal((await repo.listOpenPositions(narrow.id, 'shadow')).length, 0);
+  assert.equal((await shadowEntries.listPending({ strategyId: narrow.id })).length, 0);
 });

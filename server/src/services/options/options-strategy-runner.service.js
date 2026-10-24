@@ -36,6 +36,8 @@ const { midLimitPrice } = require('./options-mid-price');
 const { estimateMargin, committedUsdt } = require('./options-committed-capital');
 const { botUnderlyings } = require('./bot-underlyings');
 const { positionDirection } = require('./templates/alert-signal');
+// Misma ventana y mismos textos de desenlace que una entrada real.
+const { WINDOW_MS, entrySignalResolution } = require('./options-live-execution.service');
 
 // Cierres por toma de ganancia: con un TP LIMIT residente no se cancela ni
 // se compite con él; deben alcanzar su objetivo con la cotización fresca.
@@ -66,7 +68,9 @@ function lazyShadowEntries() {
   // eslint-disable-next-line global-require
   const load = () => require('../../repositories/options-shadow-entries.repository');
   return {
+    insertEntry: (...args) => load().insertEntry(...args),
     listPending: (...args) => load().listPending(...args),
+    resolveEntry: (...args) => load().resolveEntry(...args),
     cancelEntries: (...args) => load().cancelEntries(...args),
   };
 }
@@ -123,6 +127,13 @@ function shadowPendingEntries(entries, underlying) {
     .map((e) => ({ id: Number(e.id), direction: entryDirection(e.side, e.symbol, e.optionType) }));
 }
 
+/** Desenlace de una entrada simulada para su señal: el de la real, en «Sombra». */
+function shadowSignalResolution(outcome) {
+  const resolution = entrySignalResolution(outcome);
+  return { ...resolution, detail: resolution.detail.replace(/^Real: /, 'Sombra: '),
+    feesEstimated: resolution.decision === 'opened' };
+}
+
 function utcDayStart(ms) {
   const d = new Date(ms);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
@@ -147,7 +158,10 @@ class OptionsStrategyRunner {
     // Entradas simuladas pendientes (modo sombra), con la misma regla.
     this.shadowEntries = deps.shadowEntries || (this.repo === defaultRepo
       ? lazyShadowEntries()
-      : { listPending: async () => [], cancelEntries: async () => [] });
+      : {
+        insertEntry: async () => { throw new Error('Sin almacén de entradas simuladas'); },
+        listPending: async () => [], resolveEntry: async () => null, cancelEntries: async () => [],
+      });
     this.notify = deps.notify || notifyTelegram;
     this.logger = deps.logger || logger;
     this.now = deps.now || Date.now;
@@ -192,6 +206,11 @@ class OptionsStrategyRunner {
           this.logger.error('options_exercise_reconcile_failed', { error: err.message });
         }
       }
+      try {
+        await this.processShadowEntries();
+      } catch (err) {
+        this.logger.error('options_shadow_entries_failed', { error: err.message });
+      }
     };
     this.reconcileInterval = setInterval(reconcile, RECONCILE_INTERVAL_MS);
     this.reconcileInterval.unref?.();
@@ -213,6 +232,11 @@ class OptionsStrategyRunner {
     const tickCtx = { now: this.now(), chains: new Map() };
     try {
       await this.settleExpired(tickCtx);
+      try {
+        await this.processShadowEntries();
+      } catch (err) {
+        this.logger.error('options_shadow_entries_failed', { error: err.message });
+      }
       const strategies = await this.repo.listActiveStrategies();
       for (const strategy of strategies) {
         try {
@@ -234,7 +258,8 @@ class OptionsStrategyRunner {
    * lo que produjeron: llenados (`booked`) y motivos de skip/hold/error.
    */
   async runForSignal(strategy, signal, { shadowOnly = false } = {}) {
-    const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
+    // shadowOnly ("Probar señal"): la sombra decide la señal aunque el bot sea real.
+    const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [], shadowOnly };
     const actions = await this.withLock(strategy.id,
       () => this.runStrategy(strategy, tickCtx, { shadowOnly }));
     return { actions, produced: tickCtx.produced };
@@ -701,9 +726,12 @@ class OptionsStrategyRunner {
     });
   }
 
-  /** Sombra: las entradas simuladas se cancelan al momento. */
+  /** Sombra: las entradas simuladas se cancelan al momento (y su señal queda ignorada). */
   async cancelShadowEntries(strategy, action, ctx) {
     const canceled = await this.shadowEntries.cancelEntries(action.ids, ctx.now);
+    for (const entry of canceled || []) {
+      await this.resolveShadowEntrySignal(entry, shadowSignalResolution({ filled: 0, cancelRequested: true }));
+    }
     ctx.produced?.push({ mode: 'shadow', type: 'cancel_entries', reason: action.reason,
       detail: 'Entrada pendiente cancelada' });
     this.logger.info('options_shadow_entries_canceled', {
@@ -756,6 +784,10 @@ class OptionsStrategyRunner {
   }
 
   async executeShadow(strategy, action, ctx) {
+    // Igual que en real: un bot por alertas abre con una LIMIT al medio que espera.
+    if (action.type === 'open' && strategy.template === 'alert_signal') {
+      return this.openShadowEntry(strategy, action, ctx);
+    }
     const { quotes, missing } = await this.quoteLegs(action.legs);
     if (missing) {
       await this.recordOutcome(strategy, 'shadow', { type: 'error', reason: 'no_liquidity', detail: `Sin precio en el libro para ${missing}` }, ctx);
@@ -767,6 +799,128 @@ class OptionsStrategyRunner {
       return { ...leg, price, spot, fee: tradeFee({ spot, quantity: leg.quantity, price }) };
     });
     return this.book(strategy, 'shadow', action, filled, ctx);
+  }
+
+  /**
+   * Sombra de un bot por alertas: deja una entrada simulada pendiente al
+   * medio del libro fresco con el plazo de la real. La llena (o caduca)
+   * `processShadowEntries`. Solo enlaza la señal si la sombra la decide.
+   */
+  async openShadowEntry(strategy, action, ctx) {
+    const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
+    const legs = [];
+    for (let i = 0; !missing && i < action.legs.length; i++) {
+      const price = await this.midEntryPrice(action.legs[i], quotes[i].quote);
+      if (price == null) break;
+      legs.push({ ...action.legs[i], price, spot: num(quotes[i].quote?.spot) ?? ctx.spot });
+    }
+    if (legs.length !== action.legs.length) {
+      await this.recordOutcome(strategy, 'shadow', {
+        type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido',
+      }, ctx);
+      return null;
+    }
+    const decidesSignal = strategy.mode !== 'live' || ctx.shadowOnly === true;
+    const signalId = decidesSignal && Number.isSafeInteger(Number(ctx.signal?.signalId))
+      ? Number(ctx.signal.signalId) : null;
+    const entries = [];
+    for (const leg of legs) {
+      entries.push(await this.shadowEntries.insertEntry({
+        strategyId: strategy.id, userId: strategy.userId, autoSignalId: signalId,
+        alertEventId: ctx.signal?.eventId ?? null, symbol: leg.symbol, side: leg.side,
+        optionType: leg.optionType || parseSymbol(leg.symbol)?.type, quantity: leg.quantity,
+        limitPrice: leg.price, spot: leg.spot, deadlineAt: ctx.now + WINDOW_MS, createdAt: ctx.now,
+      }));
+    }
+    if (signalId != null) await this.markEstimatedSignalFee(legs, quotes, ctx);
+    ctx.produced?.push({ mode: 'shadow', type: 'open', pending: true, reason: 'shadow_entry_pending',
+      detail: 'Orden LIMIT al medio, esperando ejecución' });
+    this.logger.info('options_shadow_entry_pending', {
+      strategyId: strategy.id, ids: entries.map((e) => e.id), signalId,
+    });
+    return null;
+  }
+
+  /**
+   * Llena o caduca las entradas simuladas pendientes con la cotización
+   * fresca: BUY si ask ≤ límite, SELL si bid ≥ límite, completa o nada.
+   * Lo llaman el tick y el conciliador: cada entrada se procesa bajo el lock
+   * de su estrategia y `resolveEntry` solo pasa desde 'pending', así que
+   * dos pasadas a la vez no registran dos veces.
+   */
+  async processShadowEntries() {
+    const result = { filled: 0, expired: 0 };
+    const entries = await this.shadowEntries.listPending();
+    for (const entry of entries) {
+      try {
+        const outcome = await this.withLock(entry.strategyId, () => this.processShadowEntry(entry));
+        if (outcome === 'filled') result.filled += 1;
+        else if (outcome === 'expired' || outcome === 'canceled') result.expired += 1;
+      } catch (err) {
+        this.logger.warn('options_shadow_entry_failed', { entryId: entry.id, error: err.message });
+      }
+    }
+    return result;
+  }
+
+  async processShadowEntry(entry) {
+    const now = this.now();
+    const strategy = await this.repo.getStrategyById(entry.strategyId);
+    if (!strategy || !['shadow', 'live'].includes(strategy.mode)) {
+      const row = await this.shadowEntries.resolveEntry(entry.id, 'canceled', now);
+      if (!row) return null;
+      await this.resolveShadowEntrySignal(row, {
+        decision: 'ignored', detail: 'Sombra: Entrada cancelada; el bot no está activo',
+      });
+      return 'canceled';
+    }
+    if (now >= Number(entry.deadlineAt)) {
+      const row = await this.shadowEntries.resolveEntry(entry.id, 'expired', now);
+      if (!row) return null;
+      await this.resolveShadowEntrySignal(row, shadowSignalResolution({ filled: 0 }));
+      await this.recordOutcome(strategy, 'shadow', {
+        type: 'skip', reason: 'entry_expired', detail: 'Entrada sin ejecutar en 10 min',
+      }, { now });
+      return 'expired';
+    }
+    const quote = await this.quoteFor(entry.symbol, { fresh: true });
+    const limit = Number(entry.limitPrice);
+    const ask = num(quote?.ask);
+    const bid = num(quote?.bid);
+    const reached = entry.side === 'BUY' ? ask > 0 && ask <= limit : bid != null && bid >= limit;
+    if (!reached) return null;
+    const row = await this.shadowEntries.resolveEntry(entry.id, 'filled', now);
+    if (!row) return null;
+    let params = null;
+    try {
+      params = templates.validateParams(strategy.template, strategy.params);
+    } catch {
+      params = strategy.params || null;
+    }
+    const spot = num(quote?.spot) ?? num(entry.spot);
+    const leg = {
+      symbol: entry.symbol, side: entry.side, optionType: entry.optionType, quantity: entry.quantity,
+      price: limit, spot, fee: tradeFee({ spot, quantity: entry.quantity, price: limit }),
+    };
+    await this.book(strategy, 'shadow',
+      { type: 'open', reason: 'shadow_entry_filled', detail: 'Entrada LIMIT al medio ejecutada' },
+      [leg], { now, spot, params, positions: [] });
+    await this.resolveShadowEntrySignal(row, shadowSignalResolution({
+      filled: entry.quantity, requested: entry.quantity, side: entry.side,
+      symbol: entry.symbol, avgPrice: limit, feesUsdt: leg.fee,
+    }));
+    return 'filled';
+  }
+
+  /** Resuelve la señal enlazada a una entrada simulada; un fallo no rompe la pasada. */
+  async resolveShadowEntrySignal(entry, resolution) {
+    if (entry?.autoSignalId == null || typeof this.repo.resolveAutoSignal !== 'function') return null;
+    try {
+      return await this.repo.resolveAutoSignal(entry.autoSignalId, resolution);
+    } catch (err) {
+      this.logger.warn('options_signal_resolve_failed', { signalId: entry.autoSignalId, error: err.message });
+      return null;
+    }
   }
 
   /** Persiste un llenado (sombra o real): posiciones y evento. */

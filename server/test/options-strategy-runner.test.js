@@ -5,6 +5,7 @@ const { OptionsStrategyRunner, estimateMargin } = require('../src/services/optio
 const { buildSyntheticChain, syntheticExpiries } = require('../src/services/options/options-synthetic-chain');
 const { parseSymbol, tradeFee, HOUR_MS, DAY_MS } = require('../src/services/options/options-utils');
 const { createFakeOptionsRepo } = require('./support/options-fake-repo');
+const { createFakeShadowEntries, fillShadowEntries } = require('./support/options-fake-shadow-entries');
 
 const FRIDAY_9 = Date.UTC(2026, 9, 16, 9);
 const SPOT = 60000;
@@ -62,6 +63,7 @@ async function setup({ mode = 'shadow', limits = {}, globalLimits = {}, template
   const credentials = fakeCredentials({ limits: globalLimits });
   const notes = [];
   const clock = { now };
+  const shadowEntries = createFakeShadowEntries({ now: () => clock.now });
   const liveExecutor = {
     enabled: true,
     repo: {
@@ -84,12 +86,13 @@ async function setup({ mode = 'shadow', limits = {}, globalLimits = {}, template
     liveExecutor,
     market,
     credentials,
+    shadowEntries,
     notify: async (userId, text) => notes.push({ userId, text }),
     logger: silent,
     now: () => clock.now,
   });
   const strategy = await repo.createStrategy({ userId: 7, name: 'Strangle BTC', template, underlying: 'BTC', params, limits, mode });
-  return { repo, market, credentials, notes, runner, strategy, clock };
+  return { repo, market, credentials, notes, runner, strategy, clock, shadowEntries };
 }
 
 test('sombra: vende al bid del libro real con comisión mín(0,03 % nocional, 10 % prima)', async () => {
@@ -467,6 +470,7 @@ test('sombra atr_band: la apertura fija y persiste el objetivo una vez; un segun
   });
   withAtrBand(market);
   await runner.runForSignal(strategy, { direction: 'bullish' });
+  await fillShadowEntries({ runner, market });
   const [p] = repo.positions;
   assert.equal(repo.positions.length, 1);
   assert.equal(p.side, 'BUY');
@@ -492,6 +496,7 @@ test('sombra atr_band: sin banda al abrir, el objetivo queda pendiente y se rein
   });
   withAtrBand(market, { band: new Error('sin velas') });
   await runner.runForSignal(strategy, { direction: 'bullish' });
+  await fillShadowEntries({ runner, market });
   assert.equal(repo.positions.length, 1, 'la posición se registra aunque falle la banda');
   assert.equal(repo.positions[0].tpTargetPrice ?? null, null);
   withAtrBand(market);
@@ -507,6 +512,7 @@ test('sombra atr_band: el bid en el objetivo cierra con take_profit_atr_band', a
   });
   withAtrBand(market);
   await runner.runForSignal(strategy, { direction: 'bullish' });
+  await fillShadowEntries({ runner, market });
   const target = repo.positions[0].tpTargetPrice;
   const original = market.getQuote;
   market.getQuote = async (symbol) => ({ ...(await original(symbol)), bid: target, ask: target + 10 });
@@ -524,6 +530,7 @@ test('atr_band: el cierre manual sigue funcionando (acción explícita del usuar
   });
   withAtrBand(market);
   await runner.runForSignal(strategy, { direction: 'bullish' });
+  await fillShadowEntries({ runner, market });
   const out = await runner.closeManually(strategy, { mode: 'shadow' });
   assert.equal(out.status, 'closed');
   assert.equal(repo.positions[0].closeReason, 'manual');
@@ -867,7 +874,9 @@ test('cancel_entries shadow cancels at once and the evaluation continues', async
       ];
     },
     async cancelEntries(ids, at) { canceled.push({ ids, at }); return ids; },
+    async insertEntry(row) { inserted.push(row); return { id: 5, ...row }; },
   };
+  const inserted = [];
   const runner = new OptionsStrategyRunner({ repo, market: fakeMarket(), credentials: fakeCredentials(),
     shadowEntries, liveExecutor: { enabled: true, repo: {} }, logger: silent, now: () => FRIDAY_9 });
   const strategy = await repo.createStrategy({ userId: 7, name: 'Bot', template: 'alert_signal', underlying: 'BTC',
@@ -875,7 +884,9 @@ test('cancel_entries shadow cancels at once and the evaluation continues', async
   const { actions } = await runner.runForSignal(strategy, { eventId: '9', direction: 'bullish' });
   assert.deepEqual(actions.shadow.map((a) => a.type), ['cancel_entries', 'open']);
   assert.deepEqual(canceled, [{ ids: [3], at: FRIDAY_9 }]);
-  assert.equal(repo.positions.filter((p) => p.mode === 'shadow').length, 1);
+  // La nueva apertura en sombra también espera al medio.
+  assert.equal(inserted.length, 1);
+  assert.equal(repo.positions.filter((p) => p.mode === 'shadow').length, 0);
 });
 
 test('blocked underlying: the runner passes the fresh block to the template', async () => {
@@ -977,4 +988,141 @@ test('reevaluation skipped for another reason resolves ignored with that reason'
   await env.runner.reevaluateSignal(env.strategy.id, env.signal);
   assert.equal(env.row().decision, 'ignored');
   assert.match(env.row().detail, /^Real: entrada cancelada; Máximo de 1 operación/);
+});
+
+// ---------- sombra: entradas pendientes al medio ----------
+
+const { WINDOW_MS } = require('../src/services/options/options-live-execution.service');
+
+/** Bot por alertas en sombra con el libro del contrato fijado en bid/ask. */
+async function shadowEntrySetup({ mode = 'shadow', bid = 710, ask = 720 } = {}) {
+  const env = await setup({ mode, template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  const book = { bid, ask };
+  const original = env.market.getQuote;
+  env.market.getQuote = async (symbol, opts) => ({ ...(await original(symbol, opts)), bid: book.bid, ask: book.ask });
+  const claim = await env.repo.claimAutoSignal({ strategyId: env.strategy.id, userId: 7, alertEventId: '700',
+    direction: 'bullish', decision: 'pending', detail: 'Procesando…' });
+  const signal = { eventId: '700', direction: 'bullish', underlying: 'BTC', signalId: claim.id };
+  return { ...env, book, signal, row: () => env.repo.signals.find((x) => x.id === claim.id) };
+}
+
+test('shadow entry fills when ask reaches the limit', async () => {
+  const env = await shadowEntrySetup();
+  const { produced } = await env.runner.runForSignal(env.strategy, env.signal);
+  assert.equal(env.repo.positions.length, 0);
+  const [entry] = env.shadowEntries.entries;
+  assert.equal(entry.side, 'BUY');
+  assert.equal(entry.limitPrice, 715);
+  assert.equal(entry.autoSignalId, env.signal.signalId);
+  assert.equal(entry.alertEventId, '700');
+  assert.equal(entry.deadlineAt, FRIDAY_9 + WINDOW_MS);
+  const { decide } = require('../src/services/options/options-auto-trading.service');
+  assert.deepEqual(decide(env.strategy, produced),
+    { decision: 'pending', detail: 'Sombra: Orden LIMIT al medio, esperando ejecución' });
+
+  // Aún sin llegar: sigue pendiente.
+  env.clock.now = FRIDAY_9 + 60_000;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 0, expired: 0 });
+  env.book.ask = 714;
+  env.book.bid = 705;
+  env.clock.now = FRIDAY_9 + 120_000;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 1, expired: 0 });
+  const [position] = env.repo.positions;
+  assert.equal(position.mode, 'shadow');
+  assert.equal(position.entryPrice, 715);
+  const fee = tradeFee({ spot: SPOT, quantity: entry.quantity, price: 715 });
+  assert.ok(Math.abs(position.feesUsdt - fee) < 1e-12);
+  assert.equal(env.shadowEntries.entries[0].status, 'filled');
+  assert.equal(env.row().decision, 'opened');
+  assert.equal(env.row().feesEstimated, true);
+  assert.ok(Math.abs(env.row().feesUsdt - fee) < 1e-12);
+  assert.match(env.row().detail, /^Sombra: Compra .* a 715/);
+  // Otra pasada (tick y conciliador a la vez) no vuelve a registrar.
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 0, expired: 0 });
+  assert.equal(env.repo.positions.length, 1);
+});
+
+test('shadow entry: concurrent passes book the fill only once', async () => {
+  const env = await shadowEntrySetup();
+  await env.runner.runForSignal(env.strategy, env.signal);
+  env.book.ask = 715;
+  const results = await Promise.all([env.runner.processShadowEntries(), env.runner.processShadowEntries()]);
+  assert.equal(results.reduce((n, r) => n + r.filled, 0), 1);
+  assert.equal(env.repo.positions.length, 1);
+});
+
+test('shadow entry expires after 10 min', async () => {
+  const env = await shadowEntrySetup();
+  await env.runner.runForSignal(env.strategy, env.signal);
+  env.clock.now = FRIDAY_9 + WINDOW_MS;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 0, expired: 1 });
+  assert.equal(env.shadowEntries.entries[0].status, 'expired');
+  assert.equal(env.repo.positions.length, 0);
+  assert.equal(env.row().decision, 'ignored');
+  assert.equal(env.row().detail, 'Sombra: Entrada sin ejecutar en 10 min');
+});
+
+test('pending shadow entry survives restart and expires', async () => {
+  const env = await shadowEntrySetup();
+  await env.runner.runForSignal(env.strategy, env.signal);
+  const restarted = new OptionsStrategyRunner({ repo: env.repo, market: env.market, credentials: env.credentials,
+    shadowEntries: env.shadowEntries, liveExecutor: env.runner.liveExecutor, logger: silent,
+    now: () => FRIDAY_9 + WINDOW_MS + 1 });
+  assert.deepEqual(await restarted.processShadowEntries(), { filled: 0, expired: 1 });
+  assert.equal(env.row().detail, 'Sombra: Entrada sin ejecutar en 10 min');
+});
+
+test('pending shadow entry blocks a same-direction signal', async () => {
+  const env = await shadowEntrySetup();
+  await env.runner.runForSignal(env.strategy, env.signal);
+  const { actions } = await env.runner.runForSignal(env.strategy, { eventId: '701', direction: 'bullish', underlying: 'BTC' });
+  assert.equal(actions.shadow.at(-1).reason, 'underlying_busy');
+  assert.equal(env.shadowEntries.entries.length, 1);
+});
+
+test('opposite signal cancels the shadow entry and resolves its signal', async () => {
+  const env = await shadowEntrySetup();
+  await env.runner.runForSignal(env.strategy, env.signal);
+  await env.runner.runForSignal(env.strategy, { eventId: '702', direction: 'bearish', underlying: 'BTC' });
+  assert.equal(env.shadowEntries.entries[0].status, 'canceled');
+  assert.equal(env.row().decision, 'ignored');
+  assert.equal(env.row().detail, 'Sombra: Entrada cancelada por señal contraria');
+  // La señal contraria deja su propia entrada pendiente.
+  assert.equal(env.shadowEntries.entries[1].status, 'pending');
+  assert.equal(env.shadowEntries.entries[1].side, 'BUY');
+});
+
+test('shadow entry: without a valid mid there is no entry', async () => {
+  const env = await shadowEntrySetup({ bid: 0, ask: 720 });
+  const { produced } = await env.runner.runForSignal(env.strategy, env.signal);
+  assert.equal(env.shadowEntries.entries.length, 0);
+  assert.ok(produced.some((p) => p.mode === 'shadow' && p.reason === 'no_mid_price' && p.detail === 'Sin precio medio válido'));
+});
+
+test('shadow entry of a live bot is a parallel book: it never resolves the signal', async () => {
+  const env = await shadowEntrySetup({ mode: 'live' });
+  await env.runner.runForSignal(env.strategy, env.signal);
+  const entry = env.shadowEntries.entries.find((e) => e.strategyId === env.strategy.id);
+  assert.equal(entry.autoSignalId, null);
+  env.clock.now = FRIDAY_9 + WINDOW_MS;
+  await env.runner.processShadowEntries();
+  assert.equal(env.row().decision, 'pending');
+});
+
+test('shadow entry of a paused or deleted bot is canceled without booking', async () => {
+  const env = await shadowEntrySetup();
+  await env.runner.runForSignal(env.strategy, env.signal);
+  env.repo.strategies[0].mode = 'paused';
+  env.book.ask = 700;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 0, expired: 1 });
+  assert.equal(env.shadowEntries.entries[0].status, 'canceled');
+  assert.equal(env.repo.positions.length, 0);
+  assert.equal(env.row().decision, 'ignored');
+});
+
+test('other templates keep instant shadow fills', async () => {
+  const env = await setup();
+  await env.runner.tick();
+  assert.equal(env.shadowEntries.entries.length, 0);
+  assert.equal(env.repo.positions.filter((p) => p.closedAt == null).length, 2);
 });
