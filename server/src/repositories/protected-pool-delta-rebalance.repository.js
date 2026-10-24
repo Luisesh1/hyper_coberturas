@@ -10,9 +10,15 @@ async function create(payload, executor) {
        protected_pool_id, reason, execution_mode, twap_slices_planned, twap_slices_completed,
        price, rv4h_pct, rv24h_pct, effective_band_pct, delta_qty_before, gamma_before,
        target_qty_before, actual_qty_before, target_qty_after, actual_qty_after, drift_usd,
-       execution_fee_usd, slippage_usd, funding_snapshot_usd, distance_to_liq_pct, created_at
+       execution_fee_usd, slippage_usd, funding_snapshot_usd, distance_to_liq_pct, created_at, segment_id
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+       COALESCE($22::integer, (
+         SELECT o.active_segment_id FROM lp_orchestrators o
+          WHERE o.status = 'active' AND o.active_protected_pool_id = $1
+          ORDER BY o.id DESC LIMIT 1
+       ))
+     )
      RETURNING id`,
     [
       payload.protectedPoolId,
@@ -36,6 +42,7 @@ async function create(payload, executor) {
       payload.fundingSnapshotUsd ?? null,
       payload.distanceToLiqPct ?? null,
       payload.createdAt ?? Date.now(),
+      payload.segmentId ?? null,
     ]
   );
 

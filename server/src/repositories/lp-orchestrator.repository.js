@@ -142,6 +142,7 @@ function mapRow(row) {
     activeProtectedPoolId: row.active_protected_pool_id != null
       ? Number(row.active_protected_pool_id)
       : null,
+    activeSegmentId: row.active_segment_id != null ? Number(row.active_segment_id) : null,
     activeHedge: mapActiveHedge(row),
     initialTotalUsd: Number(row.initial_total_usd),
     strategyConfig: parseJsonSafe(row.strategy_config_json, {}),
@@ -339,6 +340,17 @@ async function updateActiveLp(userId, id, {
   return rows[0]?.id || null;
 }
 
+async function updateActiveSegment(userId, id, segmentId, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE lp_orchestrators
+        SET active_segment_id = $3, updated_at = $4
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [userId, id, segmentId ?? null, Date.now()]
+  );
+  return rows[0]?.id || null;
+}
+
 async function updateStrategyState(userId, id, {
   strategyState,
   lastEvaluation,
@@ -522,7 +534,7 @@ async function appendActionLog(entry, executor) {
        tx_hashes_json, realized_cost_usd,
        verification_status, drift_details_json,
        accounting_delta_json, payload_json,
-       created_at
+       created_at, segment_id
      )
      VALUES (
        $1, $2, $3, $4, $5, $6,
@@ -533,7 +545,7 @@ async function appendActionLog(entry, executor) {
        $17, $18,
        $19, $20,
        $21, $22,
-       $23
+       $23, $24
      )
      RETURNING id`,
     [
@@ -560,6 +572,7 @@ async function appendActionLog(entry, executor) {
       toJson(entry.accountingDelta || null),
       toJson(entry.payload || null),
       createdAt,
+      entry.segmentId ?? null,
     ]
   );
   return rows[0]?.id || null;
@@ -591,6 +604,7 @@ function mapLogRow(row) {
     driftDetails: parseJsonSafe(row.drift_details_json, null),
     accountingDelta: parseJsonSafe(row.accounting_delta_json, null),
     payload: parseJsonSafe(row.payload_json, null),
+    segmentId: row.segment_id != null ? Number(row.segment_id) : null,
     createdAt: Number(row.created_at),
   };
 }
@@ -648,12 +662,14 @@ async function findFinalizedByTxHash(orchestratorId, txHashes, executor) {
 
 module.exports = {
   DEFAULT_ACCOUNTING,
+  mapRow,
   create,
   getById,
   listForUser,
   listActiveForLoop,
   updatePhase,
   updateActiveLp,
+  updateActiveSegment,
   updateStrategyState,
   updateConfig,
   updateAccounting,
