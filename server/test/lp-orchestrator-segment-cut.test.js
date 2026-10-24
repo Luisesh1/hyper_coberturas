@@ -496,6 +496,33 @@ test('el motivo de cierre usa el precio de antes del ajuste, no el del finalize'
   assert.equal(closed.closePrice, 2515, 'el valor de cierre sigue al precio del finalize');
 });
 
+test('C1: pool con el estable en token0 y fees pendientes, precio sin cambiar => sin deriva y lado correcto', async () => {
+  // USDC/WETH: priceCurrent y límites en WETH por USDC. ETH a 2390, bajo el
+  // rango 2401.9 - 2628.1; la firma no movió el precio.
+  const usdcWeth = (identifier) => lp(identifier, {
+    token0: { symbol: 'USDC', address: '0x2', decimals: 6 },
+    token1: { symbol: 'WETH', address: '0x1', decimals: 18 },
+    tickLower: 197580,
+    tickUpper: 198480,
+    rangeLowerPrice: 1 / 2628.1,
+    rangeUpperPrice: 1 / 2401.9,
+    priceCurrent: 1 / 2390,
+    unclaimedFees0: 25,
+    unclaimedFees1: 0.01,
+  });
+  const pools = { 777: usdcWeth('777'), 888: usdcWeth('888') };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+  await ctx.finalize('modify-range', { newId: '888', snapshot: pools[888] });
+
+  const [closed] = ctx.ordered();
+  assert.equal(closed.closeReason, 'range_exit_below');
+  const drift = accounting.normalizeAccounting(closed.accounting).priceDriftUsd;
+  assert.ok(Math.abs(drift) < 1e-9, `priceDriftUsd ${drift}`);
+  assertSegmentsSumToTotal(ctx);
+});
+
 test('Review Focus 3: sin protección el corte no lee el hedge', async () => {
   const pools = { 777: lp('777'), 888: lp('888') };
   const accountingDeps = {

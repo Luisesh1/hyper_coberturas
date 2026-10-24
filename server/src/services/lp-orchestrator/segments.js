@@ -8,6 +8,7 @@
 
 const { normalizeAccounting, recomputeNetPnl } = require('./accounting');
 const { buildLpValuation } = require('../protected-pool-delta-neutral/terminal-range');
+const { resolveDeltaNeutralOrientation } = require('../delta-neutral-math.service');
 
 // Acciones que cierran el LP viejo y abren uno nuevo (o cambian su capital).
 const SEGMENT_OPENING_ACTIONS = new Set([
@@ -60,16 +61,45 @@ function subtractAccounting(current, baseline) {
 }
 
 /**
- * Motivo por el que se cortó el tramo. El lado del precio solo importa en
- * las acciones que re-centran el rango.
+ * Índice (0/1) del token volátil del pool. Acepta un snapshot (`token0.symbol`)
+ * o un objeto con `token0Symbol`/`token1Symbol` (el orquestador). Sin
+ * orientación resoluble se asume token0 volátil (precio crudo = precio USD).
  */
-function classifyCloseReason({ action, price, rangeLowerPrice, rangeUpperPrice } = {}) {
+function resolveVolatileTokenIndex(source) {
+  if (!source || typeof source !== 'object') return 0;
+  const orientation = resolveDeltaNeutralOrientation(source);
+  return orientation?.eligible && orientation.volatileTokenIndex === 1 ? 1 : 0;
+}
+
+/**
+ * Precio crudo del pool (token1 por token0, el espacio de `priceCurrent` y de
+ * `rangeLower/UpperPrice`) -> precio USD del volátil. null si no es usable.
+ */
+function toVolatileUsd(rawPrice, volatileTokenIndex) {
+  if (rawPrice == null) return null;
+  const p = Number(rawPrice);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  return volatileTokenIndex === 1 ? 1 / p : p;
+}
+
+/**
+ * Motivo por el que se cortó el tramo. El lado del precio solo importa en
+ * las acciones que re-centran el rango. `price` y los límites van en el
+ * espacio crudo del snapshot (token1 por token0); con el estable en token0
+ * (`volatileTokenIndex: 1`) se invierten, de modo que «below»/«above» siempre
+ * se refieren al precio USD del volátil.
+ */
+function classifyCloseReason({
+  action, price, rangeLowerPrice, rangeUpperPrice, volatileTokenIndex = 0,
+} = {}) {
   if (action === 'modify-range' || action === 'rebalance') {
-    const p = Number(price);
-    const lower = Number(rangeLowerPrice);
-    const upper = Number(rangeUpperPrice);
-    if (Number.isFinite(p) && Number.isFinite(lower) && p < lower) return 'range_exit_below';
-    if (Number.isFinite(p) && Number.isFinite(upper) && p > upper) return 'range_exit_above';
+    const p = toVolatileUsd(price, volatileTokenIndex);
+    const a = toVolatileUsd(rangeLowerPrice, volatileTokenIndex);
+    const b = toVolatileUsd(rangeUpperPrice, volatileTokenIndex);
+    const lower = a != null && b != null ? Math.min(a, b) : a;
+    const upper = a != null && b != null ? Math.max(a, b) : b;
+    if (p != null && lower != null && p < lower) return 'range_exit_below';
+    if (p != null && upper != null && p > upper) return 'range_exit_above';
     return 'manual_rerange';
   }
   if (action === 'increase-liquidity' || action === 'decrease-liquidity' || action === 'reinvest-fees') {
@@ -81,15 +111,24 @@ function classifyCloseReason({ action, price, rangeLowerPrice, rangeUpperPrice }
 
 /**
  * Deriva del LP viejo entre su última foto y el precio del finalize (lo que
- * tardó la firma). 0 si no se puede valorar.
+ * tardó la firma): `V(pFinal) − V(pLast)` con la misma liquidez y sin fees
+ * pendientes (esas ya se devengaron tick a tick como `lpFeesUsd`). Ambos
+ * precios llegan crudos (token1 por token0) y se pasan al precio USD del
+ * volátil antes de valorar. 0 si no se puede valorar.
  */
 function estimateSigningDriftUsd(lastSnapshot, finalizePrice) {
-  // Sin valor de partida la "deriva" seria el LP entero (Number(null) === 0).
+  // Sin valor de partida no hay contra qué cuadrar el cierre del tramo.
   const rawValue = lastSnapshot?.currentValueUsd;
   if (rawValue == null || !Number.isFinite(Number(rawValue))) return 0;
-  const valuation = buildLpValuation(lastSnapshot);
+  const orientation = resolveDeltaNeutralOrientation(lastSnapshot);
+  if (!orientation?.eligible) return 0;
+  const volatileIndex = orientation.volatileTokenIndex === 1 ? 1 : 0;
+  const pLast = toVolatileUsd(lastSnapshot.priceCurrent, volatileIndex);
+  const pFinal = toVolatileUsd(finalizePrice, volatileIndex);
+  if (pLast == null || pFinal == null) return 0;
+  const valuation = buildLpValuation({ ...lastSnapshot, unclaimedFees0: 0, unclaimedFees1: 0 });
   if (!valuation) return 0;
-  const drift = valuation.valueAt(finalizePrice) - Number(rawValue);
+  const drift = valuation.valueAt(pFinal) - valuation.valueAt(pLast);
   return Number.isFinite(drift) ? drift : 0;
 }
 
@@ -152,5 +191,6 @@ module.exports = {
   subtractAccounting,
   classifyCloseReason,
   estimateSigningDriftUsd,
+  resolveVolatileTokenIndex,
   summarizeCoverage,
 };

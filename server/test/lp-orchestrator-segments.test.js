@@ -91,7 +91,7 @@ test('estimateSigningDriftUsd: snapshot ETH/USDC, signo segun el precio', () => 
   assert.ok(v, 'el snapshot debe ser valorable');
   const value = v.valueAt(2500);
   assert.ok(value > 0);
-  const withValue = { ...snap, currentValueUsd: value };
+  const withValue = { ...snap, priceCurrent: 2500, currentValueUsd: value };
   assert.ok(estimateSigningDriftUsd(withValue, 2450) < 0, 'si el precio baja, el LP con ETH pierde');
   assert.ok(estimateSigningDriftUsd(withValue, 2550) > 0);
   assert.equal(estimateSigningDriftUsd(withValue, NaN), 0);
@@ -136,4 +136,86 @@ test('summarizeCoverage: sin filas devuelve ceros/null y tramo abierto usa now',
     { openedAt: 0, closedAt: null, now: 50 },
   );
   assert.equal(open.avgPct, 100);
+});
+
+// --- C1: deriva de firma sin fees pendientes y en el espacio del volatil ---
+
+const WETH_USDC_SNAP = {
+  token0: { symbol: 'WETH', decimals: 18 },
+  token1: { symbol: 'USDC', decimals: 6 },
+  tickLower: -198480,
+  tickUpper: -197580,
+  liquidity: '1000000000000000',
+  rangeLowerPrice: 2401.9,
+  rangeUpperPrice: 2628.1,
+  priceCurrent: 2500,
+};
+
+// Mismo rango (ETH 2401.9 - 2628.1) en un pool con el estable como token0:
+// priceCurrent y los limites van en WETH por USDC.
+const USDC_WETH_SNAP = {
+  token0: { symbol: 'USDC', decimals: 6 },
+  token1: { symbol: 'WETH', decimals: 18 },
+  tickLower: 197580,
+  tickUpper: 198480,
+  liquidity: '1000000000000000',
+  rangeLowerPrice: 1 / 2628.1,
+  rangeUpperPrice: 1 / 2401.9,
+  priceCurrent: 1 / 2500,
+};
+
+function withCurrentValue(snap) {
+  const { buildLpValuation } = require('../src/services/protected-pool-delta-neutral/terminal-range');
+  const volatileUsd = snap.token0.symbol === 'WETH' ? snap.priceCurrent : 1 / snap.priceCurrent;
+  const value = buildLpValuation({ ...snap, unclaimedFees0: 0, unclaimedFees1: 0 }).valueAt(volatileUsd);
+  assert.ok(value > 0, 'el snapshot debe ser valorable');
+  return { ...snap, currentValueUsd: value };
+}
+
+test('estimateSigningDriftUsd: fees pendientes con el precio sin cambiar no son deriva', () => {
+  const snap = { ...withCurrentValue(WETH_USDC_SNAP), unclaimedFees0: 0.01, unclaimedFees1: 30 };
+  assert.ok(Math.abs(estimateSigningDriftUsd(snap, 2500)) < 1e-9);
+});
+
+test('estimateSigningDriftUsd: pool con estable en token0, precio sin cambiar => 0', () => {
+  const snap = withCurrentValue(USDC_WETH_SNAP);
+  assert.ok(Math.abs(estimateSigningDriftUsd(snap, 1 / 2500)) < 1e-9);
+  assert.ok(estimateSigningDriftUsd(snap, 1 / 2450) < 0, 'ETH baja: el LP pierde');
+  assert.ok(estimateSigningDriftUsd(snap, 1 / 2550) > 0, 'ETH sube: el LP gana');
+  // La deriva es pequena frente al LP, no el LP entero.
+  assert.ok(Math.abs(estimateSigningDriftUsd(snap, 1 / 2450)) < snap.currentValueUsd * 0.05);
+});
+
+test('estimateSigningDriftUsd: WETH token0, caida de precio => deriva negativa', () => {
+  const snap = { ...withCurrentValue(WETH_USDC_SNAP), unclaimedFees0: 0.01, unclaimedFees1: 30 };
+  const drift = estimateSigningDriftUsd(snap, 2450);
+  assert.ok(drift < 0);
+  const { buildLpValuation } = require('../src/services/protected-pool-delta-neutral/terminal-range');
+  const v = buildLpValuation({ ...snap, unclaimedFees0: 0, unclaimedFees1: 0 });
+  assert.ok(Math.abs(drift - (v.valueAt(2450) - v.valueAt(2500))) < 1e-9);
+});
+
+test('estimateSigningDriftUsd: sin precio de la ultima foto => 0', () => {
+  const snap = { ...withCurrentValue(WETH_USDC_SNAP), priceCurrent: null };
+  assert.equal(estimateSigningDriftUsd(snap, 2450), 0);
+});
+
+test('classifyCloseReason: pool con estable en token0 mide el lado del volatil', () => {
+  const r = {
+    rangeLowerPrice: USDC_WETH_SNAP.rangeLowerPrice,
+    rangeUpperPrice: USDC_WETH_SNAP.rangeUpperPrice,
+    volatileTokenIndex: 1,
+  };
+  // ETH a 2377.5 (por debajo del rango): en WETH/USDC el precio crudo queda por encima.
+  assert.equal(classifyCloseReason({ action: 'modify-range', price: 1 / 2377.5, ...r }), 'range_exit_below');
+  assert.equal(classifyCloseReason({ action: 'rebalance', price: 1 / 2700, ...r }), 'range_exit_above');
+  assert.equal(classifyCloseReason({ action: 'modify-range', price: 1 / 2500, ...r }), 'manual_rerange');
+});
+
+test('resolveVolatileTokenIndex lee la orientacion del snapshot o de los simbolos', () => {
+  const { resolveVolatileTokenIndex } = require('../src/services/lp-orchestrator/segments');
+  assert.equal(resolveVolatileTokenIndex(USDC_WETH_SNAP), 1);
+  assert.equal(resolveVolatileTokenIndex(WETH_USDC_SNAP), 0);
+  assert.equal(resolveVolatileTokenIndex({ token0Symbol: 'USDC', token1Symbol: 'WETH' }), 1);
+  assert.equal(resolveVolatileTokenIndex(null), 0);
 });

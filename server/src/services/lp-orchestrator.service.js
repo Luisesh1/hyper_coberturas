@@ -70,6 +70,7 @@ const {
   subtractAccounting,
   classifyCloseReason,
   estimateSigningDriftUsd,
+  resolveVolatileTokenIndex,
   summarizeCoverage,
 } = require('./lp-orchestrator/segments');
 
@@ -163,6 +164,18 @@ class LpOrchestratorService {
   }
 
   /**
+   * Índice del token volátil: el snapshot manda y, sin él, los símbolos del
+   * orquestador. Los precios del tramo van crudos (token1 por token0).
+   */
+  _volatileTokenIndex(orch, snapshot) {
+    return resolveVolatileTokenIndex({
+      token0Symbol: orch?.token0Symbol,
+      token1Symbol: orch?.token1Symbol,
+      ...(snapshot && typeof snapshot === 'object' ? snapshot : {}),
+    });
+  }
+
+  /**
    * Un finalize que llega cuando el corte ya ocurrió (por reconciliación o
    * por un intento previo): el tramo anterior se cerró como `unknown` y el
    * vivo se abrió sin hashes. Se les pone el motivo y los hashes reales; los
@@ -186,6 +199,7 @@ class LpOrchestratorService {
             price: prePrice,
             rangeLowerPrice: predecessor.rangeLowerPrice,
             rangeUpperPrice: predecessor.rangeUpperPrice,
+            volatileTokenIndex: this._volatileTokenIndex(orch, snap),
           }),
           closeTxHashes: hashes,
         }, client);
@@ -311,6 +325,7 @@ class LpOrchestratorService {
             : price,
           rangeLowerPrice: live.rangeLowerPrice ?? oldSnap?.rangeLowerPrice,
           rangeUpperPrice: live.rangeUpperPrice ?? oldSnap?.rangeUpperPrice,
+          volatileTokenIndex: this._volatileTokenIndex(orch, oldSnap),
         }),
         closeTxHashes: txHashes,
         accounting: subtractAccounting(acc, live.baselineAccounting),
