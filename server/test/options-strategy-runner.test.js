@@ -764,3 +764,20 @@ test('non-alert live open keeps the executable price, not the mid', async () => 
   await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [{ ...midLeg(), side: 'SELL' }] }, midCtx({ capitalUsdt: 1e6 }));
   assert.deepEqual(credentials.orders.map((o) => o.price), [725, 700]);
 });
+
+test('pending signal shows estimated fee', async () => {
+  const { runner, strategy, credentials, repo } = await midSetup();
+  const fees = [];
+  repo.setAutoSignalFees = async (id, patch) => { fees.push({ id, ...patch }); };
+  const ctx = { ...midCtx({ capitalUsdt: 1000 }), signal: { eventId: 5, signalId: 31, direction: 'bullish' } };
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg(0.1)] }, ctx);
+  assert.equal(credentials.orders.length, 1);
+  const expected = tradeFee({ spot: SPOT, quantity: 0.1, price: 715 });
+  assert.equal(fees.length, 1);
+  assert.equal(fees[0].id, 31);
+  assert.equal(fees[0].feesEstimated, true);
+  assert.ok(Math.abs(fees[0].feesUsdt - expected) < 1e-12);
+  // Sin signalId (reentradas diferidas) no hay señal que anotar.
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg(0.1)] }, midCtx({ capitalUsdt: 1000 }));
+  assert.equal(fees.length, 1);
+});

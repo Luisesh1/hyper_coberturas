@@ -393,7 +393,64 @@ test('batchEntryOutcome: sin fills avgPrice null; lote inexistente null', async 
   } } });
   assert.deepEqual(await repo.batchEntryOutcome(3), {
     autoSignalId: null, requested: 0.1, filled: 0, avgPrice: null, feesUsdt: 0, symbol: 'S', side: 'BUY',
+    cancelRequested: false, rejected: false,
   });
   batchRows = [];
   assert.equal(await repo.batchEntryOutcome(4), null);
+});
+
+test('batchEntryOutcome only reads open batches: a close batch returns null', async () => {
+  const repo = createOptionsLiveOrdersRepository({ db: { async query(sql) {
+    if (sql.includes('FROM options_live_batches')) {
+      // El lote 3 es un cierre: solo aparece si la consulta no filtra por acción.
+      return { rows: /b\.action='open'/.test(sql) ? [] : [{
+        id: '3', auto_signal_id: '31', order_id: '8', symbol: 'S', side: 'SELL', requested_qty: '0.1' }] };
+    }
+    return { rows: [] };
+  } } });
+  assert.equal(await repo.batchEntryOutcome(3), null);
+});
+
+test('batchEntryOutcome reports cancel requests and Binance rejections', async () => {
+  const repo = createOptionsLiveOrdersRepository({ db: { async query(sql) {
+    if (sql.includes('FROM options_live_batches')) return { rows: [
+      { id: '3', auto_signal_id: '31', order_id: '8', symbol: 'S', side: 'BUY', requested_qty: '0.1',
+        cancel_requested: true, last_error: 'Rechazada por Binance: -2010' },
+    ] };
+    return { rows: [] };
+  } } });
+  const out = await repo.batchEntryOutcome(3);
+  assert.equal(out.cancelRequested, true);
+  assert.equal(out.rejected, true);
+});
+
+function finishDb({ autoSignalId = null, actionKey = 'alert:55:open', processed = '0.2', remaining = 0 } = {}) {
+  const calls = [];
+  const tx = { async query(sql, args) {
+    calls.push({ sql, args });
+    if (sql.startsWith('SELECT * FROM options_live_orders')) return { rows: [
+      { id: 9, batch_id: 3, status: 'active', processed_qty: processed } ] };
+    if (sql.includes('COUNT(*)')) return { rows: [{ n: remaining }] };
+    if (sql.includes('FROM options_live_batches WHERE id=$1')) return { rows: [
+      { strategy_id: 4, action_key: actionKey, action: 'open', auto_signal_id: autoSignalId } ] };
+    if (sql.includes('SUM(processed_qty)')) return { rows: [{ qty: processed }] };
+    return { rows: [] };
+  } };
+  return { calls, db: { transaction: (fn) => fn(tx) } };
+}
+
+test('finishOrder reports the completed batch; a linked signal is left to the executor', async () => {
+  const linked = finishDb({ autoSignalId: '31' });
+  const repo = createOptionsLiveOrdersRepository({ db: linked.db, now: () => 1 });
+  assert.deepEqual(await repo.finishOrder(9, '77', 0.2),
+    { batchId: 3, completed: true, action: 'open', autoSignalId: 31 });
+  assert.ok(!linked.calls.some((c) => c.sql.includes('options_auto_signals')));
+  const legacy = finishDb();
+  const old = createOptionsLiveOrdersRepository({ db: legacy.db, now: () => 1 });
+  assert.deepEqual(await old.finishOrder(9, '77', 0.2),
+    { batchId: 3, completed: true, action: 'open', autoSignalId: null });
+  assert.ok(legacy.calls.some((c) => c.sql.includes('UPDATE options_auto_signals')));
+  const open = finishDb({ remaining: 1 });
+  const pending = createOptionsLiveOrdersRepository({ db: open.db, now: () => 1 });
+  assert.deepEqual(await pending.finishOrder(9, '77', 0.2), { batchId: 3, completed: false });
 });

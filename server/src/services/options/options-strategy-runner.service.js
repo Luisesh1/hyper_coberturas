@@ -906,6 +906,9 @@ class OptionsStrategyRunner {
       }
     }
     const result = await this.liveExecutor.submit(strategy, { ...action, legs: quoted }, ctx);
+    if (action.type === 'open' && ['submitted', 'attention'].includes(result.status)) {
+      await this.markEstimatedSignalFee(quoted, quotes, ctx);
+    }
     if (result.status === 'submitted' || result.status === 'attention') {
       await this.maybeNotify(strategy, `Órdenes LIMIT enviadas: ${result.sent}. A la espera de fills confirmados (10 min)`, 'trade');
     }
@@ -913,6 +916,23 @@ class OptionsStrategyRunner {
       pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
       detail: result.status === 'submitted' ? 'Orden límite enviada; ejecución pendiente' : result.status });
     return result;
+  }
+
+  /**
+   * Mientras la entrada real no se resuelve con sus fills, la señal muestra
+   * la comisión estimada al precio LIMIT enviado (se marca como estimada).
+   */
+  async markEstimatedSignalFee(legs, quotes, ctx) {
+    const signalId = ctx.signal?.signalId;
+    if (signalId == null || typeof this.repo.setAutoSignalFees !== 'function') return;
+    try {
+      const feesUsdt = legs.reduce((sum, leg, i) => sum + tradeFee({
+        spot: num(quotes[i]?.quote?.spot) ?? ctx.spot, quantity: leg.quantity, price: leg.price,
+      }), 0);
+      await this.repo.setAutoSignalFees(signalId, { feesUsdt, feesEstimated: true });
+    } catch (err) {
+      this.logger.warn('options_signal_fee_estimate_failed', { signalId, error: err.message });
+    }
   }
 
   /**

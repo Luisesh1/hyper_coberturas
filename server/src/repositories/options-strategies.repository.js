@@ -182,8 +182,19 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return rows[0] ? mapStrategy(rows[0]) : null;
   }
 
+  /**
+   * Guarda el estado del runner. `blockedUnderlyings` NUNCA sale de aquí:
+   * el runner escribe copias en memoria que pueden ser anteriores a un
+   * bloqueo (`setUnderlyingBlock`); se conserva siempre el de la fila.
+   */
   async function setState(id, state) {
-    await db.query('UPDATE options_strategies SET state = $2 WHERE id = $1', [id, JSON.stringify(state || {})]);
+    await db.query(
+      `UPDATE options_strategies
+          SET state = $2::jsonb || jsonb_build_object('blockedUnderlyings',
+                COALESCE(state->'blockedUnderlyings', '{}'::jsonb))
+        WHERE id = $1`,
+      [id, JSON.stringify(state || {})]
+    );
   }
 
   /**

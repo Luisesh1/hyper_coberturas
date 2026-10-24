@@ -79,6 +79,35 @@ function isOrderableRemainder(exchange, symbol, remaining) {
     matchesStep(String(qty), filter.minQty, filter.stepSize);
 }
 
+/** Número es-ES: `min`–`max` decimales (0,35 · 712 · 7,14). */
+function esNum(value, min = 0, max = 8) {
+  return Number(value).toLocaleString('es-ES', { minimumFractionDigits: min, maximumFractionDigits: max });
+}
+const qtyText = (q) => esNum(q, 2, 8);
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Decisión y texto definitivos de la señal a partir del resultado de su
+ * lote de entrada (`batchEntryOutcome`). Comisión siempre la real.
+ */
+function entrySignalResolution(outcome) {
+  const feesUsdt = Number(outcome.feesUsdt) || 0;
+  if (!(Number(outcome.filled) > 0)) {
+    const why = outcome.rejected ? 'Entrada rechazada por Binance'
+      : outcome.cancelRequested ? 'Entrada cancelada por señal contraria'
+        : 'Entrada sin ejecutar en 10 min';
+    return { decision: 'ignored', detail: `Real: ${why}`, feesUsdt, feesEstimated: false };
+  }
+  const side = outcome.side === 'SELL' ? 'Venta' : 'Compra';
+  let detail = `Real: ${side} ${qtyText(outcome.filled)} ${outcome.symbol} a ${esNum(outcome.avgPrice)}` +
+    ` · comisión ${esNum(feesUsdt, 2, 2)} USDT`;
+  if (outcome.filled < Number(outcome.requested) - 1e-9) {
+    detail += ` · parcial: ${qtyText(outcome.filled)} de ${qtyText(outcome.requested)}`;
+  }
+  return { decision: 'opened', detail, feesUsdt, feesEstimated: false };
+}
+
 function standingPrice({ position, params, tickSize, minPrice, quote, atrHourly, now }) {
   const side = position.side;
   const origin = Number(minPrice);
@@ -263,10 +292,15 @@ class OptionsLiveExecution {
     // Freno final antes del ledger y de cualquier POST si hay trading real.
     // Nunca activa una orden: exige contrato, precio y permiso exactos.
     enforcePilotEntry({ strategy, action: { ...action, legs }, now: this.now() });
+    // Solo una entrada se enlaza con su señal (la resuelve resolveEntrySignal).
+    // Reentradas/reevaluaciones diferidas no traen signalId: quedan sin enlace.
+    const signalId = Number(ctx.signal?.signalId);
     const orders = await this.repo.beginBatch({
       strategy, action: action.type, legs, key: actionKey(strategy, action, ctx),
       detail: action.detail, deadlineAt,
       exchangePositions,
+      autoSignalId: action.type === 'open' && Number.isSafeInteger(signalId) && signalId > 0
+        ? signalId : null,
     });
     if (!orders) return { status: 'duplicate_or_unresolved' };
     let sent = 0;
@@ -362,7 +396,8 @@ class OptionsLiveExecution {
       if (this.now() < order.deadlineAt && !order.cancelRequested) return;
       // Solo finishOrder puede finalizarla, y únicamente si la fila
       // continúa en 'queued' bajo FOR UPDATE.
-      await this.repo.finishOrder(order.id, null, 0);
+      const finished = await this.repo.finishOrder(order.id, null, 0);
+      await this.afterEntryFinal(order, finished, null, 0);
       return;
     }
     const args = { symbol: order.symbol, ...(order.orderId
@@ -516,8 +551,82 @@ class OptionsLiveExecution {
       throw new Error('Terminal Binance order has missing or inconsistent trades');
     }
     if (TERMINAL.has(status)) {
-      await this.repo.finishOrder(order.id, orderId, executed);
+      const finished = await this.repo.finishOrder(order.id, orderId, executed);
+      await this.afterEntryFinal(order, finished, client, executed);
     }
+  }
+
+  /**
+   * Tras finalizar una ENTRADA: (1) si lo ejecutado no es una cantidad
+   * operable del contrato, bloquear el subyacente y avisar una vez;
+   * (2) si el lote quedó completo y está enlazado a una señal, resolverla.
+   * Nada de esto marca la orden en atención: no debe frenar otros lotes ni
+   * los cierres. Los errores se registran y no deshacen la conciliación.
+   */
+  async afterEntryFinal(order, finished, client, executed) {
+    // `finished` null: otra pasada ya la finalizó (y ya hizo estas comprobaciones).
+    if (!finished || order.action !== 'open' ||
+        (order.purpose && order.purpose !== 'standard')) return;
+    if (Number(executed) > 0) {
+      try {
+        await this.blockIfInoperable(order, client, Number(executed));
+      } catch (err) {
+        this.logger.warn('options_entry_remainder_check_failed', {
+          liveOrderId: order.id, strategyId: order.strategyId, error: err.message,
+        });
+      }
+    }
+    if (finished?.completed && finished.autoSignalId != null) {
+      try {
+        await this.resolveEntrySignal(order);
+      } catch (err) {
+        this.logger.warn('options_entry_signal_resolve_failed', {
+          liveOrderId: order.id, batchId: order.batchId, error: err.message,
+        });
+      }
+    }
+  }
+
+  /**
+   * Una entrada GTC puede llenar una cantidad que Binance no acepta como
+   * orden nueva (< minQty o fuera del stepSize): esa posición no se podría
+   * cerrar con una orden normal. Sin filtros verificables se asume lo peor.
+   */
+  async blockIfInoperable(order, client, executed) {
+    let orderable = false;
+    let unverified = false;
+    try {
+      if (!client || typeof client.getExchangeInfo !== 'function') throw new Error('Binance client unavailable');
+      orderable = isOrderableRemainder(await client.getExchangeInfo(), order.symbol, executed);
+    } catch (err) {
+      unverified = true;
+      this.logger.warn('options_entry_lot_filters_unavailable', {
+        liveOrderId: order.id, symbol: order.symbol, error: err.message,
+      });
+    }
+    if (orderable) return false;
+    const underlying = parseSymbol(order.symbol)?.underlying || String(order.symbol).split('-')[0];
+    const reason = `Resto no operable de ${qtyText(executed)} contratos en ${order.symbol}` +
+      (unverified ? ' (filtros de lote no disponibles)' : '');
+    try {
+      await this.targetRepo.setUnderlyingBlock(order.strategyId, underlying, { reason, at: this.now() });
+    } finally {
+      // El aviso sale aunque el bloqueo falle: el operador debe revisarlo.
+      await this.sendIncidentAlert(order.userId, 'ENTRY_REMAINDER_INOPERABLE', String(order.id),
+        '<b>ALERTA · Resto de entrada no operable</b>\n' +
+        escapeHtml(reason) + '.\n' +
+        'El bot no abrirá más en ' + escapeHtml(underlying) +
+        ' hasta que lo revises y lo desbloquees; los cierres siguen activos.');
+    }
+    return true;
+  }
+
+  /** Resuelve la señal enlazada al lote de entrada con los fills reales. */
+  async resolveEntrySignal(order) {
+    if (typeof this.repo.batchEntryOutcome !== 'function') return null;
+    const outcome = await this.repo.batchEntryOutcome(order.batchId);
+    if (!outcome || outcome.autoSignalId == null) return null;
+    return this.targetRepo.resolveAutoSignal(outcome.autoSignalId, entrySignalResolution(outcome));
   }
 
   async reconcileExpired() {
@@ -1082,3 +1191,4 @@ module.exports.orderTimeInForce = orderTimeInForce;
 module.exports.WINDOW_MS = WINDOW_MS;
 module.exports.isOrderableRemainder = isOrderableRemainder;
 module.exports.standingPrice = standingPrice;
+module.exports.entrySignalResolution = entrySignalResolution;

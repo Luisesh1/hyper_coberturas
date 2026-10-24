@@ -184,6 +184,8 @@ function createOptionsAutoTradingService(deps = {}) {
         score: payload.score ?? null,
         eventId: payload.eventId ?? null,
         triggeredAt: payload.triggeredAt ?? null,
+        // Enlaza la entrada real con esta fila: el ejecutor la resuelve con los fills.
+        signalId: claim.id,
       });
       outcome = decide(bot, produced);
     } catch (err) {

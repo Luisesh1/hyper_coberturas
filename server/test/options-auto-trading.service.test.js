@@ -349,3 +349,19 @@ test('simular: bot pausado → 409 BOT_PAUSED y dirección inválida → 400', a
   await repo.setMode(USER, bot.id, 'shadow');
   await assert.rejects(service.simulateSignal(USER, bot.id, { direction: 'neutral' }), (err) => err.status === 400);
 });
+
+test('processBot passes the claimed signal id to the runner as signalId', async () => {
+  const { repo } = await setup();
+  const seen = [];
+  const service = createOptionsAutoTradingService({
+    repo,
+    runner: { async runForSignal(_bot, sig) { seen.push(sig); return { produced: [] }; } },
+    logger: silent,
+    now: () => NOW,
+  });
+  await service.handleAlertTriggered(signal());
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].signalId, repo.signals[0].id);
+  assert.ok(seen[0].signalId != null);
+  assert.equal(seen[0].eventId, 501);
+});

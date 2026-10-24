@@ -78,3 +78,17 @@ test('clearUnderlyingBlock quita solo la clave del subyacente', async () => {
   assert.match(sql, /jsonb_typeof\(state->'blockedUnderlyings'\) = 'object'/);
   assert.deepEqual(args, [4, 'BTC']);
 });
+
+test('setState preserves the stored blockedUnderlyings even from a stale copy', async () => {
+  const db = capturingDb([]);
+  const repo = createOptionsStrategiesRepository({ db });
+  await repo.setState(4, { lastReasons: { BTC: 'x' } });
+  const { sql, args } = db.calls[0];
+  assert.match(sql, /UPDATE options_strategies/);
+  assert.match(sql, /\$2::jsonb \|\| jsonb_build_object\('blockedUnderlyings'/);
+  assert.match(sql, /COALESCE\(state->'blockedUnderlyings', '\{\}'::jsonb\)/);
+  assert.deepEqual(args, [4, JSON.stringify({ lastReasons: { BTC: 'x' } })]);
+  // Una copia con su propio blockedUnderlyings no pisa el de la fila.
+  await repo.setState(4, { blockedUnderlyings: {} });
+  assert.match(db.calls[1].sql, /\|\| jsonb_build_object\('blockedUnderlyings'/);
+});
