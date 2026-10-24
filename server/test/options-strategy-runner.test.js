@@ -781,3 +781,148 @@ test('pending signal shows estimated fee', async () => {
   await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg(0.1)] }, midCtx({ capitalUsdt: 1000 }));
   assert.equal(fees.length, 1);
 });
+
+// ---------- señal contraria con entradas pendientes ----------
+
+const PENDING_PUT = 'BTC-261023-55000-P';
+
+function cancelEnv(env, { orders = [], queued = true } = {}) {
+  const calls = { cancel: [], queue: [] };
+  env.runner.liveOrders = { async listByStrategy() { return orders; } };
+  env.runner.liveExecutor.repo.requestCancelEntries = async (args) => {
+    calls.cancel.push(args);
+    return orders.filter((o) => o.status !== 'final').map((o) => o.id);
+  };
+  env.runner.liveExecutor.repo.queueSignalReevaluation = async (strategy, signal, ids) => {
+    calls.queue.push({ strategyId: strategy.id, signal, ids });
+    return queued;
+  };
+  return calls;
+}
+
+test('cancel_entries live requests cancel and queues reevaluation', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  const calls = cancelEnv(env, { orders: [pendingEntry(env.strategy.id, { id: 11, symbol: PENDING_PUT })] });
+  const signal = { eventId: '501', direction: 'bullish', signalId: 77 };
+  const { actions, produced } = await env.runner.runForSignal(env.strategy, signal);
+  assert.deepEqual(actions.live.map((a) => a.type), ['cancel_entries']);
+  assert.deepEqual(calls.cancel, [{ userId: 7, strategyId: env.strategy.id, underlying: 'BTC' }]);
+  assert.deepEqual(calls.queue, [{ strategyId: env.strategy.id, signal, ids: [11] }]);
+  // Ninguna orden real nueva: se espera a que la cancelación sea final.
+  assert.equal(env.credentials.orders.length, 0);
+  const live = produced.filter((p) => p.mode === 'live');
+  assert.equal(live.length, 1);
+  assert.equal(live[0].pending, true);
+  assert.equal(live[0].reason, 'reevaluation_queued');
+  // La sombra no tiene entradas pendientes: abre.
+  assert.equal(actions.shadow[0].type, 'open');
+});
+
+test('cancel_entries live with trading disabled cancels but does not queue a reevaluation', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  const calls = cancelEnv(env, { orders: [pendingEntry(env.strategy.id, { id: 11, symbol: PENDING_PUT })] });
+  env.runner.liveExecutor.enabled = false;
+  const { produced } = await env.runner.runForSignal(env.strategy, { eventId: '501', direction: 'bullish' });
+  assert.equal(calls.cancel.length, 1);
+  assert.equal(calls.queue.length, 0);
+  assert.equal(produced.find((p) => p.mode === 'live').reason, 'entries_cancel_requested');
+});
+
+test('cancel_entries live without the ledger fails closed', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  env.runner.liveOrders = { async listByStrategy(id) { return [pendingEntry(id, { id: 11, symbol: PENDING_PUT })]; } };
+  const { produced } = await env.runner.runForSignal(env.strategy, { eventId: '501', direction: 'bullish' });
+  const live = produced.filter((p) => p.mode === 'live');
+  assert.deepEqual(live.map((p) => p.type), ['error']);
+  assert.equal(env.credentials.orders.length, 0);
+});
+
+test('pendingEntries: dirección por lado y tipo, solo del subyacente evaluado', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  // Compra de call en BTC = alcista (mismo sentido): ocupa. La de ETH no cuenta.
+  cancelEnv(env, { orders: [pendingEntry(env.strategy.id, { id: 11, symbol: 'BTC-261023-65000-C' }),
+    pendingEntry(env.strategy.id, { id: 12, symbol: 'ETH-261023-3000-P' })] });
+  let ctx = null;
+  const template = require('../src/services/options/templates').getTemplate('alert_signal');
+  const original = template.evaluate;
+  template.evaluate = (c) => { if (c.mode === 'live') ctx = c; return original(c); };
+  try {
+    const { actions } = await env.runner.runForSignal(env.strategy, { eventId: '501', direction: 'bullish' });
+    assert.deepEqual(ctx.pendingEntries, [{ id: 11, direction: 'bullish' }]);
+    assert.equal(ctx.pendingOpens, undefined);
+    assert.equal(actions.live[0].reason, 'underlying_busy');
+  } finally {
+    template.evaluate = original;
+  }
+});
+
+test('cancel_entries shadow cancels at once and the evaluation continues', async () => {
+  const repo = createFakeOptionsRepo({ now: () => FRIDAY_9 });
+  const canceled = [];
+  const shadowEntries = {
+    async listPending({ strategyId }) {
+      return [
+        { id: 3, strategyId, symbol: PENDING_PUT, side: 'BUY', optionType: 'P', status: 'pending' },
+        { id: 4, strategyId, symbol: 'ETH-261023-3000-P', side: 'BUY', optionType: 'P', status: 'pending' },
+      ];
+    },
+    async cancelEntries(ids, at) { canceled.push({ ids, at }); return ids; },
+  };
+  const runner = new OptionsStrategyRunner({ repo, market: fakeMarket(), credentials: fakeCredentials(),
+    shadowEntries, liveExecutor: { enabled: true, repo: {} }, logger: silent, now: () => FRIDAY_9 });
+  const strategy = await repo.createStrategy({ userId: 7, name: 'Bot', template: 'alert_signal', underlying: 'BTC',
+    params: { alertIds: [1], maxOpenPositions: 5 }, mode: 'shadow' });
+  const { actions } = await runner.runForSignal(strategy, { eventId: '9', direction: 'bullish' });
+  assert.deepEqual(actions.shadow.map((a) => a.type), ['cancel_entries', 'open']);
+  assert.deepEqual(canceled, [{ ids: [3], at: FRIDAY_9 }]);
+  assert.equal(repo.positions.filter((p) => p.mode === 'shadow').length, 1);
+});
+
+test('blocked underlying: the runner passes the fresh block to the template', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1] } });
+  // El ejecutor bloquea en el repo después de cargar la estrategia.
+  env.repo.strategies[0].state = { blockedUnderlyings: { BTC: { reason: 'remainder_not_orderable', at: FRIDAY_9 } } };
+  const { actions } = await env.runner.runForSignal(env.strategy, { eventId: '501', direction: 'bullish' });
+  for (const mode of ['shadow', 'live']) {
+    assert.deepEqual(actions[mode], [{ type: 'skip', reason: 'underlying_blocked',
+      detail: 'Resto no operable en BTC: revísalo y desbloquéalo' }]);
+  }
+  assert.equal(env.credentials.orders.length, 0);
+});
+
+test('reevaluateSignal re-runs the signal in live only', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  cancelEnv(env, { orders: [pendingEntry(env.strategy.id, { id: 11, symbol: PENDING_PUT, status: 'final' })] });
+  const result = await env.runner.reevaluateSignal(env.strategy.id, { eventId: '501', direction: 'bullish' });
+  assert.equal(result.status, 'evaluated');
+  assert.equal(env.credentials.orders.length, 1);
+  assert.equal(env.credentials.orders[0].side, 'BUY');
+  // La sombra ya evaluó la señal al llegar: no se repite.
+  assert.equal(env.repo.positions.filter((p) => p.mode === 'shadow').length, 0);
+});
+
+test('reevaluateSignal: the filled part of the canceled entry reverses through queueReversal', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal',
+    params: { alertIds: [1], maxOpenPositions: 5, onOpposite: 'reverse' } });
+  cancelEnv(env);
+  await env.repo.insertPosition({ strategyId: env.strategy.id, userId: 7, mode: 'live', symbol: PENDING_PUT,
+    side: 'BUY', quantity: 0.004, entryPrice: 100, openedAt: FRIDAY_9, feesUsdt: 0 });
+  const reversals = [];
+  env.runner.liveExecutor.queueReversal = async (strategy, signal, close) => { reversals.push({ signal, close }); return true; };
+  const signal = { eventId: '501', direction: 'bullish' };
+  const result = await env.runner.reevaluateSignal(env.strategy.id, signal);
+  assert.equal(result.status, 'reversal_queued');
+  assert.equal(reversals.length, 1);
+  assert.equal(reversals[0].signal, signal);
+  assert.equal(env.credentials.orders.length, 0);
+});
+
+test('reevaluateSignal: new pending entries keep the request waiting; disabled or removed do not run', async () => {
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  cancelEnv(env, { orders: [pendingEntry(env.strategy.id, { id: 12, symbol: PENDING_PUT })] });
+  assert.equal((await env.runner.reevaluateSignal(env.strategy.id, { eventId: '501', direction: 'bullish' })).status, 'waiting');
+  assert.equal((await env.runner.reevaluateSignal(env.strategy.id, { eventId: '501', direction: 'bullish', underlying: 'DOGE' })).status, 'underlying_removed');
+  env.runner.liveExecutor.enabled = false;
+  assert.equal((await env.runner.reevaluateSignal(env.strategy.id, { eventId: '501', direction: 'bullish' })).status, 'disabled');
+  assert.equal(env.credentials.orders.length, 0);
+});

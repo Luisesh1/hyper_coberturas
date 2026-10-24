@@ -292,6 +292,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         "OR (action='open' AND symbol=ANY($4::text[])))",
         [strategy.userId, at, ids, held.map((p) => p.symbol)]
       );
+      // La misma señal ya en cola como reevaluación (entradas canceladas) se
+      // convierte en reentrada: conserva su created_at (caducidad desde la
+      // señal original) y espera ahora al cierre de estas posiciones.
       const savedSignal = {
         eventId,
         direction: signal.direction,
@@ -302,7 +305,10 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         `INSERT INTO options_live_reentries
          (strategy_id,user_id,alert_event_id,signal,wait_position_ids,created_at,updated_at)
          VALUES ($1,$2,$3,$4::jsonb,$5::bigint[],$6,$6)
-         ON CONFLICT (strategy_id,alert_event_id) DO NOTHING`,
+         ON CONFLICT (strategy_id,alert_event_id) DO UPDATE SET kind='reentry',
+           wait_position_ids=EXCLUDED.wait_position_ids,wait_order_ids='{}'::bigint[],
+           signal=EXCLUDED.signal,updated_at=EXCLUDED.updated_at
+         WHERE options_live_reentries.kind='reevaluate' AND options_live_reentries.status='pending'`,
         [strategy.id, strategy.userId, eventId, JSON.stringify(savedSignal), ids, at]
       );
       return true;

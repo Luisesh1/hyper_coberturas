@@ -1086,10 +1086,11 @@ class OptionsLiveExecution {
   }
 
   async processDeferredReentries() {
-    if (!this.enabled || typeof this.repo.listPendingReentries !== 'function') return { sent: 0, expired: 0 };
+    if (!this.enabled || typeof this.repo.listPendingReentries !== 'function') return { sent: 0, expired: 0, reevaluated: 0 };
     const reentries = await this.repo.listPendingReentries(50);
     let sent = 0;
     let expired = 0;
+    let reevaluated = 0;
     for (const request of reentries) {
       try {
         // Una señal antigua no puede reabrir exposición horas después de
@@ -1108,6 +1109,18 @@ class OptionsLiveExecution {
         }
         if (!request.ready) continue;
         const runner = this.runner || require('./options-strategy-runner.service');
+        // Señal contraria que canceló entradas pendientes: con todas sus
+        // órdenes ya finales, se vuelve a evaluar entera (solo Real). Si
+        // giró, queueReversal convirtió esta fila en una reentrada y no se
+        // marca; si aparecieron entradas nuevas que cancelar, sigue a la espera.
+        if (request.kind === 'reevaluate') {
+          const result = await runner.reevaluateSignal(request.strategyId, request.signal);
+          if (['evaluated', 'underlying_removed'].includes(result?.status)) {
+            await this.repo.markReentry(request.id, 'submitted');
+            reevaluated++;
+          }
+          continue;
+        }
         const result = await runner.executeDeferredReentry(request.strategyId, request.signal);
         const submitted = ['submitted', 'attention'].includes(result?.status) ||
           (typeof this.repo.hasReentryOrder === 'function' &&
@@ -1122,7 +1135,7 @@ class OptionsLiveExecution {
         });
       }
     }
-    return { sent, expired };
+    return { sent, expired, reevaluated };
   }
 
   async reconcilePending() {

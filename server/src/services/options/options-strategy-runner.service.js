@@ -35,6 +35,7 @@ const { ensureAtrBandTarget } = require('./options-atr-band-target');
 const { midLimitPrice } = require('./options-mid-price');
 const { estimateMargin, committedUsdt } = require('./options-committed-capital');
 const { botUnderlyings } = require('./bot-underlyings');
+const { positionDirection } = require('./templates/alert-signal');
 
 // Cierres por toma de ganancia: con un TP LIMIT residente no se cancela ni
 // se compite con él; deben alcanzar su objetivo con la cotización fresca.
@@ -59,6 +60,15 @@ function lazyLiveOrders() {
   // eslint-disable-next-line global-require
   const load = () => require('../../repositories/options-live-orders.repository');
   return { listByStrategy: (...args) => load().listByStrategy(...args) };
+}
+
+function lazyShadowEntries() {
+  // eslint-disable-next-line global-require
+  const load = () => require('../../repositories/options-shadow-entries.repository');
+  return {
+    listPending: (...args) => load().listPending(...args),
+    cancelEntries: (...args) => load().cancelEntries(...args),
+  };
 }
 
 function lazyCredentials() {
@@ -89,11 +99,28 @@ function positionUnderlying(position, fallback) {
   return parseSymbol(position.symbol)?.underlying || String(fallback || '').toUpperCase();
 }
 
-/** Órdenes de entrada no finales y con cantidad por ejecutar en `underlying`. */
-function pendingOpenCount(orders, underlying) {
+/**
+ * Sentido de una entrada por su lado y el tipo de su símbolo (inversa de
+ * `legFor`): compra de call o venta de put = alcista. null si no se sabe.
+ */
+function entryDirection(side, symbol, optionType) {
+  const type = parseSymbol(symbol)?.type || optionType;
+  if (!['BUY', 'SELL'].includes(side) || !['C', 'P'].includes(type)) return null;
+  return positionDirection({ side, type });
+}
+
+/** Real: órdenes de entrada no finales y con cantidad por ejecutar en `underlying`. */
+function livePendingEntries(orders, underlying) {
   return orders.filter((o) => o.action === 'open' && o.status !== 'final'
     && Number(o.quantity) - Number(o.processedQty || 0) > 0
-    && positionUnderlying(o) === underlying).length;
+    && positionUnderlying(o) === underlying)
+    .map((o) => ({ id: Number(o.id), direction: entryDirection(o.side, o.symbol, o.optionType) }));
+}
+
+/** Sombra: entradas simuladas aún 'pending' en `underlying`. */
+function shadowPendingEntries(entries, underlying) {
+  return entries.filter((e) => e.status === 'pending' && positionUnderlying(e) === underlying)
+    .map((e) => ({ id: Number(e.id), direction: entryDirection(e.side, e.symbol, e.optionType) }));
 }
 
 function utcDayStart(ms) {
@@ -117,6 +144,10 @@ class OptionsStrategyRunner {
     this.liveOrders = deps.liveOrders || (this.repo === defaultRepo
       ? lazyLiveOrders()
       : { listByStrategy: async () => [] });
+    // Entradas simuladas pendientes (modo sombra), con la misma regla.
+    this.shadowEntries = deps.shadowEntries || (this.repo === defaultRepo
+      ? lazyShadowEntries()
+      : { listPending: async () => [], cancelEntries: async () => [] });
     this.notify = deps.notify || notifyTelegram;
     this.logger = deps.logger || logger;
     this.now = deps.now || Date.now;
@@ -271,7 +302,8 @@ class OptionsStrategyRunner {
       const orders = await this.liveOrders.listByStrategy(strategy.id);
       const actions = template.evaluate({
         now: tickCtx.now, underlying, signal, spot, chain, positions: [], openCountAll: all.length,
-        pendingOpens: pendingOpenCount(orders, underlying),
+        pendingEntries: livePendingEntries(orders, underlying),
+        blockedUnderlyings: strategy.state?.blockedUnderlyings || {},
         params, mode: 'live',
         lastOpenedAt: await this.repo.lastOpenedAt(strategy.id, 'live'),
         tradesToday: await this.repo.countEventsSince(strategy.id, 'live', 'open',
@@ -284,6 +316,33 @@ class OptionsStrategyRunner {
         ...tickCtx, spot, underlying, params, positions: [], mode: 'live',
       }) || { status: 'not_submitted' };
     });
+  }
+
+  /**
+   * Señal contraria que canceló entradas reales pendientes: cuando todas sus
+   * órdenes son finales, se vuelve a evaluar SOLO en Real (la sombra ya la
+   * evaluó al llegar). Lo llenado ya son posiciones y sigue `onOpposite`
+   * (cierre, giro durable con queueReversal o ignorar).
+   * Estados: 'evaluated' | 'reversal_queued' | 'waiting' (nuevas entradas
+   * pendientes que cancelar) | 'underlying_removed' | 'disabled'.
+   */
+  async reevaluateSignal(strategyId, signal) {
+    const strategy = await this.repo.getStrategyById(strategyId);
+    if (!strategy || strategy.mode !== 'live' || strategy.template !== 'alert_signal' ||
+        !this.liveExecutor.enabled) return { status: 'disabled' };
+    try {
+      this.signalUnderlying(strategy, templates.getTemplate(strategy.template), signal);
+    } catch {
+      return { status: 'underlying_removed' };
+    }
+    const tickCtx = { now: this.now(), chains: new Map(), signal, produced: [] };
+    const byMode = await this.withLock(strategyId,
+      () => this.runStrategy(strategy, tickCtx, { liveOnly: true }));
+    const live = byMode.live || [];
+    const produced = tickCtx.produced.filter((p) => p.mode === 'live');
+    if (live.some((a) => a.type === 'cancel_entries')) return { status: 'waiting', produced };
+    if (produced.some((p) => p.reason === 'reverse_queued')) return { status: 'reversal_queued', produced };
+    return { status: 'evaluated', produced };
   }
 
   // ---------- datos de mercado (caché por pasada) ----------
@@ -488,23 +547,39 @@ class OptionsStrategyRunner {
     return { ...tickCtx, spot, underlying, positions, allPositions, params, mode };
   }
 
-  async runStrategy(strategy, tickCtx, { shadowOnly = false } = {}) {
+  async runStrategy(strategy, tickCtx, { shadowOnly = false, liveOnly = false } = {}) {
     const market = await this.strategyMarket(strategy, tickCtx);
     const { template, params, chain, spot } = market;
-    const modes = strategy.mode === 'live' && !shadowOnly ? ['shadow', 'live'] : ['shadow'];
+    let modes = strategy.mode === 'live' && !shadowOnly ? ['shadow', 'live'] : ['shadow'];
+    if (liveOnly) modes = modes.filter((m) => m === 'live');
     const byMode = {};
+    const botSignal = tickCtx.signal && template.id === 'alert_signal';
+    // Bloqueos de subyacente: los escribe el ejecutor real al conciliar, así
+    // que se leen frescos del repo (la estrategia de la pasada puede ser vieja).
+    let blockedUnderlyings;
+    if (botSignal) {
+      const fresh = typeof this.repo.getStrategyById === 'function'
+        ? await this.repo.getStrategyById(strategy.id) : null;
+      blockedUnderlyings = (fresh || strategy).state?.blockedUnderlyings || {};
+    }
 
     for (const mode of modes) {
       const ctx = await this.modeContext(strategy, mode, tickCtx, market);
       const { positions, allPositions } = ctx;
-      const botSignal = tickCtx.signal && template.id === 'alert_signal';
       const lastOpenedAt = await this.repo.lastOpenedAt(strategy.id, mode);
       // Solo los bots por alertas limitan operaciones por día.
       const tradesToday = template.signalDriven
         ? await this.repo.countEventsSince(strategy.id, mode, 'open', utcDayStart(tickCtx.now))
         : undefined;
-      // Real: las entradas aún sin ejecutar también ocupan el subyacente.
+      // Las entradas aún sin ejecutar también ocupan el subyacente: órdenes
+      // reales no finales o entradas simuladas pendientes, según el modo.
       const orders = botSignal && mode === 'live' ? await this.liveOrders.listByStrategy(strategy.id) : null;
+      let pendingEntries;
+      if (botSignal) {
+        pendingEntries = mode === 'live'
+          ? livePendingEntries(orders, market.underlying)
+          : shadowPendingEntries(await this.shadowEntries.listPending({ strategyId: strategy.id }), market.underlying);
+      }
       const actions = template.evaluate({
         now: tickCtx.now,
         underlying: market.underlying,
@@ -513,7 +588,7 @@ class OptionsStrategyRunner {
         positions,
         // Límites compartidos por todos los subyacentes del bot.
         ...(botSignal ? { openCountAll: allPositions.length } : {}),
-        ...(orders ? { pendingOpens: pendingOpenCount(orders, market.underlying) } : {}),
+        ...(botSignal ? { pendingEntries, blockedUnderlyings } : {}),
         params,
         lastOpenedAt,
         mode,
@@ -545,6 +620,9 @@ class OptionsStrategyRunner {
           if (action.type === 'open' || action.type === 'close') {
             if (mode === 'live') await this.executeLive(strategy, action, ctx);
             else await this.executeShadow(strategy, action, ctx);
+          } else if (action.type === 'cancel_entries') {
+            if (mode === 'live') await this.cancelLiveEntries(strategy, action, ctx);
+            else await this.cancelShadowEntries(strategy, action, ctx);
           } else {
             await this.recordOutcome(strategy, mode, action, tickCtx);
           }
@@ -556,6 +634,47 @@ class OptionsStrategyRunner {
       }
     }
     return byMode;
+  }
+
+  /**
+   * Señal contraria con entradas reales pendientes: pide cancelar TODAS las
+   * del subyacente (cancelar solo reduce exposición, también con el envío
+   * apagado) y, con el envío activo, deja la señal en cola durable hasta
+   * que esas órdenes sean finales. Nunca abre nada aquí.
+   */
+  async cancelLiveEntries(strategy, action, ctx) {
+    const ledger = this.liveExecutor.repo;
+    if (typeof ledger?.requestCancelEntries !== 'function') {
+      throw new Error('Sin ledger de órdenes reales para cancelar las entradas pendientes');
+    }
+    const orderIds = await ledger.requestCancelEntries({
+      userId: strategy.userId, strategyId: strategy.id, underlying: ctx.underlying,
+    });
+    let queued = false;
+    if (action.reevaluate && this.liveExecutor.enabled) {
+      if (typeof ledger.queueSignalReevaluation !== 'function') {
+        throw new Error('Sin cola durable para reevaluar la señal');
+      }
+      queued = await ledger.queueSignalReevaluation(strategy, ctx.signal, orderIds);
+    }
+    ctx.produced?.push({ mode: 'live', type: 'cancel_entries', pending: true,
+      reason: queued ? 'reevaluation_queued' : 'entries_cancel_requested',
+      detail: queued
+        ? 'Entrada pendiente en cancelación; la señal se reevalúa al confirmarse'
+        : 'Entrada pendiente en cancelación; la señal no se reevaluará' });
+    this.logger.info('options_entries_cancel_requested', {
+      strategyId: strategy.id, underlying: ctx.underlying, orderIds, queued,
+    });
+  }
+
+  /** Sombra: las entradas simuladas se cancelan al momento. */
+  async cancelShadowEntries(strategy, action, ctx) {
+    const canceled = await this.shadowEntries.cancelEntries(action.ids, ctx.now);
+    ctx.produced?.push({ mode: 'shadow', type: 'cancel_entries', reason: action.reason,
+      detail: 'Entrada pendiente cancelada' });
+    this.logger.info('options_shadow_entries_canceled', {
+      strategyId: strategy.id, ids: action.ids, canceled: canceled?.length ?? 0,
+    });
   }
 
   /**
