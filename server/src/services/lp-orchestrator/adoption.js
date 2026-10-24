@@ -446,6 +446,7 @@ class LpAdoptionService {
         protectionConfig,
         existingProtectedPoolId,
         protectionFailureMode: 'strict',
+        openReason: 'adopt',
       });
     } catch (err) {
       this.logger.warn?.('lp_adoption_failed', {

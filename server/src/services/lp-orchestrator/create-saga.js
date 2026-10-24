@@ -391,6 +391,7 @@ class LpCreateSaga {
         // como excepción en vez de quedar en un `logger.warn`.
         protectionFailureMode: 'strict',
         creationOperationId: operationId,
+        openReason: 'create',
       });
 
       this._evaluateInBackground(userId, attached?.id || orchestrator.id);

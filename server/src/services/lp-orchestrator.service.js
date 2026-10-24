@@ -12,6 +12,8 @@
 const config = require('../config');
 const db = require('../db');
 const lpOrchestratorRepository = require('../repositories/lp-orchestrator.repository');
+const lpOrchestratorSegmentRepository = require('../repositories/lp-orchestrator-segment.repository');
+const protectedPoolDeltaRebalanceRepository = require('../repositories/protected-pool-delta-rebalance.repository');
 const protectedPoolRepository = require('../repositories/protected-uniswap-pool.repository');
 const uniswapService = require('./uniswap.service');
 const positionActionsService = require('./uniswap-position-actions.service');
@@ -62,6 +64,14 @@ const LpOrchestratorCostEstimator = require('./lp-orchestrator/cost-estimator');
 const verifier = require('./lp-orchestrator/verifier');
 const LpOrchestratorNotifier = require('./lp-orchestrator/notifier');
 const protectionRecovery = require('./lp-orchestrator/protection-recovery');
+const {
+  SEGMENT_OPENING_ACTIONS,
+  SEGMENT_CLOSING_ACTIONS,
+  subtractAccounting,
+  classifyCloseReason,
+  estimateSigningDriftUsd,
+  summarizeCoverage,
+} = require('./lp-orchestrator/segments');
 
 const FAILED_COOLDOWN_MS = 60 * 60 * 1000; // 1 h tras drift detectado
 const POSITION_MISSING_CONFIRMATIONS = config.deltaNeutral.positionMissingConfirmations || 2;
@@ -70,6 +80,8 @@ const POSITION_MISSING_CONFIRMATION_GAP_MS = config.deltaNeutral.positionMissing
 class LpOrchestratorService {
   constructor(deps = {}) {
     this.repo = deps.lpOrchestratorRepository || lpOrchestratorRepository;
+    this.segmentRepo = deps.segmentRepository || lpOrchestratorSegmentRepository;
+    this.rebalanceRepo = deps.rebalanceRepository || protectedPoolDeltaRebalanceRepository;
     this.protectedPoolRepo = deps.protectedPoolRepository || protectedPoolRepository;
     this.uniswapService = deps.uniswapService || uniswapService;
     this.positionActionsService = deps.positionActionsService || positionActionsService;
@@ -131,6 +143,209 @@ class LpOrchestratorService {
       });
       throw err;
     }
+  }
+
+  // ---------- TRAMOS (segmentos) -------------------------------------------
+
+  /**
+   * Tramo vivo (`open`/`closing`) del orquestador, o null. Prefiere el
+   * `activeSegmentId` y cae a la búsqueda por estado si apunta a uno cerrado.
+   */
+  async _loadLiveSegment(orch, executor) {
+    if (orch?.activeSegmentId != null) {
+      const byId = await this.segmentRepo.getById(orch.id, orch.activeSegmentId, executor);
+      if (byId && (byId.status === 'open' || byId.status === 'closing')) return byId;
+    }
+    return this.segmentRepo.getActive(orch.id, executor);
+  }
+
+  /**
+   * Cierra el tramo vivo y, si se pide (`openReason`), abre el siguiente, en
+   * una sola transacción. Ver «Corte entre tramos» en la spec:
+   *
+   *  1. Con protección, foto del hedge y de las sombras: lo acumulado hasta
+   *     aquí es del tramo que cierra y la foto pasa a ser el baseline.
+   *  2. Si cambia el tokenId o se cierra el LP, la deriva del LP viejo hasta
+   *     el precio del finalize es del tramo viejo.
+   *  3. Cierra el tramo vivo con `acumulado − baseline`.
+   *  4. Abre el nuevo con `baselineAccounting = acumulado` (antes de gas y
+   *     swaps, que así caen en el tramo nuevo).
+   *  5. `active_segment_id`, contabilidad y baselines del orquestador.
+   *
+   * `accounting` + `skipHedgeSnapshot` los usa el cierre del LP, que ya hizo
+   * el flush final del hedge: el paso 1 no se repite.
+   *
+   * @returns {{ closedSegmentId, openedSegmentId, accounting, strategyState, lastEvaluation, replacedSnapshot }}
+   */
+  async _cutSegment(orch, {
+    action = null,
+    closeReason = null,
+    finalizePrice = null,
+    txHashes = null,
+    newSnapshot = null,
+    newPositionIdentifier = null,
+    openReason = null,
+    protectedPoolId,
+    accounting: accountingOverride = null,
+    skipHedgeSnapshot = false,
+    hedgeQty = null,
+    executor,
+  } = {}) {
+    const now = Date.now();
+    const live = await this._loadLiveSegment(orch, executor);
+    const price = finalizePrice != null && Number.isFinite(Number(finalizePrice)) ? Number(finalizePrice) : null;
+
+    // 1) Foto del hedge (solo con protección vinculada).
+    let acc = this.accounting.normalizeAccounting(accountingOverride || orch.accounting);
+    let hedgeBaseline = orch.strategyState?.hedgeBaseline || null;
+    let shadowBaselines = orch.strategyState?.shadowBaselines || {};
+    let currentHedgeQty = hedgeQty != null && Number.isFinite(Number(hedgeQty)) ? Number(hedgeQty) : null;
+    let protection = null;
+    if (!skipHedgeSnapshot && orch.activeProtectedPoolId) {
+      try {
+        protection = await this.protectedPoolRepo.getById(orch.userId, orch.activeProtectedPoolId);
+        const hedgeState = this.accounting.readHedgeStateFromProtection(protection);
+        if (hedgeState) {
+          const result = this.accounting.applyHedgeStateDelta(acc, hedgeBaseline, hedgeState);
+          acc = result.accounting;
+          hedgeBaseline = result.hedgeBaseline;
+        }
+        const shadowResult = this.accounting.applyShadowStatesDelta(
+          acc, shadowBaselines, this.accounting.readShadowStatesFromProtection(protection)
+        );
+        acc = shadowResult.accounting;
+        shadowBaselines = shadowResult.shadowBaselines;
+        const lastQty = Number(protection?.strategyState?.lastActualQty);
+        if (currentHedgeQty == null && Number.isFinite(lastQty)) currentHedgeQty = lastQty;
+      } catch (err) {
+        this.logger.warn('lp_orchestrator_segment_hedge_snapshot_failed', {
+          orchestratorId: orch.id, protectedPoolId: orch.activeProtectedPoolId, error: err.message,
+        });
+      }
+    }
+
+    // 2) + 3) Cierre del tramo vivo.
+    let closePatch = null;
+    if (live) {
+      const oldSnap = orch.lastEvaluation?.poolSnapshot || null;
+      const sameLp = Boolean(oldSnap) && (
+        live.positionIdentifier == null || oldSnap.identifier == null
+        || String(oldSnap.identifier) === String(live.positionIdentifier)
+      );
+      const targetIdent = newPositionIdentifier ?? newSnapshot?.identifier ?? null;
+      const tokenChanged = targetIdent != null && live.positionIdentifier != null
+        && String(targetIdent) !== String(live.positionIdentifier);
+      const isClosing = SEGMENT_CLOSING_ACTIONS.has(action);
+      const drift = (sameLp && price != null && (tokenChanged || isClosing))
+        ? estimateSigningDriftUsd(oldSnap, price)
+        : 0;
+      if (drift !== 0) acc = this.accounting.applyAccountingDelta(acc, { priceDriftDelta: drift });
+
+      const lastValue = sameLp ? Number(oldSnap.currentValueUsd) : NaN;
+      let coverage = null;
+      const coveragePoolId = live.protectedPoolId ?? orch.activeProtectedPoolId ?? null;
+      if (coveragePoolId != null && typeof this.rebalanceRepo?.listByProtectedPoolId === 'function') {
+        try {
+          const rows = await this.rebalanceRepo.listByProtectedPoolId(coveragePoolId, { limit: 500 }, executor);
+          // summarizeCoverage cuenta todo lo que recibe: solo filas del tramo.
+          const inSegment = (rows || []).filter((r) => Number(r.createdAt) >= Number(live.openedAt)
+            && Number(r.createdAt) <= now);
+          coverage = summarizeCoverage(inSegment, { openedAt: live.openedAt, closedAt: now });
+        } catch (err) {
+          this.logger.warn('lp_orchestrator_segment_coverage_failed', {
+            orchestratorId: orch.id, segmentId: live.id, error: err.message,
+          });
+        }
+      }
+
+      closePatch = {
+        closedAt: now,
+        closePrice: price ?? (sameLp && Number.isFinite(Number(oldSnap.priceCurrent)) ? Number(oldSnap.priceCurrent) : null),
+        closeValueUsd: Number.isFinite(lastValue) ? lastValue + drift : null,
+        closeReason: closeReason || classifyCloseReason({
+          action,
+          price,
+          rangeLowerPrice: live.rangeLowerPrice ?? oldSnap?.rangeLowerPrice,
+          rangeUpperPrice: live.rangeUpperPrice ?? oldSnap?.rangeUpperPrice,
+        }),
+        closeTxHashes: txHashes,
+        accounting: subtractAccounting(acc, live.baselineAccounting),
+        hedgeCloseQty: currentHedgeQty ?? coverage?.lastQty ?? null,
+        coverage,
+      };
+    }
+
+    // 4) Apertura del tramo nuevo.
+    const openIdent = newPositionIdentifier ?? newSnapshot?.identifier ?? null;
+    const openPoolId = protectedPoolId !== undefined ? protectedPoolId : (orch.activeProtectedPoolId ?? null);
+    const finiteOrNull = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+    const openInput = openReason ? {
+      orchestratorId: orch.id,
+      accuracy: 'exact',
+      positionIdentifier: openIdent != null ? String(openIdent) : null,
+      poolAddress: newSnapshot?.poolAddress || orch.activePoolAddress || null,
+      protectedPoolId: openPoolId,
+      policyVersion: protection?.policyVersion || orch.protectionConfig?.policyVersion || null,
+      openedAt: now,
+      openPrice: finiteOrNull(newSnapshot?.priceCurrent),
+      rangeLowerPrice: finiteOrNull(newSnapshot?.rangeLowerPrice),
+      rangeUpperPrice: finiteOrNull(newSnapshot?.rangeUpperPrice),
+      openValueUsd: finiteOrNull(newSnapshot?.currentValueUsd),
+      openAmount0: finiteOrNull(newSnapshot?.positionAmount0 ?? newSnapshot?.amount0),
+      openAmount1: finiteOrNull(newSnapshot?.positionAmount1 ?? newSnapshot?.amount1),
+      openReason,
+      openTxHashes: txHashes,
+      baselineAccounting: acc,
+      hedgeBaseline,
+      shadowBaselines,
+      lpBaselineSnapshot: newSnapshot,
+      hedgeOpenQty: openPoolId != null ? currentHedgeQty : null,
+    } : null;
+
+    // El LP nuevo arranca con su propio snapshot: la siguiente evaluación
+    // no compara contra el LP viejo. Solo con un valor usable, o la deriva
+    // del primer tick sería el LP entero.
+    const prevIdent = orch.lastEvaluation?.poolSnapshot?.identifier;
+    const replacedSnapshot = Boolean(openInput && newSnapshot && openIdent != null
+      && Number.isFinite(Number(newSnapshot.currentValueUsd))
+      && newSnapshot.currentValueUsd != null
+      && (prevIdent == null || String(prevIdent) !== String(openIdent)));
+    const strategyState = { ...(orch.strategyState || {}), hedgeBaseline, shadowBaselines };
+    const lastEvaluation = replacedSnapshot
+      ? { ...(orch.lastEvaluation || {}), poolSnapshot: { ...newSnapshot } }
+      : orch.lastEvaluation;
+
+    // 5) Escrituras atómicas.
+    const write = async (client) => {
+      if (live) await this.segmentRepo.close(live.id, closePatch, client);
+      const opened = openInput ? await this.segmentRepo.create(openInput, client) : null;
+      await this.repo.updateActiveSegment(orch.userId, orch.id, opened?.id ?? null, client);
+      await this.repo.updateAccounting(orch.userId, orch.id, acc, client);
+      await this.repo.updateStrategyState(orch.userId, orch.id, {
+        strategyState,
+        ...(replacedSnapshot ? { lastEvaluation } : {}),
+      }, client);
+      return opened;
+    };
+    const opened = executor !== undefined ? await write(executor) : await this._withTransaction(write);
+
+    this.logger.info('lp_orchestrator_segment_cut', {
+      orchestratorId: orch.id,
+      action,
+      closedSegmentId: live?.id ?? null,
+      closeReason: closePatch?.closeReason ?? null,
+      openedSegmentId: opened?.id ?? null,
+      openReason,
+    });
+
+    return {
+      closedSegmentId: live?.id ?? null,
+      openedSegmentId: opened?.id ?? null,
+      accounting: acc,
+      strategyState,
+      lastEvaluation,
+      replacedSnapshot,
+    };
   }
 
   // ---------- LIFECYCLE: CREATE / ATTACH / KILL / ARCHIVE ------------------
@@ -224,6 +439,8 @@ class LpOrchestratorService {
     // Adopción de un LP que ya tiene cobertura: se vincula la existente en
     // vez de abrir un segundo short sobre la misma posición.
     existingProtectedPoolId = null,
+    // Motivo de apertura del tramo: `create` (saga), `adopt` o `attach`.
+    openReason = 'attach',
   }) {
     const orch = await this._loadOrThrow(userId, orchestratorId);
     if (orch.activePositionIdentifier) {
@@ -291,10 +508,26 @@ class LpOrchestratorService {
     }
 
     const newAccounting = this.accounting.incrementLpCount(orch.accounting);
+    let openedSegmentId = null;
     // Commit atómico de estado post-creación de LP: accounting + activeLp +
     // strategyState + log. Si algo falla entre estas escrituras el estado
     // del orquestador quedaría inconsistente con la LP ya creada on-chain.
     await this._withTransaction(async (client) => {
+      // Tramo nuevo: su baseline es la contabilidad previa al LP (el +1 de
+      // lpCount ya es del tramo). Sin hedge previo: la cobertura es nueva.
+      const cut = await this._cutSegment(orch, {
+        action: 'attach-lp',
+        closeReason: 'unknown',
+        txHashes: finalizeResult?.txHashes || null,
+        newSnapshot: refreshedSnapshot,
+        newPositionIdentifier,
+        openReason,
+        protectedPoolId,
+        accounting: orch.accounting,
+        skipHedgeSnapshot: true,
+        executor: client,
+      });
+      openedSegmentId = cut.openedSegmentId;
       await this.repo.updateAccounting(userId, orchestratorId, newAccounting, client);
       await this.repo.updateActiveLp(userId, orchestratorId, {
         activePositionIdentifier: String(newPositionIdentifier),
@@ -320,6 +553,7 @@ class LpOrchestratorService {
       }, client);
       await this.repo.appendActionLog({
         orchestratorId,
+        segmentId: openedSegmentId,
         kind: 'attach_lp',
         action: 'create-position',
         positionIdentifier: newPositionIdentifier,
@@ -552,6 +786,7 @@ class LpOrchestratorService {
         });
         await this.repo.appendActionLog({
           orchestratorId: orch.id,
+          segmentId: orch.activeSegmentId ?? null,
           kind: 'recovery',
           reason: 'needs_collect_detected',
           payload: {
@@ -604,9 +839,22 @@ class LpOrchestratorService {
     //      - si venía de failed, volvemos a lp_active
     //      - si hay protección activa, disparamos el refresh del hedge
     //      - logueamos en action_log como recovery con detalle
-    const newAccounting = this.accounting.incrementLpCount(orch.accounting);
-    // Commit atómico: accounting + activeLp + phase + log.
+    // Commit atómico: tramo + accounting + activeLp + phase + log. El finalize
+    // no llegó, así que el corte no sabe por qué cambió el LP (`unknown`).
+    let newAccounting = null;
+    let reconciledSegmentId = orch.activeSegmentId ?? null;
     await this._withTransaction(async (client) => {
+      const cut = await this._cutSegment(orch, {
+        action: null,
+        closeReason: 'unknown',
+        finalizePrice: newest.priceCurrent,
+        newSnapshot: newest,
+        newPositionIdentifier: String(newest.identifier),
+        openReason: 'rerange',
+        executor: client,
+      });
+      reconciledSegmentId = cut.openedSegmentId;
+      newAccounting = this.accounting.incrementLpCount(cut.accounting);
       await this.repo.updateAccounting(orch.userId, orch.id, newAccounting, client);
       await this.repo.updateActiveLp(orch.userId, orch.id, {
         activePositionIdentifier: String(newest.identifier),
@@ -639,6 +887,7 @@ class LpOrchestratorService {
     }
     await this.repo.appendActionLog({
       orchestratorId: orch.id,
+      segmentId: reconciledSegmentId,
       kind: 'recovery',
       reason: 'reconciled_position_identifier',
       payload: {
@@ -724,6 +973,7 @@ class LpOrchestratorService {
       });
       await this.repo.appendActionLog({
         orchestratorId,
+        segmentId: orch.activeSegmentId ?? null,
         kind: 'kill_lp',
         action: 'collect-fees',
         positionIdentifier: reconcile.needsCollect.tokenId,
@@ -758,6 +1008,12 @@ class LpOrchestratorService {
           reason: 'lp_already_closed_on_chain',
         });
       }
+      // El LP ya no existe: su tramo se cierra aquí y no se abre otro.
+      const closedCut = await this._cutSegment(orch, {
+        action: null,
+        closeReason: 'lp_closed',
+        newSnapshot: null,
+      });
       await this.repo.updateActiveLp(userId, orchestratorId, {
         activePositionIdentifier: null,
         activePoolAddress: null,
@@ -766,6 +1022,7 @@ class LpOrchestratorService {
       });
       await this.repo.appendActionLog({
         orchestratorId,
+        segmentId: closedCut.closedSegmentId,
         kind: 'recovery',
         reason: 'lp_already_closed_on_chain',
         payload: { previousIdentifier: reconcile.oldIdentifier, mode },
@@ -803,6 +1060,7 @@ class LpOrchestratorService {
 
     await this.repo.appendActionLog({
       orchestratorId,
+      segmentId: orch.activeSegmentId ?? null,
       kind: 'kill_lp',
       action,
       positionIdentifier: orchEffective.activePositionIdentifier,
@@ -819,7 +1077,7 @@ class LpOrchestratorService {
    * protección activa, dispara el refresh del hedge.
    */
   async recordTxFinalized({ userId, orchestratorId, action, finalizeResult, expected = {} }) {
-    const orch = await this._loadOrThrow(userId, orchestratorId);
+    let orch = await this._loadOrThrow(userId, orchestratorId);
 
     // Idempotencia: si ya registramos un tx_finalized con cualquiera de
     // los mismos txHashes, evitamos volver a aplicar costos / lpCount.
@@ -915,6 +1173,34 @@ class LpOrchestratorService {
     const isNewLp = Boolean(
       newPositionIdentifier && newPositionIdentifier !== orch.activePositionIdentifier
     );
+    const isClosingAction = SEGMENT_CLOSING_ACTIONS.has(action);
+    const finalizePrice = refreshedSnapshot?.priceCurrent ?? expected?.priceCurrent ?? null;
+
+    // Corte de tramo ANTES de aplicar gas y swaps: así esos costes caen en el
+    // tramo nuevo (son el coste de abrirlo). La idempotencia de arriba evita
+    // que un finalize repetido corte dos veces. Los cierres cortan más abajo,
+    // tras el flush final del hedge: no hay tramo nuevo donde dejar el gas ni
+    // los fills de la desactivación.
+    let cut = null;
+    if (SEGMENT_OPENING_ACTIONS.has(action)) {
+      cut = await this._cutSegment(orch, {
+        action,
+        finalizePrice,
+        txHashes: incomingTxHashes.length ? incomingTxHashes : null,
+        newSnapshot: refreshedSnapshot,
+        newPositionIdentifier: newPositionIdentifier || orch.activePositionIdentifier,
+        openReason: isCapitalAction ? 'capital_change' : 'rerange',
+      });
+      orch = {
+        ...orch,
+        accounting: cut.accounting,
+        strategyState: cut.strategyState,
+        lastEvaluation: cut.lastEvaluation,
+        activeSegmentId: cut.openedSegmentId,
+      };
+    }
+    let logSegmentId = orch.activeSegmentId ?? null;
+
     let newAccounting = this.accounting.applyTxCostDelta(orch.accounting, txCost);
     if (isNewLp) {
       // re-range cuenta como nuevo LP a efectos de lpCount
@@ -926,7 +1212,9 @@ class LpOrchestratorService {
     // el baseline de price-drift en `lastEvaluation.poolSnapshot.currentValueUsd`
     // sumando el delta. Así el próximo `_evaluateOne` no contabiliza el
     // capital agregado/retirado como deriva de precio.
-    if (capitalDeltaUsd !== 0 && orch.lastEvaluation?.poolSnapshot) {
+    // Si el corte ya dejó el snapshot del LP nuevo como baseline, no se suma
+    // otra vez el delta de capital.
+    if (capitalDeltaUsd !== 0 && orch.lastEvaluation?.poolSnapshot && !cut?.replacedSnapshot) {
       const prevValue = Number(orch.lastEvaluation.poolSnapshot.currentValueUsd) || 0;
       const adjustedSnapshot = {
         ...orch.lastEvaluation.poolSnapshot,
@@ -950,7 +1238,7 @@ class LpOrchestratorService {
 
     // Acciones de cierre dejan el orquestador en idle
     let nextPhase = 'lp_active';
-    if (action === 'close-to-usdc' || action === 'close-keep-assets') {
+    if (isClosingAction) {
       if (orch.activeProtectedPoolId) {
         await this._deactivateLinkedProtection(userId, orch.activeProtectedPoolId, {
           orchestratorId,
@@ -989,8 +1277,23 @@ class LpOrchestratorService {
           });
         }
       }
-      // Commit atómico del cierre: accounting + activeLp reset + strategyState.
+      // Commit atómico del cierre: tramo + accounting + activeLp reset + strategyState.
       await this._withTransaction(async (client) => {
+        // El flush de arriba ya hizo la foto del hedge (paso 1 del corte):
+        // el corte no la repite. Gas, fills de la desactivación y deriva de
+        // la firma quedan en el tramo que se cierra; no se abre otro.
+        const closeCut = await this._cutSegment(orch, {
+          action,
+          finalizePrice,
+          txHashes: incomingTxHashes.length ? incomingTxHashes : null,
+          newSnapshot: null,
+          accounting: newAccounting,
+          skipHedgeSnapshot: true,
+          hedgeQty: orch.activeProtectedPoolId ? 0 : null,
+          executor: client,
+        });
+        logSegmentId = closeCut.closedSegmentId;
+        newAccounting = closeCut.accounting;
         await this.repo.updateAccounting(userId, orchestratorId, newAccounting, client);
         await this.repo.updateActiveLp(userId, orchestratorId, {
           activePositionIdentifier: null,
@@ -1032,6 +1335,7 @@ class LpOrchestratorService {
 
     await this.repo.appendActionLog({
       orchestratorId,
+      segmentId: logSegmentId,
       kind: 'tx_finalized',
       action,
       positionIdentifier: newPositionIdentifier || orch.activePositionIdentifier,
@@ -1144,6 +1448,7 @@ class LpOrchestratorService {
 
     await this.repo.appendActionLog({
       orchestratorId,
+      segmentId: orch.activeSegmentId ?? null,
       kind: 'config_updated',
       action: 'update_config',
       payload: {
@@ -1180,6 +1485,7 @@ class LpOrchestratorService {
     await this.repo.archive(userId, orchestratorId);
     await this.repo.appendActionLog({
       orchestratorId,
+      segmentId: orch.activeSegmentId ?? null,
       kind: 'archive',
       createdAt: Date.now(),
     });
@@ -1249,6 +1555,7 @@ class LpOrchestratorService {
       });
       await this.repo.appendActionLog({
         orchestratorId,
+        segmentId: orch.activeSegmentId ?? null,
         kind: 'recovery',
         reason: 'position_recovered_via_reconcile',
         payload: {
@@ -1405,6 +1712,7 @@ class LpOrchestratorService {
       finalizeResult: syntheticFinalize,
       protectionConfig: protectionConfig || orch.protectionConfig || { enabled: false },
       protectionFailureMode: 'lenient',
+      openReason: 'adopt',
     });
   }
 
@@ -1519,6 +1827,7 @@ class LpOrchestratorService {
         }, client);
         await this.repo.appendActionLog({
           orchestratorId: orch.id,
+          segmentId: orch.activeSegmentId ?? null,
           kind: 'recovery',
           reason: protectedPoolId ? 'protection_recreated' : 'protection_recreate_failed',
           positionIdentifier: orch.activePositionIdentifier,
@@ -1635,7 +1944,12 @@ class LpOrchestratorService {
     const canInspectDirectly = typeof this.uniswapService.inspectPositionByIdentifier === 'function';
     // Usamos lightweight para la mayoría de evaluaciones (ahorra RPC).
     // Si no tenemos priceAtOpen previo, hacemos UN scan completo para resolverlo.
-    const hasPriceAtOpen = orch.lastEvaluation?.poolSnapshot?.priceAtOpen != null;
+    // Solo vale el priceAtOpen del MISMO LP: tras un re-range el del anterior
+    // no sirve y hace falta el scan completo.
+    const prevSnapForOpen = orch.lastEvaluation?.poolSnapshot || null;
+    const hasPriceAtOpen = prevSnapForOpen?.priceAtOpen != null
+      && prevSnapForOpen.identifier != null
+      && String(prevSnapForOpen.identifier) === String(orch.activePositionIdentifier);
     if (canInspectDirectly) {
       try {
         pool = await this.uniswapService.inspectPositionByIdentifier({
@@ -1720,6 +2034,7 @@ class LpOrchestratorService {
         if (consecutiveMissingDetections < POSITION_MISSING_CONFIRMATIONS) {
           await this.repo.appendActionLog({
             orchestratorId: orch.id,
+            segmentId: orch.activeSegmentId ?? null,
             kind: 'recovery',
             reason: 'position_missing_pending',
             payload: { consecutiveMissingDetections },
@@ -1736,6 +2051,7 @@ class LpOrchestratorService {
         });
         await this.repo.appendActionLog({
           orchestratorId: orch.id,
+          segmentId: orch.activeSegmentId ?? null,
           kind: 'recovery',
           reason: 'position_not_found',
           payload: { consecutiveMissingDetections },
@@ -1770,6 +2086,7 @@ class LpOrchestratorService {
       });
       await this.repo.appendActionLog({
         orchestratorId: orch.id,
+        segmentId: orch.activeSegmentId ?? null,
         kind: 'recovery',
         reason: 'position_auto_recovered',
         payload: {
@@ -1785,13 +2102,45 @@ class LpOrchestratorService {
       orch = await this.repo.getById(orch.userId, orch.id);
     }
 
+    // Corte de tramo si el LP cambió sin pasar por recordTxFinalized (ajuste
+    // desde otra página, pestaña cerrada): el tramo vivo apunta a otro tokenId.
+    if (pool?.identifier != null) {
+      let live = null;
+      try {
+        live = await this._loadLiveSegment(orch);
+      } catch (err) {
+        this.logger.warn('lp_orchestrator_live_segment_load_failed', { orchestratorId: orch.id, error: err.message });
+      }
+      if (live?.positionIdentifier != null && String(live.positionIdentifier) !== String(pool.identifier)) {
+        const cut = await this._cutSegment(orch, {
+          action: null,
+          closeReason: 'unknown',
+          finalizePrice: pool.priceCurrent,
+          newSnapshot: pool,
+          newPositionIdentifier: String(pool.identifier),
+          openReason: 'rerange',
+        });
+        orch = {
+          ...orch,
+          accounting: cut.accounting,
+          strategyState: cut.strategyState,
+          lastEvaluation: cut.lastEvaluation,
+          activeSegmentId: cut.openedSegmentId,
+        };
+      }
+    }
+
     const snapshotHash = computeSnapshotHash(pool);
 
     // Carry-forward: el scan lightweight omite priceAtOpen y valuación
     // inicial para ahorrar RPC. Si el snapshot anterior ya los resolvió,
     // los preservamos para que la UI y la contabilidad los tengan siempre.
+    // Solo entre snapshots del MISMO LP: el precio de apertura de un LP
+    // viejo no es el del nuevo.
     const prevSnapshot = orch.lastEvaluation?.poolSnapshot || null;
-    if (prevSnapshot && prevSnapshot.priceAtOpen != null) {
+    const sameLpAsPrev = Boolean(prevSnapshot) && prevSnapshot.identifier != null
+      && String(prevSnapshot.identifier) === String(pool.identifier);
+    if (sameLpAsPrev && prevSnapshot.priceAtOpen != null) {
       const carryFields = [
         'priceAtOpen', 'priceAtOpenAccuracy', 'priceAtOpenSource', 'priceAtOpenBlock',
       ];
@@ -1801,7 +2150,7 @@ class LpOrchestratorService {
         }
       }
     }
-    if (prevSnapshot) {
+    if (sameLpAsPrev) {
       const valuationFields = [
         'initialValueUsd', 'initialValueUsdAccuracy', 'initialValueUsdSource',
         'initialAmount0', 'initialAmount1',
@@ -2032,6 +2381,7 @@ class LpOrchestratorService {
 
     await this.repo.appendActionLog({
       orchestratorId: orch.id,
+      segmentId: orch.activeSegmentId ?? null,
       kind: 'decision',
       decision,
       reason,
@@ -2079,6 +2429,7 @@ class LpOrchestratorService {
         await this.repo.markUrgentAlertSent(orch.userId, orch.id, { at: now });
         await this.repo.appendActionLog({
           orchestratorId: orch.id,
+          segmentId: orch.activeSegmentId ?? null,
           kind: 'notification',
           decision: 'urgent_adjust',
           reason: isFirst ? 'first' : 'repeat',
@@ -2095,6 +2446,7 @@ class LpOrchestratorService {
         }
         await this.repo.appendActionLog({
           orchestratorId: orch.id,
+          segmentId: orch.activeSegmentId ?? null,
           kind: 'notification',
           decision: 'recommend_rebalance',
           createdAt: now,
@@ -2118,6 +2470,7 @@ class LpOrchestratorService {
         }
         await this.repo.appendActionLog({
           orchestratorId: orch.id,
+          segmentId: orch.activeSegmentId ?? null,
           kind: 'notification',
           decision: 'recommend_collect_fees',
           createdAt: now,
