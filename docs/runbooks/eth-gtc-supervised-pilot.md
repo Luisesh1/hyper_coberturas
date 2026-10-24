@@ -15,7 +15,8 @@ La alternativa sintética FOK de PR #20 **no** participa del piloto.
 2. La única apertura candidata sería **BUY ETH 0.01 LIMIT GTC al precio
    medio**, supervisada 10 min y cancelada si no se llena (desde el 24 de
    octubre de 2026 sustituye al FOK de entrada; los llenados parciales se
-   aceptan y un remanente inoperable bloquea el subyacente, con aviso por
+   aceptan y, si la cantidad llenada queda inoperable —no se puede cerrar
+   por estar bajo el lote mínimo—, se bloquea el subyacente, con aviso por
    Telegram y desbloqueo desde la UI),
    con símbolo, vencimiento, strike y precio máximo autorizados
    explícitamente por el operador para **esa** transacción. No reutilizar

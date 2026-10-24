@@ -204,9 +204,11 @@ de bid). Sin bid y ask válidos no hay entrada (`no_mid_price`).
 - La orden se supervisa 10 min (`WINDOW_MS`); si no se llena entera, se
   cancela. Los llenados parciales se aceptan: la cantidad llenada es una
   posición real confirmada por Binance.
-- Si tras cancelar queda un remanente inoperable (bajo el lote mínimo), el
-  subyacente queda **bloqueado**, se avisa por Telegram y se desbloquea
-  desde la UI («Desbloquear»), tras revisar la cuenta.
+- Si la cantidad **llenada** (la posición que queda abierta tras cancelar
+  el resto) no se puede cerrar por estar bajo el lote mínimo o fuera de su
+  paso, el subyacente queda **bloqueado**, se avisa por Telegram y se
+  desbloquea desde la UI («Desbloquear»), tras revisar la cuenta. Lo que
+  se cancela sin llenar no deja nada abierto.
 - Los cierres no cambian: los cierres ETH que no son TP siguen en FOK, los
   demás en GTC, y el TP residente sigue siendo `LIMIT GTC reduceOnly`.
 - El script de preparación imprime `gtc_pilot_entry_tif=GTC` y
