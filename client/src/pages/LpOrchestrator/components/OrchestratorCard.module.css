@@ -911,3 +911,9 @@
   .legDivider { width: auto; height: 1px; margin: 0; }
   .verdictUsd { font-size: var(--fs-xl); }
 }
+
+/* Ajuste en firma: puede ocupar varias líneas en móvil, no se recorta. */
+.adjusting {
+  font-weight: 700;
+  color: var(--uni-text-2);
+}

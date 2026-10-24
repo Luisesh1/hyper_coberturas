@@ -13,6 +13,7 @@ const {
   attachLpSchema,
   recordTxFinalizedSchema,
   killLpSchema,
+  actionStartedSchema,
   preflightProtectionSchema,
   createIntentSchema,
   commitIntentSchema,
@@ -207,6 +208,16 @@ router.post('/:id/record-tx-finalized', validate(recordTxFinalizedSchema), async
     userId: req.user.userId,
     orchestratorId: id,
     ...req.body,
+  });
+  res.json({ success: true, data });
+}));
+
+router.post('/:id/action-started', validate(actionStartedSchema), asyncHandler(async (req, res) => {
+  const id = requireIntParam(req, 'id');
+  const data = await lpOrchestratorService.markActionStarted({
+    userId: req.user.userId,
+    orchestratorId: id,
+    action: req.body.action,
   });
   res.json({ success: true, data });
 }));

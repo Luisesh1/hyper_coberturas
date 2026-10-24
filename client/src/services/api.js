@@ -373,6 +373,8 @@ export const lpOrchestratorApi = {
     request('POST', `/lp-orchestrators/${id}/adopt-lp`, { positionIdentifier, protectionConfig }),
   recordTxFinalized: (id, payload) =>
     request('POST', `/lp-orchestrators/${id}/record-tx-finalized`, payload),
+  actionStarted: (id, action) =>
+    request('POST', `/lp-orchestrators/${id}/action-started`, { action }),
   killLp: (id, { mode = 'auto' } = {}) =>
     request('POST', `/lp-orchestrators/${id}/kill-lp`, { mode }),
   archive: (id) => request('POST', `/lp-orchestrators/${id}/archive`, {}),

@@ -24,6 +24,8 @@ const PHASE_LABELS = {
   complete: { label: 'Completado', tone: 'muted' },
 };
 
+const ADJUSTING_TEXT = 'Ajuste en curso: la cobertura espera al LP nuevo';
+
 function buildPoolFromOrchestrator(orch) {
   const pool = orch.lastEvaluation?.poolSnapshot;
   if (!pool) return null;
@@ -93,6 +95,7 @@ export default function OrchestratorCard({
   const recommendCollect = orchestrator.lastEvaluation?.recommendCollect;
   const pool = useMemo(() => buildPoolFromOrchestrator(orchestrator), [orchestrator]);
   const hasActiveLp = !!orchestrator.activePositionIdentifier;
+  const adjusting = orchestrator.activeSegment?.status === 'closing';
   const [showStrategy, setShowStrategy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -255,7 +258,13 @@ export default function OrchestratorCard({
                   </span>
                 </>
               )}
-              {hedgeValue && (
+              {adjusting && (
+                <>
+                  <span className={styles.dot}>·</span>
+                  <span className={styles.adjusting}>{ADJUSTING_TEXT}</span>
+                </>
+              )}
+              {hedgeValue && !adjusting && (
                 <>
                   <span className={styles.dot}>·</span>
                   <span

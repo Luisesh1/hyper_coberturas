@@ -73,6 +73,9 @@ const {
   summarizeCoverage,
 } = require('./lp-orchestrator/segments');
 
+// Un ajuste que lleva más de esto en `closing` con la posición vieja aún
+// con liquidez se da por abandonado (firma cancelada) y el tramo vuelve a `open`.
+const CLOSING_ABANDON_MS = 30 * 60_000;
 const FAILED_COOLDOWN_MS = 60 * 60 * 1000; // 1 h tras drift detectado
 const POSITION_MISSING_CONFIRMATIONS = config.deltaNeutral.positionMissingConfirmations || 2;
 const POSITION_MISSING_CONFIRMATION_GAP_MS = config.deltaNeutral.positionMissingConfirmationGapMs || (3 * 60_000);
@@ -1117,6 +1120,34 @@ class LpOrchestratorService {
    * actualiza la contabilidad y, si la acción cambió el rango y hay
    * protección activa, dispara el refresh del hedge.
    */
+  /**
+   * El usuario empezó a firmar un cambio de LP: el tramo vivo pasa a
+   * `closing` para que la tarjeta avise y la ausencia temporal del LP viejo
+   * no cuente como `position_not_found`. Idempotente.
+   */
+  async markActionStarted({ userId, orchestratorId, action }) {
+    if (!SEGMENT_OPENING_ACTIONS.has(action) && !SEGMENT_CLOSING_ACTIONS.has(action)) {
+      throw new ValidationError(`Acción no soportada: ${action}`);
+    }
+    const orch = await this._loadOrThrow(userId, orchestratorId);
+    const live = await this._loadLiveSegment(orch);
+    if (live && live.status === 'open') {
+      const at = Date.now();
+      const marked = await this.segmentRepo.markClosing(live.id, { at });
+      if (marked != null) {
+        await this.repo.appendActionLog({
+          orchestratorId,
+          segmentId: live.id,
+          kind: 'decision',
+          reason: 'action_started',
+          payload: { action },
+          createdAt: at,
+        });
+      }
+    }
+    return this._loadOrThrow(userId, orchestratorId);
+  }
+
   async recordTxFinalized({ userId, orchestratorId, action, finalizeResult, expected = {} }) {
     let orch = await this._loadOrThrow(userId, orchestratorId);
 
@@ -2077,6 +2108,16 @@ class LpOrchestratorService {
           orch = await this.repo.getById(orch.userId, orch.id);
         }
       } else {
+        // Ajuste en firma: el LP viejo puede estar vacío o no aparecer
+        // mientras llega el nuevo. No cuenta como ausencia.
+        let closingLive = null;
+        try {
+          closingLive = await this._loadLiveSegment(orch);
+        } catch (err) {
+          this.logger.warn('lp_orchestrator_live_segment_load_failed', { orchestratorId: orch.id, error: err.message });
+        }
+        if (closingLive?.status === 'closing') return { skipped: 'segment_closing' };
+
         const now = Date.now();
         const strategyState = { ...(orch.strategyState || {}) };
         const lastMissingAt = Number(strategyState.lastMissingDetectedAt || 0);
@@ -2180,7 +2221,22 @@ class LpOrchestratorService {
       } catch (err) {
         this.logger.warn('lp_orchestrator_live_segment_load_failed', { orchestratorId: orch.id, error: err.message });
       }
-      if (live?.positionIdentifier != null && String(live.positionIdentifier) !== String(pool.identifier)) {
+      if (live?.status === 'closing'
+        && live.positionIdentifier != null
+        && String(live.positionIdentifier) === String(pool.identifier)
+        && hasLiquidity(pool)
+        && Date.now() - Number(live.closingStartedAt || 0) >= CLOSING_ABANDON_MS) {
+        // Firma abandonada: el LP viejo sigue con liquidez, el tramo no se queda cerrando.
+        await this.segmentRepo.reopen(live.id);
+        await this.repo.appendActionLog({
+          orchestratorId: orch.id,
+          segmentId: live.id,
+          kind: 'decision',
+          reason: 'action_abandoned',
+          payload: { closingStartedAt: live.closingStartedAt },
+          createdAt: Date.now(),
+        });
+      } else if (live?.positionIdentifier != null && String(live.positionIdentifier) !== String(pool.identifier)) {
         const cut = await this._cutSegment(orch, {
           action: null,
           closeReason: 'unknown',

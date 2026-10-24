@@ -18,6 +18,7 @@ export function usePositionActionFlow({
   initialFormState,
   buildPayload,
   onFinalized,
+  onExecuteStarted,
   autoPrepare = false,
   prefilledPrepareResult = null,
 }) {
@@ -137,6 +138,15 @@ export function usePositionActionFlow({
     }
 
     setError(null);
+    // Aviso de «ajuste en curso»: se lanza antes de la primera firma y sin
+    // esperarlo. Si falla solo se registra: nunca bloquea la firma.
+    try {
+      Promise.resolve(onExecuteStarted?.(action)).catch((err) => {
+        console.warn('onExecuteStarted failed', err);
+      });
+    } catch (err) {
+      console.warn('onExecuteStarted failed', err);
+    }
     const finalizePayload = {
       network: prepareData.network,
       version: prepareData.version,
@@ -163,7 +173,7 @@ export function usePositionActionFlow({
       return result;
     }
     return null;
-  }, [action, onFinalized, prepareData, resume]);
+  }, [action, onFinalized, onExecuteStarted, prepareData, resume]);
 
   return {
     error,

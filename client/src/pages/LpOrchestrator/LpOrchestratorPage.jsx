@@ -832,6 +832,7 @@ export default function LpOrchestratorPage() {
           prefilledPrepareResult={activeAction.prefilledPrepareResult || null}
           onClose={handleActionModalClose}
           onFinalized={handleActionFinalized}
+          onExecuteStarted={(action) => lpOrchestratorApi.actionStarted(activeAction.orchestrator.id, action)}
         />
       )}
 
