@@ -205,6 +205,23 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
     assert.equal(await repo.getActive(activeId, db), null);
   });
 
+  await t.test('relabelClose / relabelOpen solo tocan cortes unknown y aperturas sin hashes', async () => {
+    const seg = await repo.create({
+      orchestratorId: activeId, positionIdentifier: 'tokR', openedAt: 15, openReason: 'rerange',
+      openTxHashes: null, baselineAccounting: {},
+    }, db);
+    assert.equal(await repo.relabelOpen(seg.id, { openReason: 'rerange', openTxHashes: ['0xa'] }, db), seg.id);
+    assert.equal(await repo.relabelOpen(seg.id, { openReason: 'capital_change', openTxHashes: ['0xb'] }, db), null);
+    assert.deepEqual((await repo.getById(activeId, seg.id, db)).openTxHashes, ['0xa']);
+    await repo.close(seg.id, { closedAt: 16, closeReason: 'unknown' }, db);
+    assert.equal(await repo.relabelClose(seg.id, { closeReason: 'range_exit_below', closeTxHashes: ['0xc'] }, db), seg.id);
+    assert.equal(await repo.relabelClose(seg.id, { closeReason: 'manual_rerange' }, db), null);
+    const closed = await repo.getById(activeId, seg.id, db);
+    assert.equal(closed.closeReason, 'range_exit_below');
+    assert.deepEqual(closed.closeTxHashes, ['0xc']);
+    await scoped.query('DELETE FROM lp_orchestrator_segments WHERE id = $1', [seg.id]);
+  });
+
   await t.test('create asigna seq = max+1 y el segmento queda enlazable', async () => {
     const seg = await repo.create({
       orchestratorId: activeId, positionIdentifier: 'tok2', poolAddress: '0xpool',

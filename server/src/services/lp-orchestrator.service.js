@@ -160,6 +160,43 @@ class LpOrchestratorService {
   }
 
   /**
+   * Un finalize que llega cuando el corte ya ocurrió (por reconciliación o
+   * por un intento previo): el tramo anterior se cerró como `unknown` y el
+   * vivo se abrió sin hashes. Se les pone el motivo y los hashes reales; los
+   * repos solo tocan lo que siga como `unknown` / sin hashes.
+   */
+  async _relabelReconciledCut(orch, live, { action, openReason, txHashes }) {
+    const hashes = txHashes?.length ? txHashes : null;
+    const segments = await this.segmentRepo.listByOrchestrator(orch.id);
+    const predecessor = (segments || []).find((s) => s.seq === live.seq - 1 && s.status === 'closed') || null;
+    await this._withTransaction(async (client) => {
+      if (predecessor && predecessor.closeReason === 'unknown') {
+        const snap = orch.lastEvaluation?.poolSnapshot || null;
+        const snapOfOldLp = snap && snap.identifier != null
+          && String(snap.identifier) === String(predecessor.positionIdentifier);
+        const prePrice = snapOfOldLp && snap.priceCurrent != null && Number.isFinite(Number(snap.priceCurrent))
+          ? Number(snap.priceCurrent)
+          : predecessor.closePrice;
+        await this.segmentRepo.relabelClose(predecessor.id, {
+          closeReason: classifyCloseReason({
+            action,
+            price: prePrice,
+            rangeLowerPrice: predecessor.rangeLowerPrice,
+            rangeUpperPrice: predecessor.rangeUpperPrice,
+          }),
+          closeTxHashes: hashes,
+        }, client);
+      }
+      if (!live.openTxHashes || live.openTxHashes.length === 0) {
+        await this.segmentRepo.relabelOpen(live.id, { openReason, openTxHashes: hashes }, client);
+      }
+    });
+    this.logger.info('lp_orchestrator_segment_cut_relabelled', {
+      orchestratorId: orch.id, liveSegmentId: live.id, predecessorId: predecessor?.id ?? null, action,
+    });
+  }
+
+  /**
    * Cierra el tramo vivo y, si se pide (`openReason`), abre el siguiente, en
    * una sola transacción. Ver «Corte entre tramos» en la spec:
    *
@@ -262,9 +299,13 @@ class LpOrchestratorService {
         closedAt: now,
         closePrice: price ?? (sameLp && Number.isFinite(Number(oldSnap.priceCurrent)) ? Number(oldSnap.priceCurrent) : null),
         closeValueUsd: Number.isFinite(lastValue) ? lastValue + drift : null,
+        // El lado se mide con el precio de ANTES del ajuste (última foto del LP
+        // viejo): al finalizar el precio suele haber vuelto al rango.
         closeReason: closeReason || classifyCloseReason({
           action,
-          price,
+          price: sameLp && Number.isFinite(Number(oldSnap.priceCurrent)) && oldSnap.priceCurrent != null
+            ? Number(oldSnap.priceCurrent)
+            : price,
           rangeLowerPrice: live.rangeLowerPrice ?? oldSnap?.rangeLowerPrice,
           rangeUpperPrice: live.rangeUpperPrice ?? oldSnap?.rangeUpperPrice,
         }),
@@ -1181,27 +1222,55 @@ class LpOrchestratorService {
     // que un finalize repetido corte dos veces. Los cierres cortan más abajo,
     // tras el flush final del hedge: no hay tramo nuevo donde dejar el gas ni
     // los fills de la desactivación.
+    //
+    // Las fees cobradas en el ajuste (reinvest-fees) son del tramo VIEJO: se
+    // aplican antes del corte. Gas y slippage, después.
     let cut = null;
+    let costAfterCut = txCost;
     if (SEGMENT_OPENING_ACTIONS.has(action)) {
-      cut = await this._cutSegment(orch, {
-        action,
-        finalizePrice,
-        txHashes: incomingTxHashes.length ? incomingTxHashes : null,
-        newSnapshot: refreshedSnapshot,
-        newPositionIdentifier: newPositionIdentifier || orch.activePositionIdentifier,
-        openReason: isCapitalAction ? 'capital_change' : 'rerange',
-      });
-      orch = {
-        ...orch,
-        accounting: cut.accounting,
-        strategyState: cut.strategyState,
-        lastEvaluation: cut.lastEvaluation,
-        activeSegmentId: cut.openedSegmentId,
-      };
+      const openReason = isCapitalAction ? 'capital_change' : 'rerange';
+      const live = await this._loadLiveSegment(orch);
+      const alreadyCutByThisTx = Boolean(live) && Array.isArray(live.openTxHashes)
+        && live.openTxHashes.some((h) => incomingTxHashes.includes(String(h)));
+      const alreadyOnNewLp = Boolean(live && newPositionIdentifier)
+        && live.positionIdentifier != null
+        && String(live.positionIdentifier) === String(newPositionIdentifier);
+      if (alreadyCutByThisTx || alreadyOnNewLp) {
+        // Ya se cortó: la reconciliación / `_evaluateOne` vio el tokenId nuevo
+        // antes que este finalize, o un intento previo de este mismo finalize
+        // confirmó su corte y falló después. No se corta otra vez: se pone el
+        // motivo real a lo que quedó como `unknown` y el gas cae en el vivo.
+        await this._relabelReconciledCut(orch, live, {
+          action, openReason, txHashes: incomingTxHashes,
+        });
+        // En un reintento las fees ya entraron con el corte confirmado.
+        if (alreadyCutByThisTx) costAfterCut = { ...txCost, collectedFeesUsd: 0 };
+      } else {
+        const preCutAccounting = txCost.collectedFeesUsd
+          ? this.accounting.applyTxCostDelta(orch.accounting, { collectedFeesUsd: txCost.collectedFeesUsd })
+          : orch.accounting;
+        cut = await this._cutSegment(orch, {
+          action,
+          finalizePrice,
+          txHashes: incomingTxHashes.length ? incomingTxHashes : null,
+          newSnapshot: refreshedSnapshot,
+          newPositionIdentifier: newPositionIdentifier || orch.activePositionIdentifier,
+          openReason,
+          accounting: preCutAccounting,
+        });
+        costAfterCut = { ...txCost, collectedFeesUsd: 0 };
+        orch = {
+          ...orch,
+          accounting: cut.accounting,
+          strategyState: cut.strategyState,
+          lastEvaluation: cut.lastEvaluation,
+          activeSegmentId: cut.openedSegmentId,
+        };
+      }
     }
     let logSegmentId = orch.activeSegmentId ?? null;
 
-    let newAccounting = this.accounting.applyTxCostDelta(orch.accounting, txCost);
+    let newAccounting = this.accounting.applyTxCostDelta(orch.accounting, costAfterCut);
     if (isNewLp) {
       // re-range cuenta como nuevo LP a efectos de lpCount
       newAccounting = this.accounting.incrementLpCount(newAccounting);

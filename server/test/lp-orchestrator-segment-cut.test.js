@@ -195,7 +195,9 @@ async function setup({ protection = null, pools = {}, scanPools = null, accounti
     ...extra,
   });
 
-  const finalize = async (action, { newId = null, snapshot = null, gasCostUsd = 0, txHashes } = {}) => (
+  const finalize = async (action, {
+    newId = null, snapshot = null, gasCostUsd = 0, collectedFeesUsd, txHashes,
+  } = {}) => (
     service.recordTxFinalized({
       userId: 1,
       orchestratorId: id,
@@ -205,7 +207,7 @@ async function setup({ protection = null, pools = {}, scanPools = null, accounti
         positionChanges: newId ? { newPositionIdentifier: newId } : undefined,
         refreshedSnapshot: snapshot,
       },
-      expected: { gasCostUsd, slippageCostUsd: 0 },
+      expected: { gasCostUsd, slippageCostUsd: 0, ...(collectedFeesUsd != null ? { collectedFeesUsd } : {}) },
     })
   );
 
@@ -399,6 +401,99 @@ test('Review Focus 2: la reconciliación del tokenId también corta con unknown'
   assert.equal(ctx.ordered().length, 2, 'reconciliar y evaluar no cortan dos veces');
   assert.equal(liveAccounting(ctx).lpCount, 1);
   assertSegmentsSumToTotal(ctx);
+});
+
+test('un finalize tardío tras la reconciliación no vuelve a cortar: reetiqueta el corte unknown', async () => {
+  // El LP viejo estaba bajo su rango (2550 - 2800) cuando se re-rangeó.
+  const pools = {
+    777: lp('777', { rangeLowerPrice: 2550, rangeUpperPrice: 2800 }),
+    888: lp('888'),
+  };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+  pools[777] = { ...pools[777], liquidity: '0' };
+  await ctx.service.evaluateOne(1, ctx.id); // reconcilia y corta como unknown
+  assert.equal(ctx.ordered()[0].closeReason, 'unknown');
+
+  await ctx.finalize('modify-range', { newId: '888', snapshot: pools[888], gasCostUsd: 0.7 });
+
+  const segs = ctx.ordered();
+  assert.equal(segs.length, 2, 'un solo tramo nuevo');
+  const [closed, live] = segs;
+  assert.equal(closed.closeReason, 'range_exit_below');
+  assert.deepEqual(closed.closeTxHashes, ['0xmodify-range-888']);
+  assert.equal(live.status, 'open');
+  assert.equal(live.openReason, 'rerange');
+  assert.deepEqual(live.openTxHashes, ['0xmodify-range-888']);
+  assert.equal(liveAccounting(ctx).gasSpentUsd, 0.7, 'el gas cae en el tramo vivo');
+  assert.equal(accounting.normalizeAccounting(closed.accounting).gasSpentUsd, 0);
+  assertSegmentsSumToTotal(ctx);
+});
+
+test('un reintento tras un corte confirmado que falló antes del log no corta otra vez', async () => {
+  const pools = { 777: lp('777'), 888: lp('888') };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+  const realAppend = ctx.repo.appendActionLog;
+  let failOnce = true;
+  ctx.repo.appendActionLog = async (entry) => {
+    if (entry.kind === 'tx_finalized' && failOnce) {
+      failOnce = false;
+      throw new Error('db caida justo antes del log');
+    }
+    return realAppend(entry);
+  };
+
+  await assert.rejects(() => ctx.finalize('modify-range', { newId: '888', snapshot: pools[888], txHashes: ['0xr'] }));
+  assert.equal(ctx.ordered().length, 2);
+  await ctx.finalize('modify-range', { newId: '888', snapshot: pools[888], txHashes: ['0xr'] });
+
+  const segs = ctx.ordered();
+  assert.equal(segs.length, 2, 'el reintento no abre un tercer tramo');
+  assert.equal(segs[0].closeReason, 'manual_rerange');
+  assert.equal(segs[1].status, 'open');
+  assertSegmentsSumToTotal(ctx);
+});
+
+test('reinvest-fees: las fees cobradas son del tramo viejo, el gas del nuevo', async () => {
+  const pools = { 777: lp('777') };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+
+  await ctx.finalize('reinvest-fees', {
+    snapshot: lp('777', { currentValueUsd: 1003 }),
+    collectedFeesUsd: 3,
+    gasCostUsd: 0.2,
+  });
+
+  const [closed, live] = ctx.ordered();
+  assert.equal(closed.closeReason, 'capital_change');
+  assert.equal(live.openReason, 'capital_change');
+  const closedAcc = accounting.normalizeAccounting(closed.accounting);
+  assert.equal(closedAcc.lpFeesUsd, 3);
+  assert.equal(closedAcc.gasSpentUsd, 0);
+  assert.equal(liveAccounting(ctx).lpFeesUsd, 0);
+  assert.equal(liveAccounting(ctx).gasSpentUsd, 0.2);
+  assert.equal(ctx.orch().accounting.lpFeesUsd, 3, 'las fees se suman una sola vez');
+  assertSegmentsSumToTotal(ctx);
+});
+
+test('el motivo de cierre usa el precio de antes del ajuste, no el del finalize', async () => {
+  // Última foto del LP viejo: 2390, bajo 2401.9. Al finalizar el precio ya
+  // volvió al rango (2515).
+  const pools = { 777: lp('777', { priceCurrent: 2390 }), 888: lp('888', { priceCurrent: 2515 }) };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.evaluateOne(1, ctx.id);
+
+  await ctx.finalize('modify-range', { newId: '888', snapshot: pools[888] });
+
+  const [closed] = ctx.ordered();
+  assert.equal(closed.closeReason, 'range_exit_below');
+  assert.equal(closed.closePrice, 2515, 'el valor de cierre sigue al precio del finalize');
 });
 
 test('Review Focus 3: sin protección el corte no lee el hedge', async () => {

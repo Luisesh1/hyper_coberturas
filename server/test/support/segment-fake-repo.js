@@ -71,7 +71,25 @@ function makeSegmentFakeRepo() {
       }), { status: 'closed' });
       return id;
     },
+    async relabelClose(id, { closeReason, closeTxHashes } = {}) {
+      const row = segments.find((s) => s.id === id && s.status === 'closed' && s.closeReason === 'unknown');
+      if (!row) return null;
+      row.closeReason = closeReason;
+      if (closeTxHashes != null) row.closeTxHashes = clone(closeTxHashes);
+      return id;
+    },
+    async relabelOpen(id, { openReason, openTxHashes } = {}) {
+      const row = segments.find((s) => s.id === id && (s.status === 'open' || s.status === 'closing')
+        && !hasHashes(s.openTxHashes));
+      if (!row) return null;
+      if (openReason) row.openReason = openReason;
+      row.openTxHashes = clone(openTxHashes ?? null);
+      return id;
+    },
   };
+  function hasHashes(hashes) {
+    return Array.isArray(hashes) && hashes.length > 0;
+  }
   return repo;
 }
 

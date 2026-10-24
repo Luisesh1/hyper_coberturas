@@ -223,6 +223,41 @@ async function close(segmentId, {
 }
 
 /**
+ * Pone el motivo real al cierre de un tramo que se cortó como `unknown`
+ * (reconciliación antes de que llegara el finalize). Solo toca `unknown`.
+ */
+async function relabelClose(segmentId, { closeReason, closeTxHashes } = {}, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE lp_orchestrator_segments
+        SET close_reason = $2,
+            close_tx_hashes_json = COALESCE($3, close_tx_hashes_json),
+            updated_at = $4
+      WHERE id = $1 AND status = 'closed' AND close_reason = 'unknown'
+      RETURNING id`,
+    [segmentId, closeReason, toJson(closeTxHashes ?? null), Date.now()]
+  );
+  return rows[0]?.id ?? null;
+}
+
+/**
+ * Motivo y hashes de apertura de un tramo abierto sin hashes (por el corte
+ * de una reconciliación). No pisa una apertura que ya tenga hashes.
+ */
+async function relabelOpen(segmentId, { openReason, openTxHashes } = {}, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE lp_orchestrator_segments
+        SET open_reason = COALESCE($2, open_reason),
+            open_tx_hashes_json = $3,
+            updated_at = $4
+      WHERE id = $1 AND status IN ('open','closing')
+        AND (open_tx_hashes_json IS NULL OR open_tx_hashes_json IN ('null','[]'))
+      RETURNING id`,
+    [segmentId, openReason ?? null, toJson(openTxHashes ?? null), Date.now()]
+  );
+  return rows[0]?.id ?? null;
+}
+
+/**
  * Sustituye el historico sembrado (cerrado, open_reason deploy/backfill) por
  * `segments` y renumera `seq` de todos los tramos por orden temporal. Nunca
  * toca el tramo vivo. Debe ejecutarse dentro de una transaccion.
@@ -270,5 +305,7 @@ module.exports = {
   markClosing,
   reopen,
   close,
+  relabelClose,
+  relabelOpen,
   replaceHistorical,
 };
