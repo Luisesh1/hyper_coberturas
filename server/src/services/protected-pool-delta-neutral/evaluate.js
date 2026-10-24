@@ -1389,6 +1389,25 @@ const evaluateMethods = {
       nextState.nextEligibleAttemptAt = Number(nextState.minDwellUntil) || null;
       nextState.cooldownReason = 'min_dwell_active';
     }
+    // Un forzado rehidratado (p. ej. `segment_opened` de resetForNewSegment)
+    // queda resuelto cuando esta evaluacion forzada termino con datos validos
+    // y la politica dijo `hold` o el ajuste cae bajo el minimo de orden. Sin
+    // esto cada tick repetiria una evaluacion forzada y, el dia que
+    // |delta - held| alcanzara el minimo, saldria una orden que la politica no
+    // pondria. Solo los bloqueos transitorios (min-dwell, riesgo/margen,
+    // confianza baja, cooldown, spread...) lo conservan; las salidas tempranas
+    // (snapshot pendiente/invalido, spot stale, lock) ya lo conservan arriba.
+    const forcedPolicyHold = !capOverridesPolicy
+      && (rebalanceDecision.decision === 'hold' || !shouldRebalance);
+    const forcedBelowMinimum = preflight.reason === 'below_min_order_notional';
+    if (forceRebalance
+      && nextState.pendingForceReason
+      && !minDwellActive
+      && !forcedStatus
+      && !confidenceBlocksIncrease
+      && (forcedBelowMinimum || (preflight.ok && forcedPolicyHold))) {
+      nextState.pendingForceReason = null;
+    }
     if (forcedStatus) {
       if ((forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath) {
         nextState.lastDecision = 'risk_paused_reduce';

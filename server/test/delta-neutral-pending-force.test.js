@@ -390,3 +390,95 @@ test('net_profit: forzado rehidratado bajo el minimo se resuelve en hold y no se
   assert.notEqual(second.netProfitPolicyGate, 'forced');
   assert.equal(protection.strategyState.pendingForceReason ?? null, null);
 });
+
+// --- C2: el forzado `segment_opened` de resetForNewSegment se resuelve con
+// la primera evaluación forzada válida que acaba en hold o bajo el mínimo,
+// en todas las políticas. Solo los bloqueos transitorios lo conservan.
+
+const POLICY_CASES = [
+  { label: 'range_exit_v1', policyVersion: 'range_exit_v1' },
+  { label: 'legacy', policyVersion: null },
+];
+
+function policyBase(policyVersion) {
+  return {
+    ...(policyVersion ? { policyVersion } : {}),
+    strategyState: {
+      // Temporizador legacy no vencido y dwell ya pasado.
+      lastRebalanceAt: Date.now() - (5 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+      executionIntent: 'live',
+      ...(policyVersion ? { policyVersion } : {}),
+    },
+  };
+}
+
+async function forcedTarget(policyVersion) {
+  const probe = buildProtection(JSON.parse(JSON.stringify(policyBase(policyVersion))));
+  let target = null;
+  await buildService(probe, {
+    actualQty: 0, centerDeadZonePct: 0, onExecute: (_r, { metrics }) => { target = Number(metrics.targetQty); },
+  }).evaluateProtection(probe, { forceReason: 'segment_opened', forceRebalance: true });
+  assert.ok(target > 0.003, `objetivo forzado ${target}`);
+  return target;
+}
+
+for (const { label, policyVersion } of POLICY_CASES) {
+  test(`${label}: forzado segment_opened bajo el minimo se resuelve y no se repite`, async () => {
+    const target = await forcedTarget(policyVersion);
+    const base = policyBase(policyVersion);
+    const protection = buildProtection({
+      ...base,
+      strategyState: { ...base.strategyState, pendingForceReason: 'segment_opened' },
+    });
+    let executions = 0;
+    const holder = { qty: target - 0.001 }; // ~$2.5, bajo el minimo de $11
+    const service = buildService(protection, {
+      actualQty: holder.qty, centerDeadZonePct: 0, onExecute: () => { executions += 1; },
+    });
+    const first = await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.equal(first.decisionOwner, 'force', 'la primera evaluacion es la forzada');
+    assert.equal(protection.strategyState.pendingForceReason ?? null, null, 'el forzado queda resuelto');
+
+    const second = await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.notEqual(second.decisionOwner, 'force', 'el tick siguiente ya no es forzado');
+    assert.notEqual(second.lastDecisionReason, 'segment_opened');
+    assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+  });
+
+  // range_exit_v1 no tiene min-dwell (su confirmacion de cruce es su dwell).
+  test(`${label}: forzado segment_opened bloqueado por el min-dwell se conserva`, { skip: policyVersion === 'range_exit_v1' && 'range_exit_v1 no usa min-dwell' }, async () => {
+    const base = policyBase(policyVersion);
+    const protection = buildProtection({
+      ...base,
+      strategyState: {
+        ...base.strategyState,
+        ...dwellActiveState(),
+        pendingForceReason: 'segment_opened',
+      },
+    });
+    let executions = 0;
+    const service = buildService(protection, { actualQty: 0, centerDeadZonePct: 0, onExecute: () => { executions += 1; } });
+    await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.equal(protection.strategyState.pendingForceReason, 'segment_opened');
+  });
+
+  test(`${label}: forzado segment_opened en cooldown se conserva`, async () => {
+    const base = policyBase(policyVersion);
+    const protection = buildProtection({
+      ...base,
+      nextEligibleAttemptAt: Date.now() + 60_000,
+      cooldownReason: 'spread_too_wide',
+      strategyState: { ...base.strategyState, pendingForceReason: 'segment_opened' },
+    });
+    let executions = 0;
+    const service = buildService(protection, { actualQty: 0, centerDeadZonePct: 0, onExecute: () => { executions += 1; } });
+    await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.equal(protection.strategyState.pendingForceReason, 'segment_opened');
+  });
+}
