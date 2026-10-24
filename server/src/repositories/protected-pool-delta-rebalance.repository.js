@@ -49,9 +49,7 @@ async function create(payload, executor) {
   return rows[0]?.id || null;
 }
 
-async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, executor) {
-  const { rows } = await exec(executor).query(
-    `SELECT id,
+const REBALANCE_SELECT = `id,
             protected_pool_id AS "protectedPoolId",
             reason,
             execution_mode AS "executionMode",
@@ -72,16 +70,13 @@ async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, exec
             slippage_usd AS "slippageUsd",
             funding_snapshot_usd AS "fundingSnapshotUsd",
             distance_to_liq_pct AS "distanceToLiqPct",
-            created_at AS "createdAt"
-       FROM protected_pool_delta_rebalance_log
-      WHERE protected_pool_id = $1
-      ORDER BY created_at DESC, id DESC
-      LIMIT $2`,
-    [protectedPoolId, limit]
-  );
+            created_at AS "createdAt",
+            segment_id AS "segmentId"`;
 
+function mapRebalanceRows(rows) {
   return rows.map((row) => ({
     ...row,
+    segmentId: row.segmentId != null ? Number(row.segmentId) : null,
     price: row.price != null ? Number(row.price) : null,
     rv4hPct: row.rv4hPct != null ? Number(row.rv4hPct) : null,
     rv24hPct: row.rv24hPct != null ? Number(row.rv24hPct) : null,
@@ -101,7 +96,32 @@ async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, exec
   }));
 }
 
+async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT ${REBALANCE_SELECT}
+       FROM protected_pool_delta_rebalance_log
+      WHERE protected_pool_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`,
+    [protectedPoolId, limit]
+  );
+  return mapRebalanceRows(rows);
+}
+
+async function listBySegmentId(segmentId, { limit = 500 } = {}, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT ${REBALANCE_SELECT}
+       FROM protected_pool_delta_rebalance_log
+      WHERE segment_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`,
+    [segmentId, limit]
+  );
+  return mapRebalanceRows(rows);
+}
+
 module.exports = {
   create,
   listByProtectedPoolId,
+  listBySegmentId,
 };

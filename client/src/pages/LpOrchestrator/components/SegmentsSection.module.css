@@ -1,0 +1,231 @@
+.root {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--uni-border);
+  background: var(--uni-wash-soft);
+  border-left: 3px solid rgba(var(--uni-violet-rgb), 0.6);
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 2px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--uni-text-1);
+  text-align: left;
+  min-height: 32px;
+}
+
+.title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--uni-violet);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.count {
+  font-size: 0.72rem;
+  color: var(--uni-text-2);
+}
+
+.chevron {
+  margin-left: auto;
+  color: var(--uni-text-3);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.item {
+  border-radius: 8px;
+  background: var(--uni-bg-1);
+  border: 1px solid var(--uni-border);
+  overflow: hidden;
+}
+
+/* Escritorio: una línea. */
+.row {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 2fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--uni-text-1);
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.seq {
+  font-weight: 800;
+  color: var(--uni-text-0);
+}
+
+/* Escritorio: el contenedor de fecha + motivo no genera caja propia. */
+.meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--uni-border-strong);
+  color: var(--uni-amber);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dates,
+.range,
+.reason,
+.coverage {
+  color: var(--uni-text-2);
+  min-width: 0;
+}
+
+.live { color: var(--uni-cyan); font-weight: 700; }
+
+.net {
+  font-weight: 800;
+  text-align: right;
+}
+
+.coverage { text-align: right; white-space: nowrap; }
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--uni-border);
+}
+
+.cells {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--uni-wash-soft);
+  border: 1px solid var(--uni-border);
+}
+
+.cellLabel {
+  font-size: 0.64rem;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.cellValue {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--uni-text-0);
+}
+
+.rebalances {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subTitle {
+  font-size: 0.64rem;
+  font-weight: 800;
+  color: var(--uni-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.rebalanceRow {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1.2fr auto;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--uni-text-2);
+}
+
+.gap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--uni-bg-2);
+  border: 1px dashed var(--uni-border-strong);
+  font-size: 0.8rem;
+  color: var(--uni-text-2);
+}
+
+.muted { font-size: 0.78rem; color: var(--uni-text-3); }
+
+.positive { color: var(--uni-green); }
+.negative { color: var(--uni-red); }
+.neutral { color: var(--uni-text-1); }
+
+.detailRange { display: none; font-size: 0.76rem; color: var(--uni-text-2); }
+
+/* Estrecho (móvil o tarjeta angosta): la fila apila sus datos en dos
+   líneas y el rango pasa al detalle. Se mide el contenedor, no la ventana:
+   en escritorio la tarjeta también puede ser estrecha. */
+@container (max-width: 560px) {
+  .row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'seq coverage net'
+      'meta meta meta';
+    row-gap: 4px;
+    column-gap: 8px;
+  }
+  .seq { grid-area: seq; }
+  .coverage { grid-area: coverage; text-align: left; font-size: 0.74rem; }
+  .net { grid-area: net; }
+  .meta {
+    grid-area: meta;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    font-size: 0.74rem;
+  }
+  .range { display: none; }
+  .detailRange { display: block; }
+  .cells { grid-template-columns: repeat(2, 1fr); }
+  .rebalanceRow { grid-template-columns: 1fr 1fr; }
+}

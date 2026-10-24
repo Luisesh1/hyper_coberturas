@@ -1,4 +1,6 @@
-import { formatUsd, formatSignedUsd } from '../../UniswapPools/utils/pool-formatters';
+import { formatSignedUsd } from '../../UniswapPools/utils/pool-formatters';
+import { lpBreakdownItems, hedgeBreakdownItems, signTone } from './accountingBreakdown';
+import SegmentsSection from './SegmentsSection';
 import { formatOrchestratorAge } from './orchestratorAge';
 import styles from './AccountingPanel.module.css';
 
@@ -18,18 +20,14 @@ function formatSignedPct(value) {
   return `${n >= 0 ? '+' : '-'}${Math.abs(n).toFixed(2)}%`;
 }
 
-function signTone(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return 'neutral';
-  return n > 0 ? 'positive' : 'negative';
-}
-
 export default function AccountingPanel({
   accounting,
   createdAt = null,
   initialTotalUsd = null,
   unclaimedFeesUsd = null,
   compact = false,
+  orchestratorId = null,
+  refreshKey = null,
 }) {
   const a = accounting || {};
   const hasHedgeData =
@@ -70,43 +68,11 @@ export default function AccountingPanel({
   const pendingFees = Number(unclaimedFeesUsd);
   const hasPendingFees = Number.isFinite(pendingFees) && pendingFees > 0;
 
-  const lpItems = [
-    { label: 'Fees LP ganadas', value: formatUsd(a.lpFeesUsd), tone: 'positive' },
-  ];
-  if (hasPendingFees) {
-    lpItems.push({
-      label: 'Fees pendientes de cobrar',
-      value: formatUsd(pendingFees),
-      tone: 'positive',
-    });
-  }
-  lpItems.push(
-    { label: 'Gas gastado', value: `-${formatUsd(a.gasSpentUsd)}`, tone: 'negative' },
-    { label: 'Slippage swaps', value: `-${formatUsd(a.swapSlippageUsd)}`, tone: 'negative' },
-    { label: 'Deriva de precio', value: formatSignedUsd(a.priceDriftUsd), tone: signTone(a.priceDriftUsd) },
-  );
-  if (Number(a.capitalAdjustmentsUsd) !== 0) {
-    lpItems.push({
-      label: 'Capital ajustado',
-      value: formatSignedUsd(a.capitalAdjustmentsUsd),
-      tone: signTone(a.capitalAdjustmentsUsd),
-    });
-  }
-  if (feesYieldPct != null) {
-    lpItems.push({
-      label: 'Yield fees',
-      value: `${feesYieldPct >= 0 ? '+' : ''}${feesYieldPct.toFixed(2)}%`,
-      tone: feesYieldPct > 0 ? 'positive' : 'neutral',
-    });
-  }
-
-  const hedgeItems = [
-    { label: 'Hedge realizado', value: formatSignedUsd(a.hedgeRealizedPnlUsd), tone: signTone(a.hedgeRealizedPnlUsd) },
-    { label: 'Hedge no realizado', value: formatSignedUsd(a.hedgeUnrealizedPnlUsd), tone: signTone(a.hedgeUnrealizedPnlUsd) },
-    { label: 'Funding hedge', value: formatSignedUsd(a.hedgeFundingUsd), tone: signTone(a.hedgeFundingUsd) },
-    { label: 'Fees ejecución', value: `-${formatUsd(a.hedgeExecutionFeesUsd)}`, tone: 'negative' },
-    { label: 'Slippage hedge', value: `-${formatUsd(a.hedgeSlippageUsd)}`, tone: 'negative' },
-  ];
+  const lpItems = lpBreakdownItems(a, {
+    pendingFeesUsd: hasPendingFees ? pendingFees : null,
+    feesYieldPct,
+  });
+  const hedgeItems = hedgeBreakdownItems(a);
 
   return (
     <div className={`${styles.root} ${compact ? styles.compact : ''}`}>
@@ -151,6 +117,10 @@ export default function AccountingPanel({
           )}
         </strong>
       </div>
+
+      {!compact && orchestratorId != null && (
+        <SegmentsSection orchestratorId={orchestratorId} refreshKey={refreshKey} />
+      )}
     </div>
   );
 }

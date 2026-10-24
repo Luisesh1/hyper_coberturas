@@ -2608,6 +2608,92 @@ class LpOrchestratorService {
     }
   }
 
+  // ---------- API de tramos ------------------------------------------------
+
+  _segmentSummary(segment, { accounting: acc, coverage } = {}) {
+    return {
+      id: segment.id,
+      seq: segment.seq,
+      status: segment.status,
+      accuracy: segment.accuracy,
+      openedAt: segment.openedAt,
+      closedAt: segment.closedAt ?? null,
+      rangeLowerPrice: segment.rangeLowerPrice,
+      rangeUpperPrice: segment.rangeUpperPrice,
+      openPrice: segment.openPrice,
+      closePrice: segment.closePrice ?? null,
+      openReason: segment.openReason,
+      closeReason: segment.closeReason ?? null,
+      accounting: acc ?? segment.accounting,
+      coverage: coverage !== undefined ? coverage : segment.coverage,
+    };
+  }
+
+  /** Tramo vivo: P&L = acumulado − baseline; cobertura calculada al vuelo. */
+  async _liveSegmentView(orch, segment) {
+    const rows = typeof this.rebalanceRepo.listBySegmentId === 'function'
+      ? await this.rebalanceRepo.listBySegmentId(segment.id, { limit: 500 })
+      : [];
+    return this._segmentSummary(segment, {
+      accounting: subtractAccounting(orch.accounting, segment.baselineAccounting),
+      coverage: summarizeCoverage(rows, { openedAt: segment.openedAt, closedAt: null, now: Date.now() }),
+    });
+  }
+
+  async _segmentView(orch, segment) {
+    if (segment.status !== 'closed') return this._liveSegmentView(orch, segment);
+    if (segment.coverage || typeof this.rebalanceRepo.listBySegmentId !== 'function') {
+      return this._segmentSummary(segment);
+    }
+    // Cerrado sin resumen guardado (histórico sembrado): se calcula al vuelo.
+    const rows = await this.rebalanceRepo.listBySegmentId(segment.id, { limit: 500 });
+    return this._segmentSummary(segment, {
+      coverage: summarizeCoverage(rows, { openedAt: segment.openedAt, closedAt: segment.closedAt }),
+    });
+  }
+
+  /**
+   * Tramos del orquestador (seq desc) y su cuadre contra el acumulado.
+   * Devuelve null si el orquestador no es del usuario.
+   */
+  async listSegments(userId, orchestratorId) {
+    const orch = await this.repo.getById(userId, orchestratorId);
+    if (!orch) return null;
+    const rows = await this.segmentRepo.listByOrchestrator(orch.id);
+    const segments = [];
+    for (const row of rows) segments.push(await this._segmentView(orch, row));
+    const round = (v) => Math.round(v * 1e6) / 1e6 + 0;
+    const sum = segments.reduce((acc, s) => acc + (Number(s.accounting?.totalNetPnlUsd) || 0), 0);
+    const total = Number(orch.accounting?.totalNetPnlUsd) || 0;
+    return {
+      segments,
+      totals: {
+        sumNetPnlUsd: round(sum),
+        orchestratorNetPnlUsd: round(total),
+        differenceUsd: round(total - sum),
+      },
+    };
+  }
+
+  async getSegment(userId, orchestratorId, segmentId) {
+    const orch = await this.repo.getById(userId, orchestratorId);
+    if (!orch) return null;
+    const segment = await this.segmentRepo.getById(orch.id, segmentId);
+    if (!segment) return null;
+    const view = await this._segmentView(orch, segment);
+    const [log, rebalances] = await Promise.all([
+      this.repo.listActionLog(userId, orch.id, { limit: 500 }),
+      typeof this.rebalanceRepo.listBySegmentId === 'function'
+        ? this.rebalanceRepo.listBySegmentId(segment.id, { limit: 500 })
+        : [],
+    ]);
+    return {
+      ...view,
+      events: (log || []).filter((e) => e.segmentId === segment.id),
+      rebalances,
+    };
+  }
+
   // ---------- helpers ------------------------------------------------------
 
   async _loadOrThrow(userId, id) {
