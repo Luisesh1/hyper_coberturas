@@ -13,6 +13,7 @@ const protectedPoolRefreshService = require('../../protected-pool-refresh.servic
 const protectedPoolDeltaNeutralService = require('../../protected-pool-delta-neutral.service');
 const smartPoolCreatorService = require('../../smart-pool-creator.service');
 const logger = require('../../logger.service');
+const { SEGMENT_OPENING_ACTIONS } = require('../../lp-orchestrator/segments');
 const onChainManager = require('../../onchain-manager.service');
 
 const {
@@ -166,6 +167,24 @@ function extractMintedPositionId(receipts, positionManagerAddress, walletAddress
   return minted;
 }
 
+// Un tramo nuevo empieza sin cooldowns ni latches del LP anterior. Solo
+// reescribe estado (no opera) y un fallo no debe romper el finalize.
+async function resetSegmentDecisionState(userId, protection, action) {
+  if (!SEGMENT_OPENING_ACTIONS.has(action) || protection.protectionMode !== 'delta_neutral') return;
+  try {
+    await protectedPoolDeltaNeutralService.resetForNewSegment(
+      await protectedPoolRepo.getById(userId, protection.id),
+    );
+  } catch (err) {
+    logger.warn('uniswap_position_action_segment_reset_failed', {
+      action,
+      userId,
+      protectionId: protection.id,
+      error: err.message,
+    });
+  }
+}
+
 async function updateProtectionRecords({
   userId,
   action,
@@ -311,6 +330,7 @@ async function updateProtectionRecords({
         // el motor la relea antes de dimensionar el hedge.
         snapshotStatus: refreshedSnapshot ? null : 'refresh_pending',
       });
+      await resetSegmentDecisionState(userId, protection, action);
       continue;
     }
 
@@ -319,6 +339,7 @@ async function updateProtectionRecords({
       lastTxHash: txHashes[txHashes.length - 1] || null,
       lastTxAt: Date.now(),
     });
+    await resetSegmentDecisionState(userId, protection, action);
   }
 
   try {

@@ -19,6 +19,7 @@ const {
   normalizeProtectionSnapshot,
   validateNormalizedProtectionSnapshot,
 } = require('./delta-neutral-snapshot.service');
+const { resetDecisionStateForNewSegment } = require('./protected-pool-delta-neutral/segment-reset');
 const { computeExtractableSlotSurplusUsd } = require('../utils/isolated-margin');
 const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
 const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
@@ -1298,6 +1299,28 @@ class ProtectedPoolDeltaNeutralService {
       marketContext,
       forceReason: crossedBoundary ? 'boundary_cross' : nearBoundary ? 'boundary_watch' : null,
     });
+  }
+
+  /**
+   * Abre tramo con el estado de decision limpio. Espera a la evaluacion en
+   * curso (que podria reescribir el estado viejo despues) y nunca opera: la
+   * siguiente evaluacion encuentra `pendingForceReason`.
+   */
+  async resetForNewSegment(protection) {
+    const protectionId = Number(protection?.id);
+    if (!Number.isInteger(protectionId) || protectionId <= 0) return;
+    const inFlight = this.evaluationLocks.get(protectionId);
+    if (inFlight) await Promise.resolve(inFlight).catch(() => null);
+
+    const fresh = (await this.repo.getById(protection.userId, protectionId)) || protection;
+    await this.repo.updateStrategyState(fresh.userId ?? protection.userId, protectionId, {
+      strategyState: resetDecisionStateForNewSegment(fresh.strategyState),
+    });
+
+    const prefix = `${protectionId}:`;
+    for (const [key, entry] of this.shadowStates.entries()) {
+      if (key.startsWith(prefix)) this.shadowStates.set(key, { ...(entry || {}), shadowPolicyState: {} });
+    }
   }
 
   async evaluateProtection(protection, options = {}) {
