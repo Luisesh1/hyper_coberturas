@@ -55,6 +55,11 @@ export default defineConfig({
         // Split manual para reducir el chunk inicial. Cada grupo carga
         // sólo cuando alguna ruta lo necesita.
         manualChunks(id) {
+          // El helper de preload de Vite lo importa el entry; si lo absorbe
+          // vendor-wallet, ese chunk entra en la carga inicial.
+          if (id.includes('vite/preload-helper') || id.includes('commonjsHelpers')) {
+            return 'vendor-react';
+          }
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('react-dom') || id.includes('/react/') || id.includes('react-router')) {
             return 'vendor-react';
