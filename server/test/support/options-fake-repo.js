@@ -62,6 +62,12 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       // Igual que el repo real: los bloqueos guardados nunca se pisan.
       if (s) s.state = { ...clone(state || {}), blockedUnderlyings: clone(s.state?.blockedUnderlyings || {}) };
     },
+    async clearUnderlyingBlock(strategyId, underlying) {
+      const s = strategies.find((x) => x.id === strategyId);
+      if (!s || !s.state?.blockedUnderlyings) return null;
+      delete s.state.blockedUnderlyings[String(underlying).toUpperCase()];
+      return clone(s);
+    },
     async deleteStrategy(userId, id) {
       const i = strategies.findIndex((x) => x.id === id && x.userId === userId);
       if (i < 0) return false;

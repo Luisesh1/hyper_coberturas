@@ -19,6 +19,7 @@ const defaultRepo = require('../../repositories/options-strategies.repository');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const { botUnderlyings, normalizeUnderlyings } = require('./bot-underlyings');
 const { parseSymbol } = require('./options-utils');
+const { dailyPnlSeries } = require('./options-pnl-series');
 
 const TEMPLATE_ID = 'alert_signal';
 const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
@@ -64,6 +65,8 @@ function signalDto(row) {
     decision: row.decision,
     detail: row.detail,
     simulated: row.simulated === true,
+    feesUsdt: row.feesUsdt ?? null,
+    feesEstimated: row.feesEstimated === true,
     createdAt: row.createdAt,
   };
 }
@@ -151,6 +154,9 @@ function createOptionsAutoTradingService(deps = {}) {
   const alerts = deps.alerts || lazyAlerts();
   const strategies = deps.strategies || lazyStrategies();
   const liveOrders = deps.liveOrders || lazyLiveOrders();
+  const shadowEntries = deps.shadowEntries || (repo === defaultRepo
+    ? { listPending: (...args) => require('../../repositories/options-shadow-entries.repository').listPending(...args) }
+    : { listPending: async () => [] });
   const log = deps.logger || logger;
   const now = deps.now || Date.now;
   let unsubscribe = null;
@@ -311,15 +317,42 @@ function createOptionsAutoTradingService(deps = {}) {
       repo.lastAutoSignalsByUser(userId),
     ]);
     const byId = new Map(alertList.map((a) => [Number(a.id), a]));
-    return bots.map((bot) => ({
+    return Promise.all(bots.map(async (bot) => {
+      // `paused` se muestra con el libro sombra.
+      const book = bot.mode === 'live' ? 'live' : 'shadow';
+      const positions = (await repo.listPositions(bot.id)) || [];
+      let deadlines = [];
+      try {
+        deadlines = book === 'live'
+          ? (await liveOrders.listByStrategy(bot.id)).filter((o) => o.action === 'open' && o.status !== 'final').map((o) => o.deadlineAt)
+          : (await shadowEntries.listPending({ strategyId: bot.id })).map((e) => e.deadlineAt);
+      } catch { deadlines = []; }
+      deadlines = deadlines.filter((d) => d != null);
+      return {
       ...bot,
+      pnlSeries: dailyPnlSeries(positions, book, now()),
+      feesUsdt: Math.round(positions.filter((p) => p.mode === book).reduce((a, p) => a + (p.feesUsdt || 0), 0) * 100) / 100,
+      pendingEntry: deadlines.length ? { deadlineAt: Math.min(...deadlines) } : null,
+      blocked: Object.keys(bot.state?.blockedUnderlyings || {}).length > 0,
       underlyings: botUnderlyings(bot),
       alerts: (bot.params?.alertIds || [])
         .map((id) => byId.get(Number(id)))
         .filter(Boolean)
         .map((a) => ({ id: Number(a.id), name: a.name, direction: alertDirection(a), assetList: a.assetList || [] })),
       lastSignal: signalDto(lastSignals.find((s) => s.strategyId === bot.id)),
+      };
     }));
+  }
+
+  /** Quita el bloqueo de un subyacente del bot (tras revisar el motivo). */
+  async function unblockUnderlying(userId, id, underlyingRaw) {
+    const bot = await requireBot(userId, id);
+    const underlying = normalizeUnderlying(underlyingRaw);
+    if (!botUnderlyings(bot).includes(underlying)) {
+      throw new ValidationError(`El bot no opera ${underlying}`);
+    }
+    await repo.clearUnderlyingBlock(bot.id, underlying);
+    return botSummary(userId, bot.id);
   }
 
   async function botSummary(userId, id) {
@@ -579,6 +612,7 @@ function createOptionsAutoTradingService(deps = {}) {
     simulateSignal,
     handleAlertTriggered,
     listBots,
+    unblockUnderlying,
     eligibleAlerts,
     createBot,
     cloneBot,

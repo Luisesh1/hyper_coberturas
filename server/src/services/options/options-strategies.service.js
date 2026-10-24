@@ -8,7 +8,7 @@ const { AppError, ValidationError, NotFoundError } = require('../../errors/app-e
 const defaultRepo = require('../../repositories/options-strategies.repository');
 const templates = require('./templates');
 const { UNDERLYINGS } = require('./options-iv-recorder.service');
-const { DAY_MS, parseSymbol } = require('./options-utils');
+const { DAY_MS, parseSymbol, tradeFee } = require('./options-utils');
 const { estimateMargin, legDeltaExposure, utcDayStart, lazyMarket } = require('./options-strategy-runner.service');
 const { committedUsdt: computeCommitted } = require('./options-committed-capital');
 
@@ -114,6 +114,7 @@ function kpisFor(positions, events, mode, now) {
     feesUsdt: round(mine.reduce((a, p) => a + p.feesUsdt, 0)),
     feeBreakdown: feeBreakdownFor(mine),
     premiumUsdt: round(premium),
+    feesPctOfPremium: premium > 0 ? round((mine.reduce((a, p) => a + p.feesUsdt, 0) / premium) * 100, 1) : null,
     cycles: cycles.size,
     winRatePct: finished.length ? round((finished.filter((c) => c.pnl > 0).length / finished.length) * 100, 1) : null,
     openPositions: mine.length - closed.length,
@@ -201,6 +202,9 @@ function createOptionsStrategiesService(deps = {}) {
   const liveOrders = deps.liveOrders || (repo === defaultRepo
     ? require('../../repositories/options-live-orders.repository')
     : { listByStrategy: async () => [] });
+  const shadowEntries = deps.shadowEntries || (repo === defaultRepo
+    ? { listPending: (...args) => require('../../repositories/options-shadow-entries.repository').listPending(...args) }
+    : { listPending: async () => [] });
   const credentials = deps.credentials || lazyCredentials();
   const market = deps.market || lazyMarket();
   const now = deps.now || Date.now;
@@ -262,12 +266,14 @@ function createOptionsStrategiesService(deps = {}) {
 
   async function get(userId, id) {
     const strategy = await requireStrategy(userId, id);
-    const [positions, events, standingOrders] = await Promise.all([
+    const isBot = strategy.template === 'alert_signal';
+    const [positions, events, standingOrders, shadowPending] = await Promise.all([
       repo.listPositions(strategy.id),
       repo.listEvents(strategy.id, { limit: 100 }),
       strategy.template === 'alert_signal'
         ? liveOrders.listByStrategy(strategy.id)
         : Promise.resolve([]),
+      isBot ? shadowEntries.listPending({ strategyId: strategy.id }) : Promise.resolve([]),
     ]);
     const at = now();
     // Una sola cotización por posición abierta: alimenta el mark que ve el
@@ -276,8 +282,28 @@ function createOptionsStrategiesService(deps = {}) {
     const quotes = new Map(await Promise.all(openNow.map(async (p) => {
       try { return [p.id, (await market.getQuote(p.symbol)) || null]; } catch { return [p.id, null]; }
     })));
+    // Entradas esperando fill: sombra (tabla propia) y reales (órdenes `open` sin terminar).
+    const pendingRaw = [
+      ...shadowPending.map((e) => ({ id: e.id, mode: 'shadow', symbol: e.symbol, side: e.side, quantity: e.quantity,
+        executedQty: 0, limitPrice: e.limitPrice, deadlineAt: e.deadlineAt, spot: e.spot })),
+      ...standingOrders.filter((o) => o.action === 'open' && o.status !== 'final').map((o) => ({
+        id: o.id, mode: 'live', symbol: o.symbol, side: o.side, quantity: o.quantity,
+        executedQty: o.processedQty ?? 0, limitPrice: o.limitPrice, deadlineAt: o.deadlineAt ?? null, spot: null })),
+    ];
+    const pendingEntries = await Promise.all(pendingRaw.map(async ({ spot: entrySpot, ...e }) => {
+      let q = null;
+      try { q = (await market.getQuote(e.symbol)) || null; } catch { q = null; }
+      let spot = entrySpot ?? q?.spot ?? null;
+      if (spot == null) {
+        try { spot = (await market.getChain(parseSymbol(e.symbol)?.underlying))?.spot ?? null; } catch { spot = null; }
+      }
+      const fee = spot != null ? tradeFee({ spot, quantity: e.quantity, price: e.limitPrice }) : null;
+      return { ...e, bid: q?.bid ?? null, ask: q?.ask ?? null, feesEstUsdt: fee == null ? null : round(fee, 4) };
+    }));
     return {
       ...strategy,
+      pendingEntries,
+      blockedUnderlyings: strategy.state?.blockedUnderlyings || {},
       kpis: { shadow: kpisFor(positions, events, 'shadow', at), live: kpisFor(positions, events, 'live', at) },
       equity: equityCurve(positions, strategy.createdAt),
       positions: openNow.map((p) => {
@@ -303,6 +329,8 @@ function createOptionsStrategiesService(deps = {}) {
           entryPrice: p.entryPrice, exitPrice: p.exitPrice, openedAt: p.openedAt,
           closedAt: p.closedAt, pnlUsdt: p.pnlUsdt, feesUsdt: p.feesUsdt,
           closeReason: p.closeReason ?? null,
+          entryFeeUsdt: p.entryFeeUsdt ?? null, exitFeeUsdt: p.exitFeeUsdt ?? null,
+          exerciseFeeUsdt: p.exerciseFeeUsdt ?? null,
         })),
       usage: await limitsUsage({ repo, market, strategy, positions, at, quotes, orders: standingOrders }),
       events,
