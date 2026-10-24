@@ -214,3 +214,24 @@ test('netDelta es null si las posiciones abiertas abarcan varios subyacentes (un
   await repo.insertPosition({ strategyId: one.id, userId: USER, mode: 'live', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 3600e3 });
   assert.equal((await service.get(USER, one.id)).usage.netDelta, 0.03);
 });
+
+test('kpis feeBreakdown sums components and reports unallocated history', () => {
+  const { kpisFor } = require('../src/services/options/options-strategies.service');
+  const positions = [
+    // Abierta: solo entrada.
+    { mode: 'live', openedAt: 1, closedAt: null, feesUsdt: 1, entryFeeUsdt: 1, exitFeeUsdt: null, exerciseFeeUsdt: null },
+    // Cerrada con salida.
+    { mode: 'live', openedAt: 2, closedAt: 5, pnlUsdt: 3, feesUsdt: 2.5, entryFeeUsdt: 2, exitFeeUsdt: 0.5, exerciseFeeUsdt: null },
+    // Vencida con ejercicio.
+    { mode: 'live', openedAt: 3, closedAt: 6, pnlUsdt: -1, feesUsdt: 1.75, entryFeeUsdt: 1.5, exitFeeUsdt: null, exerciseFeeUsdt: 0.25 },
+    // Histórica sin desglose.
+    { mode: 'live', openedAt: 4, closedAt: 7, pnlUsdt: 1, feesUsdt: 4, entryFeeUsdt: null, exitFeeUsdt: null, exerciseFeeUsdt: null },
+    // Otro libro: no cuenta.
+    { mode: 'shadow', openedAt: 1, closedAt: null, feesUsdt: 9, entryFeeUsdt: 9 },
+  ];
+  const k = kpisFor(positions, [], 'live', NOW);
+  assert.equal(k.feesUsdt, 9.25);
+  assert.deepEqual(k.feeBreakdown, { entryUsdt: 4.5, exitUsdt: 0.5, exerciseUsdt: 0.25, unallocatedUsdt: 4 });
+  const empty = kpisFor([], [], 'live', NOW);
+  assert.deepEqual(empty.feeBreakdown, { entryUsdt: 0, exitUsdt: 0, exerciseUsdt: 0, unallocatedUsdt: 0 });
+});

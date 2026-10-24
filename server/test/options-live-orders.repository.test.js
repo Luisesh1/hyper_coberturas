@@ -488,3 +488,63 @@ test('finishOrder writes the underlying block in the same transaction', async ()
   await assert.rejects(repo.finishOrder(9, '77', 0.2, { block: { underlying: 'ETH-X', reason: 'r' } }),
     /Invalid underlying block/);
 });
+
+function applyTradeDb({ action = 'close', position = null } = {}) {
+  const calls = [];
+  const tx = { async query(sql, args) {
+    calls.push({ sql, args });
+    if (sql.includes('FROM options_live_orders') && sql.includes('FOR UPDATE')) return { rows: [{
+      id: 9, user_id: 7, strategy_id: 5, action, symbol: 'BTC-261030-60000-C',
+      side: action === 'open' ? 'BUY' : 'SELL', position_id: position ? position.id : null,
+      purpose: 'exit', processed_qty: '0', requested_qty: '1', exchange_order_id: '77' }] };
+    if (sql.includes('INSERT INTO options_live_fills')) return { rows: [{ id: 1 }] };
+    if (sql.includes('FROM options_strategy_positions') && sql.includes('FOR UPDATE')) {
+      return { rows: position ? [position] : [] };
+    }
+    return { rows: [], rowCount: 1 };
+  } };
+  return { calls, repo: createOptionsLiveOrdersRepository({ db: { transaction: (fn) => fn(tx) }, now: () => 1 }) };
+}
+const livePosition = (quantity, fees, entry = fees) => ({ id: 91, strategy_id: '5', user_id: '7', mode: 'live',
+  symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: String(quantity), entry_price: '100',
+  opened_at: '10', fees_usdt: String(fees), entry_fee_usdt: entry == null ? null : String(entry) });
+
+test('live open records the trade fee as the entry fee', async () => {
+  const d = applyTradeDb({ action: 'open' });
+  assert.equal(await d.repo.applyTrade({ id: 9 }, { id: 't1', quantity: '0.4', price: 120, fee: 0.8, at: 50 }), true);
+  const ins = d.calls.find((c) => c.sql.includes('INSERT INTO options_strategy_positions'));
+  assert.match(ins.sql, /fees_usdt,entry_fee_usdt\)/);
+  assert.equal(ins.args.at(-1), 0.8);
+  assert.equal(ins.args.at(-2), 0.8);
+});
+
+test('live full close splits entry and exit fees', async () => {
+  const d = applyTradeDb({ position: livePosition(0.4, 1.2) });
+  await d.repo.applyTrade({ id: 9 }, { id: 't2', quantity: '0.4', price: 130, fee: 0.3, at: 60 });
+  const upd = d.calls.find((c) => c.sql.includes('UPDATE options_strategy_positions'));
+  assert.match(upd.sql, /entry_fee_usdt=\$7,exit_fee_usdt=\$8/);
+  const [, , , , fees, , entry, exit] = upd.args;
+  assert.ok(Math.abs(entry - 1.2) < 1e-12);
+  assert.equal(exit, 0.3);
+  assert.ok(Math.abs(fees - (entry + exit)) < 1e-12);
+});
+
+test('live partial close allocates entry fee proportionally and keeps the breakdown summing to fees_usdt', async () => {
+  const d = applyTradeDb({ position: livePosition(0.4, 1.2) });
+  await d.repo.applyTrade({ id: 9 }, { id: 't3', quantity: '0.1', price: 130, fee: 0.05, at: 60 });
+  const upd = d.calls.find((c) => c.sql.includes('UPDATE options_strategy_positions'));
+  assert.match(upd.sql, /SET quantity=\$2,fees_usdt=\$3,entry_fee_usdt=\$3 WHERE id=\$1/);
+  const [, remainingQty, remainingFees] = upd.args;
+  assert.ok(Math.abs(remainingQty - 0.3) < 1e-12);
+  assert.ok(Math.abs(remainingFees - 0.9) < 1e-12);
+  const ins = d.calls.find((c) => c.sql.includes('INSERT INTO options_strategy_positions'));
+  assert.match(ins.sql, /fees_usdt,close_reason,entry_fee_usdt,exit_fee_usdt\)/);
+  const fees = ins.args[10];
+  const entry = ins.args[12];
+  const exit = ins.args[13];
+  assert.ok(Math.abs(entry - 0.3) < 1e-12);
+  assert.equal(exit, 0.05);
+  assert.ok(Math.abs(fees - (entry + exit)) < 1e-12);
+  // Entre las dos filas se conserva la comisión de entrada original.
+  assert.ok(Math.abs(remainingFees + entry - 1.2) < 1e-12);
+});

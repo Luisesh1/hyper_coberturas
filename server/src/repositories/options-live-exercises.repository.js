@@ -69,14 +69,17 @@ function createOptionsLiveExercisesRepository({ db = defaultDb, now = Date.now }
       for (const p of positions) {
         const qty = Number(p.quantity);
         const allocatedFee = recordFee * qty / quantity;
-        const fees = Number(p.fees_usdt || 0) + allocatedFee;
+        const entryFee = Number(p.fees_usdt || 0);
+        const fees = entryFee + allocatedFee;
         const pnl = grossPnl({
           side, entryPrice: Number(p.entry_price), exitPrice: perUnit, quantity: qty,
         }) - fees;
         const { rowCount } = await tx.query(
-          'UPDATE options_strategy_positions SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5 ' +
+          // Abierta: lo pagado hasta ahora es la entrada; se suma el ejercicio.
+          'UPDATE options_strategy_positions SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5,' +
+          'entry_fee_usdt=COALESCE(entry_fee_usdt,$6),exercise_fee_usdt=$7 ' +
           'WHERE id=$1 AND closed_at IS NULL',
-          [p.id, perUnit, exercisedAt, pnl, fees]
+          [p.id, perUnit, exercisedAt, pnl, fees, entryFee, allocatedFee]
         );
         if (rowCount !== 1) throw new Error('Position changed during exercise reconciliation');
         await tx.query(

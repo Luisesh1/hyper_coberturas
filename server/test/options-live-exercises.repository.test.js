@@ -63,3 +63,16 @@ test('ejercicio real: un mismo recordId se aplica una sola vez tras reinicio', a
   assert.equal(f.calls.some((c) => c.sql.includes('UPDATE options_strategy_positions')), false);
   await assert.rejects(f.repo.applyExercise({ ...proof, payoffUsdt: 900 }), /differs from Binance/);
 });
+
+test('live exercise books the exercise fee and keeps the entry fee', async () => {
+  const f = stub({ positions: [position(1, 8, 0.1, 120), position(2, 9, 0.1, 140)] });
+  await f.repo.applyExercise(proof);
+  const updates = f.calls.filter((c) => c.sql.startsWith('UPDATE options_strategy_positions'));
+  for (const u of updates) {
+    assert.match(u.sql, /entry_fee_usdt=COALESCE\(entry_fee_usdt,\$6\),exercise_fee_usdt=\$7/);
+    const [, , , , fees, entry, exercise] = u.params;
+    assert.equal(entry, 0.5);
+    assert.ok(Math.abs(exercise - 0.625) < 1e-12);
+    assert.ok(Math.abs(fees - (entry + exercise)) < 1e-12);
+  }
+});

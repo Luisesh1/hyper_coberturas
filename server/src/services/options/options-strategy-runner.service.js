@@ -950,7 +950,9 @@ class OptionsStrategyRunner {
         if (!position) continue;
         const fees = position.feesUsdt + leg.fee;
         const pnl = grossPnl({ side: position.side, entryPrice: position.entryPrice, exitPrice: leg.price, quantity: position.quantity }) - fees;
-        await this.repo.closePosition(position.id, { exitPrice: leg.price, closedAt: ctx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: action.reason || null });
+        // Abierta solo ha pagado la entrada: su total es la comisión de entrada.
+        await this.repo.closePosition(position.id, { exitPrice: leg.price, closedAt: ctx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: action.reason || null,
+          entryFeeUsdt: position.feesUsdt, exitFeeUsdt: leg.fee });
       }
     }
     const event = await this.repo.insertEvent({
@@ -1324,7 +1326,8 @@ class OptionsStrategyRunner {
         const fee = exerciseFee({ spot: indexPrice, quantity: p.quantity, intrinsicValue: value });
         const fees = p.feesUsdt + fee;
         const pnl = grossPnl({ side: p.side, entryPrice: p.entryPrice, exitPrice: value, quantity: p.quantity }) - fees;
-        await this.repo.closePosition(p.id, { exitPrice: value, closedAt: tickCtx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: 'expiry' });
+        await this.repo.closePosition(p.id, { exitPrice: value, closedAt: tickCtx.now, pnlUsdt: pnl, feesUsdt: fees, closeReason: 'expiry',
+          entryFeeUsdt: p.feesUsdt, exerciseFeeUsdt: fee });
         premium += signedPremium(p.side === 'SELL' ? 'BUY' : 'SELL', value, p.quantity);
         legs.push({ symbol: p.symbol, side: p.side === 'SELL' ? 'BUY' : 'SELL', quantity: p.quantity, price: value, fee });
         settled += 1;

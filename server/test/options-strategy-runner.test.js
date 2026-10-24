@@ -1126,3 +1126,32 @@ test('other templates keep instant shadow fills', async () => {
   assert.equal(env.shadowEntries.entries.length, 0);
   assert.equal(env.repo.positions.filter((p) => p.closedAt == null).length, 2);
 });
+
+test('shadow open+close splits entry and exit fees', async () => {
+  const { repo, runner, strategy } = await setup({ mode: 'paused' });
+  const openLeg = { symbol: 'BTC-261030-58000-P', side: 'SELL', quantity: 0.1, price: 300, fee: 1.8 };
+  await runner.book(strategy, 'shadow', { type: 'open', legs: [openLeg] }, [openLeg], { now: FRIDAY_9, positions: [] });
+  const opened = repo.positions[0];
+  assert.equal(opened.entryFeeUsdt, 1.8);
+  assert.equal(opened.feesUsdt, 1.8);
+  const leg = { symbol: opened.symbol, side: 'BUY', quantity: 0.1, price: 200, fee: 0.6, positionId: opened.id };
+  await runner.book(strategy, 'shadow', { type: 'close', reason: 'take_profit', legs: [leg] }, [leg], { now: FRIDAY_9 + HOUR_MS, positions: [{ ...opened }] });
+  const p = repo.positions[0];
+  assert.equal(p.entryFeeUsdt, 1.8);
+  assert.equal(p.exitFeeUsdt, 0.6);
+  assert.equal(p.exerciseFeeUsdt ?? null, null);
+  assert.ok(Math.abs(p.feesUsdt - 2.4) < 1e-12);
+});
+
+test('shadow expiry books exercise fee', async () => {
+  const { repo, runner, market, strategy } = await setup({ mode: 'paused' });
+  await repo.insertPosition({ strategyId: strategy.id, userId: 7, mode: 'shadow', symbol: 'BTC-261016-58000-P', side: 'SELL', quantity: 0.1, entryPrice: 300, openedAt: FRIDAY_9 - 7 * DAY_MS, feesUsdt: 1.8 });
+  market.state.spot = 57000;
+  await runner.tick();
+  const p = repo.positions[0];
+  const exFee = Math.min(0.00015 * 57000 * 0.1, 0.1 * 1000 * 0.1);
+  assert.equal(p.entryFeeUsdt, 1.8);
+  assert.equal(p.exitFeeUsdt ?? null, null);
+  assert.ok(Math.abs(p.exerciseFeeUsdt - exFee) < 1e-12);
+  assert.ok(Math.abs(p.feesUsdt - (1.8 + exFee)) < 1e-12);
+});

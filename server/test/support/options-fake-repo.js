@@ -70,7 +70,9 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     },
 
     async insertPosition(p) {
-      const row = { id: seq++, exitPrice: null, closedAt: null, pnlUsdt: null, feesUsdt: 0, ...p };
+      const row = { id: seq++, exitPrice: null, closedAt: null, pnlUsdt: null, feesUsdt: 0,
+        exitFeeUsdt: null, exerciseFeeUsdt: null, ...p };
+      row.entryFeeUsdt = row.feesUsdt;
       positions.push(row);
       return clone(row);
     },
@@ -80,10 +82,12 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
       if (p.tpTargetPrice == null) Object.assign(p, { tpTargetPrice: price, tpTargetMeta: clone(meta) });
       return clone(p);
     },
-    async closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
+    async closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null,
+      entryFeeUsdt = null, exitFeeUsdt = null, exerciseFeeUsdt = null }) {
       const p = positions.find((x) => x.id === id && x.closedAt == null);
       if (!p) return null;
-      Object.assign(p, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason });
+      Object.assign(p, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason,
+        entryFeeUsdt: entryFeeUsdt ?? p.entryFeeUsdt, exitFeeUsdt, exerciseFeeUsdt });
       return clone(p);
     },
     async listOpenPositions(strategyId, mode) {

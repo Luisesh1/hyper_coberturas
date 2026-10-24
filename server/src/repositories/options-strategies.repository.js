@@ -48,6 +48,10 @@ function mapPosition(row) {
     closedAt: numberOrNull(row.closed_at),
     pnlUsdt: numberOrNull(row.pnl_usdt),
     feesUsdt: Number(row.fees_usdt || 0),
+    // Desglose (NULL en cerradas históricas, sin reparto fiable).
+    entryFeeUsdt: numberOrNull(row.entry_fee_usdt),
+    exitFeeUsdt: numberOrNull(row.exit_fee_usdt),
+    exerciseFeeUsdt: numberOrNull(row.exercise_fee_usdt),
     closeReason: row.close_reason || null,
     tpTargetPrice: numberOrNull(row.tp_target_price),
     tpTargetMeta: parseJson(row.tp_target_meta, null),
@@ -238,11 +242,12 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
 
   // ---------- posiciones ----------
 
+  /** Una apertura solo paga la entrada: `entry_fee_usdt = fees_usdt`. */
   async function insertPosition({ strategyId, userId, mode, symbol, side, quantity, entryPrice, openedAt, feesUsdt = 0 }) {
     const { rows } = await db.query(
       `INSERT INTO options_strategy_positions
-         (strategy_id, user_id, mode, symbol, side, quantity, entry_price, opened_at, fees_usdt)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (strategy_id, user_id, mode, symbol, side, quantity, entry_price, opened_at, fees_usdt, entry_fee_usdt)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
        RETURNING *`,
       [strategyId, userId, mode, symbol, side, quantity, entryPrice, openedAt ?? now(), feesUsdt]
     );
@@ -266,14 +271,22 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return current[0] ? mapPosition(current[0]) : null;
   }
 
-  /** Cierra una posición abierta. `feesUsdt` es el total (entrada + salida). */
-  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null }) {
+  /**
+   * Cierra una posición abierta. `feesUsdt` es el total; `entryFeeUsdt`,
+   * `exitFeeUsdt` y `exerciseFeeUsdt` su desglose (entrada ausente: se
+   * conserva la guardada).
+   */
+  async function closePosition(id, { exitPrice, closedAt, pnlUsdt, feesUsdt, closeReason = null,
+    entryFeeUsdt = null, exitFeeUsdt = null, exerciseFeeUsdt = null }) {
     const { rows } = await db.query(
       `UPDATE options_strategy_positions
-          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5, close_reason = $6
+          SET exit_price = $2, closed_at = $3, pnl_usdt = $4, fees_usdt = $5, close_reason = $6,
+              entry_fee_usdt = COALESCE($7::numeric, entry_fee_usdt),
+              exit_fee_usdt = $8, exercise_fee_usdt = $9
         WHERE id = $1 AND closed_at IS NULL
         RETURNING *`,
-      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt, closeReason]
+      [id, exitPrice, closedAt ?? now(), pnlUsdt, feesUsdt, closeReason,
+        entryFeeUsdt, exitFeeUsdt, exerciseFeeUsdt]
     );
     return rows[0] ? mapPosition(rows[0]) : null;
   }

@@ -72,6 +72,27 @@ function tradeStatsFor(closed) {
   };
 }
 
+/**
+ * Comisiones por concepto. Las filas sin desglose (cerradas históricas)
+ * suman su total en `unallocatedUsdt`; en las demás los NULL cuentan 0.
+ */
+function feeBreakdownFor(positions) {
+  const acc = { entryUsdt: 0, exitUsdt: 0, exerciseUsdt: 0, unallocatedUsdt: 0 };
+  for (const p of positions) {
+    if (p.entryFeeUsdt == null && p.exitFeeUsdt == null && p.exerciseFeeUsdt == null) {
+      acc.unallocatedUsdt += Number(p.feesUsdt) || 0;
+      continue;
+    }
+    acc.entryUsdt += Number(p.entryFeeUsdt) || 0;
+    acc.exitUsdt += Number(p.exitFeeUsdt) || 0;
+    acc.exerciseUsdt += Number(p.exerciseFeeUsdt) || 0;
+  }
+  return {
+    entryUsdt: round(acc.entryUsdt), exitUsdt: round(acc.exitUsdt),
+    exerciseUsdt: round(acc.exerciseUsdt), unallocatedUsdt: round(acc.unallocatedUsdt),
+  };
+}
+
 function kpisFor(positions, events, mode, now) {
   const mine = positions.filter((p) => p.mode === mode);
   const closed = mine.filter((p) => p.closedAt != null);
@@ -91,6 +112,7 @@ function kpisFor(positions, events, mode, now) {
     realizedPnlUsdt: round(closed.reduce((a, p) => a + p.pnlUsdt, 0)),
     pnl30dUsdt: round(closed.filter((p) => p.closedAt >= now - 30 * DAY_MS).reduce((a, p) => a + p.pnlUsdt, 0)),
     feesUsdt: round(mine.reduce((a, p) => a + p.feesUsdt, 0)),
+    feeBreakdown: feeBreakdownFor(mine),
     premiumUsdt: round(premium),
     cycles: cycles.size,
     winRatePct: finished.length ? round((finished.filter((c) => c.pnl > 0).length / finished.length) * 100, 1) : null,

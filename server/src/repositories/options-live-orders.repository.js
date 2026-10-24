@@ -985,10 +985,10 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       if (locked.action === 'open') {
         await tx.query(
           `INSERT INTO options_strategy_positions
-           (strategy_id,user_id,mode,symbol,side,quantity,entry_price,opened_at,fees_usdt)
-           VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8)`,
+           (strategy_id,user_id,mode,symbol,side,quantity,entry_price,opened_at,fees_usdt,entry_fee_usdt)
+           VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9)`,
           [locked.strategy_id, locked.user_id, locked.symbol, locked.side,
-            quantity, trade.price, trade.at, trade.fee]
+            quantity, trade.price, trade.at, trade.fee, trade.fee]
         );
       } else {
         const { rows: [position] } = await tx.query(
@@ -1007,6 +1007,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         const closeReason = locked.purpose === 'take_profit' ? 'take_profit' : null;
         const held = Number(position.quantity);
         if (quantity > held + 1e-9) throw new Error('Fill larger than open position');
+        // Una abierta solo ha pagado la entrada (fees_usdt = entry_fee_usdt):
+        // se reparte en proporción a la cantidad cerrada, y ambas filas
+        // conservan fees_usdt = entrada + salida.
         const allocatedEntryFee = Number(position.fees_usdt) * (quantity / held);
         const fees = allocatedEntryFee + trade.fee;
         const pnl = grossPnl({ side: position.side, entryPrice: position.entry_price,
@@ -1014,21 +1017,23 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         if (Math.abs(held - quantity) < 1e-9) {
           await tx.query(
             `UPDATE options_strategy_positions
-             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5,close_reason=$6 WHERE id=$1`,
-            [position.id, trade.price, trade.at, pnl, fees, closeReason]
+             SET exit_price=$2,closed_at=$3,pnl_usdt=$4,fees_usdt=$5,close_reason=$6,
+                 entry_fee_usdt=$7,exit_fee_usdt=$8 WHERE id=$1`,
+            [position.id, trade.price, trade.at, pnl, fees, closeReason, allocatedEntryFee, trade.fee]
           );
         } else {
           await tx.query(
-            'UPDATE options_strategy_positions SET quantity=$2,fees_usdt=$3 WHERE id=$1',
+            'UPDATE options_strategy_positions SET quantity=$2,fees_usdt=$3,entry_fee_usdt=$3 WHERE id=$1',
             [position.id, held - quantity, Number(position.fees_usdt) - allocatedEntryFee]
           );
           await tx.query(
             `INSERT INTO options_strategy_positions
              (strategy_id,user_id,mode,symbol,side,quantity,entry_price,exit_price,
-              opened_at,closed_at,pnl_usdt,fees_usdt,close_reason)
-             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+              opened_at,closed_at,pnl_usdt,fees_usdt,close_reason,entry_fee_usdt,exit_fee_usdt)
+             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
             [position.strategy_id, position.user_id, position.symbol, position.side, quantity,
-              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees, closeReason]
+              position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees, closeReason,
+              allocatedEntryFee, trade.fee]
           );
         }
       }
