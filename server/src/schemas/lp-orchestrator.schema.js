@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { SEGMENT_OPENING_ACTIONS, SEGMENT_CLOSING_ACTIONS } = require('../services/lp-orchestrator/segments');
 
 const strategyConfigSchema = z.object({
   rangeWidthPct: z.number().positive().lt(100),
@@ -106,6 +107,10 @@ const recordTxFinalizedSchema = z.object({
     slippageCostUsd: z.number().min(0).optional(),
     collectedFeesUsd: z.number().min(0).optional(),
   }).passthrough().optional(),
+});
+
+const actionStartedSchema = z.object({
+  action: z.enum([...SEGMENT_OPENING_ACTIONS, ...SEGMENT_CLOSING_ACTIONS]),
 });
 
 const killLpSchema = z.object({
@@ -293,6 +298,7 @@ module.exports = {
   attachLpSchema,
   recordTxFinalizedSchema,
   killLpSchema,
+  actionStartedSchema,
   adoptionCandidatesQuerySchema,
   adoptLpSchema,
 };

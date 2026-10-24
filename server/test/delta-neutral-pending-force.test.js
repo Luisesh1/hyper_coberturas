@@ -274,3 +274,211 @@ test('net_profit_v2 live ejecuta el ajuste parcial y conserva su identidad', asy
   assert.ok(execution.metrics.targetQty < execution.metrics.deltaQty);
   assert.equal(state.executed, true);
 });
+
+// ---- Forzados que no se pierden en las salidas tempranas ----
+const FORCE = { forceReason: 'lp_range_changed', forceRebalance: true };
+
+test('snapshot_refresh_pending conserva la senal forzada', async () => {
+  const protection = buildProtection({ snapshotStatus: 'refresh_pending', strategyState: {} });
+  const service = buildService(protection);
+  service._refreshProtectionTruth = async () => ({ refreshed: false });
+  await service.evaluateProtection(protection, FORCE);
+  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+});
+
+test('snapshot_invalid conserva la senal forzada', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service._normalizeSnapshot = () => ({
+    validation: { valid: false, status: 'invalid', reasons: ['x'] },
+    snapshotFreshAt: NOW,
+    snapshotHash: 'h',
+  });
+  service._notifyBlock = async () => {};
+  await service.evaluateProtection(protection, FORCE);
+  assert.equal(protection.strategyState.status, 'snapshot_invalid');
+  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+});
+
+test('spot_stale conserva la senal forzada', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service._resolvePricingContext = async () => ({
+    currentPrice: NaN, twin: null, spotSource: 'x', spotFailureReason: 'boom',
+  });
+  await service.evaluateProtection(protection, FORCE);
+  assert.equal(protection.strategyState.lastDecisionReason, 'spot_stale');
+  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+});
+
+test('un tick sin forzado no deja senal pendiente en las salidas tempranas', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service._resolvePricingContext = async () => ({
+    currentPrice: NaN, twin: null, spotSource: 'x', spotFailureReason: 'boom',
+  });
+  await service.evaluateProtection(protection);
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+});
+
+test('lock distribuido ocupado conserva la senal forzada', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  const calls = [];
+  service.repo.setPendingForceReason = async (...args) => { calls.push(args); };
+  service.repo.updateStrategyState = async () => { throw new Error('no debe reescribir el estado entero'); };
+  service.useDistributedLocks = true;
+  service._db = {
+    pool: {
+      connect: async () => ({
+        query: async () => ({ rows: [{ acquired: false }] }),
+        release: () => {},
+      }),
+    },
+  };
+  const result = await service.evaluateProtection(protection, FORCE);
+  assert.equal(result, null);
+  assert.deepEqual(calls, [[1, 55, 'lp_range_changed']]);
+});
+
+test('lock ocupado sin forzado no escribe estado', async () => {
+  const protection = buildProtection({ strategyState: {} });
+  const service = buildService(protection);
+  service.useDistributedLocks = true;
+  service._db = {
+    pool: { connect: async () => ({ query: async () => ({ rows: [{ acquired: false }] }), release: () => {} }) },
+  };
+  await service.evaluateProtection(protection);
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+});
+
+test('net_profit: forzado rehidratado bajo el minimo se resuelve en hold y no se repite', async () => {
+  const base = {
+    policyVersion: 'net_profit_v1',
+    targetHedgeRatio: 0.6,
+    strategyState: {
+      lastRebalanceAt: Date.now() - (13 * 60 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+      executionIntent: 'live',
+      policyVersion: 'net_profit_v1',
+    },
+  };
+  // Sonda: el objetivo que fija el modelo para este LP.
+  let target = null;
+  const probe = buildProtection(JSON.parse(JSON.stringify(base)));
+  await buildService(probe, { actualQty: 0, centerDeadZonePct: 0, onExecute: (_r, { metrics }) => { target = metrics.deltaQty; } })
+    .evaluateProtection(probe);
+  assert.ok(target > 0.01);
+
+  const protection = buildProtection({
+    ...base,
+    strategyState: { ...base.strategyState, pendingForceReason: 'lp_range_changed' },
+  });
+  let executions = 0;
+  // |delta - actual| ~ $2.5, bajo el minimo de $11.
+  const service = buildService(protection, {
+    actualQty: target - 0.001, centerDeadZonePct: 0, onExecute: () => { executions += 1; },
+  });
+  const first = await service.evaluateProtection(protection);
+  assert.equal(executions, 0);
+  assert.equal(first.netProfitPolicyGate, 'forced_within_min_notional');
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+
+  const second = await service.evaluateProtection(protection);
+  assert.equal(executions, 0);
+  assert.notEqual(second.netProfitPolicyGate, 'forced');
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+});
+
+// --- C2: el forzado `segment_opened` de resetForNewSegment se resuelve con
+// la primera evaluación forzada válida que acaba en hold o bajo el mínimo,
+// en todas las políticas. Solo los bloqueos transitorios lo conservan.
+
+const POLICY_CASES = [
+  { label: 'range_exit_v1', policyVersion: 'range_exit_v1' },
+  { label: 'legacy', policyVersion: null },
+];
+
+function policyBase(policyVersion) {
+  return {
+    ...(policyVersion ? { policyVersion } : {}),
+    strategyState: {
+      // Temporizador legacy no vencido y dwell ya pasado.
+      lastRebalanceAt: Date.now() - (5 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+      executionIntent: 'live',
+      ...(policyVersion ? { policyVersion } : {}),
+    },
+  };
+}
+
+async function forcedTarget(policyVersion) {
+  const probe = buildProtection(JSON.parse(JSON.stringify(policyBase(policyVersion))));
+  let target = null;
+  await buildService(probe, {
+    actualQty: 0, centerDeadZonePct: 0, onExecute: (_r, { metrics }) => { target = Number(metrics.targetQty); },
+  }).evaluateProtection(probe, { forceReason: 'segment_opened', forceRebalance: true });
+  assert.ok(target > 0.003, `objetivo forzado ${target}`);
+  return target;
+}
+
+for (const { label, policyVersion } of POLICY_CASES) {
+  test(`${label}: forzado segment_opened bajo el minimo se resuelve y no se repite`, async () => {
+    const target = await forcedTarget(policyVersion);
+    const base = policyBase(policyVersion);
+    const protection = buildProtection({
+      ...base,
+      strategyState: { ...base.strategyState, pendingForceReason: 'segment_opened' },
+    });
+    let executions = 0;
+    const holder = { qty: target - 0.001 }; // ~$2.5, bajo el minimo de $11
+    const service = buildService(protection, {
+      actualQty: holder.qty, centerDeadZonePct: 0, onExecute: () => { executions += 1; },
+    });
+    const first = await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.equal(first.decisionOwner, 'force', 'la primera evaluacion es la forzada');
+    assert.equal(protection.strategyState.pendingForceReason ?? null, null, 'el forzado queda resuelto');
+
+    const second = await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.notEqual(second.decisionOwner, 'force', 'el tick siguiente ya no es forzado');
+    assert.notEqual(second.lastDecisionReason, 'segment_opened');
+    assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+  });
+
+  // range_exit_v1 no tiene min-dwell (su confirmacion de cruce es su dwell).
+  test(`${label}: forzado segment_opened bloqueado por el min-dwell se conserva`, { skip: policyVersion === 'range_exit_v1' && 'range_exit_v1 no usa min-dwell' }, async () => {
+    const base = policyBase(policyVersion);
+    const protection = buildProtection({
+      ...base,
+      strategyState: {
+        ...base.strategyState,
+        ...dwellActiveState(),
+        pendingForceReason: 'segment_opened',
+      },
+    });
+    let executions = 0;
+    const service = buildService(protection, { actualQty: 0, centerDeadZonePct: 0, onExecute: () => { executions += 1; } });
+    await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.equal(protection.strategyState.pendingForceReason, 'segment_opened');
+  });
+
+  test(`${label}: forzado segment_opened en cooldown se conserva`, async () => {
+    const base = policyBase(policyVersion);
+    const protection = buildProtection({
+      ...base,
+      nextEligibleAttemptAt: Date.now() + 60_000,
+      cooldownReason: 'spread_too_wide',
+      strategyState: { ...base.strategyState, pendingForceReason: 'segment_opened' },
+    });
+    let executions = 0;
+    const service = buildService(protection, { actualQty: 0, centerDeadZonePct: 0, onExecute: () => { executions += 1; } });
+    await service.evaluateProtection(protection);
+    assert.equal(executions, 0);
+    assert.equal(protection.strategyState.pendingForceReason, 'segment_opened');
+  });
+}

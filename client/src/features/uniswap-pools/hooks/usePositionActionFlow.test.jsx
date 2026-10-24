@@ -120,3 +120,47 @@ describe('usePositionActionFlow · reintento de un ajuste de rango cortado', () 
     expect(uniswapApi.preparePositionAction.mock.calls[0][1].resumeFunding).toBeUndefined();
   });
 });
+
+describe('usePositionActionFlow · aviso de ajuste en curso', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    walletMock.preflightTransaction.mockResolvedValue({ gas: '0x5208' });
+    walletMock.submitTransactionDetailed.mockResolvedValue({ hash: DECREASE_HASH });
+    walletMock.waitForTransactionReceipt.mockResolvedValue({ status: 1, transactionHash: DECREASE_HASH });
+    uniswapApi.finalizePositionAction.mockResolvedValue({ operationId: 1, status: 'done', result: {} });
+  });
+
+  const plan = { ...FULL_PLAN, txPlan: [tx('decrease_liquidity_v4')] };
+
+  it('handleExecute llama a onExecuteStarted antes de la primera firma', async () => {
+    const onExecuteStarted = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => usePositionActionFlow({
+      action: 'modify-range', initialFormState, buildPayload, prefilledPrepareResult: plan, onExecuteStarted,
+    }));
+    await act(async () => { await result.current.handleExecute(); });
+    expect(onExecuteStarted).toHaveBeenCalledWith('modify-range');
+    expect(onExecuteStarted.mock.invocationCallOrder[0])
+      .toBeLessThan(walletMock.submitTransactionDetailed.mock.invocationCallOrder[0]);
+  });
+
+  it('si onExecuteStarted falla, la firma sigue adelante', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onExecuteStarted = vi.fn().mockRejectedValue(new Error('red caída'));
+    const { result } = renderHook(() => usePositionActionFlow({
+      action: 'modify-range', initialFormState, buildPayload, prefilledPrepareResult: plan, onExecuteStarted,
+    }));
+    await act(async () => { await result.current.handleExecute(); });
+    expect(walletMock.submitTransactionDetailed).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('no avisa para acciones que no cambian el LP (collect-fees)', async () => {
+    const onExecuteStarted = vi.fn();
+    const { result } = renderHook(() => usePositionActionFlow({
+      action: 'collect-fees', initialFormState, buildPayload, prefilledPrepareResult: plan, onExecuteStarted,
+    }));
+    await act(async () => { await result.current.handleExecute(); });
+    expect(onExecuteStarted).not.toHaveBeenCalled();
+    expect(walletMock.submitTransactionDetailed).toHaveBeenCalled();
+  });
+});

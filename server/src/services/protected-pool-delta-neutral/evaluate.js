@@ -64,6 +64,13 @@ const {
   buildShadowSnapshots,
 } = require('./shadow-policies');
 
+// Una senal forzada (p. ej. cambio de rango del LP) es one-shot: si la
+// evaluacion sale temprano sin ejecutarla hay que dejarla pendiente, o se pierde.
+function persistPendingForce(state, { forceReason = null, forceRebalance = false } = {}) {
+  if (!forceRebalance) return state;
+  return { ...state, pendingForceReason: forceReason || state.pendingForceReason || 'forced' };
+}
+
 const evaluateMethods = {
   async _evaluateProtectionUnlocked(protection, options = {}) {
     const { marketContext = null } = options;
@@ -96,6 +103,14 @@ const evaluateMethods = {
       // viejo y valida como `ready`. Operar con eso dimensiona el hedge contra
       // una posicion que ya no existe, asi que se espera a la relectura.
       if (current.snapshotStatus === 'refresh_pending' && !refreshed?.refreshed) {
+        if (forceRebalance) {
+          await this.repo.updateStrategyState(current.userId, current.id, {
+            strategyState: persistPendingForce(strategyState, { forceReason, forceRebalance }),
+            // El repo sobreescribe estas dos columnas con NULL si no se pasan.
+            cooldownReason: current.cooldownReason,
+            lastDecisionReason: current.lastDecisionReason,
+          });
+        }
         await this._persistDecision(current, {
           decision: 'refresh_snapshot',
           reason: 'snapshot_refresh_pending',
@@ -121,7 +136,7 @@ const evaluateMethods = {
         lastDecisionReason: 'snapshot_invalid',
       };
       await this.repo.updateStrategyState(current.userId, current.id, {
-        strategyState: invalidState,
+        strategyState: persistPendingForce(invalidState, { forceReason, forceRebalance }),
         snapshotStatus: snapshotMeta.validation.status,
         snapshotFreshAt: snapshotMeta.snapshotFreshAt,
         snapshotHash: snapshotMeta.snapshotHash,
@@ -264,7 +279,7 @@ const evaluateMethods = {
         lastSpotFailureReason: priceError,
       };
       await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
-        strategyState: staleState,
+        strategyState: persistPendingForce(staleState, { forceReason, forceRebalance }),
         snapshotStatus: snapshotMeta.validation.status,
         snapshotFreshAt: snapshotMeta.snapshotFreshAt,
         snapshotHash: snapshotMeta.snapshotHash,
@@ -303,7 +318,7 @@ const evaluateMethods = {
         lastDecisionReason: 'metrics_ineligible',
       };
       await this.repo.updateStrategyState(activeProtection.userId, activeProtection.id, {
-        strategyState: degradedState,
+        strategyState: persistPendingForce(degradedState, { forceReason, forceRebalance }),
         priceCurrent: currentPrice,
         snapshotStatus: snapshotMeta.validation.status,
         snapshotFreshAt: snapshotMeta.snapshotFreshAt,
@@ -451,6 +466,8 @@ const evaluateMethods = {
         lpValueUsd: Number(metrics.poolValueUsd),
         expectedCostUsd: expectedPolicyCostUsd,
         state: strategyState.netProfitPolicyState || {},
+        forceRebalance,
+        minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
       })
       : null;
 
@@ -622,6 +639,9 @@ const evaluateMethods = {
         nextState.netProfitPolicyState = decisionState;
       }
       nextState.netProfitPolicyGate = netProfitDecision.gate;
+      // El forzado ya se resolvio: el drift cabe bajo el minimo de orden. Sin
+      // esto la senal rehidratada quedaria viva y forzaria cada tick.
+      if (netProfitDecision.gate === 'forced_within_min_notional') nextState.pendingForceReason = null;
       nextState.netProfitPolicyTargetQty = Number(metrics.deltaQty);
     }
     const tracking = rebalanceDecision.tracking;
@@ -1368,6 +1388,25 @@ const evaluateMethods = {
     if (nextState.pendingForceReason && minDwellActive) {
       nextState.nextEligibleAttemptAt = Number(nextState.minDwellUntil) || null;
       nextState.cooldownReason = 'min_dwell_active';
+    }
+    // Un forzado rehidratado (p. ej. `segment_opened` de resetForNewSegment)
+    // queda resuelto cuando esta evaluacion forzada termino con datos validos
+    // y la politica dijo `hold` o el ajuste cae bajo el minimo de orden. Sin
+    // esto cada tick repetiria una evaluacion forzada y, el dia que
+    // |delta - held| alcanzara el minimo, saldria una orden que la politica no
+    // pondria. Solo los bloqueos transitorios (min-dwell, riesgo/margen,
+    // confianza baja, cooldown, spread...) lo conservan; las salidas tempranas
+    // (snapshot pendiente/invalido, spot stale, lock) ya lo conservan arriba.
+    const forcedPolicyHold = !capOverridesPolicy
+      && (rebalanceDecision.decision === 'hold' || !shouldRebalance);
+    const forcedBelowMinimum = preflight.reason === 'below_min_order_notional';
+    if (forceRebalance
+      && nextState.pendingForceReason
+      && !minDwellActive
+      && !forcedStatus
+      && !confidenceBlocksIncrease
+      && (forcedBelowMinimum || (preflight.ok && forcedPolicyHold))) {
+      nextState.pendingForceReason = null;
     }
     if (forcedStatus) {
       if ((forcedStatus === 'risk_paused' || forcedStatus === 'margin_pending') && isReduceOnlyPath) {

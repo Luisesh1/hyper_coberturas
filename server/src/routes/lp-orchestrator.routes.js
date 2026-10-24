@@ -13,6 +13,7 @@ const {
   attachLpSchema,
   recordTxFinalizedSchema,
   killLpSchema,
+  actionStartedSchema,
   preflightProtectionSchema,
   createIntentSchema,
   commitIntentSchema,
@@ -127,6 +128,25 @@ router.get('/:id/action-log', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+router.get('/:id/segments', asyncHandler(async (req, res) => {
+  const id = requireIntParam(req, 'id');
+  const data = await lpOrchestratorService.listSegments(req.user.userId, id);
+  if (!data) {
+    return res.status(404).json({ success: false, error: 'Orquestador no encontrado' });
+  }
+  res.json({ success: true, data });
+}));
+
+router.get('/:id/segments/:segmentId', asyncHandler(async (req, res) => {
+  const id = requireIntParam(req, 'id');
+  const segmentId = requireIntParam(req, 'segmentId');
+  const data = await lpOrchestratorService.getSegment(req.user.userId, id, segmentId);
+  if (!data) {
+    return res.status(404).json({ success: false, error: 'Tramo no encontrado' });
+  }
+  res.json({ success: true, data });
+}));
+
 router.get('/:id/protection-ops', asyncHandler(async (req, res) => {
   const id = requireIntParam(req, 'id');
   const limit = Math.min(200, Number(req.query.limit) || 50);
@@ -207,6 +227,16 @@ router.post('/:id/record-tx-finalized', validate(recordTxFinalizedSchema), async
     userId: req.user.userId,
     orchestratorId: id,
     ...req.body,
+  });
+  res.json({ success: true, data });
+}));
+
+router.post('/:id/action-started', validate(actionStartedSchema), asyncHandler(async (req, res) => {
+  const id = requireIntParam(req, 'id');
+  const data = await lpOrchestratorService.markActionStarted({
+    userId: req.user.userId,
+    orchestratorId: id,
+    action: req.body.action,
   });
   res.json({ success: true, data });
 }));

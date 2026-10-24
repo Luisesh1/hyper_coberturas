@@ -19,6 +19,7 @@ const {
   normalizeProtectionSnapshot,
   validateNormalizedProtectionSnapshot,
 } = require('./delta-neutral-snapshot.service');
+const { resetDecisionStateForNewSegment } = require('./protected-pool-delta-neutral/segment-reset');
 const { computeExtractableSlotSurplusUsd } = require('../utils/isolated-margin');
 const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
 const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
@@ -1300,6 +1301,46 @@ class ProtectedPoolDeltaNeutralService {
     });
   }
 
+  /**
+   * Abre tramo con el estado de decision limpio. Espera a la evaluacion en
+   * curso (que podria reescribir el estado viejo despues) y nunca opera: la
+   * siguiente evaluacion encuentra `pendingForceReason`.
+   */
+  async resetForNewSegment(protection) {
+    const protectionId = Number(protection?.id);
+    if (!Number.isInteger(protectionId) || protectionId <= 0) return;
+    // El reset ocupa el candado en proceso: una evaluacion en curso termina
+    // antes, los ticks normales reusan esta promesa y un forzado se encola
+    // detras, asi que ninguno lee la fila vieja ni la reescribe despues.
+    let lock;
+    while ((lock = this.evaluationLocks.get(protectionId))) {
+      await Promise.resolve(lock).catch(() => null);
+    }
+    let release;
+    const mine = new Promise((resolve) => { release = resolve; });
+    this.evaluationLocks.set(protectionId, mine);
+    try {
+      const fresh = (await this.repo.getById(protection.userId, protectionId)) || protection;
+      // Columnas coherentes con el estado reiniciado (que borra el motivo, el
+      // cooldown y nextEligibleAttemptAt): el repo anula cooldown_reason y
+      // last_decision_reason, y next_eligible_attempt_at se pide explicito.
+      await this.repo.updateStrategyState(fresh.userId ?? protection.userId, protectionId, {
+        strategyState: resetDecisionStateForNewSegment(fresh.strategyState),
+        cooldownReason: null,
+        lastDecisionReason: null,
+        clearNextEligibleAttemptAt: true,
+      });
+
+      const prefix = `${protectionId}:`;
+      for (const [key, entry] of this.shadowStates.entries()) {
+        if (key.startsWith(prefix)) this.shadowStates.set(key, { ...(entry || {}), shadowPolicyState: {} });
+      }
+    } finally {
+      if (this.evaluationLocks.get(protectionId) === mine) this.evaluationLocks.delete(protectionId);
+      release();
+    }
+  }
+
   async evaluateProtection(protection, options = {}) {
     const protectionId = Number(protection?.id);
     if (!Number.isInteger(protectionId) || protectionId <= 0) return null;
@@ -1337,6 +1378,14 @@ class ProtectedPoolDeltaNeutralService {
           protectionId: protection.id,
           userId: protection.userId,
         });
+        // El forzado es one-shot: si el lock lo descarta, el tick que si
+        // evalua lo recoge de `pendingForceReason`.
+        if (options?.forceRebalance) {
+          await this._persistBusyLockForce(protection, options).catch((err) => this.logger.warn?.(
+            'delta_neutral_busy_lock_force_persist_failed',
+            { protectionId: protection.id, error: err.message },
+          ));
+        }
         return null;
       }
       return await this._evaluateProtectionUnlocked(protection, options);
@@ -1352,6 +1401,18 @@ class ProtectedPoolDeltaNeutralService {
       }
       client.release();
     }
+  }
+
+  async _persistBusyLockForce(protection, options) {
+    // Solo `pendingForceReason`, con merge atomico en SQL: leer y reescribir el
+    // estado entero pisaria lo que el titular del lock escriba entre medias.
+    // Residual: un titular a mitad de tick aun puede sobrescribir la senal con
+    // su propio nextState (solo posible entre procesos).
+    await this.repo.setPendingForceReason(
+      protection.userId,
+      protection.id,
+      options.forceReason || 'forced',
+    );
   }
 
   async _continueDeactivation(protection, context = {}) {

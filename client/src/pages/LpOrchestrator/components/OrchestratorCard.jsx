@@ -24,11 +24,18 @@ const PHASE_LABELS = {
   complete: { label: 'Completado', tone: 'muted' },
 };
 
+const ADJUSTING_TEXT = 'Ajuste en curso: la cobertura espera al LP nuevo';
+
 function buildPoolFromOrchestrator(orch) {
   const pool = orch.lastEvaluation?.poolSnapshot;
   if (!pool) return null;
+  // El precio de apertura es el del tramo vivo, no el del primer LP.
+  const segmentOpenPrice = orch.activeSegment?.openPrice;
   return {
     ...pool,
+    ...(segmentOpenPrice != null && Number.isFinite(Number(segmentOpenPrice))
+      ? { priceAtOpen: Number(segmentOpenPrice) }
+      : {}),
     token0: pool.token0 || { symbol: orch.token0Symbol },
     token1: pool.token1 || { symbol: orch.token1Symbol },
     network: pool.network || orch.network,
@@ -93,6 +100,7 @@ export default function OrchestratorCard({
   const recommendCollect = orchestrator.lastEvaluation?.recommendCollect;
   const pool = useMemo(() => buildPoolFromOrchestrator(orchestrator), [orchestrator]);
   const hasActiveLp = !!orchestrator.activePositionIdentifier;
+  const adjusting = orchestrator.activeSegment?.status === 'closing';
   const [showStrategy, setShowStrategy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -255,7 +263,13 @@ export default function OrchestratorCard({
                   </span>
                 </>
               )}
-              {hedgeValue && (
+              {adjusting && (
+                <>
+                  <span className={styles.dot}>·</span>
+                  <span className={styles.adjusting}>{ADJUSTING_TEXT}</span>
+                </>
+              )}
+              {hedgeValue && !adjusting && (
                 <>
                   <span className={styles.dot}>·</span>
                   <span
@@ -368,6 +382,8 @@ export default function OrchestratorCard({
                 accounting={orchestrator.accounting}
                 createdAt={orchestrator.createdAt}
                 initialTotalUsd={orchestrator.initialTotalUsd}
+                orchestratorId={orchestrator.id}
+                refreshKey={orchestrator.updatedAt}
                 unclaimedFeesUsd={
                   orchestrator.lastEvaluation?.unclaimedFeesUsd
                   ?? orchestrator.lastEvaluation?.poolSnapshot?.unclaimedFeesUsd

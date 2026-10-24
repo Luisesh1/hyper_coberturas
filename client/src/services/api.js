@@ -365,6 +365,8 @@ export const lpOrchestratorApi = {
   },
   adoptExistingLp: (payload) =>
     request('POST', '/lp-orchestrators/adopt', payload, { timeoutMs: 120_000 }),
+  listSegments: (id) => request('GET', `/lp-orchestrators/${id}/segments`),
+  getSegment: (id, segmentId) => request('GET', `/lp-orchestrators/${id}/segments/${segmentId}`),
   evaluate: (id) => request('POST', `/lp-orchestrators/${id}/evaluate`, {}),
   reconcile: (id) => request('POST', `/lp-orchestrators/${id}/reconcile`, {}, { timeoutMs: 60_000 }),
   attachLp: (id, payload) => request('POST', `/lp-orchestrators/${id}/attach-lp`, payload),
@@ -373,6 +375,8 @@ export const lpOrchestratorApi = {
     request('POST', `/lp-orchestrators/${id}/adopt-lp`, { positionIdentifier, protectionConfig }),
   recordTxFinalized: (id, payload) =>
     request('POST', `/lp-orchestrators/${id}/record-tx-finalized`, payload),
+  actionStarted: (id, action) =>
+    request('POST', `/lp-orchestrators/${id}/action-started`, { action }),
   killLp: (id, { mode = 'auto' } = {}) =>
     request('POST', `/lp-orchestrators/${id}/kill-lp`, { mode }),
   archive: (id) => request('POST', `/lp-orchestrators/${id}/archive`, {}),

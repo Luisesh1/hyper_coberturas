@@ -58,6 +58,7 @@ export default function PositionActionModal({
   ownerAddress = null,
   onClose,
   onFinalized,
+  onExecuteStarted,
 }) {
   const [isSwitchingWallet, setIsSwitchingWallet] = useState(false);
   const initialFormState = useMemo(() => getInitialState(action, pool, defaults), [action, pool, defaults]);
@@ -82,6 +83,7 @@ export default function PositionActionModal({
     sendTransaction,
     waitForTransactionReceipt,
     onFinalized,
+    onExecuteStarted,
     autoPrepare: action === 'collect-fees' && !prefilledPrepareResult,
     prefilledPrepareResult,
   });

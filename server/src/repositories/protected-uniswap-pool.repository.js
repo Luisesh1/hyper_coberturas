@@ -879,6 +879,9 @@ async function updateStrategyState(userId, id, {
   trackingErrorQty,
   trackingErrorUsd,
   executionMode,
+  // `nextEligibleAttemptAt` va con COALESCE (null = conservar); para anularlo
+  // de verdad hay que pedirlo explicitamente.
+  clearNextEligibleAttemptAt = false,
   updatedAt = Date.now(),
 }, executor) {
   const { rows } = await exec(executor).query(
@@ -890,7 +893,8 @@ async function updateStrategyState(userId, id, {
             snapshot_status = COALESCE($7, snapshot_status),
             snapshot_fresh_at = COALESCE($8, snapshot_fresh_at),
             snapshot_hash = COALESCE($9, snapshot_hash),
-            next_eligible_attempt_at = COALESCE($10, next_eligible_attempt_at),
+            next_eligible_attempt_at = CASE WHEN $18::boolean THEN NULL
+                                            ELSE COALESCE($10, next_eligible_attempt_at) END,
             cooldown_reason = $11,
             last_decision = COALESCE($12, last_decision),
             last_decision_reason = $13,
@@ -918,6 +922,7 @@ async function updateStrategyState(userId, id, {
       trackingErrorUsd ?? null,
       executionMode ?? null,
       updatedAt,
+      clearNextEligibleAttemptAt === true,
     ]
   );
 
@@ -1076,7 +1081,26 @@ async function clearCooldown(userId, id, executor) {
   return rows[0]?.id || null;
 }
 
+/**
+ * Fusiona SOLO `pendingForceReason` en strategy_state_json de forma atomica.
+ * Lo usa el camino de lock ocupado, que no puede leer-modificar-escribir el
+ * estado entero sin pisar lo que el titular del lock escriba entre medias.
+ */
+async function setPendingForceReason(userId, id, reason, executor, updatedAt = Date.now()) {
+  const { rows } = await exec(executor).query(
+    `UPDATE protected_uniswap_pools
+        SET strategy_state_json = (COALESCE(NULLIF(strategy_state_json, '')::jsonb, '{}'::jsonb)
+              || jsonb_build_object('pendingForceReason', $3::text))::text,
+            updated_at = $4
+      WHERE user_id = $1 AND id = $2 AND status = 'active'
+      RETURNING id`,
+    [userId, id, reason, updatedAt]
+  );
+  return rows[0]?.id || null;
+}
+
 module.exports = {
+  setPendingForceReason,
   create,
   clearCooldown,
   deactivate,

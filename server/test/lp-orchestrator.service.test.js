@@ -1,7 +1,23 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { LpOrchestratorService } = require('../src/services/lp-orchestrator.service');
+const { LpOrchestratorService: RealLpOrchestratorService } = require('../src/services/lp-orchestrator.service');
+const { makeSegmentFakeRepo } = require('./support/segment-fake-repo');
+
+// Estos tests no cubren los tramos: por defecto un repo de tramos en memoria
+// sin log de rebalanceos y db sin transacciones, para que el corte nunca
+// toque pg.
+class LpOrchestratorService extends RealLpOrchestratorService {
+  constructor(deps = {}) {
+    super({
+      segmentRepository: makeSegmentFakeRepo(),
+      rebalanceRepository: { listByProtectedPoolId: async () => [] },
+      // El corte es transaccional: sin db fake caería al pool real.
+      db: { transaction: async (fn) => fn(undefined) },
+      ...deps,
+    });
+  }
+}
 const accounting = require('../src/services/lp-orchestrator/accounting');
 
 // Fake db para los tests que exercitan rutas con _withTransaction:
@@ -70,6 +86,12 @@ function makeFakeRepo() {
       const o = orchestrators.get(id);
       if (!o) return null;
       o.accounting = acc;
+      return id;
+    },
+    async updateActiveSegment(userId, id, segmentId) {
+      const o = orchestrators.get(id);
+      if (!o) return null;
+      o.activeSegmentId = segmentId;
       return id;
     },
     async markUrgentAlertSent(userId, id, { at }) {

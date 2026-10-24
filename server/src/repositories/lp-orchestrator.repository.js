@@ -119,6 +119,21 @@ function mapActiveHedge(row) {
   };
 }
 
+function mapActiveSegment(row) {
+  if (row.seg_id == null) return null;
+  const num = (v) => (v != null ? Number(v) : null);
+  return {
+    id: Number(row.seg_id),
+    seq: Number(row.seg_seq),
+    status: row.seg_status,
+    openedAt: num(row.seg_opened_at),
+    openPrice: num(row.seg_open_price),
+    rangeLowerPrice: num(row.seg_range_lower_price),
+    rangeUpperPrice: num(row.seg_range_upper_price),
+    closingStartedAt: num(row.seg_closing_started_at),
+  };
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
@@ -142,7 +157,9 @@ function mapRow(row) {
     activeProtectedPoolId: row.active_protected_pool_id != null
       ? Number(row.active_protected_pool_id)
       : null,
+    activeSegmentId: row.active_segment_id != null ? Number(row.active_segment_id) : null,
     activeHedge: mapActiveHedge(row),
+    activeSegment: mapActiveSegment(row),
     initialTotalUsd: Number(row.initial_total_usd),
     strategyConfig: parseJsonSafe(row.strategy_config_json, {}),
     protectionConfig: parseJsonSafe(row.protection_config_json, null),
@@ -238,9 +255,19 @@ async function getById(userId, id, executor) {
             p.center_dead_zone_pct AS active_protection_center_dead_zone_pct,
             p.hedge_size           AS active_protection_hedge_size,
             p.price_current        AS active_protection_price_current,
-            p.strategy_state_json  AS active_protection_state_json
+            p.strategy_state_json  AS active_protection_state_json,
+            seg.id                 AS seg_id,
+            seg.seq                AS seg_seq,
+            seg.status             AS seg_status,
+            seg.opened_at          AS seg_opened_at,
+            seg.open_price         AS seg_open_price,
+            seg.range_lower_price  AS seg_range_lower_price,
+            seg.range_upper_price  AS seg_range_upper_price,
+            seg.closing_started_at AS seg_closing_started_at
        FROM lp_orchestrators o
        LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id
+       LEFT JOIN lp_orchestrator_segments seg
+              ON seg.id = o.active_segment_id AND seg.status IN ('open','closing')
        WHERE o.user_id = $1 AND o.id = $2`,
     [userId, id]
   );
@@ -255,9 +282,19 @@ async function listForUser(userId, { includeArchived = false } = {}, executor) {
             p.center_dead_zone_pct AS active_protection_center_dead_zone_pct,
             p.hedge_size           AS active_protection_hedge_size,
             p.price_current        AS active_protection_price_current,
-            p.strategy_state_json  AS active_protection_state_json
+            p.strategy_state_json  AS active_protection_state_json,
+            seg.id                 AS seg_id,
+            seg.seq                AS seg_seq,
+            seg.status             AS seg_status,
+            seg.opened_at          AS seg_opened_at,
+            seg.open_price         AS seg_open_price,
+            seg.range_lower_price  AS seg_range_lower_price,
+            seg.range_upper_price  AS seg_range_upper_price,
+            seg.closing_started_at AS seg_closing_started_at
        FROM lp_orchestrators o
        LEFT JOIN protected_uniswap_pools p ON p.id = o.active_protected_pool_id
+       LEFT JOIN lp_orchestrator_segments seg
+              ON seg.id = o.active_segment_id AND seg.status IN ('open','closing')
        WHERE o.user_id = $1
          AND ($2::boolean OR o.status <> 'archived')
        ORDER BY o.updated_at DESC, o.id DESC`,
@@ -335,6 +372,17 @@ async function updateActiveLp(userId, id, {
       phase ?? null,
       updatedAt,
     ]
+  );
+  return rows[0]?.id || null;
+}
+
+async function updateActiveSegment(userId, id, segmentId, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE lp_orchestrators
+        SET active_segment_id = $3, updated_at = $4
+      WHERE user_id = $1 AND id = $2
+      RETURNING id`,
+    [userId, id, segmentId ?? null, Date.now()]
   );
   return rows[0]?.id || null;
 }
@@ -522,7 +570,7 @@ async function appendActionLog(entry, executor) {
        tx_hashes_json, realized_cost_usd,
        verification_status, drift_details_json,
        accounting_delta_json, payload_json,
-       created_at
+       created_at, segment_id
      )
      VALUES (
        $1, $2, $3, $4, $5, $6,
@@ -533,7 +581,7 @@ async function appendActionLog(entry, executor) {
        $17, $18,
        $19, $20,
        $21, $22,
-       $23
+       $23, $24
      )
      RETURNING id`,
     [
@@ -560,6 +608,7 @@ async function appendActionLog(entry, executor) {
       toJson(entry.accountingDelta || null),
       toJson(entry.payload || null),
       createdAt,
+      entry.segmentId ?? null,
     ]
   );
   return rows[0]?.id || null;
@@ -591,6 +640,7 @@ function mapLogRow(row) {
     driftDetails: parseJsonSafe(row.drift_details_json, null),
     accountingDelta: parseJsonSafe(row.accounting_delta_json, null),
     payload: parseJsonSafe(row.payload_json, null),
+    segmentId: row.segment_id != null ? Number(row.segment_id) : null,
     createdAt: Number(row.created_at),
   };
 }
@@ -648,12 +698,14 @@ async function findFinalizedByTxHash(orchestratorId, txHashes, executor) {
 
 module.exports = {
   DEFAULT_ACCOUNTING,
+  mapRow,
   create,
   getById,
   listForUser,
   listActiveForLoop,
   updatePhase,
   updateActiveLp,
+  updateActiveSegment,
   updateStrategyState,
   updateConfig,
   updateAccounting,

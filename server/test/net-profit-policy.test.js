@@ -353,3 +353,32 @@ test('latcheado, sin delta y con un short grande: desarma', () => {
   // es el cambio: estar latcheado ya no implica sostener la exposicion.
   assert.equal(confirmado.nextState.upperExitConfirmed, true);
 });
+
+test('forceRebalance salta cerrojos y ajusta a |delta - actual| en una sola orden', () => {
+  const now = 1_000_000;
+  const day = Math.floor(now / (24 * 60 * 60_000));
+  for (const policyVersion of [NET_PROFIT_V1, NET_PROFIT_V2]) {
+    const result = decideNetProfitV1({
+      policyVersion, deltaQty: 1, actualQty: 0.7, currentPrice: 100,
+      rangeLowerPrice: 95, rangeUpperPrice: 105, lpValueUsd: 1_000, now,
+      forceRebalance: true, minOrderNotionalUsd: 11,
+      state: { upperExitConfirmed: true, cooldownUntil: now + 1e6, lastFillAt: now - 1, rotationBudgetCount: 99, rotationBudgetDay: day },
+    });
+    assert.equal(result.decision, 'rebalance');
+    assert.equal(result.adjustQty, 0.3);
+  }
+  const reduce = decideNetProfitV1({
+    deltaQty: 0.5, actualQty: 1, currentPrice: 100, rangeLowerPrice: 95, rangeUpperPrice: 105,
+    now, forceRebalance: true, minOrderNotionalUsd: 11, state: {},
+  });
+  assert.equal(reduce.adjustQty, -0.5);
+});
+
+test('forceRebalance con orden bajo el minimo devuelve hold forced_within_min_notional', () => {
+  const result = decideNetProfitV1({
+    deltaQty: 1, actualQty: 0.95, currentPrice: 100, rangeLowerPrice: 95, rangeUpperPrice: 105,
+    now: 1_000_000, forceRebalance: true, minOrderNotionalUsd: 11, state: {},
+  });
+  assert.equal(result.decision, 'hold');
+  assert.equal(result.gate, 'forced_within_min_notional');
+});

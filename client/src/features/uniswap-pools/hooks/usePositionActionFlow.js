@@ -13,11 +13,19 @@ export const POSITION_ACTION_STEP = {
   ERROR: 'error',
 };
 
+// Acciones que cambian el LP: las únicas que el servidor acepta en
+// `action-started` (collect-fees y demás no abren ni cierran tramo).
+const LP_CHANGING_ACTIONS = new Set([
+  'modify-range', 'rebalance', 'increase-liquidity', 'decrease-liquidity',
+  'reinvest-fees', 'close-to-usdc', 'close-keep-assets',
+]);
+
 export function usePositionActionFlow({
   action,
   initialFormState,
   buildPayload,
   onFinalized,
+  onExecuteStarted,
   autoPrepare = false,
   prefilledPrepareResult = null,
 }) {
@@ -137,6 +145,15 @@ export function usePositionActionFlow({
     }
 
     setError(null);
+    // Aviso de «ajuste en curso»: se lanza antes de la primera firma y sin
+    // esperarlo. Si falla solo se registra: nunca bloquea la firma.
+    try {
+      if (LP_CHANGING_ACTIONS.has(action)) Promise.resolve(onExecuteStarted?.(action)).catch((err) => {
+        console.warn('onExecuteStarted failed', err);
+      });
+    } catch (err) {
+      console.warn('onExecuteStarted failed', err);
+    }
     const finalizePayload = {
       network: prepareData.network,
       version: prepareData.version,
@@ -163,7 +180,7 @@ export function usePositionActionFlow({
       return result;
     }
     return null;
-  }, [action, onFinalized, prepareData, resume]);
+  }, [action, onFinalized, onExecuteStarted, prepareData, resume]);
 
   return {
     error,

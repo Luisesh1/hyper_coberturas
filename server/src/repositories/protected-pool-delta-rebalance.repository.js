@@ -10,9 +10,15 @@ async function create(payload, executor) {
        protected_pool_id, reason, execution_mode, twap_slices_planned, twap_slices_completed,
        price, rv4h_pct, rv24h_pct, effective_band_pct, delta_qty_before, gamma_before,
        target_qty_before, actual_qty_before, target_qty_after, actual_qty_after, drift_usd,
-       execution_fee_usd, slippage_usd, funding_snapshot_usd, distance_to_liq_pct, created_at
+       execution_fee_usd, slippage_usd, funding_snapshot_usd, distance_to_liq_pct, created_at, segment_id
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+       COALESCE($22::integer, (
+         SELECT o.active_segment_id FROM lp_orchestrators o
+          WHERE o.status = 'active' AND o.active_protected_pool_id = $1
+          ORDER BY o.id DESC LIMIT 1
+       ))
+     )
      RETURNING id`,
     [
       payload.protectedPoolId,
@@ -36,15 +42,14 @@ async function create(payload, executor) {
       payload.fundingSnapshotUsd ?? null,
       payload.distanceToLiqPct ?? null,
       payload.createdAt ?? Date.now(),
+      payload.segmentId ?? null,
     ]
   );
 
   return rows[0]?.id || null;
 }
 
-async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, executor) {
-  const { rows } = await exec(executor).query(
-    `SELECT id,
+const REBALANCE_SELECT = `id,
             protected_pool_id AS "protectedPoolId",
             reason,
             execution_mode AS "executionMode",
@@ -65,16 +70,13 @@ async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, exec
             slippage_usd AS "slippageUsd",
             funding_snapshot_usd AS "fundingSnapshotUsd",
             distance_to_liq_pct AS "distanceToLiqPct",
-            created_at AS "createdAt"
-       FROM protected_pool_delta_rebalance_log
-      WHERE protected_pool_id = $1
-      ORDER BY created_at DESC, id DESC
-      LIMIT $2`,
-    [protectedPoolId, limit]
-  );
+            created_at AS "createdAt",
+            segment_id AS "segmentId"`;
 
+function mapRebalanceRows(rows) {
   return rows.map((row) => ({
     ...row,
+    segmentId: row.segmentId != null ? Number(row.segmentId) : null,
     price: row.price != null ? Number(row.price) : null,
     rv4hPct: row.rv4hPct != null ? Number(row.rv4hPct) : null,
     rv24hPct: row.rv24hPct != null ? Number(row.rv24hPct) : null,
@@ -94,7 +96,32 @@ async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, exec
   }));
 }
 
+async function listByProtectedPoolId(protectedPoolId, { limit = 100 } = {}, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT ${REBALANCE_SELECT}
+       FROM protected_pool_delta_rebalance_log
+      WHERE protected_pool_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`,
+    [protectedPoolId, limit]
+  );
+  return mapRebalanceRows(rows);
+}
+
+async function listBySegmentId(segmentId, { limit = 500 } = {}, executor) {
+  const { rows } = await exec(executor).query(
+    `SELECT ${REBALANCE_SELECT}
+       FROM protected_pool_delta_rebalance_log
+      WHERE segment_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`,
+    [segmentId, limit]
+  );
+  return mapRebalanceRows(rows);
+}
+
 module.exports = {
   create,
   listByProtectedPoolId,
+  listBySegmentId,
 };
