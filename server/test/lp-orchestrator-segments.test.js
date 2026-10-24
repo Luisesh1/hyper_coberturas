@@ -97,6 +97,22 @@ test('estimateSigningDriftUsd: snapshot ETH/USDC, signo segun el precio', () => 
   assert.equal(estimateSigningDriftUsd(withValue, NaN), 0);
 });
 
+test('estimateSigningDriftUsd es 0 si el snapshot no trae valor actual', () => {
+  // Sin currentValueUsd la "deriva" seria el valor entero del LP.
+  const snap = {
+    token0: { symbol: 'WETH', decimals: 18 },
+    token1: { symbol: 'USDC', decimals: 6 },
+    tickLower: -198480,
+    tickUpper: -197580,
+    liquidity: '1000000000000000',
+    rangeLowerPrice: 2401.9,
+    rangeUpperPrice: 2628.1,
+  };
+  assert.equal(estimateSigningDriftUsd(snap, 2500), 0);
+  assert.equal(estimateSigningDriftUsd({ ...snap, currentValueUsd: null }, 2500), 0);
+  assert.equal(estimateSigningDriftUsd({ ...snap, currentValueUsd: 'n/a' }, 2500), 0);
+});
+
 test('summarizeCoverage pondera por tiempo', () => {
   const rows = [
     { createdAt: 0, actualQtyAfter: 0.1, targetQtyAfter: 0.1 }, // 100 % durante 30

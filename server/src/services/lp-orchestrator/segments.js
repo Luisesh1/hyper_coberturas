@@ -84,9 +84,12 @@ function classifyCloseReason({ action, price, rangeLowerPrice, rangeUpperPrice }
  * tardó la firma). 0 si no se puede valorar.
  */
 function estimateSigningDriftUsd(lastSnapshot, finalizePrice) {
+  // Sin valor de partida la "deriva" seria el LP entero (Number(null) === 0).
+  const rawValue = lastSnapshot?.currentValueUsd;
+  if (rawValue == null || !Number.isFinite(Number(rawValue))) return 0;
   const valuation = buildLpValuation(lastSnapshot);
   if (!valuation) return 0;
-  const drift = valuation.valueAt(finalizePrice) - Number(lastSnapshot.currentValueUsd);
+  const drift = valuation.valueAt(finalizePrice) - Number(rawValue);
   return Number.isFinite(drift) ? drift : 0;
 }
 
