@@ -109,10 +109,9 @@ export default function OrderTicket({ ticket, configured, pending, onSubmit }) {
               />
             </label>
             <div className={styles.field}>
-              <div className={styles.fieldHead}>
-                <span>Cantidad</span>
-                <QtyUnitToggle ticket={ticket} />
-              </div>
+              {/* La columna es estrecha: el selector hace de etiqueta visible y
+                  el input lleva la accesible con la unidad. */}
+              <QtyUnitToggle ticket={ticket} className={`${styles.unitToggle} ${styles.unitToggleFill}`} />
               <input
                 className={styles.input}
                 inputMode="decimal"
