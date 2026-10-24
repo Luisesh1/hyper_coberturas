@@ -112,6 +112,14 @@ export function buildMapping(structure, { targetDelta, expiryDays } = {}) {
   const days = toNumber(expiryDays) ?? COMMON_DEFAULTS.expiryDays;
   const delta = (sign) => formatNumber(sign * Math.abs(d), { decimals: 2 });
   const venc = `venc. ~${formatNumber(days, { decimals: 0 })} d`;
+  // Delta ≥ 0,9 no lo alcanza ninguna OTM: el bot toma la más cercana al spot.
+  if (Math.abs(d) >= 0.9) {
+    const detail = `Más cercana al precio · ${venc}`;
+    return [
+      { direction: 'bullish', action: buy ? 'Comprar call' : 'Vender put', side: buy ? 'buy' : 'sell', detail },
+      { direction: 'bearish', action: buy ? 'Comprar put' : 'Vender call', side: buy ? 'buy' : 'sell', detail },
+    ];
+  }
   return [
     {
       direction: 'bullish',

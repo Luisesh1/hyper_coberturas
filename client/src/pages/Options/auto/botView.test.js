@@ -5,6 +5,10 @@ import {
 } from './botView';
 
 describe('buildMapping', () => {
+  it('delta ≥ 0,9: dice «más cercana al precio» en vez del delta (ninguna OTM llega)', () => {
+    const rows = buildMapping('buy_with', { targetDelta: 0.95, expiryDays: 2 });
+    expect(rows.map((r) => r.detail)).toEqual(['Más cercana al precio · venc. ~2 d', 'Más cercana al precio · venc. ~2 d']);
+  });
   it('comprar a favor: alcista → call, bajista → put', () => {
     const rows = buildMapping('buy_with', { targetDelta: 0.35, expiryDays: 7 });
     expect(rows.map((r) => [r.direction, r.action, r.detail])).toEqual([

@@ -204,19 +204,19 @@ describe('AutoTradingTab · escritorio', () => {
 
     const preview = within(dialog).getByRole('list', { name: 'Qué abre cada dirección' });
     expect(within(preview).getByText('Comprar call')).toBeTruthy();
-    expect(within(preview).getByText('Δ ≈ 0,35 · venc. ~7 d')).toBeTruthy();
+    expect(within(preview).getAllByText('Más cercana al precio · venc. ~2 d')).toHaveLength(2);
     expect(within(dialog).getByText('Tope de ganancia (%)')).toBeTruthy();
     expect(within(dialog).getByText('Prima máx. por operación')).toBeTruthy();
 
     fireEvent.click(within(dialog).getByRole('radio', { name: /Vender en contra/ }));
     expect(within(preview).getByText('Vender put')).toBeTruthy();
     expect(within(preview).getByText('Vender call')).toBeTruthy();
-    expect(within(preview).getByText('Δ ≈ −0,25 · venc. ~7 d')).toBeTruthy();
+    expect(within(preview).getByText('Δ ≈ −0,25 · venc. ~2 d')).toBeTruthy();
     expect(within(dialog).getByText('Recomprar al')).toBeTruthy();
     expect(within(dialog).getByText('Margen máximo')).toBeTruthy();
     // + sube el delta un paso y la vista previa lo refleja al momento.
     fireEvent.click(within(dialog).getByRole('button', { name: 'Aumentar Delta objetivo' }));
-    expect(within(preview).getByText('Δ ≈ 0,30 · venc. ~7 d')).toBeTruthy();
+    expect(within(preview).getByText('Δ ≈ 0,30 · venc. ~2 d')).toBeTruthy();
 
     fireEvent.change(within(dialog).getByLabelText('Nombre'), { target: { value: 'Contra BTC' } });
     fireEvent.click(await within(dialog).findByRole('checkbox', { name: new RegExp(ALERT_DOWN.name) }));
@@ -230,7 +230,7 @@ describe('AutoTradingTab · escritorio', () => {
       underlyings: ['BTC'],
       alertIds: [12],
       params: {
-        structure: 'sell_against', targetDelta: 0.3, expiryDays: 7, expiryMinDays: null, expiryMaxDays: null, quantity: 0.01, onOpposite: 'close',
+        structure: 'sell_against', targetDelta: 0.3, expiryDays: 2, expiryMinDays: 1, expiryMaxDays: 3, quantity: 0.01, onOpposite: 'close',
         takeProfitPct: 50, stopLossPct: 200, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
         contractCount: 1, capitalUsdt: null, budgetUsdt: null, budgetFractions: 4,
         maxPremiumUsdt: null, maxSpreadPct: null, minLeverage: null,
