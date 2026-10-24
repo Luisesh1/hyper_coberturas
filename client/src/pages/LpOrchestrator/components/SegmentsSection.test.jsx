@@ -89,4 +89,26 @@ describe('SegmentsSection', () => {
     expect(await screen.findByText('Reajustes del short')).toBeTruthy();
     expect(lpOrchestratorApi.getSegment).toHaveBeenCalledWith(5, 1);
   });
+
+  it('un tramo aproximado sin reajustes muestra «sin datos», no «Sin reajustes»', async () => {
+    const approx = seg(1, { accuracy: 'approximate', openReason: 'deploy', closeReason: 'unknown', coverage: null });
+    mockList([approx]);
+    lpOrchestratorApi.getSegment.mockResolvedValue({ ...approx, rebalances: [] });
+    render(<SegmentsSection orchestratorId={5} />);
+    await open();
+    expect(await screen.findByText('sin datos')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: /#1/ }));
+    expect(await screen.findByText('Sin datos de reajustes')).toBeTruthy();
+    expect(screen.queryByText('Sin reajustes')).toBeNull();
+  });
+
+  it('un tramo exacto sin reajustes sigue diciendo «Sin reajustes»', async () => {
+    const exact = seg(1, { coverage: { adjustments: 0, avgPct: null } });
+    mockList([exact]);
+    lpOrchestratorApi.getSegment.mockResolvedValue({ ...exact, rebalances: [] });
+    render(<SegmentsSection orchestratorId={5} />);
+    await open();
+    fireEvent.click(await screen.findByRole('button', { name: /#1/ }));
+    expect(await screen.findByText('Sin reajustes')).toBeTruthy();
+  });
 });

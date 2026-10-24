@@ -3,7 +3,7 @@ import { lpOrchestratorApi } from '../../../services/api';
 import { formatSignedUsd, formatUsd } from '../../UniswapPools/utils/pool-formatters';
 import { formatNumber } from '../../../utils/formatters';
 import { lpBreakdownItems, hedgeBreakdownItems, signTone } from './accountingBreakdown';
-import { segmentRowModel, hasReconstructionGap, formatSegmentDate } from './segmentsSummary';
+import { segmentRowModel, hasReconstructionGap, formatSegmentDate, hasCoverageData } from './segmentsSummary';
 import styles from './SegmentsSection.module.css';
 
 function num(value) {
@@ -52,7 +52,9 @@ function SegmentDetail({ orchestratorId, segment }) {
         <span className={styles.subTitle}>Reajustes del short</span>
         {error && <span className={styles.muted}>{error}</span>}
         {!error && !detail && <span className={styles.muted}>Cargando…</span>}
-        {detail && rebalances.length === 0 && <span className={styles.muted}>Sin reajustes</span>}
+        {detail && rebalances.length === 0 && (
+          <span className={styles.muted}>{hasCoverageData(segment) ? 'Sin reajustes' : 'Sin datos de reajustes'}</span>
+        )}
         {rebalances.map((r) => (
           <div key={r.id} className={styles.rebalanceRow}>
             <span>{formatSegmentDate(r.createdAt)}</span>

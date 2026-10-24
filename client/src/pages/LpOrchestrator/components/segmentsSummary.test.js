@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeReasonLabel, segmentRowModel, hasReconstructionGap } from './segmentsSummary';
+import { closeReasonLabel, segmentRowModel, hasReconstructionGap, hasCoverageData } from './segmentsSummary';
 
 describe('closeReasonLabel', () => {
   it('devuelve los rótulos exactos de cada motivo', () => {
@@ -41,8 +41,23 @@ describe('segmentRowModel', () => {
   });
 
   it('sin cobertura medida no inventa un porcentaje', () => {
-    expect(segmentRowModel({ ...base, coverage: null }).coverageText).toBe('—');
     expect(segmentRowModel({ ...base, coverage: { avgPct: null } }).coverageText).toBe('—');
+    expect(segmentRowModel({ ...base, coverage: { adjustments: 0, avgPct: null } }).coverageText).toBe('—');
+  });
+
+  it('sin resumen de cobertura (null) muestra «sin datos»', () => {
+    expect(segmentRowModel({ ...base, coverage: null }).coverageText).toBe('sin datos');
+    expect(segmentRowModel({ ...base, coverage: undefined }).coverageText).toBe('sin datos');
+  });
+
+  it('un tramo aproximado sin reajustes no tiene datos de cobertura', () => {
+    const approx = { ...base, accuracy: 'approximate' };
+    expect(segmentRowModel({ ...approx, coverage: { adjustments: 0, avgPct: null } }).coverageText).toBe('sin datos');
+    expect(segmentRowModel({ ...approx, coverage: null }).coverageText).toBe('sin datos');
+    expect(segmentRowModel({ ...approx, coverage: { adjustments: 2, avgPct: 80 } }).coverageText).toBe('80% cubierto');
+    expect(hasCoverageData({ ...approx, coverage: { adjustments: 0 } })).toBe(false);
+    expect(hasCoverageData({ ...base, coverage: { adjustments: 0 } })).toBe(true);
+    expect(hasCoverageData({ ...base, coverage: null })).toBe(false);
   });
 
   it('marca como aproximado un tramo reconstruido', () => {

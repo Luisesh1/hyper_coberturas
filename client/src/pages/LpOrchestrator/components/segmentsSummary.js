@@ -17,8 +17,24 @@ export function closeReasonLabel(reason) {
   return CLOSE_REASON_LABELS[reason] || CLOSE_REASON_LABELS.unknown;
 }
 
-function formatCoverage(coverage) {
-  const pct = coverage?.avgPct;
+export const NO_COVERAGE_DATA = 'sin datos';
+
+/**
+ * Hay datos de cobertura del tramo. Sin resumen (null) no los hay; en un
+ * tramo aproximado (sembrado o reconstruido) «0 reajustes» tampoco es un
+ * dato: es que no quedaron filas de esa época.
+ */
+export function hasCoverageData(segment) {
+  const coverage = segment?.coverage;
+  if (coverage == null) return false;
+  if (segment.accuracy === 'approximate' && coverage.adjustments != null
+    && !(Number(coverage.adjustments) > 0)) return false;
+  return true;
+}
+
+function formatCoverage(segment) {
+  if (!hasCoverageData(segment)) return NO_COVERAGE_DATA;
+  const pct = segment.coverage.avgPct;
   if (pct == null || !Number.isFinite(Number(pct))) return '—';
   return `${Math.round(Number(pct))}% cubierto`;
 }
@@ -82,7 +98,7 @@ export function segmentRowModel(segment) {
     reason,
     netText: Number.isFinite(net) ? formatSignedUsd(net) : '—',
     netTone: signTone(net),
-    coverageText: formatCoverage(segment.coverage),
+    coverageText: formatCoverage(segment),
     approximate: segment.accuracy === 'approximate',
     live: segment.status !== 'closed',
   };

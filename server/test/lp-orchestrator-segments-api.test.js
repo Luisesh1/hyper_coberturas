@@ -87,3 +87,31 @@ test('getSegment: añade eventos y reajustes del propio tramo', async () => {
   assert.deepEqual(out.rebalances.map((r) => r.id), [2]);
   assert.equal(out.coverage.adjustments, 1);
 });
+
+test('tramo aproximado sin reajustes: cobertura null («sin datos»), no cero reajustes', async () => {
+  const { service, segRepo } = await setup();
+  // seq 1 pasa a ser el histórico sembrado/reconstruido: aproximado, sin filas.
+  segRepo.segments.find((s) => s.id === 1).accuracy = 'approximate';
+  let out = await service.listSegments(1, 5);
+  const hist = out.segments.find((s) => s.id === 1);
+  assert.equal(hist.coverage, null);
+  assert.equal((await service.getSegment(1, 5, 1)).coverage, null);
+
+  // Un resumen guardado con 0 reajustes en un tramo aproximado tampoco es dato.
+  segRepo.segments.find((s) => s.id === 1).coverage = {
+    adjustments: 0, openQty: null, lastQty: null, minPct: null, maxPct: null, avgPct: null,
+  };
+  out = await service.listSegments(1, 5);
+  assert.equal(out.segments.find((s) => s.id === 1).coverage, null);
+
+  // Con filas propias sí se resume.
+  segRepo.segments.find((s) => s.id === 2).accuracy = 'approximate';
+  out = await service.listSegments(1, 5);
+  assert.equal(out.segments.find((s) => s.id === 2).coverage.adjustments, 1);
+});
+
+test('tramo exacto cerrado sin reajustes sigue siendo 0 reajustes', async () => {
+  const { service } = await setup();
+  const out = await service.listSegments(1, 5);
+  assert.equal(out.segments.find((s) => s.id === 1).coverage.adjustments, 0);
+});

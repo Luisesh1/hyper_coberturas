@@ -2728,11 +2728,18 @@ class LpOrchestratorService {
 
   async _segmentView(orch, segment) {
     if (segment.status !== 'closed') return this._liveSegmentView(orch, segment);
-    if (segment.coverage || typeof this.rebalanceRepo.listBySegmentId !== 'function') {
-      return this._segmentSummary(segment);
+    const approximate = segment.accuracy === 'approximate';
+    // En un tramo aproximado (sembrado o reconstruido) «0 reajustes» no es un
+    // dato: es que no hay filas de esa época. Se expone como sin datos (null).
+    const storedKnown = segment.coverage
+      && !(approximate && !(Number(segment.coverage.adjustments) > 0));
+    if (storedKnown) return this._segmentSummary(segment);
+    if (typeof this.rebalanceRepo.listBySegmentId !== 'function') {
+      return this._segmentSummary(segment, { coverage: approximate ? null : segment.coverage });
     }
     // Cerrado sin resumen guardado (histórico sembrado): se calcula al vuelo.
     const rows = await this.rebalanceRepo.listBySegmentId(segment.id, { limit: 500 });
+    if (approximate && !(rows || []).length) return this._segmentSummary(segment, { coverage: null });
     return this._segmentSummary(segment, {
       coverage: summarizeCoverage(rows, { openedAt: segment.openedAt, closedAt: segment.closedAt }),
     });
