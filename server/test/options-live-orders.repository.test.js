@@ -213,3 +213,187 @@ test('lote: el símbolo debe ser de un subyacente del bot (varios con params.und
   const orders = await run({ ...base, params: { underlyings: ['BTC', 'ETH'] } });
   assert.equal(orders[0].symbol, ETH);
 });
+
+test('lote: beginBatch guarda auto_signal_id (null si no viene)', async () => {
+  const inserts = [];
+  const tx = {
+    async query(sql, params) {
+      if (sql.includes('FROM options_strategies')) return { rows: [{ id: 5, user_id: 7, mode: 'live', underlying: 'BTC' }] };
+      if (sql.includes('INSERT INTO options_live_batches')) { inserts.push({ sql, params }); return { rows: [{ id: '1' }] }; }
+      if (sql.includes('INSERT INTO options_live_orders')) return { rows: [{
+        id: '2', batch_id: '1', strategy_id: '5', user_id: '7', action: 'open', position_id: null,
+        symbol: 'BTC-261030-60000-C', side: 'BUY', requested_qty: '0.1', limit_price: '100', processed_qty: '0',
+        client_order_id: 'HC1L0', status: 'queued', purpose: 'standard', created_at: '1000', deadline_at: '601000',
+      }] };
+      return { rows: [] };
+    },
+  };
+  const repo = createOptionsLiveOrdersRepository({ db: { transaction: (fn) => fn(tx) }, now: () => 1000 });
+  const base = { strategy: { id: 5, userId: 7 }, action: 'open', deadlineAt: 601000, exchangePositions: [],
+    legs: [{ symbol: 'BTC-261030-60000-C', side: 'BUY', quantity: 0.1, price: 100 }] };
+  await repo.beginBatch({ ...base, key: 'alert:1:open', autoSignalId: 31 });
+  await repo.beginBatch({ ...base, key: 'alert:2:open' });
+  assert.match(inserts[0].sql, /auto_signal_id/);
+  assert.equal(inserts[0].params[7], 31);
+  assert.equal(inserts[1].params[7], null);
+});
+
+test('requestCancelEntries marca las entradas no finales del subyacente y devuelve sus ids', async () => {
+  const calls = [];
+  const repo = createOptionsLiveOrdersRepository({
+    now: () => 1234,
+    db: { async query(sql, params) { calls.push({ sql, params }); return { rows: [{ id: '9' }, { id: '12' }] }; } },
+  });
+  assert.deepEqual(await repo.requestCancelEntries({ userId: 7, strategyId: 5, underlying: 'eth' }), [9, 12]);
+  const { sql, params } = calls[0];
+  assert.match(sql, /UPDATE options_live_orders SET cancel_requested=TRUE/);
+  assert.match(sql, /action='open'/);
+  assert.match(sql, /purpose<>'take_profit'/);
+  assert.match(sql, /status<>'final'/);
+  assert.match(sql, /symbol LIKE \$3/);
+  assert.match(sql, /RETURNING id/);
+  assert.deepEqual(params, [7, 5, 'ETH-%', 1234]);
+  await assert.rejects(repo.requestCancelEntries({ userId: 7, strategyId: 5, underlying: 'E%' }), /Invalid/);
+  await assert.rejects(repo.requestCancelEntries({ userId: 'x', strategyId: 5, underlying: 'ETH' }), /Invalid/);
+  assert.equal(calls.length, 1);
+});
+
+/**
+ * BD falsa con estado para la cola de reentradas/reevaluaciones: guarda lo
+ * insertado y calcula `ready` con la regla de cada `kind` solo si la SQL de
+ * listPendingReentries contiene el predicado correspondiente.
+ */
+function reentriesDb({ orders }) {
+  const reentries = [];
+  const calls = [];
+  const query = async (sql, args) => {
+    calls.push({ sql, args });
+    if (sql.includes('FROM options_strategies') && sql.includes('FOR UPDATE')) {
+      return { rows: [{ id: 4, user_id: 7, mode: 'live', template: 'alert_signal' }] };
+    }
+    if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM options_live_orders') && sql.includes('FOR UPDATE')) {
+      return { rows: orders.filter((o) => args[0].includes(o.id) && o.user_id === args[1] && o.strategy_id === args[2])
+        .map((o) => ({ id: String(o.id) })) };
+    }
+    if (sql.includes('INSERT INTO options_live_reentries')) {
+      if (reentries.some((r) => r.strategy_id === args[0] && r.alert_event_id === args[2])) return { rows: [] };
+      reentries.push({ id: reentries.length + 1, strategy_id: args[0], user_id: args[1], alert_event_id: args[2],
+        signal: JSON.parse(args[3]), wait_order_ids: args[4], created_at: args[5], kind: 'reevaluate', status: 'pending' });
+      return { rows: [{ id: reentries.length }] };
+    }
+    if (sql.includes('FROM options_live_reentries')) {
+      assert.match(sql, /r\.kind/);
+      assert.match(sql, /CASE WHEN r\.kind='reevaluate'/);
+      assert.match(sql, /o\.id=ANY\(r\.wait_order_ids\) AND o\.status<>'final'/);
+      assert.match(sql, /p\.id=ANY\(r\.wait_position_ids\) AND p\.closed_at IS NULL/);
+      return { rows: reentries.filter((r) => r.status === 'pending').map((r) => ({
+        ...r, signal: JSON.stringify(r.signal),
+        ready: !orders.some((o) => r.wait_order_ids.includes(o.id) && o.status !== 'final'),
+      })) };
+    }
+    throw new Error('Unexpected SQL: ' + sql);
+  };
+  return { reentries, calls, query, transaction: (fn) => fn({ query }) };
+}
+
+test('queueSignalReevaluation no es ready mientras una orden de espera no es final y sí al finalizarla', async () => {
+  const orders = [
+    { id: 9, user_id: 7, strategy_id: 4, status: 'active' },
+    { id: 12, user_id: 7, strategy_id: 4, status: 'final' },
+  ];
+  const db = reentriesDb({ orders });
+  const repo = createOptionsLiveOrdersRepository({ db, now: () => 1000 });
+  const queued = await repo.queueSignalReevaluation({ id: 4, userId: 7 },
+    { eventId: '9002', direction: 'bearish', underlying: 'ETH' }, [9, 12]);
+  assert.equal(queued, true);
+  const insert = db.calls.find((c) => c.sql.includes('INSERT INTO options_live_reentries'));
+  assert.match(insert.sql, /'reevaluate'/);
+  assert.match(insert.sql, /wait_order_ids/);
+  assert.match(insert.sql, /ON CONFLICT \(strategy_id,alert_event_id\) DO NOTHING/);
+  assert.deepEqual(insert.args[4], [9, 12]);
+  assert.ok(db.calls.some((c) => c.sql.includes('pg_advisory_xact_lock')));
+  let [pending] = await repo.listPendingReentries();
+  assert.equal(pending.kind, 'reevaluate');
+  assert.deepEqual(pending.signal, { eventId: '9002', direction: 'bearish', underlying: 'ETH' });
+  assert.equal(pending.ready, false);
+  orders[0].status = 'final';
+  [pending] = await repo.listPendingReentries();
+  assert.equal(pending.ready, true);
+  // Un segundo intento del mismo evento no duplica la cola.
+  await repo.queueSignalReevaluation({ id: 4, userId: 7 },
+    { eventId: '9002', direction: 'bearish', underlying: 'ETH' }, [9]);
+  assert.equal(db.reentries.length, 1);
+});
+
+test('queueSignalReevaluation valida evento, órdenes propias y estrategia viva', async () => {
+  const orders = [{ id: 9, user_id: 7, strategy_id: 4, status: 'active' }];
+  const db = reentriesDb({ orders });
+  const repo = createOptionsLiveOrdersRepository({ db, now: () => 1000 });
+  const strategy = { id: 4, userId: 7 };
+  await assert.rejects(repo.queueSignalReevaluation(strategy, { eventId: 'x', direction: 'bearish' }, [9]),
+    /Invalid durable reevaluation/);
+  await assert.rejects(repo.queueSignalReevaluation(strategy, { eventId: '1', direction: 'up' }, [9]),
+    /Invalid durable reevaluation/);
+  await assert.rejects(repo.queueSignalReevaluation(strategy, { eventId: '1', direction: 'bearish' }, [0]),
+    /Invalid durable reevaluation/);
+  assert.equal(db.calls.length, 0);
+  // Orden de otro bot: no se puede esperar por ella.
+  await assert.rejects(repo.queueSignalReevaluation(strategy, { eventId: '1', direction: 'bearish' }, [9, 77]),
+    /do not belong/);
+  assert.equal(db.reentries.length, 0);
+  const paused = createOptionsLiveOrdersRepository({ now: () => 1, db: { transaction: (fn) => fn({ async query(sql) {
+    if (sql.includes('FROM options_strategies')) return { rows: [{ id: 4, user_id: 7, mode: 'shadow', template: 'alert_signal' }] };
+    throw new Error('Unexpected SQL: ' + sql);
+  } }) } });
+  assert.equal(await paused.queueSignalReevaluation(strategy, { eventId: '1', direction: 'bearish' }, [9]), false);
+});
+
+test('listPendingReentries mantiene kind=reentry por defecto', async () => {
+  const repo = createOptionsLiveOrdersRepository({ db: { async query() {
+    return { rows: [{ id: '1', strategy_id: '4', user_id: '7', alert_event_id: '5', signal: { eventId: '5' },
+      created_at: '10', kind: null, ready: true }] };
+  } } });
+  const [r] = await repo.listPendingReentries();
+  assert.equal(r.kind, 'reentry');
+  assert.equal(r.ready, true);
+});
+
+test('batchEntryOutcome suma 0,10 + 0,05 a precio medio ponderado y con comisiones sumadas', async () => {
+  const calls = [];
+  const repo = createOptionsLiveOrdersRepository({ db: { async query(sql, args) {
+    calls.push({ sql, args });
+    if (sql.includes('FROM options_live_batches')) return { rows: [{
+      id: '3', auto_signal_id: '31', order_id: '8', symbol: 'BTC-261030-60000-C', side: 'BUY', requested_qty: '0.2',
+    }] };
+    if (sql.includes('FROM options_live_fills')) return { rows: [
+      { quantity: '0.1', price: '700', fee_usdt: '2.04' },
+      { quantity: '0.05', price: '730', fee_usdt: '1.02' },
+    ] };
+    throw new Error('Unexpected SQL: ' + sql);
+  } } });
+  const out = await repo.batchEntryOutcome(3);
+  assert.equal(out.autoSignalId, 31);
+  assert.equal(out.requested, 0.2);
+  assert.equal(out.filled, 0.15);
+  assert.equal(out.avgPrice, 710);
+  assert.equal(out.feesUsdt, 3.06);
+  assert.equal(out.symbol, 'BTC-261030-60000-C');
+  assert.equal(out.side, 'BUY');
+  assert.deepEqual(calls.map((c) => c.args), [[3], [3]]);
+  assert.match(calls[1].sql, /JOIN options_live_orders o ON o\.id=f\.live_order_id/);
+  assert.match(calls[1].sql, /o\.batch_id=\$1/);
+});
+
+test('batchEntryOutcome: sin fills avgPrice null; lote inexistente null', async () => {
+  let batchRows = [{ id: '3', auto_signal_id: null, order_id: '8', symbol: 'S', side: 'BUY', requested_qty: '0.1' }];
+  const repo = createOptionsLiveOrdersRepository({ db: { async query(sql) {
+    if (sql.includes('FROM options_live_batches')) return { rows: batchRows };
+    return { rows: [] };
+  } } });
+  assert.deepEqual(await repo.batchEntryOutcome(3), {
+    autoSignalId: null, requested: 0.1, filled: 0, avgPrice: null, feesUsdt: 0, symbol: 'S', side: 'BUY',
+  });
+  batchRows = [];
+  assert.equal(await repo.batchEntryOutcome(4), null);
+});

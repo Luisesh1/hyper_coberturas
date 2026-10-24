@@ -80,11 +80,20 @@ function mapAutoSignal(row) {
     decision: row.decision,
     detail: row.detail || null,
     simulated: row.simulated === true,
+    feesUsdt: numberOrNull(row.fees_usdt),
+    feesEstimated: row.fees_estimated === true,
     createdAt: Number(row.created_at),
   };
 }
 
 const TRADED_DECISIONS = ['opened', 'closed', 'reversed'];
+const FINAL_DECISIONS = ['opened', 'closed', 'reversed', 'ignored', 'error'];
+
+function normalizeUnderlying(underlying) {
+  const u = String(underlying ?? '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,20}$/.test(u)) throw new Error('Invalid underlying');
+  return u;
+}
 
 function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = {}) {
   // ---------- estrategias ----------
@@ -175,6 +184,40 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
 
   async function setState(id, state) {
     await db.query('UPDATE options_strategies SET state = $2 WHERE id = $1', [id, JSON.stringify(state || {})]);
+  }
+
+  /**
+   * Bloquea un subyacente del bot: `state.blockedUnderlyings[U] = { reason, at }`.
+   * La fusión se hace en SQL para no perder claves escritas en paralelo
+   * (p. ej. `lastReasons`) ni otros subyacentes bloqueados.
+   */
+  async function setUnderlyingBlock(strategyId, underlying, { reason, at } = {}) {
+    const u = normalizeUnderlying(underlying);
+    const { rows } = await db.query(
+      `UPDATE options_strategies
+          SET state = jsonb_set(
+                COALESCE(state, '{}'::jsonb), '{blockedUnderlyings}',
+                CASE WHEN jsonb_typeof(state->'blockedUnderlyings') = 'object'
+                     THEN state->'blockedUnderlyings' ELSE '{}'::jsonb END
+                  || jsonb_build_object($2::text, jsonb_build_object('reason', $3::text, 'at', $4::bigint)),
+                true)
+        WHERE id = $1
+        RETURNING *`,
+      [strategyId, u, reason == null ? null : String(reason), at ?? now()]
+    );
+    return rows[0] ? mapStrategy(rows[0]) : null;
+  }
+
+  async function clearUnderlyingBlock(strategyId, underlying) {
+    const u = normalizeUnderlying(underlying);
+    const { rows } = await db.query(
+      `UPDATE options_strategies
+          SET state = jsonb_set(state, '{blockedUnderlyings}', (state->'blockedUnderlyings') - $2::text)
+        WHERE id = $1 AND jsonb_typeof(state->'blockedUnderlyings') = 'object'
+        RETURNING *`,
+      [strategyId, u]
+    );
+    return rows[0] ? mapStrategy(rows[0]) : null;
   }
 
   async function deleteStrategy(userId, id) {
@@ -395,6 +438,35 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return rows[0] ? mapAutoSignal(rows[0]) : null;
   }
 
+  /**
+   * Resultado definitivo de una señal con su comisión. A diferencia de
+   * `finishAutoSignal`, sobrescribe 'pending' y también el 'opened'
+   * provisional (p. ej. una entrada en sombra que al final caduca).
+   * `feesUsdt`/`feesEstimated` ausentes conservan el valor guardado.
+   */
+  async function resolveAutoSignal(id, { decision, detail, feesUsdt, feesEstimated } = {}) {
+    if (!FINAL_DECISIONS.includes(decision)) throw new Error('Invalid signal decision');
+    const { rows } = await db.query(
+      `UPDATE options_auto_signals
+          SET decision = $2, detail = $3,
+              fees_usdt = COALESCE($4::numeric, fees_usdt),
+              fees_estimated = COALESCE($5::boolean, fees_estimated)
+        WHERE id = $1 AND decision IN ('pending','opened')
+        RETURNING *`,
+      [id, decision, detail ?? null, feesUsdt ?? null, feesEstimated ?? null]
+    );
+    return rows[0] ? mapAutoSignal(rows[0]) : null;
+  }
+
+  async function setAutoSignalFees(id, { feesUsdt, feesEstimated } = {}) {
+    const { rows } = await db.query(
+      `UPDATE options_auto_signals SET fees_usdt = $2, fees_estimated = $3
+        WHERE id = $1 RETURNING *`,
+      [id, feesUsdt ?? null, feesEstimated === true]
+    );
+    return rows[0] ? mapAutoSignal(rows[0]) : null;
+  }
+
   /** `filter`: 'all' | 'traded' (abrió, cerró o dio la vuelta) | 'ignored'. */
   async function listAutoSignals(strategyId, { limit = 100, filter = 'all' } = {}) {
     let decisions = null;
@@ -428,6 +500,8 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     countEventsSince,
     claimAutoSignal,
     finishAutoSignal,
+    resolveAutoSignal,
+    setAutoSignalFees,
     listAutoSignals,
     lastAutoSignalsByUser,
     getStrategy,
@@ -438,6 +512,8 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     updateStrategy,
     setMode,
     setState,
+    setUnderlyingBlock,
+    clearUnderlyingBlock,
     deleteStrategy,
     insertPosition,
     setTpTarget,

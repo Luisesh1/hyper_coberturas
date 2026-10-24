@@ -74,7 +74,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     return compareExposure(rows, exchangePositions);
   }
 
-  async function beginBatch({ strategy, action, legs, key, detail, deadlineAt, exchangePositions }) {
+  async function beginBatch({ strategy, action, legs, key, detail, deadlineAt, exchangePositions, autoSignalId = null }) {
     if (!legs.length || !['open', 'close'].includes(action)) throw new Error('Invalid live batch');
     return db.transaction(async (tx) => {
       // Locks entre réplicas: un solo lote sin conciliar por usuario,
@@ -194,9 +194,9 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       const time = now();
       const { rows: [batch] } = await tx.query(
         `INSERT INTO options_live_batches
-           (strategy_id,user_id,action_key,action,detail,created_at,deadline_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [strategy.id, strategy.userId, key, action, detail || null, time, deadlineAt]
+           (strategy_id,user_id,action_key,action,detail,created_at,deadline_at,auto_signal_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [strategy.id, strategy.userId, key, action, detail || null, time, deadlineAt, autoSignalId ?? null]
       );
       // Todo cierre real queda con intención durable, aun si el LIMIT
       // termina parcialmente ejecutado. Evita que el protector vuelva a
@@ -309,11 +309,62 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
 
+  /**
+   * Señal contraria con entradas reales pendientes: se piden sus
+   * cancelaciones y la señal espera, durable, a que TODAS esas órdenes sean
+   * finales para volver a evaluarse. Mismas comprobaciones que queueReversal.
+   * Devuelve false si el bot ya no es real/por alertas del usuario.
+   */
+  async function queueSignalReevaluation(strategy, signal, orderIds) {
+    const eventId = String(signal?.eventId ?? '');
+    const ids = Array.isArray(orderIds) ? orderIds.map(Number) : null;
+    if (!/^\d{1,20}$/.test(eventId) || !['bullish','bearish'].includes(signal?.direction) ||
+        !ids || ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+        new Set(ids).size !== ids.length) {
+      throw new Error('Invalid durable reevaluation event');
+    }
+    return db.transaction(async (tx) => {
+      const { rows: [owner] } = await tx.query(
+        'SELECT id,user_id,mode,template FROM options_strategies WHERE id=$1 FOR UPDATE', [strategy.id]
+      );
+      if (!owner || Number(owner.user_id) !== Number(strategy.userId) ||
+          owner.mode !== 'live' || owner.template !== 'alert_signal') return false;
+      await tx.query('SELECT pg_advisory_xact_lock(760218, $1::int)', [strategy.userId]);
+      if (ids.length) {
+        const { rows: owned } = await tx.query(
+          "SELECT id FROM options_live_orders WHERE id=ANY($1::bigint[]) AND user_id=$2 " +
+          "AND strategy_id=$3 AND action='open' FOR UPDATE", [ids, strategy.userId, strategy.id]
+        );
+        if (owned.length !== ids.length) throw new Error('Reevaluation orders do not belong to this strategy');
+      }
+      const savedSignal = {
+        eventId,
+        direction: signal.direction,
+        underlying: signal.underlying ?? null,
+      };
+      await tx.query(
+        `INSERT INTO options_live_reentries
+         (strategy_id,user_id,alert_event_id,signal,wait_position_ids,kind,wait_order_ids,created_at,updated_at)
+         VALUES ($1,$2,$3,$4::jsonb,'{}'::bigint[],'reevaluate',$5::bigint[],$6,$6)
+         ON CONFLICT (strategy_id,alert_event_id) DO NOTHING`,
+        [strategy.id, strategy.userId, eventId, JSON.stringify(savedSignal), ids, now()]
+      );
+      return true;
+    });
+  }
+
+  /**
+   * Cola de reentradas pendientes. `ready`: para 'reentry', las posiciones
+   * de espera están cerradas; para 'reevaluate', ninguna orden de espera
+   * sigue sin ser final.
+   */
   async function listPendingReentries(limit = 50) {
     const { rows } = await db.query(
-      "SELECT r.id,r.strategy_id,r.user_id,r.alert_event_id,r.signal,r.created_at, " +
-      "NOT EXISTS (SELECT 1 FROM options_strategy_positions p " +
-      "WHERE p.id=ANY(r.wait_position_ids) AND p.closed_at IS NULL) AS ready " +
+      "SELECT r.id,r.strategy_id,r.user_id,r.alert_event_id,r.signal,r.created_at,r.kind,r.wait_order_ids, " +
+      "CASE WHEN r.kind='reevaluate' THEN NOT EXISTS (SELECT 1 FROM options_live_orders o " +
+      "WHERE o.id=ANY(r.wait_order_ids) AND o.status<>'final') " +
+      "ELSE NOT EXISTS (SELECT 1 FROM options_strategy_positions p " +
+      "WHERE p.id=ANY(r.wait_position_ids) AND p.closed_at IS NULL) END AS ready " +
       "FROM options_live_reentries r JOIN options_strategies s ON s.id=r.strategy_id " +
       "WHERE r.status='pending' AND s.mode='live' " +
       "ORDER BY r.created_at,r.id LIMIT $1", [limit]
@@ -322,6 +373,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       id: Number(r.id), strategyId: Number(r.strategy_id), userId: Number(r.user_id),
       eventId: String(r.alert_event_id), signal: typeof r.signal === 'string' ? JSON.parse(r.signal) : r.signal,
       createdAt: Number(r.created_at), ready: r.ready === true,
+      kind: r.kind || 'reentry', waitOrderIds: (r.wait_order_ids || []).map(Number),
     }));
   }
 
@@ -604,6 +656,61 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
       [ids[0], ids[1], ids[2], now()]
     );
     return rows[0] ? map(rows[0]) : null;
+  }
+
+  /**
+   * Señal contraria: pide cancelar TODAS las entradas no finales del bot en
+   * el subyacente (también las que ya tenían la cancelación pedida, que
+   * igualmente hay que esperar). Devuelve sus ids.
+   */
+  async function requestCancelEntries({ userId, strategyId, underlying }) {
+    const ids = [userId, strategyId].map(Number);
+    const u = String(underlying ?? '').trim().toUpperCase();
+    if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0) || !/^[A-Z0-9]{1,20}$/.test(u)) {
+      throw new Error('Invalid cancel entries request');
+    }
+    const { rows } = await db.query(
+      "UPDATE options_live_orders SET cancel_requested=TRUE,updated_at=$4 " +
+      "WHERE user_id=$1 AND strategy_id=$2 AND action='open' AND purpose<>'take_profit' " +
+      "AND status<>'final' AND symbol LIKE $3 RETURNING id",
+      [ids[0], ids[1], u + '-%', now()]
+    );
+    return rows.map((r) => Number(r.id));
+  }
+
+  /**
+   * Resultado de un lote de entrada a partir de los fills conciliados:
+   * cantidad pedida y ejecutada, precio medio ponderado y comisiones.
+   */
+  async function batchEntryOutcome(batchId) {
+    const { rows: orders } = await db.query(
+      "SELECT b.id,b.auto_signal_id,o.id AS order_id,o.symbol,o.side,o.requested_qty " +
+      "FROM options_live_batches b JOIN options_live_orders o ON o.batch_id=b.id " +
+      "WHERE b.id=$1 ORDER BY o.id", [batchId]
+    );
+    if (!orders.length) return null;
+    const { rows: fills } = await db.query(
+      "SELECT f.quantity,f.price,f.fee_usdt FROM options_live_fills f " +
+      "JOIN options_live_orders o ON o.id=f.live_order_id WHERE o.batch_id=$1 ORDER BY f.id", [batchId]
+    );
+    const round = (x) => Number(x.toFixed(12));
+    let filled = 0;
+    let notional = 0;
+    let fees = 0;
+    for (const f of fills) {
+      filled += Number(f.quantity);
+      notional += Number(f.quantity) * Number(f.price);
+      fees += Number(f.fee_usdt || 0);
+    }
+    return {
+      autoSignalId: orders[0].auto_signal_id == null ? null : Number(orders[0].auto_signal_id),
+      requested: round(orders.reduce((acc, o) => acc + Number(o.requested_qty), 0)),
+      filled: round(filled),
+      avgPrice: filled > 0 ? round(notional / filled) : null,
+      feesUsdt: round(fees),
+      symbol: orders[0].symbol,
+      side: orders[0].side,
+    };
   }
 
   /**
@@ -967,7 +1074,8 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
     listMissingTpPositions, beginStandingTp, listQueuedTpOrders, listUnprotectedLivePositions,
-    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, requestCancel, hasPendingClose, queueReversal, listPendingReentries, hasReentryOrder, markReentry,
+    deferExitIfProtected, requestDeadlineExit, listReadyExitRequests, listRestingTpOrderIds, hasStandingTp, requestCancel, requestCancelEntries, hasPendingClose, queueReversal,
+    queueSignalReevaluation, batchEntryOutcome, listPendingReentries, hasReentryOrder, markReentry,
     claimAttentionNotification, releaseAttentionNotification, listAttentionOrders,
     listMonitorUsers, listUserOrderIds, claimIncidentNotification,
     claimIncidentNotificationToken, releaseIncidentNotification,
