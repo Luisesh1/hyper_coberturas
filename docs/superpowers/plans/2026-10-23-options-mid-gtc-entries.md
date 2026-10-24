@@ -236,6 +236,38 @@ test('works with decimal ticks without float drift', () => {
 - [ ] **Step 4:** Run `cd server && npm test`. Expected: PASS.
 - [ ] **Step 5:** Commit `feat(options): shadow entries wait at the mid like live ones`.
 
+### Task 6b: Desglose de comisiones (entrada, salida, ejercicio)
+
+El usuario aprobó la maqueta con el desglose. Hoy solo existe el total `fees_usdt` por posición.
+
+**Files:**
+- Create: `server/src/db/migrations/047_options_position_fee_breakdown.sql`
+- Modify: `server/src/repositories/options-strategies.repository.js` (`insertPosition`, `closePosition`, `mapPosition`)
+- Modify: `server/src/repositories/options-live-orders.repository.js` (`applyTrade`: apertura, cierre total y cierre parcial con reparto proporcional)
+- Modify: `server/src/services/options/options-strategy-runner.service.js` (`book` y `settleExpired`)
+- Modify: `server/src/services/options/options-live-settlement.service.js` (ejercicio real)
+- Modify: `server/src/services/options/options-strategies.service.js` (`kpisFor`)
+- Test: `server/test/options-strategy-runner.test.js`, `server/test/options-live-orders.repository.test.js`, `server/test/options-live-settlement.test.js`, `server/test/options-strategies.usage.test.js`
+
+**Interfaces:**
+- **Migración:** `options_strategy_positions` añade `entry_fee_usdt`, `exit_fee_usdt` y `exercise_fee_usdt`, todas `NUMERIC NULL`.
+  - Backfill: en las posiciones abiertas, `entry_fee_usdt = fees_usdt`.
+  - Las cerradas históricas se quedan en NULL, porque no se puede repartir con fiabilidad.
+- **Invariante:** en filas nuevas, `fees_usdt = entry + exit + exercise`.
+- **`kpisFor`** añade `feeBreakdown: { entryUsdt, exitUsdt, exerciseUsdt, unallocatedUsdt }`.
+  - `unallocatedUsdt` es la suma de `fees_usdt` de las filas sin desglose.
+  - La UI lo muestra como «sin desglose (histórico)» solo si es > 0.
+
+- [ ] **Step 1: Failing tests.**
+  - `shadow open+close splits entry and exit fees`.
+  - `shadow expiry books exercise fee`.
+  - `live partial close allocates entry fee proportionally and keeps the breakdown summing to fees_usdt`.
+  - `kpis feeBreakdown sums components and reports unallocated history`.
+- [ ] **Step 2:** Run `cd server && node --test test/options-strategy-runner.test.js test/options-live-orders.repository.test.js test/options-live-settlement.test.js test/options-strategies.usage.test.js`. Expected: FAIL.
+- [ ] **Step 3:** Implementar.
+- [ ] **Step 4:** Run `cd server && npm test`. Expected: PASS.
+- [ ] **Step 5:** Commit `feat(options): fee breakdown per position (entry, exit, exercise)`.
+
 ### Task 7: API para la GUI
 
 **Files:**
@@ -249,7 +281,7 @@ test('works with decimal ticks without float drift', () => {
 - **`get(userId, id)`** añade:
   - `pendingEntries: [{ id, mode, symbol, side, quantity, executedQty, limitPrice, bid, ask, deadlineAt, feesEstUsdt }]`, con sombra y real;
   - `blockedUnderlyings`;
-  - `kpis[mode].feesPctOfPremium` (`feesUsdt / premiumUsdt × 100` o null);
+  - `kpis[mode].feesPctOfPremium` (`feesUsdt / premiumUsdt × 100` o null) y `kpis[mode].feeBreakdown` (Task 6b);
   - `equity` por modo, que ya existe.
 - **`listBots`** añade por bot:
   - `pnlSeries: number[]` (P&L acumulado diario de 30 días, del modo del bot);
@@ -279,7 +311,7 @@ test('works with decimal ticks without float drift', () => {
   - `progress` es `remainingMs / 600000`, en el rango 0–1.
 - **`flowSteps(bot) → [{ key: 'signal' | 'contract' | 'entry' | 'exit', title, subtitle }]`.**
   - Textos según la maqueta. Para la banda ATR, la salida es «TP banda ATR (GTC)».
-- **`feeSummary(kpis) → { total, pct, label }`**, con label «4,6 % de la prima operada».
+- **`feeSummary(kpis) → { total, pct, label, parts: [{ key, label, usdt }] }`**, con label «4,6 % de la prima operada» y `parts` en el orden entrada, salida, ejercicio y, solo si es > 0, «sin desglose (histórico)».
 - **`ladder(entry) → { bidPct, midPct, askPct, savingPerContract }`.**
 - **`normalizeSignal`** añade `feesUsdt` y `feesEstimated`, y **`signalFeeText(signal)`** devuelve «Comisión 4,08 USDT», «Comisión est. 7,14 USDT» o null.
 
