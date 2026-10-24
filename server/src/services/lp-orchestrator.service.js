@@ -1116,11 +1116,6 @@ class LpOrchestratorService {
   }
 
   /**
-   * Llamado tras firmar y finalizar una acción on-chain. Corre el verifier,
-   * actualiza la contabilidad y, si la acción cambió el rango y hay
-   * protección activa, dispara el refresh del hedge.
-   */
-  /**
    * El usuario empezó a firmar un cambio de LP: el tramo vivo pasa a
    * `closing` para que la tarjeta avise y la ausencia temporal del LP viejo
    * no cuente como `position_not_found`. Idempotente.
@@ -1148,6 +1143,11 @@ class LpOrchestratorService {
     return this._loadOrThrow(userId, orchestratorId);
   }
 
+  /**
+   * Llamado tras firmar y finalizar una acción on-chain. Corre el verifier,
+   * actualiza la contabilidad y, si la acción cambió el rango y hay
+   * protección activa, dispara el refresh del hedge.
+   */
   async recordTxFinalized({ userId, orchestratorId, action, finalizeResult, expected = {} }) {
     let orch = await this._loadOrThrow(userId, orchestratorId);
 
@@ -2116,7 +2116,11 @@ class LpOrchestratorService {
         } catch (err) {
           this.logger.warn('lp_orchestrator_live_segment_load_failed', { orchestratorId: orch.id, error: err.message });
         }
-        if (closingLive?.status === 'closing') return { skipped: 'segment_closing' };
+        // Pasado el plazo sin LP nuevo (firma abandonada tras vaciar el viejo),
+        // la ausencia vuelve a contar: sigue el camino normal de position_not_found.
+        const closingExpired = closingLive?.status === 'closing'
+          && Date.now() - Number(closingLive.closingStartedAt || 0) >= CLOSING_ABANDON_MS;
+        if (closingLive?.status === 'closing' && !closingExpired) return { skipped: 'segment_closing' };
 
         const now = Date.now();
         const strategyState = { ...(orch.strategyState || {}) };

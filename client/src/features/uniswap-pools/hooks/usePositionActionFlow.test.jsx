@@ -153,4 +153,14 @@ describe('usePositionActionFlow · aviso de ajuste en curso', () => {
     expect(walletMock.submitTransactionDetailed).toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('no avisa para acciones que no cambian el LP (collect-fees)', async () => {
+    const onExecuteStarted = vi.fn();
+    const { result } = renderHook(() => usePositionActionFlow({
+      action: 'collect-fees', initialFormState, buildPayload, prefilledPrepareResult: plan, onExecuteStarted,
+    }));
+    await act(async () => { await result.current.handleExecute(); });
+    expect(onExecuteStarted).not.toHaveBeenCalled();
+    expect(walletMock.submitTransactionDetailed).toHaveBeenCalled();
+  });
 });

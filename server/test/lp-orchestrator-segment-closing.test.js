@@ -288,3 +288,17 @@ test('Review Focus 4: closing >30 min con el LP viejo con liquidez vuelve a open
   assert.equal(ctx.ordered()[0].closingStartedAt, null);
   assert.equal(ctx.ordered().length, 1);
 });
+
+test('closing >30 min con el LP viejo vacío y sin LP nuevo: vuelve el camino position_not_found', async () => {
+  const pools = { 777: lp('777') };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  await ctx.service.markActionStarted({ userId: 1, orchestratorId: ctx.id, action: 'modify-range' });
+  pools[777] = lp('777', { liquidity: '0' });
+  ctx.segRepo.segments[0].closingStartedAt = Date.now() - 31 * MIN;
+
+  for (let i = 0; i < 3; i++) await ctx.service.evaluateOne(1, ctx.id);
+  assert.equal(ctx.orch().phase, 'failed');
+  assert.equal(ctx.orch().lastError, 'position_not_found');
+  assert.equal(ctx.ordered()[0].status, 'closing');
+});
