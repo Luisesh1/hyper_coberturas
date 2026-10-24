@@ -168,6 +168,7 @@ jobs:
       - name: npm audit (server)
         run: npm --prefix server audit --audit-level=high
       - name: npm audit (client)
-        run: npm --prefix client audit --audit-level=high
+        # Excepciones documentadas en scripts/audit-with-exceptions.mjs.
+        run: node scripts/audit-with-exceptions.mjs client
       - name: npm audit (contracts)
         run: npm --prefix contracts audit --audit-level=high
