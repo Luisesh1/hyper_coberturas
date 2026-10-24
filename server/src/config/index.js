@@ -170,6 +170,9 @@ const config = {
     basisGuardBps: parseInt(process.env.DELTA_NEUTRAL_BASIS_GUARD_BPS, 10) || 40,
     lowConfidenceBasisBps: parseInt(process.env.DELTA_NEUTRAL_LOW_CONF_BASIS_BPS, 10) || 75,
     minDwellMs: parseInt(process.env.DELTA_NEUTRAL_MIN_DWELL_MS, 10) || 60_000,
+    // Evaluaciones completas en paralelo (cada una puede retener una conexion
+    // del pool de Postgres para su lock). Siempre en serie por cuenta:activo.
+    maxConcurrentEvals: parseInt(process.env.DELTA_NEUTRAL_MAX_CONCURRENT_EVALS, 10) || 3,
     // Banda de no-trade (% del valor vivo del LP) para las rutas urgentes
     // `boundary_cross` / `price_band`, que antes disparaban sin piso economico.
     // Subirlo frena mas churn pero deja mas delta sin cubrir: es el dial que

@@ -101,6 +101,7 @@ async function bootstrapInfra(httpServer) {
       protectedPoolDynamicService.stop();
       deltaNeutralIntegrityService.stop();
       protectedPoolDeltaNeutralService.stop();
+      await protectedPoolDeltaNeutralService.drain().catch(() => {});
       lpOrchestratorMonitorService.stop();
       crossChainMonitorService.stop();
       walletMetricsService.stop();
