@@ -396,8 +396,7 @@ class OptionsLiveExecution {
       if (this.now() < order.deadlineAt && !order.cancelRequested) return;
       // Solo finishOrder puede finalizarla, y únicamente si la fila
       // continúa en 'queued' bajo FOR UPDATE.
-      const finished = await this.repo.finishOrder(order.id, null, 0);
-      await this.afterEntryFinal(order, finished, null, 0);
+      await this.finalizeOrder(order, null, 0);
       return;
     }
     const args = { symbol: order.symbol, ...(order.orderId
@@ -551,77 +550,92 @@ class OptionsLiveExecution {
       throw new Error('Terminal Binance order has missing or inconsistent trades');
     }
     if (TERMINAL.has(status)) {
-      const finished = await this.repo.finishOrder(order.id, orderId, executed);
-      await this.afterEntryFinal(order, finished, client, executed);
+      // El bloqueo por resto no operable se decide ANTES de finalizar y se
+      // escribe en la misma transacción que la finalización.
+      const block = await this.entryRemainderBlock(order, client, trades, executed);
+      await this.finalizeOrder(order, orderId, executed, block);
+    }
+  }
+
+  isEntry(order) {
+    return order.action === 'open' && (!order.purpose || order.purpose === 'standard');
+  }
+
+  /**
+   * Finaliza la orden. En una ENTRADA, finishOrder escribe en la misma
+   * transacción el bloqueo del subyacente (si lo hay) y la resolución de la
+   * señal enlazada: o queda todo, o nada y la siguiente pasada lo reintenta.
+   * El aviso de Telegram sale DESPUÉS del commit y dice si se bloqueó o no.
+   */
+  async finalizeOrder(order, orderId, executed, block = null) {
+    if (!this.isEntry(order)) return this.repo.finishOrder(order.id, orderId, executed);
+    let finished;
+    try {
+      finished = await this.repo.finishOrder(order.id, orderId, executed,
+        { block, resolveSignal: entrySignalResolution });
+    } catch (err) {
+      if (block) {
+        await this.notifyRemainder(order, block, false);
+      }
+      throw err;
+    }
+    if (finished?.blocked && block) await this.notifyRemainder(order, block, true);
+    return finished;
+  }
+
+  async notifyRemainder(order, block, applied) {
+    const message = applied
+      ? '<b>ALERTA · Resto de entrada no operable</b>\n' + escapeHtml(block.reason) + '.\n' +
+        'El bot no abrirá más en ' + escapeHtml(block.underlying) +
+        ' hasta que lo revises y lo desbloquees; los cierres siguen activos.'
+      : '<b>ALERTA · Resto de entrada no operable</b>\n' + escapeHtml(block.reason) + '.\n' +
+        'NO se pudo bloquear ' + escapeHtml(block.underlying) + '; revisa manualmente. ' +
+        'La orden queda en atención y se reintentará en la próxima conciliación.';
+    try {
+      await this.sendIncidentAlert(order.userId,
+        applied ? 'ENTRY_REMAINDER_INOPERABLE' : 'ENTRY_REMAINDER_BLOCK_FAILED', String(order.id), message);
+    } catch (err) {
+      this.logger.warn('options_entry_remainder_notify_failed', { liveOrderId: order.id, error: err.message });
     }
   }
 
   /**
-   * Tras finalizar una ENTRADA: (1) si lo ejecutado no es una cantidad
-   * operable del contrato, bloquear el subyacente y avisar una vez;
-   * (2) si el lote quedó completo y está enlazado a una señal, resolverla.
-   * Nada de esto marca la orden en atención: no debe frenar otros lotes ni
-   * los cierres. Los errores se registran y no deshacen la conciliación.
+   * Cada fill de una entrada es una fila de posición propia, con su TP y su
+   * cierre. Si ALGUNA fila no es una cantidad que Binance acepte como orden
+   * nueva (< minQty o fuera del stepSize), no se puede cerrar ni proteger:
+   * bloquear el subyacente. Un único fill igual a lo pedido ya se validó al
+   * enviar y no necesita filtros. Sin filtros verificables se asume lo peor.
    */
-  async afterEntryFinal(order, finished, client, executed) {
-    // `finished` null: otra pasada ya la finalizó (y ya hizo estas comprobaciones).
-    if (!finished || order.action !== 'open' ||
-        (order.purpose && order.purpose !== 'standard')) return;
-    if (Number(executed) > 0) {
-      try {
-        await this.blockIfInoperable(order, client, Number(executed));
-      } catch (err) {
-        this.logger.warn('options_entry_remainder_check_failed', {
-          liveOrderId: order.id, strategyId: order.strategyId, error: err.message,
-        });
-      }
-    }
-    if (finished?.completed && finished.autoSignalId != null) {
-      try {
-        await this.resolveEntrySignal(order);
-      } catch (err) {
-        this.logger.warn('options_entry_signal_resolve_failed', {
-          liveOrderId: order.id, batchId: order.batchId, error: err.message,
-        });
-      }
-    }
-  }
-
-  /**
-   * Una entrada GTC puede llenar una cantidad que Binance no acepta como
-   * orden nueva (< minQty o fuera del stepSize): esa posición no se podría
-   * cerrar con una orden normal. Sin filtros verificables se asume lo peor.
-   */
-  async blockIfInoperable(order, client, executed) {
-    let orderable = false;
+  async entryRemainderBlock(order, client, trades, executed) {
+    if (!this.isEntry(order) || !(Number(executed) > 0)) return null;
+    const rows = trades.map((t) => Number(t.quantity));
+    if (rows.length === 1 && Math.abs(rows[0] - order.quantity) < 1e-8) return null;
+    let bad;
     let unverified = false;
     try {
       if (!client || typeof client.getExchangeInfo !== 'function') throw new Error('Binance client unavailable');
-      orderable = isOrderableRemainder(await client.getExchangeInfo(), order.symbol, executed);
+      const info = await client.getExchangeInfo();
+      bad = rows.filter((q) => !isOrderableRemainder(info, order.symbol, q));
     } catch (err) {
       unverified = true;
+      bad = rows;
       this.logger.warn('options_entry_lot_filters_unavailable', {
         liveOrderId: order.id, symbol: order.symbol, error: err.message,
       });
     }
-    if (orderable) return false;
+    if (!bad.length) return null;
+    const total = Number(bad.reduce((a, q) => a + q, 0).toFixed(12));
     const underlying = parseSymbol(order.symbol)?.underlying || String(order.symbol).split('-')[0];
-    const reason = `Resto no operable de ${qtyText(executed)} contratos en ${order.symbol}` +
+    const reason = `Resto no operable de ${qtyText(total)} contratos en ${order.symbol}` +
+      (bad.length > 1 ? ` (${bad.length} posiciones)` : '') +
       (unverified ? ' (filtros de lote no disponibles)' : '');
-    try {
-      await this.targetRepo.setUnderlyingBlock(order.strategyId, underlying, { reason, at: this.now() });
-    } finally {
-      // El aviso sale aunque el bloqueo falle: el operador debe revisarlo.
-      await this.sendIncidentAlert(order.userId, 'ENTRY_REMAINDER_INOPERABLE', String(order.id),
-        '<b>ALERTA · Resto de entrada no operable</b>\n' +
-        escapeHtml(reason) + '.\n' +
-        'El bot no abrirá más en ' + escapeHtml(underlying) +
-        ' hasta que lo revises y lo desbloquees; los cierres siguen activos.');
-    }
-    return true;
+    return { underlying, reason, at: this.now() };
   }
 
-  /** Resuelve la señal enlazada al lote de entrada con los fills reales. */
+  /**
+   * Resuelve a mano la señal enlazada a un lote de entrada (la vía normal es
+   * finishOrder, en la misma transacción que finaliza la última orden).
+   */
   async resolveEntrySignal(order) {
     if (typeof this.repo.batchEntryOutcome !== 'function') return null;
     const outcome = await this.repo.batchEntryOutcome(order.batchId);

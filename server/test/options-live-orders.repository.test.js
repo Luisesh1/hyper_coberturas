@@ -424,33 +424,67 @@ test('batchEntryOutcome reports cancel requests and Binance rejections', async (
   assert.equal(out.rejected, true);
 });
 
-function finishDb({ autoSignalId = null, actionKey = 'alert:55:open', processed = '0.2', remaining = 0 } = {}) {
+function finishDb({ autoSignalId = null, actionKey = 'alert:55:open', processed = '0.2', remaining = 0,
+  strategyRowCount = 1 } = {}) {
   const calls = [];
   const tx = { async query(sql, args) {
     calls.push({ sql, args });
     if (sql.startsWith('SELECT * FROM options_live_orders')) return { rows: [
-      { id: 9, batch_id: 3, status: 'active', processed_qty: processed } ] };
+      { id: 9, batch_id: 3, strategy_id: 4, status: 'active', processed_qty: processed } ] };
     if (sql.includes('COUNT(*)')) return { rows: [{ n: remaining }] };
     if (sql.includes('FROM options_live_batches WHERE id=$1')) return { rows: [
       { strategy_id: 4, action_key: actionKey, action: 'open', auto_signal_id: autoSignalId } ] };
     if (sql.includes('SUM(processed_qty)')) return { rows: [{ qty: processed }] };
+    if (sql.includes('FROM options_live_batches b JOIN')) return { rows: [
+      { id: 3, auto_signal_id: autoSignalId, order_id: 9, symbol: 'ETH-261031-2500-C', side: 'BUY',
+        requested_qty: '0.2', cancel_requested: false, last_error: null } ] };
+    if (sql.includes('FROM options_live_fills')) return { rows: [{ quantity: processed, price: '715', fee_usdt: '1.5' }] };
+    if (sql.includes('UPDATE options_strategies')) return { rows: [], rowCount: strategyRowCount };
     return { rows: [] };
   } };
   return { calls, db: { transaction: (fn) => fn(tx) } };
 }
 
-test('finishOrder reports the completed batch; a linked signal is left to the executor', async () => {
+test('finishOrder resolves a linked entry signal inside its transaction', async () => {
   const linked = finishDb({ autoSignalId: '31' });
   const repo = createOptionsLiveOrdersRepository({ db: linked.db, now: () => 1 });
-  assert.deepEqual(await repo.finishOrder(9, '77', 0.2),
-    { batchId: 3, completed: true, action: 'open', autoSignalId: 31 });
-  assert.ok(!linked.calls.some((c) => c.sql.includes('options_auto_signals')));
-  const legacy = finishDb();
+  const seen = [];
+  const out = await repo.finishOrder(9, '77', 0.2, { resolveSignal: (o) => {
+    seen.push(o);
+    return { decision: 'opened', detail: 'Real: x', feesUsdt: 1.5, feesEstimated: false };
+  } });
+  assert.deepEqual(out, { batchId: 3, completed: true, action: 'open', autoSignalId: 31,
+    blocked: false, signalResolved: true });
+  assert.equal(seen[0].filled, 0.2);
+  assert.equal(seen[0].feesUsdt, 1.5);
+  const update = linked.calls.find((c) => c.sql.includes('UPDATE options_auto_signals'));
+  assert.match(update.sql, /WHERE id = \$1 AND decision IN \('pending','opened'\)/);
+  assert.deepEqual(update.args, [31, 'opened', 'Real: x', 1.5, false]);
+  // Sin resolutor queda el texto genérico de siempre (nunca 'pending' para siempre).
+  const legacy = finishDb({ autoSignalId: '31' });
   const old = createOptionsLiveOrdersRepository({ db: legacy.db, now: () => 1 });
-  assert.deepEqual(await old.finishOrder(9, '77', 0.2),
-    { batchId: 3, completed: true, action: 'open', autoSignalId: null });
-  assert.ok(legacy.calls.some((c) => c.sql.includes('UPDATE options_auto_signals')));
+  assert.equal((await old.finishOrder(9, '77', 0.2)).signalResolved, false);
+  assert.ok(legacy.calls.some((c) => /alert_event_id=\$2 AND decision='pending'/.test(c.sql)));
   const open = finishDb({ remaining: 1 });
   const pending = createOptionsLiveOrdersRepository({ db: open.db, now: () => 1 });
-  assert.deepEqual(await pending.finishOrder(9, '77', 0.2), { batchId: 3, completed: false });
+  assert.deepEqual(await pending.finishOrder(9, '77', 0.2), { batchId: 3, completed: false, blocked: false });
+});
+
+test('finishOrder writes the underlying block in the same transaction', async () => {
+  const d = finishDb({ remaining: 1 });
+  const repo = createOptionsLiveOrdersRepository({ db: d.db, now: () => 1 });
+  const out = await repo.finishOrder(9, '77', 0.2,
+    { block: { underlying: 'eth', reason: 'Resto no operable de 0,005 contratos en X', at: 50 } });
+  assert.equal(out.blocked, true);
+  const i = d.calls.findIndex((c) => c.sql.includes('UPDATE options_strategies'));
+  const fin = d.calls.findIndex((c) => c.sql.includes("SET status='final'"));
+  assert.ok(i > fin && fin >= 0);
+  assert.match(d.calls[i].sql, /jsonb_set\(\s*COALESCE\(state, '\{\}'::jsonb\), '\{blockedUnderlyings\}'/);
+  assert.deepEqual(d.calls[i].args, [4, 'ETH', 'Resto no operable de 0,005 contratos en X', 50]);
+  // Fila de estrategia ausente: la transacción falla (y no se finaliza).
+  const gone = createOptionsLiveOrdersRepository({ db: finishDb({ strategyRowCount: 0 }).db, now: () => 1 });
+  await assert.rejects(gone.finishOrder(9, '77', 0.2, { block: { underlying: 'ETH', reason: 'r' } }),
+    /cannot block underlying/);
+  await assert.rejects(repo.finishOrder(9, '77', 0.2, { block: { underlying: 'ETH-X', reason: 'r' } }),
+    /Invalid underlying block/);
 });

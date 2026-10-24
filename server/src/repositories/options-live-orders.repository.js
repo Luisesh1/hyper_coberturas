@@ -683,14 +683,19 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
    * cantidad pedida y ejecutada, precio medio ponderado y comisiones.
    */
   async function batchEntryOutcome(batchId) {
-    const { rows: orders } = await db.query(
+    return entryOutcomeWith(db, batchId);
+  }
+
+  // Mismo cálculo dentro de la transacción de finishOrder (q = db o tx).
+  async function entryOutcomeWith(q, batchId) {
+    const { rows: orders } = await q.query(
       "SELECT b.id,b.auto_signal_id,o.id AS order_id,o.symbol,o.side,o.requested_qty," +
       "o.cancel_requested,o.last_error " +
       "FROM options_live_batches b JOIN options_live_orders o ON o.batch_id=b.id " +
       "WHERE b.id=$1 AND b.action='open' ORDER BY o.id", [batchId]
     );
     if (!orders.length) return null;
-    const { rows: fills } = await db.query(
+    const { rows: fills } = await q.query(
       "SELECT f.quantity,f.price,f.fee_usdt FROM options_live_fills f " +
       "JOIN options_live_orders o ON o.id=f.live_order_id WHERE o.batch_id=$1 ORDER BY f.id", [batchId]
     );
@@ -1029,7 +1034,21 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     });
   }
 
-  async function finishOrder(id, exchangeOrderId, executedQuantity) {
+  /**
+   * Finaliza una orden. En la MISMA transacción, opcionalmente:
+   * - `block` `{ underlying, reason, at }`: bloquea el subyacente del bot
+   *   (resto de entrada no operable), misma fusión jsonb que setUnderlyingBlock;
+   * - `resolveSignal(outcome) → { decision, detail, feesUsdt, feesEstimated }`:
+   *   si el lote de ENTRADA queda completo y enlazado a una señal, la resuelve
+   *   con los fills reales. Un fallo deshace también la finalización, así que
+   *   la siguiente pasada lo reintenta todo: nunca se pierde el bloqueo.
+   */
+  async function finishOrder(id, exchangeOrderId, executedQuantity, { block = null, resolveSignal = null } = {}) {
+    if (block) {
+      const u = String(block.underlying ?? '').trim().toUpperCase();
+      if (!/^[A-Z0-9]{1,20}$/.test(u) || !block.reason) throw new Error('Invalid underlying block');
+      block = { ...block, underlying: u };
+    }
     return db.transaction(async (tx) => {
       const { rows: [locked] } = await tx.query(
         'SELECT * FROM options_live_orders WHERE id=$1 FOR UPDATE', [id]
@@ -1048,20 +1067,48 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
          exchange_order_id=COALESCE($2,exchange_order_id),updated_at=$3,reconcile_lease_until=0
          WHERE id=$1`, [id, exchangeOrderId == null ? null : String(exchangeOrderId), now()]
       );
+      if (block) {
+        const { rowCount } = await tx.query(
+          `UPDATE options_strategies
+              SET state = jsonb_set(
+                    COALESCE(state, '{}'::jsonb), '{blockedUnderlyings}',
+                    CASE WHEN jsonb_typeof(state->'blockedUnderlyings') = 'object'
+                         THEN state->'blockedUnderlyings' ELSE '{}'::jsonb END
+                      || jsonb_build_object($2::text, jsonb_build_object('reason', $3::text, 'at', $4::bigint)),
+                    true)
+            WHERE id = $1`,
+          [locked.strategy_id, block.underlying, String(block.reason), block.at ?? now()]
+        );
+        if (rowCount !== 1) throw new Error('Strategy missing: cannot block underlying');
+      }
+      const blocked = !!block;
       const { rows: [remaining] } = await tx.query(
         "SELECT COUNT(*)::int AS n FROM options_live_orders WHERE batch_id=$1 AND status<>'final'",
         [locked.batch_id]
       );
       const batchId = Number(locked.batch_id);
-      if (Number(remaining.n) !== 0) return { batchId, completed: false };
+      if (Number(remaining.n) !== 0) return { batchId, completed: false, blocked };
       await tx.query("UPDATE options_live_batches SET status='completed' WHERE id=$1", [locked.batch_id]);
       const { rows: [batch] } = await tx.query(
         'SELECT strategy_id,action_key,action,auto_signal_id FROM options_live_batches WHERE id=$1', [locked.batch_id]
       );
       const autoSignalId = batch?.auto_signal_id == null ? null : Number(batch.auto_signal_id);
-      // Con señal enlazada la resuelve el ejecutor con los fills reales
-      // (OptionsLiveExecution.resolveEntrySignal); aquí solo el resto.
-      const match = autoSignalId == null && /^alert:([0-9]+):(open|close)$/.exec(batch?.action_key || '');
+      // Entrada enlazada a su señal: se resuelve aquí con los fills reales.
+      let signalResolved = false;
+      if (autoSignalId != null && batch?.action === 'open' && typeof resolveSignal === 'function') {
+        const outcome = await entryOutcomeWith(tx, locked.batch_id);
+        const r = outcome && resolveSignal(outcome);
+        if (!r || !['opened', 'ignored'].includes(r.decision)) throw new Error('Invalid entry signal resolution');
+        await tx.query(
+          `UPDATE options_auto_signals
+              SET decision = $2, detail = $3, fees_usdt = $4::numeric, fees_estimated = $5::boolean
+            WHERE id = $1 AND decision IN ('pending','opened')`,
+          [autoSignalId, r.decision, r.detail ?? null, Number(r.feesUsdt) || 0, r.feesEstimated === true]
+        );
+        signalResolved = true;
+      }
+      // Sin resolutor (o sin señal enlazada): texto genérico de siempre.
+      const match = !signalResolved && /^alert:([0-9]+):(open|close)$/.exec(batch?.action_key || '');
       if (match) {
         const { rows: [fills] } = await tx.query(
           'SELECT COALESCE(SUM(processed_qty),0) AS qty FROM options_live_orders WHERE batch_id=$1',
@@ -1077,7 +1124,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
               : 'Sin ejecuciones tras la ventana LIMIT de diez minutos']
         );
       }
-      return { batchId, completed: true, action: batch?.action ?? null, autoSignalId };
+      return { batchId, completed: true, action: batch?.action ?? null, autoSignalId, blocked, signalResolved };
     });
   }
   return { assertExchangeExposure, beginBatch, listUnresolved, listByStrategy, countSubmittedSince,
