@@ -5,6 +5,7 @@ const { OptionsStrategyRunner, estimateMargin } = require('../src/services/optio
 const { buildSyntheticChain, syntheticExpiries } = require('../src/services/options/options-synthetic-chain');
 const { parseSymbol, tradeFee, HOUR_MS, DAY_MS } = require('../src/services/options/options-utils');
 const { createFakeOptionsRepo } = require('./support/options-fake-repo');
+const { midLimitPrice } = require('../src/services/options/options-mid-price');
 
 const FRIDAY_9 = Date.UTC(2026, 9, 16, 9);
 const SPOT = 60000;
@@ -29,6 +30,10 @@ function fakeMarket({ now = FRIDAY_9, spot = SPOT, atmIv = 0.6, spreadPct = 4 } 
       const row = chainOf(meta.expiry).rows.find((r) => r.strike === meta.strike);
       if (!row) throw new Error('símbolo desconocido');
       return { ...(meta.type === 'C' ? row.call : row.put), ...meta, spot: state.spot };
+    },
+    // PRICE_FILTER del contrato: las aperturas reales van al medio de la rejilla.
+    async getPriceFilter() {
+      return { tickSize: '0.01', minPrice: '0.01', maxPrice: '1000000' };
     },
   };
 }
@@ -157,7 +162,9 @@ test('modo real: acepta órdenes LIMIT sin inventar posiciones ni fills', async 
   for (const order of credentials.orders) {
     const quote = await market.getQuote(order.symbol);
     assert.equal(order.side, 'SELL');
-    assert.equal(order.price, quote.bid);
+    // Apertura real: LIMIT al medio del libro, redondeado hacia abajo al vender.
+    assert.equal(order.price, midLimitPrice({ bid: quote.bid, ask: quote.ask, side: 'SELL', tickSize: '0.01', minPrice: '0.01' }));
+    assert.ok(order.price >= quote.bid && order.price <= quote.ask);
     assert.equal(order.reduceOnly, false);
     assert.equal(order.quantity, 0.01);
   }
@@ -661,4 +668,90 @@ test('presupuesto: el ejecutor real revalida contra la parte de la señal e igno
   await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs, signalBudgetUsdt: q.ask * quantity * 0.9 },
     { ...ctx, params: { capitalUsdt: null, budgetUsdt: 1e6, budgetFractions: 4 } });
   assert.equal(credentials.orders.length, 1);
+});
+
+// ---------- aperturas reales al medio (LIMIT GTC) ----------
+
+const MID_SYMBOL = 'BTC-261016-60000-C';
+const midLeg = (quantity = 0.1) => ({ symbol: MID_SYMBOL, side: 'BUY', quantity, optionType: 'C', strike: 60000 });
+const midCtx = (params) => ({ now: FRIDAY_9, spot: SPOT, positions: [], produced: [], params });
+
+async function midSetup(book = { bid: 700, ask: 725 }, { filter = { tickSize: '5', minPrice: '5', maxPrice: '100000' } } = {}) {
+  const env = await setup({ mode: 'live' });
+  const original = env.market.getQuote;
+  env.market.getQuote = async (symbol, opts) => ({ ...(await original(symbol, opts)), ...book });
+  env.market.getPriceFilter = async () => filter;
+  return env;
+}
+
+test('live open sends the mid on the contract grid', async () => {
+  const { runner, strategy, credentials } = await midSetup();
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg()] }, midCtx({ capitalUsdt: 1000 }));
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(credentials.orders[0].price, 715);
+});
+
+test('live open SELL rounds the mid down onto the grid', async () => {
+  const { runner, strategy, credentials } = await midSetup();
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [{ ...midLeg(), side: 'SELL' }] },
+    midCtx({ capitalUsdt: 1e6 }));
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(credentials.orders[0].price, 710);
+});
+
+test('live open uses the tick carried by the quote when present', async () => {
+  const { runner, strategy, credentials } = await midSetup({ bid: 700, ask: 725, tickSize: 5, minPrice: 5 }, { filter: null });
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg()] }, midCtx({ capitalUsdt: 1000 }));
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(credentials.orders[0].price, 715);
+});
+
+test('live open without bid is skipped with no_mid_price', async () => {
+  const { repo, runner, strategy, credentials } = await midSetup({ bid: null, ask: 725 });
+  // Sin bid la cotización no tiene precio de compra válido para el medio.
+  const ctx = midCtx({ capitalUsdt: 1000 });
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg()] }, ctx);
+  assert.equal(credentials.orders.length, 0);
+  const skip = ctx.produced.find((p) => p.mode === 'live' && p.type === 'skip');
+  assert.equal(skip.reason, 'no_mid_price');
+  assert.equal(repo.events.find((e) => e.mode === 'live').detail, 'Sin precio medio válido');
+});
+
+test('live open without a known tick is skipped with no_mid_price', async () => {
+  const { runner, strategy, credentials } = await midSetup({ bid: 700, ask: 725 }, { filter: null });
+  const ctx = midCtx({ capitalUsdt: 1000 });
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg()] }, ctx);
+  assert.equal(credentials.orders.length, 0);
+  assert.equal(ctx.produced.find((p) => p.type === 'skip').reason, 'no_mid_price');
+});
+
+test('live open with no grid tick inside the spread is skipped with no_mid_price', async () => {
+  const { runner, strategy, credentials } = await midSetup({ bid: 701, ask: 704 });
+  const ctx = midCtx({ capitalUsdt: 1000 });
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg()] }, ctx);
+  assert.equal(credentials.orders.length, 0);
+  assert.equal(ctx.produced.find((p) => p.type === 'skip').reason, 'no_mid_price');
+});
+
+test('capital revalidated at mid: budget covers 715 but not 725 and the order goes out', async () => {
+  const { runner, strategy, credentials } = await midSetup();
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg(0.1)] }, midCtx({ capitalUsdt: 72 }));
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(credentials.orders[0].price, 715);
+});
+
+test('live close keeps the executable book price (not the mid)', async () => {
+  const { runner, strategy, credentials } = await midSetup();
+  await runner.executeLive(strategy, { type: 'close', reason: 'stop_loss', detail: 'stop',
+    legs: [{ ...midLeg(), side: 'SELL', positionId: 1 }] }, midCtx({ capitalUsdt: 1000 }));
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(credentials.orders[0].price, 700);
+});
+
+test('live SELL open without ask is skipped with no_mid_price', async () => {
+  const { runner, strategy, credentials } = await midSetup({ bid: 700, ask: null });
+  const ctx = midCtx({ capitalUsdt: 1e6 });
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [{ ...midLeg(), side: 'SELL' }] }, ctx);
+  assert.equal(credentials.orders.length, 0);
+  assert.equal(ctx.produced.find((p) => p.type === 'skip').reason, 'no_mid_price');
 });

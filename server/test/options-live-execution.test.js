@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { OptionsLiveExecution, normalizeTrade, actionKey, WINDOW_MS } =
+const { OptionsLiveExecution, normalizeTrade, actionKey, WINDOW_MS, orderTimeInForce } =
   require('../src/services/options/options-live-execution.service');
 
 const strategy = { id: 1, userId: 7, template: 'alert_signal' };
@@ -9,7 +9,7 @@ const context = (time = 100_000, eventId = 77) =>
   ({ now: time, signal: { eventId, direction: 'bullish' } });
 const silent = { warn() {}, info() {}, error() {} };
 
-function fixture({ now = 100_000, onSubmit } = {}) {
+function fixture({ now = 100_000, onSubmit, leg: l = leg } = {}) {
   const clock = { time: now };
   const orders = [];
   const fills = [];
@@ -69,13 +69,15 @@ function fixture({ now = 100_000, onSubmit } = {}) {
       o.orderId = orderId == null ? null : String(orderId);
     },
   };
-  const state = { status: 'NEW', executedQty: '0', quantity: String(leg.quantity), type: 'LIMIT', timeInForce: 'GTC' };
+  const state = { status: 'NEW', executedQty: '0', quantity: String(l.quantity), type: 'LIMIT', timeInForce: 'GTC' };
   let allTrades = [];
   let openOrders = [];
   const client = {
     async getExchangeInfo() {
-      return { optionSymbols: [60000, 61000, 62000].map((strike) => ({
-        symbol: `BTC-261030-${strike}-C`, status: 'TRADING',
+      const symbols = [60000, 61000, 62000].map((strike) => `BTC-261030-${strike}-C`);
+      if (!symbols.includes(l.symbol)) symbols.push(l.symbol);
+      return { optionSymbols: symbols.map((symbol) => ({
+        symbol, status: 'TRADING',
         quoteAsset: 'USDT', expiryDate: 9999999999999,
         filters: [{ filterType: 'PRICE_FILTER', minPrice: '0',
           maxPrice: '1000000', tickSize: '0.01', minQty: '0.01',
@@ -90,7 +92,7 @@ function fixture({ now = 100_000, onSubmit } = {}) {
     async getOrder(payload) {
       calls.get.push(payload);
       return { orderId: '4611875134427365377', clientOrderId: orders[0].clientOrderId,
-        symbol: leg.symbol, side: leg.side, ...state };
+        symbol: l.symbol, side: l.side, ...state };
     },
     async getUserTrades(payload) {
       calls.trades.push(payload);
@@ -109,15 +111,15 @@ function fixture({ now = 100_000, onSubmit } = {}) {
   const credentials = { async getClientForUser() { return client; } };
   const engine = new OptionsLiveExecution({ repo, credentials, logger: silent, enabled: true, now: () => clock.time });
   const submit = (eventId = 77) =>
-    engine.submit(strategy, { type: 'open', legs: [leg], detail: 'señal' }, context(clock.time, eventId));
+    engine.submit(strategy, { type: 'open', legs: [l], detail: 'señal' }, context(clock.time, eventId));
   const setState = (status, executedQty) => Object.assign(state, { status, executedQty: String(executedQty) });
   const setTrades = (list) => { allTrades = list; };
   const setOpenOrders = (list) => { openOrders = list; };
   return { engine, repo, orders, fills, clock, calls, client, submit, setState, setTrades, setOpenOrders };
 }
-function trade(quantity, tradeId = '300') {
-  return { orderId: '4611875134427365377', tradeId, symbol: leg.symbol,
-    side: leg.side, quantity: String(quantity), price: '98', fee: '-0.15',
+function trade(quantity, tradeId = '300', l = leg) {
+  return { orderId: '4611875134427365377', tradeId, symbol: l.symbol,
+    side: l.side, quantity: String(quantity), price: '98', fee: '-0.15',
     quoteAsset: 'USDT', time: 101_000 };
 }
 
@@ -344,4 +346,41 @@ test('un -1007 de Binance (estado desconocido) sigue tratándose como envío amb
   const f = fixture({ onSubmit: async () => { throw binanceError('BINANCE_OPTIONS_REJECTED', 400, -1007); } });
   assert.equal((await f.submit()).status, 'attention');
   assert.equal(f.orders[0].status, 'attention');
+});
+
+// Aperturas al medio: GTC en cualquier subyacente; ETH conserva FOK al cerrar.
+const ethLeg = { symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.2, price: 715 };
+
+test('ETH open is GTC; ETH close stays FOK and the resting TP GTC', () => {
+  assert.equal(orderTimeInForce({ symbol: 'ETH-261031-2500-C', action: 'open' }), 'GTC');
+  assert.equal(orderTimeInForce({ symbol: 'BTC-261031-60000-C', action: 'open' }), 'GTC');
+  assert.equal(orderTimeInForce({ symbol: 'ETH-261031-2500-C', action: 'close' }), 'FOK');
+  assert.equal(orderTimeInForce({ symbol: 'ETH-261031-2500-C', action: 'close', purpose: 'take_profit' }), 'GTC');
+  assert.equal(orderTimeInForce({ symbol: 'BTC-261031-60000-C', action: 'close' }), 'GTC');
+});
+
+test('ETH open is posted to Binance as GTC', async () => {
+  const f = fixture({ leg: ethLeg });
+  assert.equal((await f.submit()).status, 'submitted');
+  assert.equal(f.calls.post[0].timeInForce, 'GTC');
+  assert.equal(f.calls.post[0].price, 715);
+  assert.equal(f.calls.post[0].reduceOnly, false);
+});
+
+test('partial GTC open is not an anomaly: finalizes with the confirmed quantity', async () => {
+  const f = fixture({ leg: ethLeg });
+  await f.submit();
+  f.setTrades([trade(0.1, '300', ethLeg)]);
+  f.setState('PARTIALLY_FILLED', 0.1);
+  let result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.orders[0].processedQty, 0.1);
+  assert.notEqual(f.orders[0].status, 'attention');
+  f.clock.time += WINDOW_MS + 1;
+  result = await f.engine.reconcilePending();
+  assert.equal(result.errors, 0);
+  assert.equal(f.calls.cancel.length, 1);
+  assert.equal(f.orders[0].status, 'final');
+  assert.equal(f.orders[0].processedQty, 0.1);
+  assert.equal(f.calls.post.length, 1);
 });

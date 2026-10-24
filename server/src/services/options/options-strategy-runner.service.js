@@ -32,6 +32,7 @@ const { fullSizeFokLimit } = require('./options-fok-depth');
 const { isPilotSyntheticTpEligible, fixedTargetPrice } =
   require('./options-synthetic-tp-experiment');
 const { ensureAtrBandTarget } = require('./options-atr-band-target');
+const { midLimitPrice } = require('./options-mid-price');
 const { estimateMargin, committedUsdt } = require('./options-committed-capital');
 const { botUnderlyings } = require('./bot-underlyings');
 
@@ -773,10 +774,25 @@ class OptionsStrategyRunner {
     }
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
-      await this.recordOutcome(strategy, 'live', {
-        type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}`,
-      }, ctx);
+      await this.recordOutcome(strategy, 'live', action.type === 'open'
+        ? { type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido' }
+        : { type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}` }, ctx);
       return null;
+    }
+    // Aperturas: LIMIT GTC al medio del libro fresco, sobre la rejilla del
+    // contrato. Sin bid/ask, sin tick conocido o sin tick dentro del spread
+    // no hay entrada: nunca enviar un precio que Binance no admita.
+    if (action.type === 'open') {
+      for (let i = 0; i < action.legs.length; i++) {
+        const mid = await this.midEntryPrice(action.legs[i], quotes[i].quote);
+        if (mid == null) {
+          await this.recordOutcome(strategy, 'live', {
+            type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido',
+          }, ctx);
+          return null;
+        }
+        quotes[i].price = mid;
+      }
     }
     // ONLY the explicit one-contract ETH pilot experiment may replace the
     // resting GTC TP with a synthetic full-size FOK close.
@@ -841,7 +857,7 @@ class OptionsStrategyRunner {
         return null;
       }
     }
-    // El precio LIMIT es la cotización recién consultada, pero el fill
+    // El precio LIMIT es la cotización recién consultada (el medio al abrir), pero el fill
     // SOLO se registra cuando Binance lo confirma en getUserTrades.
     const quoted = action.legs.map((leg, i) => ({
       ...leg, price: quotes[i].price,
@@ -894,6 +910,25 @@ class OptionsStrategyRunner {
       pending: ['submitted', 'tp_cancel_requested'].includes(result.status), reason: result.status,
       detail: result.status === 'submitted' ? 'Orden límite enviada; ejecución pendiente' : result.status });
     return result;
+  }
+
+  /**
+   * Precio medio de entrada de una pata, o null. El tick sale de la
+   * cotización si lo trae; si no, del PRICE_FILTER del contrato.
+   */
+  async midEntryPrice(leg, quote) {
+    let tickSize = Number(quote?.tickSize) > 0 ? quote.tickSize : null;
+    let minPrice = tickSize != null ? quote.minPrice : null;
+    if (tickSize == null && typeof this.market.getPriceFilter === 'function') {
+      try {
+        const filter = await this.market.getPriceFilter(leg.symbol);
+        if (Number(filter?.tickSize) > 0) ({ tickSize, minPrice } = filter);
+      } catch (err) {
+        this.logger.warn('options_price_filter_failed', { symbol: leg.symbol, error: err.message });
+      }
+    }
+    if (tickSize == null) return null;
+    return midLimitPrice({ bid: quote?.bid, ask: quote?.ask, side: leg.side, tickSize, minPrice });
   }
 
   /** `kind`: 'trade' | 'error'. Respeta `params.notify` del bot (activo si falta). */

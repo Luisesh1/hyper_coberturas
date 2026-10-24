@@ -1,6 +1,6 @@
 /**
  * Motor real de ejecución Binance Options.
- * LIMIT para Binance Options: ETH FOK al abrir y al cerrar (excepto TP resting GTC), sin fills sintéticos.
+ * LIMIT para Binance Options: aperturas GTC al medio; ETH FOK al cerrar (excepto TP resting GTC), sin fills sintéticos.
  * Orden durable -> POST único -> status/trades -> cancelar remanente -> ledger.
  */
 const liveRepo = require('../../repositories/options-live-orders.repository');
@@ -48,13 +48,12 @@ function holdsToExpiryWithoutTp(params, expiryMs, now) {
     tpDeadline(expiryMs, params) <= now + TP_MIN_LEAD_MS;
 }
 
-// En ETH, las entradas y los cierres estándar usan FOK para evitar
-// residuos por ejecuciones parciales. El TP residente necesita GTC:
-// el riesgo de fills parciales de TP aún bloquea el piloto automático.
+// Las entradas reposan como GTC al medio en cualquier subyacente: un fill
+// parcial de apertura es válido y se contabiliza lo confirmado. En ETH los
+// cierres estándar usan FOK para evitar residuos; el TP residente es GTC.
 const orderTimeInForce = (order) => {
   const eth = /^ETH-\d{6}-\d+(?:\.\d+)?-[CP]$/.test(order.symbol || '');
-  return eth && (order.action === 'open' ||
-    (order.action === 'close' && order.purpose !== 'take_profit'))
+  return eth && order.action === 'close' && order.purpose !== 'take_profit'
     ? 'FOK' : 'GTC';
 };
 
@@ -492,7 +491,7 @@ class OptionsLiveExecution {
         'Stop/expiry exit needs supervised exchange reconciliation.');
     }
     // Registrar PRIMERO los trades confirmados para no ocultar exposición.
-    // FOK es todo o nada: un fill parcial de entrada O salida es anómalo.
+    // FOK (solo cierres ETH) es todo o nada: un fill parcial es anómalo.
     if (orderTimeInForce(order) === 'FOK' &&
         (status === 'PARTIALLY_FILLED' ||
          (executed > 0 && executed < order.quantity - 1e-8))) {

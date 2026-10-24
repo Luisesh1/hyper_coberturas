@@ -40,8 +40,12 @@ function checkPolicy({ input, quote, strategy, env }) {
   const exchangeGtc = orderTimeInForce({
     symbol: input?.symbol, action: 'close', purpose: 'take_profit',
   }) === 'GTC';
-  const ethFokEntry = orderTimeInForce({
+  // Entradas: LIMIT GTC al medio. Cierres estándar ETH: FOK (sin residuos).
+  const ethGtcEntry = orderTimeInForce({
     symbol: input?.symbol, action: 'open', purpose: 'standard',
+  }) === 'GTC';
+  const ethFokExit = orderTimeInForce({
+    symbol: input?.symbol, action: 'close', purpose: 'standard',
   }) === 'FOK';
   const priceValidated = quote?.readOnly === true &&
     quote?.pilotReady === false &&
@@ -51,14 +55,14 @@ function checkPolicy({ input, quote, strategy, env }) {
     Number(quote?.publicOrder?.quantity) === qty &&
     quote?.publicOrder?.limitPrice === input?.maxLimit;
   return {
-    liveOff, paused, entrySignalConfigured, exactSize, riskBudget, exchangeGtc, ethFokEntry,
-    priceValidated,
+    liveOff, paused, entrySignalConfigured, exactSize, riskBudget, exchangeGtc, ethGtcEntry,
+    ethFokExit, priceValidated,
   };
 }
 
 function summaryLines(result) {
   const expected = ['liveOff','paused','entrySignalConfigured','exactSize','riskBudget',
-    'exchangeGtc','ethFokEntry','priceValidated'];
+    'exchangeGtc','ethGtcEntry','ethFokExit','priceValidated'];
   if (!result || result.readOnly !== true || result.pilotReady !== false ||
       !['candidate','blocked'].includes(result.status) ||
       expected.some(name => typeof result.checks?.[name] !== 'boolean') ||
@@ -67,7 +71,8 @@ function summaryLines(result) {
   }
   return [
     'gtc_pilot_read_only=yes',
-    'gtc_pilot_entry_tif=FOK',
+    'gtc_pilot_entry_tif=GTC',
+    'gtc_pilot_exit_tif=FOK',
     'gtc_pilot_take_profit_tif=GTC',
     'gtc_pilot_take_profit_placement=after_confirmed_fill',
     ...expected.map(k => 'gtc_pilot_'+k+'='+

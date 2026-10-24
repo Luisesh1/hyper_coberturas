@@ -97,6 +97,11 @@ function harness({ syntheticTpExperimentalEnabled = false } = {}) {
       assert.equal(symbol,SYMBOL);
       return {...quote};
     },
+    // PRICE_FILTER del contrato (igual que orderInfo): la entrada va al medio.
+    async getPriceFilter(symbol) {
+      assert.equal(symbol,SYMBOL);
+      return {tickSize:'0.1',minPrice:'0',maxPrice:'10000'};
+    },
   };
   const repo = {
     async assertExchangeExposure() {return true;},
@@ -273,7 +278,8 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.deepEqual({symbol:f.broker[0].symbol,side:f.broker[0].side,
     qty:f.broker[0].quantity,price:f.broker[0].price,reduceOnly:f.broker[0].reduceOnly,
     tif:f.broker[0].timeInForce},
-    {symbol:SYMBOL,side:'BUY',qty:.01,price:23.60,reduceOnly:false,tif:'FOK'});
+    // Entrada: LIMIT GTC al medio (23,20/23,60 -> 23,40), ya no FOK al ask.
+    {symbol:SYMBOL,side:'BUY',qty:.01,price:23.40,reduceOnly:false,tif:'GTC'});
   // Binance acknowledgement is not a fill: no position yet.
   assert.equal(f.positions.length,0);
   // The exchange-level open-order guard must block a second BUY before
@@ -281,7 +287,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   await assert.rejects(f.runEntry(2),/manual reconciliation required/);
   assert.equal(f.broker.length,1);
 
-  f.setFill(f.broker[0],.01,23.60,8001);
+  f.setFill(f.broker[0],.01,23.40,8001);
   const reconciled=await f.engine.reconcilePending();
   assert.equal(reconciled.errors,0);
   assert.equal(f.positions.filter(p=>p.quantity>0).length,1);
@@ -290,7 +296,7 @@ test('PILOT E2E: exact ETH BUY -> verified fill -> resting TP -> stop cancels TP
   assert.equal(f.broker[1].reduceOnly,true);
   assert.equal(f.broker[1].timeInForce,'GTC');
   assert.equal(f.broker[1].quantity,.01);
-  assert.equal(f.broker[1].price,35.40);
+  assert.equal(f.broker[1].price,35.10,'TP +50 % sobre el fill real al medio (23,40)');
   assert.equal((await f.engine.reconcilePending()).protectionSent.sent,0);
 
   f.setQuote({bid:11.70,ask:12,mark:23.50});
@@ -344,25 +350,27 @@ test('24-hour pre-expiry exit takes precedence even when price unavailable',()=>
 test('partial fill below minimum executable lot is flagged; no fictitious TP',async()=>{
   const f=harness();
   await f.runEntry();
-  f.setFill(f.broker[0],.005,23.60,8011);
+  f.setFill(f.broker[0],.005,23.40,8011);
   const result=await f.engine.reconcilePending();
-  assert.equal(result.errors,1,'FOK partial must raise an incident after confirmed trades');
+  // Entrada GTC: un parcial no es una anomalía FOK; el fill confirmado se
+  // contabiliza y la orden sigue reposando. El resto inoperable lo trata
+  // la supervisión de entradas (bloqueo por subyacente), no la atención.
+  assert.equal(result.errors,0,'GTC open partial is not an FOK anomaly');
   assert.equal(result.protection.queued,0);
   assert.equal(f.positions[0].quantity,.005);
-  assert.ok(f.records.some(o=>o.action==='open'&&o.status==='attention'));
-  assert.ok(f.warnings.includes('options_live_reconciliation_failed'));
+  assert.ok(f.records.some(o=>o.action==='open'&&o.status==='active'&&o.processedQty===.005));
   assert.equal(f.broker.length,1,'cannot place invalid 0.005 option TP');
   assert.ok(f.warnings.includes('options_tp_coverage_pending'));
   assert.ok(f.notices.some(n=>n.includes('TP aún no protegido')));
   // Fail-closed: this simulation DOES NOT certify unattended live rollout.
 });
 
-test('FOK rejected without any fill creates no position and still exhausts one-shot entry',async()=>{
+test('GTC entry canceled without any fill creates no position and still exhausts one-shot entry',async()=>{
   const f=harness();
   const entry=await f.runEntry();
   assert.equal(entry.status,'submitted');
-  assert.equal(f.broker[0].timeInForce,'FOK');
-  f.broker[0].status='EXPIRED';
+  assert.equal(f.broker[0].timeInForce,'GTC');
+  f.broker[0].status='CANCELED';
   f.broker[0].executedQty=0;
   const outcome=await f.engine.reconcilePending();
   assert.equal(outcome.errors,0);
