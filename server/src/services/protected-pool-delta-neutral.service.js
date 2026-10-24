@@ -1398,18 +1398,15 @@ class ProtectedPoolDeltaNeutralService {
   }
 
   async _persistBusyLockForce(protection, options) {
-    const current = await this.repo.getById(protection.userId, protection.id);
-    if (!current || current.status !== 'active') return;
-    const state = normalizeStrategyState(current.strategyState);
-    await this.repo.updateStrategyState(current.userId, current.id, {
-      strategyState: {
-        ...state,
-        pendingForceReason: options.forceReason || state.pendingForceReason || 'forced',
-      },
-      // El repo sobreescribe estas dos columnas con NULL si no se pasan.
-      cooldownReason: current.cooldownReason,
-      lastDecisionReason: current.lastDecisionReason,
-    });
+    // Solo `pendingForceReason`, con merge atomico en SQL: leer y reescribir el
+    // estado entero pisaria lo que el titular del lock escriba entre medias.
+    // Residual: un titular a mitad de tick aun puede sobrescribir la senal con
+    // su propio nextState (solo posible entre procesos).
+    await this.repo.setPendingForceReason(
+      protection.userId,
+      protection.id,
+      options.forceReason || 'forced',
+    );
   }
 
   async _continueDeactivation(protection, context = {}) {

@@ -324,6 +324,9 @@ test('un tick sin forzado no deja senal pendiente en las salidas tempranas', asy
 test('lock distribuido ocupado conserva la senal forzada', async () => {
   const protection = buildProtection({ strategyState: {} });
   const service = buildService(protection);
+  const calls = [];
+  service.repo.setPendingForceReason = async (...args) => { calls.push(args); };
+  service.repo.updateStrategyState = async () => { throw new Error('no debe reescribir el estado entero'); };
   service.useDistributedLocks = true;
   service._db = {
     pool: {
@@ -335,7 +338,7 @@ test('lock distribuido ocupado conserva la senal forzada', async () => {
   };
   const result = await service.evaluateProtection(protection, FORCE);
   assert.equal(result, null);
-  assert.equal(protection.strategyState.pendingForceReason, 'lp_range_changed');
+  assert.deepEqual(calls, [[1, 55, 'lp_range_changed']]);
 });
 
 test('lock ocupado sin forzado no escribe estado', async () => {
@@ -346,5 +349,44 @@ test('lock ocupado sin forzado no escribe estado', async () => {
     pool: { connect: async () => ({ query: async () => ({ rows: [{ acquired: false }] }), release: () => {} }) },
   };
   await service.evaluateProtection(protection);
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+});
+
+test('net_profit: forzado rehidratado bajo el minimo se resuelve en hold y no se repite', async () => {
+  const base = {
+    policyVersion: 'net_profit_v1',
+    targetHedgeRatio: 0.6,
+    strategyState: {
+      lastRebalanceAt: Date.now() - (13 * 60 * 60_000),
+      lastSnapshotPrice: PRICE,
+      modelConfidence: 'high',
+      executionIntent: 'live',
+      policyVersion: 'net_profit_v1',
+    },
+  };
+  // Sonda: el objetivo que fija el modelo para este LP.
+  let target = null;
+  const probe = buildProtection(JSON.parse(JSON.stringify(base)));
+  await buildService(probe, { actualQty: 0, centerDeadZonePct: 0, onExecute: (_r, { metrics }) => { target = metrics.deltaQty; } })
+    .evaluateProtection(probe);
+  assert.ok(target > 0.01);
+
+  const protection = buildProtection({
+    ...base,
+    strategyState: { ...base.strategyState, pendingForceReason: 'lp_range_changed' },
+  });
+  let executions = 0;
+  // |delta - actual| ~ $2.5, bajo el minimo de $11.
+  const service = buildService(protection, {
+    actualQty: target - 0.001, centerDeadZonePct: 0, onExecute: () => { executions += 1; },
+  });
+  const first = await service.evaluateProtection(protection);
+  assert.equal(executions, 0);
+  assert.equal(first.netProfitPolicyGate, 'forced_within_min_notional');
+  assert.equal(protection.strategyState.pendingForceReason ?? null, null);
+
+  const second = await service.evaluateProtection(protection);
+  assert.equal(executions, 0);
+  assert.notEqual(second.netProfitPolicyGate, 'forced');
   assert.equal(protection.strategyState.pendingForceReason ?? null, null);
 });
