@@ -113,12 +113,18 @@ function entryDirection(side, symbol, optionType) {
   return positionDirection({ side, type });
 }
 
-/** Real: órdenes de entrada no finales y con cantidad por ejecutar en `underlying`. */
+/**
+ * Real: órdenes de entrada no finales y con cantidad por ejecutar en
+ * `underlying`. Una con la cancelación ya pedida tiene sentido desconocido
+ * (null): la señal que pidió cancelarla espera en cola, y una señal
+ * posterior debe encolar su propia reevaluación en vez de darla por ocupada.
+ */
 function livePendingEntries(orders, underlying) {
   return orders.filter((o) => o.action === 'open' && o.status !== 'final'
     && Number(o.quantity) - Number(o.processedQty || 0) > 0
     && positionUnderlying(o) === underlying)
-    .map((o) => ({ id: Number(o.id), direction: entryDirection(o.side, o.symbol, o.optionType) }));
+    .map((o) => ({ id: Number(o.id),
+      direction: o.cancelRequested ? null : entryDirection(o.side, o.symbol, o.optionType) }));
 }
 
 /** Sombra: entradas simuladas aún 'pending' en `underlying`. */

@@ -344,7 +344,7 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
     }
     return db.transaction(async (tx) => {
       const { rows: [owner] } = await tx.query(
-        'SELECT id,user_id,mode,template FROM options_strategies WHERE id=$1 FOR UPDATE', [strategy.id]
+        'SELECT id,user_id,mode,template,underlying FROM options_strategies WHERE id=$1 FOR UPDATE', [strategy.id]
       );
       if (!owner || Number(owner.user_id) !== Number(strategy.userId) ||
           owner.mode !== 'live' || owner.template !== 'alert_signal') return false;
@@ -362,12 +362,35 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
         underlying: signal.underlying ?? null,
         ...signalIdOf(signal),
       };
+      // Solo la señal más reciente decide el subyacente: una reevaluación
+      // anterior aún pendiente (p. ej. B bajista mientras llega C alcista)
+      // queda sustituida y su señal se resuelve como ignorada.
+      const at = now();
+      const fallback = String(owner.underlying ?? '').toUpperCase();
+      const target = String(signal.underlying ?? fallback).toUpperCase();
+      const { rows: superseded } = await tx.query(
+        `UPDATE options_live_reentries SET status='expired',updated_at=$5
+          WHERE strategy_id=$1 AND kind='reevaluate' AND status='pending' AND alert_event_id<>$2
+            AND UPPER(COALESCE(signal->>'underlying',$4::text))=$3::text
+          RETURNING signal`,
+        [strategy.id, eventId, target, fallback, at]
+      );
+      const supersededIds = superseded
+        .map((r) => signalIdOf(typeof r.signal === 'string' ? JSON.parse(r.signal) : r.signal).signalId)
+        .filter((id) => id != null);
+      if (supersededIds.length) {
+        await tx.query(
+          `UPDATE options_auto_signals SET decision='ignored',detail=$3
+            WHERE id=ANY($1::bigint[]) AND strategy_id=$2 AND decision='pending'`,
+          [supersededIds, strategy.id, 'Real: sustituida por una señal posterior']
+        );
+      }
       await tx.query(
         `INSERT INTO options_live_reentries
          (strategy_id,user_id,alert_event_id,signal,wait_position_ids,kind,wait_order_ids,created_at,updated_at)
          VALUES ($1,$2,$3,$4::jsonb,'{}'::bigint[],'reevaluate',$5::bigint[],$6,$6)
          ON CONFLICT (strategy_id,alert_event_id) DO NOTHING`,
-        [strategy.id, strategy.userId, eventId, JSON.stringify(savedSignal), ids, now()]
+        [strategy.id, strategy.userId, eventId, JSON.stringify(savedSignal), ids, at]
       );
       return true;
     });

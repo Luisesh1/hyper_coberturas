@@ -276,6 +276,7 @@ function reentriesDb({ orders }) {
       return { rows: orders.filter((o) => args[0].includes(o.id) && o.user_id === args[1] && o.strategy_id === args[2])
         .map((o) => ({ id: String(o.id) })) };
     }
+    if (sql.startsWith('UPDATE options_live_reentries')) return { rows: [] };
     if (sql.includes('INSERT INTO options_live_reentries')) {
       if (reentries.some((r) => r.strategy_id === args[0] && r.alert_event_id === args[2])) return { rows: [] };
       reentries.push({ id: reentries.length + 1, strategy_id: args[0], user_id: args[1], alert_event_id: args[2],
@@ -324,6 +325,51 @@ test('queueSignalReevaluation no es ready mientras una orden de espera no es fin
   await repo.queueSignalReevaluation({ id: 4, userId: 7 },
     { eventId: '9002', direction: 'bearish', underlying: 'ETH' }, [9]);
   assert.equal(db.reentries.length, 1);
+});
+
+test('queueSignalReevaluation: una señal nueva sustituye la reevaluación pendiente del mismo subyacente', async () => {
+  const calls = [];
+  const rows = [
+    { id: 1, strategy_id: 4, alert_event_id: '9002', kind: 'reevaluate', status: 'pending',
+      signal: { eventId: '9002', direction: 'bearish', underlying: 'BTC', signalId: 61 } },
+    { id: 2, strategy_id: 4, alert_event_id: '9003', kind: 'reevaluate', status: 'pending',
+      signal: { eventId: '9003', direction: 'bearish', underlying: 'ETH', signalId: 62 } },
+  ];
+  const query = async (sql, args) => {
+    calls.push({ sql, args });
+    if (sql.includes('FROM options_strategies') && sql.includes('FOR UPDATE')) {
+      return { rows: [{ id: 4, user_id: 7, mode: 'live', template: 'alert_signal', underlying: 'BTC' }] };
+    }
+    if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+    if (sql.includes('FROM options_live_orders') && sql.includes('FOR UPDATE')) return { rows: [{ id: '9' }] };
+    if (sql.startsWith('UPDATE options_live_reentries')) {
+      assert.match(sql, /kind='reevaluate' AND status='pending'/);
+      assert.match(sql, /alert_event_id<>\$2/);
+      const hit = rows.filter((r) => r.strategy_id === args[0] && r.alert_event_id !== args[1] &&
+        r.kind === 'reevaluate' && r.status === 'pending' &&
+        String(r.signal.underlying ?? args[3]).toUpperCase() === args[2]);
+      hit.forEach((r) => { r.status = 'expired'; });
+      return { rows: hit.map((r) => ({ signal: r.signal })) };
+    }
+    if (sql.startsWith('UPDATE options_auto_signals')) return { rows: [] };
+    if (sql.includes('INSERT INTO options_live_reentries')) return { rows: [{ id: 3 }] };
+    throw new Error('Unexpected SQL: ' + sql);
+  };
+  const repo = createOptionsLiveOrdersRepository({ db: { transaction: (fn) => fn({ query }) }, now: () => 5000 });
+  assert.equal(await repo.queueSignalReevaluation({ id: 4, userId: 7 },
+    { eventId: '9010', direction: 'bullish', underlying: 'btc', signalId: 70 }, [9]), true);
+  assert.deepEqual(rows.map((r) => r.status), ['expired', 'pending']);
+  const resolve = calls.find((c) => c.sql.startsWith('UPDATE options_auto_signals'));
+  assert.match(resolve.sql, /decision='pending'/);
+  assert.match(resolve.sql, /strategy_id=\$2/);
+  assert.deepEqual(resolve.args[0], [61]);
+  assert.equal(resolve.args[2], 'Real: sustituida por una señal posterior');
+  // Sustituir y encolar en la misma transacción, bajo el lock de usuario.
+  const order = calls.map((c) => c.sql);
+  assert.ok(order.findIndex((q) => q.includes('pg_advisory_xact_lock')) <
+    order.findIndex((q) => q.startsWith('UPDATE options_live_reentries')));
+  assert.ok(order.findIndex((q) => q.startsWith('UPDATE options_live_reentries')) <
+    order.findIndex((q) => q.includes('INSERT INTO options_live_reentries')));
 });
 
 test('queueSignalReevaluation valida evento, órdenes propias y estrategia viva', async () => {

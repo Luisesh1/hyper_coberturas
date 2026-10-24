@@ -863,6 +863,20 @@ test('pendingEntries: dirección por lado y tipo, solo del subyacente evaluado',
   }
 });
 
+test('una entrada con la cancelación ya pedida tiene sentido desconocido: la señal posterior encola su propia reevaluación', async () => {
+  // A alcista en reposo; B bajista pidió cancelarla. C alcista llega antes de que A sea final:
+  // no puede quedar «ocupado» (la reevaluación de B abriría bajista), C se encola.
+  const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+  const calls = cancelEnv(env, { orders: [pendingEntry(env.strategy.id,
+    { id: 11, symbol: 'BTC-261023-65000-C', cancelRequested: true })] });
+  const signal = { eventId: '503', direction: 'bullish', signalId: 79 };
+  const { actions } = await env.runner.runForSignal(env.strategy, signal);
+  assert.deepEqual(actions.live.map((a) => a.type), ['cancel_entries']);
+  assert.equal(actions.live[0].reevaluate, true);
+  assert.deepEqual(calls.queue, [{ strategyId: env.strategy.id, signal, ids: [11] }]);
+  assert.equal(env.credentials.orders.length, 0);
+});
+
 test('cancel_entries shadow cancels at once and the evaluation continues', async () => {
   const repo = createFakeOptionsRepo({ now: () => FRIDAY_9 });
   const canceled = [];
