@@ -107,6 +107,7 @@ test('GET /:id trae pendingEntries sombra con deadlineAt y bid/ask; GET lista tr
       assert.equal(listed.feesUsdt, 0);
       assert.deepEqual(listed.pendingEntry, { deadlineAt });
       assert.equal(listed.blocked, false);
+      assert.equal(listed.pendingEntryUnknown, false);
     });
   } finally { restore(); }
 });
@@ -139,6 +140,20 @@ test('GET /:id/signals trae feesUsdt y feesEstimated', async () => {
       const sig = (await call('GET', `/auto-bots/${bot.id}/signals`)).json.data[0];
       assert.equal(sig.feesUsdt, 1.25);
       assert.equal(sig.feesEstimated, true);
+    });
+  } finally { restore(); }
+});
+
+test('GET /auto-bots: si falla la consulta de entradas pendientes, pendingEntryUnknown es true y no se finge que no hay', async () => {
+  const shadowEntries = { async listPending() { throw new Error('db caída'); } };
+  const { restore } = useFakeServices({ shadowEntries });
+  try {
+    await withServer(async (call) => {
+      await call('POST', '/auto-bots', validBot);
+      const res = await call('GET', '/auto-bots');
+      assert.equal(res.status, 200);
+      assert.equal(res.json.data[0].pendingEntry, null);
+      assert.equal(res.json.data[0].pendingEntryUnknown, true);
     });
   } finally { restore(); }
 });

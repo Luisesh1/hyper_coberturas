@@ -322,17 +322,23 @@ function createOptionsAutoTradingService(deps = {}) {
       const book = bot.mode === 'live' ? 'live' : 'shadow';
       const positions = (await repo.listPositions(bot.id)) || [];
       let deadlines = [];
+      let pendingEntryUnknown = false;
       try {
         deadlines = book === 'live'
           ? (await liveOrders.listByStrategy(bot.id)).filter((o) => o.action === 'open' && o.status !== 'final').map((o) => o.deadlineAt)
           : (await shadowEntries.listPending({ strategyId: bot.id })).map((e) => e.deadlineAt);
-      } catch { deadlines = []; }
+      } catch (err) {
+        deadlines = [];
+        pendingEntryUnknown = true;
+        log.warn('options_bot_pending_lookup_failed', { strategyId: bot.id, error: err.message });
+      }
       deadlines = deadlines.filter((d) => d != null);
       return {
       ...bot,
       pnlSeries: dailyPnlSeries(positions, book, now()),
       feesUsdt: Math.round(positions.filter((p) => p.mode === book).reduce((a, p) => a + (p.feesUsdt || 0), 0) * 100) / 100,
       pendingEntry: deadlines.length ? { deadlineAt: Math.min(...deadlines) } : null,
+      pendingEntryUnknown,
       blocked: Object.keys(bot.state?.blockedUnderlyings || {}).length > 0,
       underlyings: botUnderlyings(bot),
       alerts: (bot.params?.alertIds || [])
