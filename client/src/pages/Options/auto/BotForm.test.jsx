@@ -61,6 +61,12 @@ describe('BotForm · modos Simple, Avanzado y Presets', () => {
     expect(onSubmit.mock.calls[0][0].params).toMatchObject({ capitalUsdt: 10, quantity: 1 });
   });
 
+  it('un bot nuevo nace con el preset Rápido', () => {
+    render(<MemoryRouter><BotForm open underlying="BTC" onCancel={() => {}} onSubmit={() => {}} /></MemoryRouter>);
+    expect(screen.getByText('Preset: Rápido')).toBeTruthy();
+    expect(screen.getAllByText('Más cercana al precio · venc. ~2 d').length).toBe(2);
+  });
+
   it('recuerda el último modo al volver a abrir', () => {
     const { unmount } = render(<MemoryRouter><BotForm open bot={bot('fixed', [])} underlying="ETH" onCancel={() => {}} onSubmit={() => {}} /></MemoryRouter>);
     toMode('Avanzado');

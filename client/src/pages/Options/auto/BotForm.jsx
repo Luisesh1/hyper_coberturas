@@ -89,11 +89,16 @@ function readMode() {
   }
 }
 
+// Formulario inicial: un bot nuevo nace con el preset «Rápido».
+function startForm(bot, underlying) {
+  return bot ? initialBotForm({ bot, underlying }) : applyPreset(initialBotForm({ underlying }), 'fast');
+}
+
 // Crear o editar un bot. Los subyacentes son de selección múltiple; quitar
 // uno con posiciones abiertas lo rechaza el servidor (409) y se muestra aquí.
 export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel, onSubmit }) {
   const editing = !!bot;
-  const [form, setForm] = useState(() => initialBotForm({ bot, underlying }));
+  const [form, setForm] = useState(() => startForm(bot, underlying));
   const [errors, setErrors] = useState({});
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -105,7 +110,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
 
   useEffect(() => {
     if (!open) return;
-    setForm(initialBotForm({ bot, underlying: UNDERLYINGS.includes(underlying) ? underlying : 'BTC' }));
+    setForm(startForm(bot, UNDERLYINGS.includes(underlying) ? underlying : 'BTC'));
     setErrors({});
     setSubmitted(false);
     setServerError(null);
