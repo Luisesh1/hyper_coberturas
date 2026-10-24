@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
-  describeParams, coveredList, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  describeParams, coveredList, botStatus, flowSteps, feeSummary, ladder, signalFeeText, formatCountdown, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 
 describe('buildMapping', () => {
@@ -435,5 +435,122 @@ describe('varios subyacentes', () => {
     const a = normalizeAlert({ id: 3, name: 'A', direction: 'bullish', assetList: ['BTCUSDT', 'ETHUSDT'] });
     expect(coveredList(a, ['BTC', 'ETH', 'SOL'])).toEqual(['BTC', 'ETH']);
     expect(coveredList({ ...a, coveredUnderlyings: ['ETH'] }, ['BTC', 'ETH'])).toEqual(['ETH']);
+  });
+});
+
+describe('botStatus', () => {
+  const now = 1_800_000_000_000;
+  const pendingDetail = { pendingEntries: [{ id: 1, symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.35, limitPrice: 712, deadlineAt: now + 372_000 }] };
+  it('entrada pendiente a 6:12 → pending con progreso ≈ 0,62', () => {
+    const s = botStatus({ mode: 'live' }, pendingDetail, now);
+    expect(s.kind).toBe('pending');
+    expect(s.remainingMs).toBe(372_000);
+    expect(s.progress).toBeCloseTo(0.62);
+    expect(s.title).toContain('0,35');
+    expect(s.title).toContain('BTC-261031-70000-C');
+    expect(formatCountdown(s.remainingMs)).toBe('6:12');
+  });
+  it('bloqueo gana a posición y entrada pendiente', () => {
+    const detail = { ...pendingDetail, blockedUnderlyings: { BTC: { reason: 'x', at: 1 } }, positions: [{ closedAt: null }] };
+    expect(botStatus({ mode: 'live' }, detail, now).kind).toBe('blocked');
+    expect(botStatus({ mode: 'live', blocked: true }, null, now).kind).toBe('blocked');
+  });
+  it('posición abierta, espera y pausa', () => {
+    expect(botStatus({ mode: 'live' }, { positions: [{ closedAt: null }] }, now).kind).toBe('position');
+    expect(botStatus({ mode: 'live', status: 'in_position' }, null, now).kind).toBe('position');
+    expect(botStatus({ mode: 'live', status: 'waiting' }, null, now).kind).toBe('waiting');
+    expect(botStatus({ mode: 'paused' }, null, now).kind).toBe('paused');
+  });
+  it('lista con pendingEntry {deadlineAt} y sin detalle', () => {
+    const s = botStatus({ mode: 'shadow', pendingEntry: { deadlineAt: now + 600_000 } }, null, now);
+    expect(s.kind).toBe('pending');
+    expect(s.progress).toBe(1);
+    expect(botStatus({ mode: 'shadow', pendingEntry: { deadlineAt: now - 5 } }, null, now).progress).toBe(0);
+  });
+  it('estado de entrada desconocido no afirma que no haya entrada', () => {
+    const s = botStatus({ mode: 'live', pendingEntryUnknown: true }, null, now);
+    expect(s.kind).toBe('waiting');
+    expect(s.detail).toBe('Estado de la entrada desconocido');
+  });
+});
+
+describe('flowSteps', () => {
+  const bot = {
+    structure: 'buy_with', alerts: [{ name: 'MACD cruce 15m', thresholdPercent: 70 }],
+    params: { structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12 },
+  };
+  it('cuatro pasos como la maqueta', () => {
+    const steps = flowSteps(bot);
+    expect(steps.map((s) => s.key)).toEqual(['signal', 'contract', 'entry', 'exit']);
+    expect(steps.map((s) => s.title)).toEqual(['Señal', 'Contrato', 'Entrada', 'Salida']);
+    expect(steps[0].subtitle).toBe('MACD cruce 15m · umbral 70 %');
+    expect(steps[1].value).toBe('Compra call / put');
+    expect(steps[1].subtitle).toBe('Δ ≈ 0,35 · vence ~7 d');
+    expect(steps[2].value).toBe('GTC al precio medio');
+    expect(steps[2].subtitle).toBe('espera 10 min; si no, se cancela');
+    expect(steps[3].value).toBe('TP +80 % · Stop −50 %');
+    expect(steps[3].subtitle).toBe('o 12 h antes del vencimiento');
+  });
+  it('banda ATR: TP banda ATR (GTC)', () => {
+    const steps = flowSteps({ ...bot, params: { ...bot.params, takeProfitMode: 'atr_band' } });
+    expect(steps[3].value).toBe('TP banda ATR (GTC)');
+  });
+});
+
+describe('feeSummary / signalFeeText', () => {
+  it('porcentaje y desglose en orden', () => {
+    const f = feeSummary({ feesUsdt: 31.85, premiumUsdt: 690, feeBreakdown: { entryUsdt: 18.2, exitUsdt: 11.05, exerciseUsdt: 2.6, unallocatedUsdt: 0 } });
+    expect(f.total).toBe(31.85);
+    expect(f.pct).toBeCloseTo(4.6, 1);
+    expect(f.label).toBe('4,6 % de la prima operada');
+    expect(f.parts.map((p) => [p.key, p.label, p.usdt])).toEqual([
+      ['entry', 'entrada', 18.2], ['exit', 'salida', 11.05], ['exercise', 'ejercicio', 2.6],
+    ]);
+  });
+  it('sin desglose histórico solo si > 0; prefiere feesPctOfPremium', () => {
+    const f = feeSummary({ feesUsdt: 10, feesPctOfPremium: 2.5, feeBreakdown: { entryUsdt: 1, exitUsdt: 2, exerciseUsdt: 0, unallocatedUsdt: 7 } });
+    expect(f.pct).toBe(2.5);
+    expect(f.parts.at(-1)).toEqual({ key: 'unallocated', label: 'sin desglose (histórico)', usdt: 7 });
+  });
+  it('sin datos', () => {
+    const f = feeSummary({});
+    expect(f.pct).toBeNull();
+    expect(f.parts).toEqual([]);
+  });
+  it('signalFeeText y normalizeSignal', () => {
+    expect(signalFeeText({ feesUsdt: 7.14, feesEstimated: true })).toBe('Comisión est. 7,14 USDT');
+    expect(signalFeeText({ feesUsdt: 4.08, feesEstimated: false })).toBe('Comisión 4,08 USDT');
+    expect(signalFeeText({ feesUsdt: null })).toBeNull();
+    const s = normalizeSignals([{ id: 1, decision: 'opened', feesUsdt: 4.08, feesEstimated: true }])[0];
+    expect(s.feesUsdt).toBe(4.08);
+    expect(s.feesEstimated).toBe(true);
+    expect(normalizeSignals([{ id: 2, decision: 'opened' }])[0].feesUsdt).toBeNull();
+  });
+});
+
+describe('ladder', () => {
+  it('compra: límite entre bid y ask, ahorro frente al ask', () => {
+    const l = ladder({ side: 'BUY', bid: 700, ask: 725, limitPrice: 712 });
+    expect(l.bidPct).toBe(0);
+    expect(l.askPct).toBe(100);
+    expect(l.midPct).toBeCloseTo(48);
+    expect(l.savingPerContract).toBe(13);
+  });
+  it('venta: ahorro frente al bid; datos incompletos → null', () => {
+    expect(ladder({ side: 'SELL', bid: 700, ask: 725, limitPrice: 713 }).savingPerContract).toBe(13);
+    expect(ladder({ side: 'BUY', bid: null, ask: 725, limitPrice: 712 })).toBeNull();
+  });
+});
+
+describe('normalizeBot (campos de la lista)', () => {
+  it('pnlSeries, comisiones y entrada pendiente', () => {
+    const b = normalizeBot({ id: 1, mode: 'live', pnlSeries: [1, 2], feesUsdt: 5.43, pendingEntry: { deadlineAt: 5 }, blocked: true });
+    expect(b.pnlSeries).toEqual([1, 2]);
+    expect(b.feesUsdt).toBe(5.43);
+    expect(b.pendingEntry.deadlineAt).toBe(5000);
+    expect(b.blocked).toBe(true);
+    expect(b.pendingEntryUnknown).toBe(false);
+    expect(normalizeBot({ id: 2 }).pnlSeries).toEqual([]);
+    expect(normalizeBot({ id: 2 }).pendingEntry).toBeNull();
   });
 });

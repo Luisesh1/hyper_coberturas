@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closedTradeRows, openPositionRows, pendingOrderRows, usageRows } from './botActivity';
+import { pendingEntryRows, closedTradeRows, openPositionRows, pendingOrderRows, usageRows } from './botActivity';
 
 const buyPos = { id: 1, mode: 'shadow', symbol: 'ETH-251031-2500-C', side: 'BUY', quantity: 0.01, entryPrice: 10, openedAt: 1 };
 
@@ -120,5 +120,34 @@ describe('closedTradeRows', () => {
     ];
     const rows = closedTradeRows({ closedPositions: closed }, 'shadow');
     expect(rows.map((r) => r.reasonLabel)).toEqual(['Stop', '—']);
+  });
+});
+
+describe('pendingEntryRows', () => {
+  const now = 1_800_000_000_000;
+  it('fila con cuenta atrás, ejecutado, escalera y comisión estimada', () => {
+    const [r] = pendingEntryRows({ pendingEntries: [{ id: 'a', mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.35, executedQty: 0, limitPrice: 712, deadlineAt: now + 372_000, bid: 700, ask: 725, feesEstUsdt: 7.14 }] }, now);
+    expect(r.sideLabel).toBe('Comprar');
+    expect(r.countdown).toBe('6:12');
+    expect(r.progress).toBeCloseTo(0.62);
+    expect(r.filled).toBe('0 de 0,35');
+    expect(r.ladder.savingPerContract).toBe(13);
+    expect(r.feeText).toBe('Comisión est. 7,14 USDT');
+  });
+  it('sin pendientes → []', () => {
+    expect(pendingEntryRows({}, now)).toEqual([]);
+  });
+});
+
+describe('comisiones por fila', () => {
+  it('cerradas suman entrada + salida + ejercicio', () => {
+    const [r] = closedTradeRows({ closedPositions: [{ id: 1, mode: 'shadow', entryFeeUsdt: 1, exitFeeUsdt: 2, exerciseFeeUsdt: null }] }, 'shadow');
+    expect(r.feesUsdt).toBe(3);
+    const [n] = closedTradeRows({ closedPositions: [{ id: 2, mode: 'shadow' }] }, 'shadow');
+    expect(n.feesUsdt).toBeNull();
+  });
+  it('abiertas exponen feesUsdt', () => {
+    const [r] = openPositionRows({ positions: [{ ...buyPos, entryFeeUsdt: 0.5 }], params: {} }, 'shadow');
+    expect(r.feesUsdt).toBe(0.5);
   });
 });

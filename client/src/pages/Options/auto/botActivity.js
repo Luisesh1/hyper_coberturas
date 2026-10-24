@@ -1,7 +1,8 @@
 // Vistas puras del detalle de un bot: posiciones abiertas, órdenes vivas,
 // uso de límites y operaciones cerradas. Sin acceso a red ni al reloj salvo
 // el parámetro `now` (para poder probarlas).
-import { formatNumber, toNumber, tone } from '../strategies/common/format';
+import { formatNumber, toMs, toNumber, tone } from '../strategies/common/format';
+import { entryProgress, formatCountdown, ladder, signalFeeText } from './botView';
 
 export const REASON_LABEL = {
   take_profit: 'Toma de ganancia',
@@ -18,6 +19,12 @@ const isSell = (side) => String(side || '').toUpperCase() === 'SELL';
 const sideLabel = (side) => (isSell(side) ? 'Vender' : String(side || '').toUpperCase() === 'BUY' ? 'Comprar' : '—');
 const round = (n) => Math.round(n * 1e8) / 1e8;
 const list = (v) => (Array.isArray(v) ? v : []);
+
+// Suma de las comisiones conocidas de una posición; null si no hay ninguna.
+function positionFees(p) {
+  const parts = [p.entryFeeUsdt, p.exitFeeUsdt, p.exerciseFeeUsdt].map(toNumber).filter((n) => n !== null);
+  return parts.length ? round(parts.reduce((a, b) => a + b, 0)) : null;
+}
 
 // Vencimiento de Binance: 08:00 UTC del día YYMMDD del símbolo.
 function expiryMs(symbol) {
@@ -76,6 +83,7 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
         stopPrice,
         tpBreakdown: atrBand ? atrBandBreakdown(p) : null,
         hoursToExpiry: exp === null ? null : Math.max(0, Math.round((exp - now) / 3600000)),
+        feesUsdt: positionFees(p),
         tone: tone(pnlUsdt),
       };
     });
@@ -162,5 +170,32 @@ export function closedTradeRows(detail = {}, mode = 'shadow') {
       exit: toNumber(p.exitPrice),
       pnlUsdt: toNumber(p.pnlUsdt),
       reasonLabel: REASON_LABEL[p.closeReason] || '—',
+      feesUsdt: positionFees(p),
     }));
+}
+
+// Entradas GTC al medio en espera (sombra y real), con cuenta atrás.
+export function pendingEntryRows(detail = {}, now = Date.now()) {
+  return list(detail.pendingEntries).map((e) => {
+    const deadlineAt = toMs(e.deadlineAt);
+    const remainingMs = deadlineAt === null ? 0 : Math.max(0, deadlineAt - now);
+    const n = (v) => formatNumber(v ?? 0, { decimals: 4, minDecimals: 0 });
+    return {
+      id: e.id,
+      mode: e.mode || 'shadow',
+      symbol: e.symbol,
+      sideLabel: sideLabel(e.side),
+      quantity: toNumber(e.quantity),
+      limitPrice: toNumber(e.limitPrice),
+      bid: toNumber(e.bid),
+      ask: toNumber(e.ask),
+      deadlineAt,
+      remainingMs,
+      countdown: formatCountdown(remainingMs),
+      progress: entryProgress(remainingMs),
+      filled: `${n(e.executedQty)} de ${n(e.quantity)}`,
+      ladder: ladder(e),
+      feeText: signalFeeText({ feesUsdt: e.feesEstUsdt, feesEstimated: true }),
+    };
+  });
 }
