@@ -6,7 +6,8 @@ import KpiCards from './KpiCards';
 import PositionRange from './PositionRange';
 import SignalsTimeline from './SignalsTimeline';
 import Sparkline from './Sparkline';
-import { kpiCardsModel, relativeTime, signalOutcome } from './visualModel';
+import PendingBanner from './PendingBanner';
+import { contractShort, kpiCardsModel, relativeTime, signalOutcome } from './visualModel';
 import BotList from '../BotList';
 import { botStatus, flowSteps, normalizeBot, normalizeSignals } from '../botView';
 import { pendingEntryRows } from '../botActivity';
@@ -129,6 +130,22 @@ describe('KpiCards', () => {
     expect(screen.getByText('Operaciones hoy 2 / 4')).toBeTruthy();
   });
 
+  it('compacto (teléfono): 2×2 con mini curva, «Comisiones» con % de la prima, acierto y presupuesto con barra', () => {
+    const { container } = render(<KpiCards model={kpiCardsModel(bot, NOW)} compact />);
+    expect(screen.getByText('P&L neto 30 d')).toBeTruthy();
+    expect(screen.getByLabelText(/Curva de P&L 30 días/)).toBeTruthy();
+    expect(screen.getByText('Comisiones')).toBeTruthy();
+    expect(screen.getByText('4,6 % de la prima')).toBeTruthy();
+    expect(screen.getByLabelText('66,7 % de acierto')).toBeTruthy();
+    expect(screen.getByText('6 de 9')).toBeTruthy();
+    expect(screen.getByText('2 fracciones libres')).toBeTruthy();
+    expect(screen.getByLabelText(/^Presupuesto:/)).toBeTruthy();
+    // Sin desgloses ni leyendas en el teléfono.
+    expect(screen.queryByText('entrada 18,20')).toBeNull();
+    expect(screen.queryByText('— real +214,60')).toBeNull();
+    expect(container.querySelectorAll('[role="img"]').length).toBeGreaterThanOrEqual(4);
+  });
+
   it('con pocas operaciones el acierto es n/a', () => {
     const few = { ...bot, kpis: { live: { cycles: 2, winRatePct: 50, closedTrades: 2 } } };
     render(<KpiCards model={kpiCardsModel(few, NOW)} />);
@@ -226,5 +243,46 @@ describe('BotList', () => {
     const { container } = render(<BotList bots={bots} selectedId={2} onSelect={() => {}} />);
     expect(container.querySelector('[title="Sombra"]')).toBeTruthy();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('PendingBanner', () => {
+  const bots = [
+    normalizeBot({ id: 1, name: 'Momentum BTC', mode: 'live', params: {}, alerts: [], pendingEntry: { deadlineAt: NOW + 372_000 } }),
+    normalizeBot({ id: 2, name: 'Lotería', mode: 'paused', params: {}, alerts: [] }),
+  ];
+  const [entry] = pendingEntryRows({ pendingEntries: [ENTRY] }, NOW);
+
+  it('«1 entrada pendiente · 6:12», bot y contrato al límite; cuenta atrás y limpia el temporizador', () => {
+    const onSelect = vi.fn();
+    const { unmount } = render(<PendingBanner bots={bots} entry={{ botId: 1, row: entry }} onSelect={onSelect} />);
+    const btn = screen.getByRole('button', { name: /1 entrada pendiente · 6:12/ });
+    expect(within(btn).getByText('Momentum BTC · C 70.000 a 712')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.getByText('1 entrada pendiente · 6:11')).toBeTruthy();
+    fireEvent.click(btn);
+    expect(onSelect).toHaveBeenCalledWith(1);
+    expect(vi.getTimerCount()).toBe(1);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('sin entradas pendientes no pinta nada ni crea temporizador', () => {
+    const { container } = render(<PendingBanner bots={[bots[1]]} onSelect={() => {}} />);
+    expect(container.firstChild).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('varias: cuenta, la que vence antes, y sin contrato si el detalle no es de ese bot', () => {
+    const two = [...bots, normalizeBot({ id: 3, name: 'ETH swing', mode: 'shadow', params: {}, alerts: [], pendingEntry: { deadlineAt: NOW + 60_000 } })];
+    render(<PendingBanner bots={two} entry={{ botId: 1, row: entry }} onSelect={() => {}} />);
+    expect(screen.getByText('2 entradas pendientes · 1:00')).toBeTruthy();
+    expect(screen.getByText('ETH swing · y 1 más')).toBeTruthy();
+  });
+
+  it('contractShort: tipo y strike', () => {
+    expect(contractShort('BTC-261031-70000-C')).toBe('C 70.000');
+    expect(contractShort('XRP-261031-2.5-P')).toBe('P 2,5');
+    expect(contractShort('raro')).toBe('raro');
   });
 });

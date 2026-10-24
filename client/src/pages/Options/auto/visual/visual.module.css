@@ -204,7 +204,11 @@
 .kpisCompact { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .kpisCompact .kpi { padding: 10px; }
 .kpisCompact .kpiValue { font-size: 17px; }
-.kpisCompact .winRing { width: 36px; height: 36px; }
+.kpisCompact .kpiValueSub { font-size: 12px; }
+.kpisCompact .kpiSub { font-size: 11px; overflow-wrap: anywhere; }
+.kpisCompact .curveEmpty { font-size: 11px; }
+.meterWin { background: var(--green); }
+.meterLoss { background: var(--red-bg); }
 
 /* ── 4 · Posición ─────────────────────────────────────────────── */
 .pos { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -275,6 +279,33 @@
 .evMeta { color: var(--text-tertiary); font-size: 11px; overflow-wrap: anywhere; }
 .evTime { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 .timelineCompact .ev { padding: 7px 0; }
+
+/* ── Banner de entrada pendiente (lista móvil) ────────────────── */
+.banner {
+  --tone: var(--amber);
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--amber-border);
+  background: linear-gradient(90deg, var(--amber-bg), transparent 70%), var(--bg-card);
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.banner:active { background: var(--bg-hover); }
+.banner:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.bannerRing { display: block; }
+.bannerText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bannerTitle { font-size: 14px; font-weight: 650; color: var(--text-bright); font-variant-numeric: tabular-nums; }
+.bannerSub { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── 6 · Sparkline ────────────────────────────────────────────── */
 .spark { display: block; flex: none; overflow: visible; }

@@ -704,8 +704,14 @@ export function botStatus(bot = {}, detail = null, now = Date.now()) {
       progress: entryProgress(remainingMs),
     };
   }
-  const inPosition = Array.isArray(detail?.positions) ? detail.positions.some(isOpenPosition) : bot.status === 'in_position';
-  if (inPosition || bot.status === 'in_position') {
+  // Solo cuentan las posiciones del libro del bot: real → live; sombra y
+  // pausado → shadow. Con detalle manda el detalle; el «in_position» de la
+  // lista solo vale cuando aún no hay detalle.
+  const book = bot.mode === 'live' ? 'live' : 'shadow';
+  const inPosition = Array.isArray(detail?.positions)
+    ? detail.positions.some((p) => isOpenPosition(p) && (p.mode || 'shadow') === book)
+    : bot.status === 'in_position';
+  if (inPosition) {
     return { kind: 'position', title: 'En posición', detail: 'Vigilando el take profit y el stop.' };
   }
   if (bot.mode === 'paused') {

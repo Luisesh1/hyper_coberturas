@@ -456,10 +456,22 @@ describe('botStatus', () => {
     expect(botStatus({ mode: 'live', blocked: true }, null, now).kind).toBe('blocked');
   });
   it('posición abierta, espera y pausa', () => {
-    expect(botStatus({ mode: 'live' }, { positions: [{ closedAt: null }] }, now).kind).toBe('position');
+    expect(botStatus({ mode: 'live' }, { positions: [{ mode: 'live', closedAt: null }] }, now).kind).toBe('position');
+    expect(botStatus({ mode: 'shadow' }, { positions: [{ closedAt: null }] }, now).kind).toBe('position');
     expect(botStatus({ mode: 'live', status: 'in_position' }, null, now).kind).toBe('position');
     expect(botStatus({ mode: 'live', status: 'waiting' }, null, now).kind).toBe('waiting');
     expect(botStatus({ mode: 'paused' }, null, now).kind).toBe('paused');
+  });
+  it('solo cuentan las posiciones abiertas del modo del bot (real → live; sombra/pausado → shadow)', () => {
+    const shadowOnly = { positions: [{ mode: 'shadow', closedAt: null }] };
+    const liveOnly = { positions: [{ mode: 'live', closedAt: null }] };
+    expect(botStatus({ mode: 'live' }, shadowOnly, now).kind).toBe('waiting');
+    expect(botStatus({ mode: 'shadow' }, liveOnly, now).kind).toBe('waiting');
+    expect(botStatus({ mode: 'paused' }, shadowOnly, now).kind).toBe('position');
+    expect(botStatus({ mode: 'paused' }, liveOnly, now).kind).toBe('paused');
+    // El «in_position» de la lista no contradice un detalle sin posición en su modo.
+    expect(botStatus({ mode: 'live', status: 'in_position' }, shadowOnly, now).kind).toBe('waiting');
+    expect(botStatus({ mode: 'live', status: 'in_position' }, { positions: [] }, now).kind).toBe('waiting');
   });
   it('lista con pendingEntry {deadlineAt} y sin detalle', () => {
     const s = botStatus({ mode: 'shadow', pendingEntry: { deadlineAt: now + 600_000 } }, null, now);

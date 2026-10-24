@@ -193,10 +193,26 @@ export default function BotDetail({
     <p className={`${ui.alert} ${ui.alertError}`} role="alert">No se pudo desvincular la alerta: {unlinkError.message}</p>
   );
 
+  const status = botStatus(bot, hasDetail(bot) ? bot : null);
+  const entry = status.kind === 'pending' ? currentEntry(bot) : null;
+  const blocked = Object.keys(bot.blockedUnderlyings || {});
+  const kSignals = kpis.find((k) => k.key === 'signals');
+  const nowStrip = (
+    <BotNowStrip
+      key={bot.id}
+      status={status}
+      entry={entry}
+      blocked={blocked}
+      onUnblock={onUnblock}
+      unblocking={unblocking}
+      unknown={bot.pendingEntryUnknown === true}
+      compact={mobile}
+    />
+  );
+
+  // Teléfono: estado → KPIs 2×2 → posición → flujo → cronología; debajo,
+  // órdenes y límites, la configuración de la señal y la curva.
   if (mobile) {
-    const kSignals = kpis.find((k) => k.key === 'signals');
-    const kTraded = kpis.find((k) => k.key === 'traded');
-    const kPnl = kpis.find((k) => k.key === (isLive ? 'pnlLive' : 'pnlShadow'));
     return (
       <div className={styles.mobileDetail} role="dialog" aria-modal="true" aria-label={bot.name}>
         <header className={styles.mobileDetailHead}>
@@ -223,47 +239,45 @@ export default function BotDetail({
           {liveWarning}
           {loadAlert}
           {noticeAlert}
+          {nowStrip}
+          <KpiCards model={kpiCardsModel(bot)} compact />
           <LiveTpStatus bot={bot} />
-          <div className={ui.tileGrid}>
-            <div className={ui.tile}>
-              <span className={ui.tileLabel}>Señales 30d</span>
-              <span className={`${ui.tileValue} ${ui.tone_neutral}`}>
-                {kSignals.value}{stats ? ` · ${kTraded.value} operadas` : ''}
-              </span>
+          <BotActivity {...activity} part="positions" />
+          <section className={`${styles.mobileSection} ${styles.mobileCard}`} aria-label="Regla del bot">
+            <BotFlow steps={flowSteps(bot)} directions={botDirections(bot.alerts)} compact />
+            <div className={styles.mobileActions}>
+              <button type="button" className={`${ui.btn} ${styles.touchBtn}`} onClick={onEdit}>
+                <PencilIcon size={18} /> Alertas, salidas y riesgo
+              </button>
+              <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
             </div>
-            <div className={ui.tile}>
-              <span className={ui.tileLabel}>{kPnl.label}</span>
-              <span className={`${ui.tileValue} ${ui[`tone_${kPnl.tone}`]}`}>{kPnl.value}</span>
-            </div>
-          </div>
-          <BotActivity {...activity} part="top" />
-          <section className={styles.mobileSection}>
-            <h2 className={styles.mobileH2}>Al recibir la señal</h2>
-            <span className={styles.structurePill}>{info.label}</span>
-            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} compact />
-            <AlertRows alerts={bot.alerts} />
-            <button type="button" className={ui.btn} onClick={onEdit}>
-              <PencilIcon size={18} /> Alertas, salidas y riesgo
-            </button>
-            <SimulateMenu key={bot.id} bot={bot} onSimulate={onSimulate} busy={actionBusy} mobile />
           </section>
           <section className={styles.mobileSection}>
             <div className={styles.sectionHead}>
               <h2 className={styles.mobileH2}>Señales y decisiones</h2>
             </div>
+            {stats && (
+              <p className={styles.signalsStats}>
+                <span>{kSignals.value} señales en 30 d</span> · <span>{kSignals.hint}</span> · <span>{stats.traded} operadas</span>
+              </p>
+            )}
             <SignalFilter value={signalsFilter} onChange={onSignalsFilter} />
-            <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} mobile />
+            <div className={styles.mobileCard}>
+              <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} mobile />
+            </div>
+          </section>
+          <BotActivity {...activity} part="orders" />
+          <section className={styles.mobileSection}>
+            <h2 className={styles.mobileH2}>Al recibir la señal</h2>
+            <span className={styles.structurePill}>{info.label}</span>
+            <Mapping structure={bot.structure} targetDelta={p.targetDelta} expiryDays={p.expiryDays} alerts={bot.alerts} compact />
+            <AlertRows alerts={bot.alerts} />
           </section>
           <BotActivity {...activity} part="bottom" />
         </div>
       </div>
     );
   }
-
-  const status = botStatus(bot, hasDetail(bot) ? bot : null);
-  const entry = status.kind === 'pending' ? currentEntry(bot) : null;
-  const blocked = Object.keys(bot.blockedUnderlyings || {});
-  const kSignals = kpis.find((k) => k.key === 'signals');
 
   return (
     <section className={styles.detail} aria-label="Detalle del bot">
@@ -304,15 +318,7 @@ export default function BotDetail({
       {noticeAlert}
       <LiveTpStatus bot={bot} />
 
-      <BotNowStrip
-        key={bot.id}
-        status={status}
-        entry={entry}
-        blocked={blocked}
-        onUnblock={onUnblock}
-        unblocking={unblocking}
-        unknown={bot.pendingEntryUnknown === true}
-      />
+      {nowStrip}
 
       <KpiCards model={kpiCardsModel(bot)} />
 

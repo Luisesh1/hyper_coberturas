@@ -19,10 +19,10 @@ function Card({ label, children, className = '' }) {
 }
 
 // Curva real frente a sombra: el libro activo sólido con área, el otro a trazos.
-function PnlCurve({ pnl, mode }) {
+function PnlCurve({ pnl, mode, height = H, emptyText = 'Sin operaciones cerradas en 30 días' }) {
   const { live, shadow } = pnl.curve;
   const all = [...live, ...shadow].map((p) => p.y);
-  if (!all.length) return <div className={styles.curveEmpty}>Sin operaciones cerradas en 30 días</div>;
+  if (!all.length) return <div className={styles.curveEmpty} style={{ height }}>{emptyText}</div>;
   const min = Math.min(0, ...all);
   const max = Math.max(0, ...all);
   const span = max - min || 1;
@@ -36,7 +36,7 @@ function PnlCurve({ pnl, mode }) {
     `sombra ${signed(pnl.shadow)}`,
   ].filter(Boolean).join(', ');
   return (
-    <svg className={styles.curve} viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img" aria-label={`Curva de P&L 30 días: ${label}`}>
+    <svg className={styles.curve} viewBox={`0 0 ${W} ${H}`} width="100%" height={height} preserveAspectRatio="none" role="img" aria-label={`Curva de P&L 30 días: ${label}`}>
       {activePts.length > 1 && (
         <path className={styles[`area_${mode}`]} d={`M${xy(activePts[0])} L${line(activePts.slice(1))} L${W},${H} L0,${H} Z`} />
       )}
@@ -53,7 +53,9 @@ function PnlCard({ pnl, mode, compact }) {
   return (
     <Card label="P&L neto 30 d">
       <span className={`${styles.kpiValue} ${toneClass(pnl.value)}`}>{signed(pnl.value)}</span>
-      {!compact && <PnlCurve pnl={pnl} mode={mode} />}
+      {compact
+        ? <PnlCurve pnl={pnl} mode={mode} height={28} emptyText="Sin cerradas en 30 d" />
+        : <PnlCurve pnl={pnl} mode={mode} />}
       {!compact && (
         <div className={styles.split}>
           {showLive && <span className={styles.leg_live}>— real {signed(pnl.live)}</span>}
@@ -90,6 +92,21 @@ function WinCard({ win, compact }) {
     win.avg !== null ? `Media ${signed(win.avg)}` : null,
     win.drawdown !== null && win.drawdown > 0 ? `peor racha ${signed(-win.drawdown)}` : null,
   ].filter(Boolean).join(' · ');
+  if (compact) {
+    const p = Math.min(100, Math.max(0, win.pct ?? 0));
+    const short = win.few ? `${plural(win.closedTrades, 'cerrada', 'cerradas')} · mín. ${MIN_TRADES_FOR_WIN_RATE}`
+      : win.wins !== null && win.total ? `${win.wins} de ${win.total}` : 'Sin cerradas';
+    return (
+      <Card label="Acierto">
+        <span className={styles.kpiValue}>{value}</span>
+        <div className={styles.meter} role="img"
+          aria-label={win.pct === null ? 'Acierto sin datos suficientes' : `${formatPct(win.pct, { decimals: 1 })} de acierto`}>
+          {win.pct !== null && <><i className={styles.meterWin} style={{ width: `${p}%` }} /><i className={styles.meterLoss} style={{ width: `${100 - p}%` }} /></>}
+        </div>
+        <span className={styles.kpiSub}>{short}</span>
+      </Card>
+    );
+  }
   return (
     <Card label="Acierto">
       <div className={styles.winRow}>
@@ -106,12 +123,12 @@ function WinCard({ win, compact }) {
 
 function FeesCard({ fees, compact }) {
   const pct = fees.pct;
-  const sub = fees.label
-    ? `${fees.label}${!compact && fees.premium ? ` (${n2(fees.premium)} USDT)` : ''}`
-    : 'Sin prima operada todavía';
+  let sub = fees.label ? `${fees.label}${fees.premium ? ` (${n2(fees.premium)} USDT)` : ''}` : 'Sin prima operada todavía';
+  if (compact) sub = pct !== null ? `${formatPct(pct, { decimals: 1 })} de la prima` : 'Sin prima operada';
+  const total = fees.total === null ? '—' : `${formatUsdt(fees.total)}${compact ? '' : ' USDT'}`;
   return (
-    <Card label="Comisiones totales">
-      <span className={`${styles.kpiValue} ${styles.t_fee}`}>{fees.total === null ? '—' : `${formatUsdt(fees.total)} USDT`}</span>
+    <Card label={compact ? 'Comisiones' : 'Comisiones totales'}>
+      <span className={`${styles.kpiValue} ${styles.t_fee}`}>{total}</span>
       <div className={styles.meter} role="img" aria-label={pct === null ? 'Comisiones sin prima operada' : `Comisiones: ${fees.label}`}>
         {pct !== null && <i className={styles.meterFee} style={{ width: `${Math.min(100, Math.max(pct > 0 ? 1.5 : 0, pct))}%` }} />}
       </div>
@@ -130,20 +147,21 @@ function BudgetCard({ budget: b, compact }) {
     b.openCount || !b.pendingCount ? plural(b.openCount, 'posición', 'posiciones') : null,
     b.pendingCount ? plural(b.pendingCount, 'entrada pendiente', 'entradas pendientes') : null,
   ].filter(Boolean).join(' + ');
-  const sub = `${counts}${b.freeFractions !== null ? ` · ${plural(b.freeFractions, 'fracción libre', 'fracciones libres')}` : ''}`;
+  const free = b.freeFractions !== null ? plural(b.freeFractions, 'fracción libre', 'fracciones libres') : null;
+  const sub = compact && free ? free : `${counts}${free ? ` · ${free}` : ''}`;
   const pct = (v) => `${Math.min(100, Math.max(0, (v / b.budget) * 100))}%`;
   return (
     <Card label="Presupuesto">
       {b.budget !== null ? (
         <>
-          <span className={styles.kpiValue}>{n2(b.used)} <span className={styles.kpiValueSub}>/ {n2(b.budget)} USDT</span></span>
+          <span className={styles.kpiValue}>{n2(b.used)} <span className={styles.kpiValueSub}>/ {n2(b.budget)}{compact ? '' : ' USDT'}</span></span>
           <div className={styles.meter} role="img" aria-label={`Presupuesto: ${n2(b.used)} usado y ${n2(b.reserved)} reservado de ${n2(b.budget)} USDT`}>
             <i className={styles.meterUsed} style={{ width: pct(b.used) }} />
             <i className={styles.meterReserved} style={{ width: pct(b.reserved) }} />
           </div>
         </>
       ) : (
-        <span className={styles.kpiValue}>{n2(b.used + b.reserved)} <span className={styles.kpiValueSub}>USDT · sin presupuesto total</span></span>
+        <span className={styles.kpiValue}>{n2(b.used + b.reserved)} <span className={styles.kpiValueSub}>{compact ? 'USDT' : 'USDT · sin presupuesto total'}</span></span>
       )}
       <span className={styles.kpiSub}>{sub}</span>
       {!compact && (
@@ -159,7 +177,8 @@ function BudgetCard({ budget: b, compact }) {
 /**
  * Cuatro KPIs con forma: P&L neto con curva real frente a sombra, anillo de
  * acierto, comisiones con barra y desglose, y presupuesto usado/reservado.
- * `model` sale de kpiCardsModel(bot). `compact`: rejilla 2×2 sin curva.
+ * `model` sale de kpiCardsModel(bot). `compact` (teléfono): rejilla 2×2 con
+ * mini curva y barras, sin desgloses ni leyendas.
  */
 export default function KpiCards({ model, compact = false }) {
   if (!model) return null;

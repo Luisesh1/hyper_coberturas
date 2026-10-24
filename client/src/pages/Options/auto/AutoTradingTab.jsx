@@ -12,6 +12,8 @@ import BotList from './BotList';
 import BotDetail from './BotDetail';
 import BotForm from './BotForm';
 import DirectionChip from './DirectionChip';
+import PendingBanner from './visual/PendingBanner';
+import { pendingEntryRows } from './botActivity';
 import { AutoIcon as BoltIcon } from '../icons';
 import { DECISION_LABEL, filterSignals, latestSignal, normalizeBot, normalizeSignals, signalStats } from './botView';
 import ui from '../strategies/common/ui.module.css';
@@ -39,8 +41,8 @@ const CLOSE_RESULT = {
 
 // Pestaña «Trading automatizado» del módulo de Opciones: bots que abren y
 // cierran opciones cuando se disparan alertas alcistas o bajistas.
-// Escritorio: lista + detalle. Teléfono: «Última señal», tarjetas, FAB y
-// detalle a pantalla completa.
+// Escritorio: lista + detalle. Teléfono: banner de entrada pendiente,
+// «Última señal», tarjetas, FAB y detalle a pantalla completa.
 export default function AutoTradingTab({ underlying } = {}) {
   const isMobile = useMediaQuery(MOBILE_QUERY);
 
@@ -565,8 +567,13 @@ export default function AutoTradingTab({ underlying } = {}) {
   // ── Móvil ────────────────────────────────────────────────────────────
   if (isMobile) {
     const last = latestSignal(bots);
+    // El contrato y el límite solo llegan con el detalle (ya visto) del bot.
+    const detailEntry = detail && Array.isArray(detail.pendingEntries)
+      ? pendingEntryRows(detail).reduce((a, r) => (!a || (r.deadlineAt ?? Infinity) < (a.deadlineAt ?? Infinity) ? r : a), null)
+      : null;
     return (
       <div className={styles.mobileRoot}>
+        <PendingBanner bots={bots} entry={detailEntry ? { botId: detail.id, row: detailEntry } : null} onSelect={selectBot} />
         {last && (
           <button type="button" className={styles.lastSignal} onClick={() => selectBot(last.bot.id)}>
             <span className={styles.lastSignalLabel}>Última señal</span>

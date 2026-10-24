@@ -1,6 +1,7 @@
 import { formatNumber } from '../../strategies/common/format';
 import { formatCountdown } from '../botView';
 import { useNow } from './useNow';
+import { contractShort } from './visualModel';
 import styles from './visual.module.css';
 
 const R = 24;
@@ -127,7 +128,7 @@ export default function BotNowStrip({
           <>
             <p>
               {compact ? (
-                <>{entry.sideLabel} {formatNumber(entry.quantity, { decimals: 4, minDecimals: 0 })} a <b className={styles.limit}>{price(entry.limitPrice)}</b> · bid {price(entry.bid)} / ask {price(entry.ask)}</>
+                <>{entry.sideLabel === 'Vender' ? 'Venta' : 'Compra'} {formatNumber(entry.quantity, { decimals: 4, minDecimals: 0 })} {contractShort(entry.symbol)} a <b className={styles.limit}>{price(entry.limitPrice)}</b> · bid {price(entry.bid)} / ask {price(entry.ask)}</>
               ) : (
                 <>
                   Orden límite GTC a <b className={styles.limit}>{price(entry.limitPrice)}</b> (precio medio).{' '}

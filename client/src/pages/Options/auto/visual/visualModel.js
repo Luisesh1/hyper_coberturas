@@ -1,6 +1,6 @@
 // Derivaciones puras para los componentes visuales del detalle del bot
 // (tarjetas KPI, cronología de señales). Sin red; el reloj entra por `now`.
-import { formatDateTime, toMs, toNumber } from '../../strategies/common/format';
+import { formatDateTime, formatNumber, toMs, toNumber } from '../../strategies/common/format';
 import { buildEquity } from '../../strategies/strategyView';
 import { MIN_TRADES_FOR_WIN_RATE, feeSummary } from '../botView';
 
@@ -8,6 +8,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const list = (v) => (Array.isArray(v) ? v : []);
 const round = (n) => Math.round(n * 1e8) / 1e8;
 const pad = (n) => String(n).padStart(2, '0');
+
+// «C 70.000» a partir de «BTC-261031-70000-C»: tipo y strike, lo que cabe en
+// una línea de teléfono. Si el símbolo no tiene esa forma se devuelve tal cual.
+export function contractShort(symbol) {
+  const m = /-(\d+(?:\.\d+)?)-([CP])$/.exec(String(symbol ?? ''));
+  if (!m) return String(symbol ?? '');
+  return `${m[2]} ${formatNumber(Number(m[1]), { decimals: 4, minDecimals: 0 })}`;
+}
 
 // «ahora», «hace 4 min», «hace 2 h», «ayer 18:40» o «22 oct 09:15».
 export function relativeTime(at, now = Date.now()) {

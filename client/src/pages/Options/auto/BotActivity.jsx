@@ -7,7 +7,8 @@ import { WarningIcon } from '../strategies/common/icons';
 import { closedTradeRows, openPositionRows, pendingOrderRows, usageRows } from './botActivity';
 import { COMMON_DEFAULTS } from './botView';
 import { DirectionGlyph } from './DirectionChip';
-import PositionRange, { rangePct } from './visual/PositionRange';
+import PositionRange from './visual/PositionRange';
+import { contractShort } from './visual/visualModel';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
 import v from './visual/visual.module.css';
@@ -33,28 +34,6 @@ function Section({ title, actions, children, mobile }) {
       </div>
       {children}
     </section>
-  );
-}
-
-function TpStopBar({ row }) {
-  const pct = rangePct(row);
-  return (
-    <div className={styles.tpStop}>
-      <div
-        className={styles.tpStopTrack}
-        role="progressbar"
-        aria-label={`Precio entre stop y objetivo de ${row.symbol}`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct === null ? undefined : Math.round(pct)}
-      >
-        {pct !== null && <span className={styles.tpStopDot} style={{ left: `${pct}%` }} />}
-      </div>
-      <div className={styles.tpStopLabels}>
-        <span>Stop {price(row.stopPrice)}</span>
-        <span>TP {price(row.tpPrice)}{tpPctText(row)}</span>
-      </div>
-    </div>
   );
 }
 
@@ -121,14 +100,61 @@ function toNumberOr(x, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// P&L a mercado menos las comisiones ya pagadas, y su % sobre la prima.
+function netPnl(row) {
+  const net = row.pnlUsdt === null ? null : round2(row.pnlUsdt - (row.feesUsdt ?? 0));
+  return { net, pct: net !== null && row.premiumUsdt ? (net / row.premiumUsdt) * 100 : null };
+}
+
+// Tarjeta de posición (teléfono): contrato y P&L neto, barra compacta
+// stop–entrada–ahora–TP, comisiones y vencimiento, y «Cerrar» a todo ancho.
+function MobilePositionCard({ row: r, multi, onClosePosition, busy }) {
+  const { net, pct } = netPnl(r);
+  const legend = [r.stopPrice !== null ? `Stop ${price(r.stopPrice)}` : null, r.tpPrice !== null ? `TP ${price(r.tpPrice)}${tpPctText(r)}` : null].filter(Boolean).join(' · ');
+  const hasRange = r.tpPrice !== null && (r.stopPrice !== null || r.entry !== null);
+  return (
+    <li className={`${styles.activityCard} ${styles.posCardMobile}`}>
+      <div className={v.posTop}>
+        <span className={v.posSym}>
+          {contractShort(r.symbol)} · {formatNumber(r.quantity, { decimals: 4, minDecimals: 0 })}
+          {multi && <span className={styles.underlyingTag}>{String(r.symbol).split('-')[0]}</span>}
+        </span>
+        <span className={`${v.posPnl} ${toneClass(r.tone)}`}>
+          {net === null ? '—' : `${formatUsdt(net, { sign: true })} neto`}
+          {pct !== null && <small> {formatPct(pct, { sign: true })}</small>}
+        </span>
+      </div>
+      <div className={styles.posSymbolLine}>
+        <span className={ui.mono}>{r.symbol}</span>
+        <span>{r.sideLabel}</span>
+      </div>
+      {hasRange && <PositionRange stop={r.stopPrice} entry={r.entry} mark={r.mark} tp={r.tpPrice} compact />}
+      {r.tpBreakdown !== null
+        ? <AtrTarget row={r} />
+        : legend && <span className={styles.posLegend}>{legend}</span>}
+      <div className={v.split}>
+        <span>Comisiones <b className={v.t_fee}>{r.feesUsdt === null ? '—' : formatUsdt(r.feesUsdt)}</b></span>
+        {r.hoursToExpiry !== null && <span>vence en {hoursText(r.hoursToExpiry)}</span>}
+      </div>
+      <div className={`${ui.muted} ${ui.small}`}>
+        Entrada {price(r.entry)} · Mark {price(r.mark)} · Prima {usdt(r.premiumUsdt)} · ejecutada {formatDateTime(r.openedAt)}
+      </div>
+      {onClosePosition && (
+        <button type="button" className={`${ui.btn} ${styles.touchBtn} ${styles.posCloseMobile}`} aria-label={`Cerrar ${r.symbol}`} onClick={() => onClosePosition(r.id)} disabled={busy}>
+          Cerrar
+        </button>
+      )}
+    </li>
+  );
+}
+
 // Tarjeta de posición (escritorio): barra stop–entrada–ahora–TP, hechos,
 // vencimiento y P&L neto de comisiones.
 function PositionCard({ row, bot, count, onClosePosition, busy, now }) {
   const type = /-C$/.test(row.symbol || '') ? 'Call' : /-P$/.test(row.symbol || '') ? 'Put' : 'Opción';
   const sell = row.sideLabel === 'Vender';
   const bullish = (type === 'Call') !== sell;
-  const net = row.pnlUsdt === null ? null : round2(row.pnlUsdt - (row.feesUsdt ?? 0));
-  const netPct = net !== null && row.premiumUsdt ? (net / row.premiumUsdt) * 100 : null;
+  const { net, pct: netPct } = netPnl(row);
   const usage = bot.usage || {};
   const delta = usage.mode === undefined || usage.mode === (bot.mode === 'live' ? 'live' : 'shadow') ? usage.netDelta : null;
   const tp = tpFact(bot, row);
@@ -180,25 +206,7 @@ function Positions({ rows, bot, mobile, multi, onClosePosition, onCloseAll, busy
       {rows.length > 0 && mobile && (
         <ul className={styles.activityList}>
           {rows.map((r) => (
-            <li key={r.id} className={styles.activityCard}>
-              <div className={styles.activityCardHead}>
-                <span className={`${ui.mono} ${styles.activitySymbol}`}>{r.symbol}</span>
-                {multi && <span className={styles.underlyingTag}>{String(r.symbol).split('-')[0]}</span>}
-                <span className={ui.muted}>{r.sideLabel} · {formatNumber(r.quantity, { decimals: 4, minDecimals: 0 })}</span>
-              </div>
-              <div className={`${styles.activityPnl} ${toneClass(r.tone)}`}>
-                {pnl(r.pnlUsdt)}
-                {r.pnlPct !== null && <small> {formatPct(r.pnlPct, { sign: true })}</small>}
-              </div>
-              <div className={`${ui.muted} ${ui.small}`}>
-                Entrada {price(r.entry)} · Mark {price(r.mark)}{r.hoursToExpiry !== null ? ` · vence en ${r.hoursToExpiry} h` : ''}
-              </div>
-              <div className={`${ui.muted} ${ui.small}`}>
-                Prima {usdt(r.premiumUsdt)} · ejecutada {formatDateTime(r.openedAt)}
-              </div>
-              {r.tpBreakdown !== null ? <AtrTarget row={r} /> : <TpStopBar row={r} />}
-              <CloseBtn row={r} onClosePosition={onClosePosition} busy={busy} />
-            </li>
+            <MobilePositionCard key={r.id} row={r} multi={multi} onClosePosition={onClosePosition} busy={busy} />
           ))}
         </ul>
       )}
