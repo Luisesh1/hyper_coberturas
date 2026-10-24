@@ -161,6 +161,21 @@ const config = {
       maxRequestsPerSecond: parseInt(process.env.ETHERSCAN_MAX_REQUESTS_PER_SECOND, 10) || 3,
     },
   },
+  // Poda diaria de protection_decision_log (llegó a 6,49 M filas / 1,79 GB).
+  // Acotada por ejecución: batchSize * maxBatches filas como máximo.
+  decisionLogRetention: {
+    enabled: process.env.DECISION_LOG_RETENTION_ENABLED !== 'false',
+    // Inválido o <= 0 cae al default de 30 días.
+    retentionDays: (() => {
+      const d = parseInt(process.env.DECISION_LOG_RETENTION_DAYS, 10);
+      return d > 0 ? d : 30;
+    })(),
+    intervalMs: 24 * 3_600_000,
+    initialDelayMs: 10 * 60_000,
+    batchSize: 5_000,
+    maxBatches: 200,
+    pauseMs: 200,
+  },
   deltaNeutral: {
     trackingMode: process.env.DELTA_NEUTRAL_TRACKING_MODE || 'hybrid',
     hlWsEnabled: process.env.DELTA_NEUTRAL_HL_WS_ENABLED !== 'false',

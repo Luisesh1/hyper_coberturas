@@ -100,6 +100,11 @@ async function pruneDecisionLog({
   retentionDays = DEFAULT_DECISION_LOG_RETENTION_DAYS,
   batchSize = DEFAULT_PRUNE_BATCH_SIZE,
   dryRun = true,
+  // Tope de lotes por ejecución y pausa entre lotes: permiten correr la poda
+  // en segundo plano sin acaparar el motor. Por defecto (script manual) sin tope.
+  maxBatches = Infinity,
+  pauseMs = 0,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}, executor = db) {
   const days = Number(retentionDays) > 0 ? Number(retentionDays) : DEFAULT_DECISION_LOG_RETENTION_DAYS;
   const cutoffMs = Date.now() - (days * 86_400_000);
@@ -110,6 +115,8 @@ async function pruneDecisionLog({
   }
 
   let deleted = 0;
+  let batches = 0;
+  let capped = false;
   for (;;) {
     const { rowCount } = await executor.query(
       `DELETE FROM protection_decision_log
@@ -122,10 +129,17 @@ async function pruneDecisionLog({
       [cutoffMs, batchSize]
     );
     deleted += rowCount;
+    batches += 1;
     if (rowCount < batchSize) break;
+    // Lote lleno al llegar al tope: puede quedar remanente para la siguiente ejecución.
+    if (batches >= maxBatches) {
+      capped = true;
+      break;
+    }
+    if (pauseMs > 0) await sleep(pauseMs);
   }
 
-  return { dryRun: false, retentionDays: days, cutoffMs, candidates, deleted };
+  return { dryRun: false, retentionDays: days, cutoffMs, candidates, deleted, capped };
 }
 
 
