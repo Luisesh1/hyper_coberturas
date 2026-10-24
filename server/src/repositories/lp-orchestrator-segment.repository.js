@@ -258,6 +258,23 @@ async function relabelOpen(segmentId, { openReason, openTxHashes } = {}, executo
 }
 
 /**
+ * Rellena `open_price` de un tramo vivo solo si sigue NULL (p. ej. el tramo
+ * vivo sembrado por la 048, cuyo precio de apertura llega con el primer scan
+ * completo). Nunca pisa un valor existente.
+ */
+async function fillOpenPrice(segmentId, openPrice, executor) {
+  const { rows } = await exec(executor).query(
+    `UPDATE lp_orchestrator_segments
+        SET open_price = $2,
+            updated_at = $3
+      WHERE id = $1 AND status IN ('open','closing') AND open_price IS NULL
+      RETURNING id`,
+    [segmentId, openPrice, Date.now()]
+  );
+  return rows[0]?.id ?? null;
+}
+
+/**
  * Sustituye el historico sembrado (cerrado, open_reason deploy/backfill/backfill_diff) por
  * `segments` y renumera `seq` de todos los tramos por orden temporal. Nunca
  * toca el tramo vivo. Debe ejecutarse dentro de una transaccion.
@@ -307,5 +324,6 @@ module.exports = {
   close,
   relabelClose,
   relabelOpen,
+  fillOpenPrice,
   replaceHistorical,
 };

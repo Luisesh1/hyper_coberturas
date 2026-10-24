@@ -616,6 +616,36 @@ test('I3: killLp con el LP ya cerrado corta el tramo atómicamente con la fase i
   assert.equal(ctx.orch().phase, 'idle');
 });
 
+test('I4: el tramo vivo sembrado sin open_price lo toma del primer scan completo de su LP', async () => {
+  const pools = { 777: lp('777', { priceAtOpen: 2490.5 }) };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  // Estado tras la 048: tramo vivo sin open_price y snapshot sin priceAtOpen.
+  ctx.segRepo.segments[0].openPrice = null;
+  const snap = { ...ctx.orch().lastEvaluation.poolSnapshot };
+  delete snap.priceAtOpen;
+  ctx.orch().lastEvaluation = { ...ctx.orch().lastEvaluation, poolSnapshot: snap };
+
+  await ctx.service.evaluateOne(1, ctx.id);
+  assert.equal(ctx.inspectCalls[ctx.inspectCalls.length - 1].lightweight, false, 'scan completo');
+  assert.equal(ctx.ordered()[0].openPrice, 2490.5);
+
+  // Ya relleno: un priceAtOpen distinto no lo pisa.
+  pools[777] = lp('777', { priceAtOpen: 1 });
+  ctx.orch().lastEvaluation.poolSnapshot.priceAtOpen = null;
+  await ctx.service.evaluateOne(1, ctx.id);
+  assert.equal(ctx.ordered()[0].openPrice, 2490.5);
+});
+
+test('I4: sin priceAtOpen real no se rellena open_price', async () => {
+  const pools = { 777: lp('777', { priceAtOpen: 'unavailable' }) };
+  const ctx = await setup({ pools });
+  await ctx.attach('777', pools[777]);
+  ctx.segRepo.segments[0].openPrice = null;
+  await ctx.service.evaluateOne(1, ctx.id);
+  assert.equal(ctx.ordered()[0].openPrice, null);
+});
+
 test('reinvest-fees: las fees cobradas son del tramo viejo, el gas del nuevo', async () => {
   const pools = { 777: lp('777') };
   const ctx = await setup({ pools });

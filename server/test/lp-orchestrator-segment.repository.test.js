@@ -122,6 +122,26 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
   });
   await scoped.query(`UPDATE lp_orchestrators SET last_evaluation_json = '' WHERE id = $1`, [emptyJsonId]);
   const stoppedId = await insertOrch({ status: 'stopped', position: null, accounting: { lpFeesUsd: 2 } });
+  // I4: snapshot del orquestador #57 con el precio de apertura del LP anterior.
+  const openFields = {
+    priceAtOpen: 2668.73, priceAtOpenAccuracy: 'exact', priceAtOpenSource: 'mint_event', priceAtOpenBlock: 123,
+    initialValueUsd: 1000, initialValueUsdAccuracy: 'exact', initialValueUsdSource: 'mint', initialAmount0: 0.1,
+    initialAmount1: 500,
+  };
+  const staleOpenEval = {
+    status: 'ok',
+    decision: 'hold',
+    poolSnapshot: { identifier: 'tok57', priceCurrent: 2515, rangeLowerPrice: 2401.9, rangeUpperPrice: 2628.1, currentValueUsd: 990, ...openFields },
+  };
+  const staleOpenId = await insertOrch({
+    status: 'active', position: 'tok57', pool: '0xpool', accounting: { lpFeesUsd: 7, gasSpentUsd: 1 }, evaluation: staleOpenEval,
+  });
+  const stoppedStaleId = await insertOrch({
+    status: 'stopped', position: null, accounting: {}, evaluation: staleOpenEval,
+  });
+  const noSnapshotId = await insertOrch({
+    status: 'active', position: 'tokNoSnap', pool: '0xpool', accounting: {}, evaluation: { status: 'ok' },
+  });
 
   await scoped.query(fs.readFileSync(path.join(dir, files.find((f) => f.startsWith('048_lp_orchestrator_segments'))), 'utf8'));
 
@@ -170,6 +190,45 @@ test('repositorio de tramos contra Postgres', { skip }, async (t) => {
     const num = await repo.getActive(badNumId, db);
     assert.equal(num.rangeLowerPrice, null);
     assert.equal(num.rangeUpperPrice, 5);
+  });
+
+  await t.test('I4: la 048 quita los campos de apertura del snapshot de los activos', async () => {
+    const read = async (id) => (await scoped.query(
+      'SELECT last_evaluation_json, accounting_json FROM lp_orchestrators WHERE id=$1', [id]
+    )).rows[0];
+    const row = await read(staleOpenId);
+    const ev = JSON.parse(row.last_evaluation_json);
+    for (const key of Object.keys(openFields)) {
+      assert.equal(Object.prototype.hasOwnProperty.call(ev.poolSnapshot, key), false, `${key} sigue en el snapshot`);
+    }
+    assert.deepEqual(ev.poolSnapshot, {
+      identifier: 'tok57', priceCurrent: 2515, rangeLowerPrice: 2401.9, rangeUpperPrice: 2628.1, currentValueUsd: 990,
+    });
+    assert.equal(ev.status, 'ok');
+    assert.equal(ev.decision, 'hold');
+    assert.deepEqual(JSON.parse(row.accounting_json), { lpFeesUsd: 7, gasSpentUsd: 1 });
+    const live = await repo.getActive(staleOpenId, db);
+    assert.equal(live.rangeLowerPrice, 2401.9, 'la siembra del rango sigue leyendo el snapshot');
+    assert.equal(live.openPrice, null);
+
+    // Inactivos, JSON invalido y snapshots sin esos campos quedan tal cual.
+    assert.deepEqual(JSON.parse((await read(stoppedStaleId)).last_evaluation_json), staleOpenEval);
+    assert.equal((await read(badJsonId)).last_evaluation_json, 'not json');
+    assert.equal((await read(emptyJsonId)).last_evaluation_json, '');
+    assert.deepEqual(JSON.parse((await read(noSnapshotId)).last_evaluation_json), { status: 'ok' });
+    assert.deepEqual(JSON.parse((await read(activeId)).last_evaluation_json), {
+      poolSnapshot: { rangeLowerPrice: 2400, rangeUpperPrice: 2600 },
+    });
+  });
+
+  await t.test('I4: fillOpenPrice solo rellena un open_price NULL de un tramo vivo', async () => {
+    const live = await repo.getActive(staleOpenId, db);
+    assert.equal(await repo.fillOpenPrice(live.id, 2490.5, db), live.id);
+    assert.equal((await repo.getById(staleOpenId, live.id, db)).openPrice, 2490.5);
+    assert.equal(await repo.fillOpenPrice(live.id, 1, db), null, 'no pisa un open_price existente');
+    assert.equal((await repo.getById(staleOpenId, live.id, db)).openPrice, 2490.5);
+    const hist = (await repo.listByOrchestrator(staleOpenId, db)).find((x) => x.status === 'closed');
+    assert.equal(await repo.fillOpenPrice(hist.id, 3, db), null, 'no toca tramos cerrados');
   });
 
   await t.test('un segundo tramo vivo viola el indice parcial', async () => {

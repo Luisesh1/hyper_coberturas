@@ -120,3 +120,42 @@ UPDATE lp_orchestrators o
  WHERE s.orchestrator_id = o.id AND s.seq = 2 AND s.status = 'open';
 
 DROP FUNCTION pg_temp.seg048_range(text, text);
+
+-- El carry-forward anterior copiaba el precio de apertura (y la valoracion
+-- inicial) del LP previo al snapshot del LP nuevo (#57: 2668.73 sobre el rango
+-- 2401.9 - 2628.1). Con el guard por identificador ese valor ya parece del LP
+-- vivo y el scan ligero no lo corrige. Se quitan esos campos del snapshot de
+-- los activos para forzar un scan completo en la siguiente evaluacion. JSON
+-- invalido (la columna es TEXT) o sin poolSnapshot objeto: se deja tal cual.
+CREATE FUNCTION pg_temp.seg048_strip_open(ev text) RETURNS text AS $f$
+DECLARE
+  doc jsonb;
+  snap jsonb;
+  stripped jsonb;
+BEGIN
+  doc := ev::jsonb;
+  snap := doc -> 'poolSnapshot';
+  IF snap IS NULL OR jsonb_typeof(snap) <> 'object' THEN
+    RETURN NULL;
+  END IF;
+  stripped := snap - ARRAY[
+    'priceAtOpen', 'priceAtOpenAccuracy', 'priceAtOpenSource', 'priceAtOpenBlock',
+    'initialValueUsd', 'initialValueUsdAccuracy', 'initialValueUsdSource',
+    'initialAmount0', 'initialAmount1'
+  ];
+  IF stripped = snap THEN
+    RETURN NULL;
+  END IF;
+  RETURN jsonb_set(doc, '{poolSnapshot}', stripped)::text;
+EXCEPTION WHEN OTHERS THEN
+  RETURN NULL;
+END;
+$f$ LANGUAGE plpgsql;
+
+UPDATE lp_orchestrators
+   SET last_evaluation_json = pg_temp.seg048_strip_open(last_evaluation_json)
+ WHERE status = 'active'
+   AND last_evaluation_json IS NOT NULL
+   AND pg_temp.seg048_strip_open(last_evaluation_json) IS NOT NULL;
+
+DROP FUNCTION pg_temp.seg048_strip_open(text);

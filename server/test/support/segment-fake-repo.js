@@ -86,6 +86,13 @@ function makeSegmentFakeRepo() {
       row.openTxHashes = clone(openTxHashes ?? null);
       return id;
     },
+    async fillOpenPrice(id, openPrice) {
+      const row = segments.find((s) => s.id === id && (s.status === 'open' || s.status === 'closing')
+        && s.openPrice == null);
+      if (!row) return null;
+      row.openPrice = openPrice;
+      return id;
+    },
   };
   function hasHashes(hashes) {
     return Array.isArray(hashes) && hashes.length > 0;

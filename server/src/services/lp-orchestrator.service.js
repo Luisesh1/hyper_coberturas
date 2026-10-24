@@ -176,6 +176,33 @@ class LpOrchestratorService {
   }
 
   /**
+   * Rellena `open_price` del tramo vivo con el `priceAtOpen` del snapshot
+   * cuando el tramo aún no lo tiene y el snapshot es de su mismo LP. Solo
+   * con un precio real (finito y > 0); el repo nunca pisa un valor existente.
+   */
+  async _fillLiveSegmentOpenPrice(orch, live, pool) {
+    if (!live || live.openPrice != null || typeof this.segmentRepo?.fillOpenPrice !== 'function') return;
+    if (live.status !== 'open' && live.status !== 'closing') return;
+    if (live.positionIdentifier == null || pool?.identifier == null
+      || String(live.positionIdentifier) !== String(pool.identifier)) return;
+    const raw = pool.priceAtOpen;
+    const price = raw == null || raw === '' ? NaN : Number(raw);
+    if (!Number.isFinite(price) || price <= 0) return;
+    try {
+      const filled = await this.segmentRepo.fillOpenPrice(live.id, price);
+      if (filled != null) {
+        this.logger.info('lp_orchestrator_segment_open_price_filled', {
+          orchestratorId: orch.id, segmentId: live.id, openPrice: price,
+        });
+      }
+    } catch (err) {
+      this.logger.warn('lp_orchestrator_segment_open_price_fill_failed', {
+        orchestratorId: orch.id, segmentId: live.id, error: err.message,
+      });
+    }
+  }
+
+  /**
    * Un finalize que llega cuando el corte ya ocurrió (por reconciliación o
    * por un intento previo): el tramo anterior se cerró como `unknown` y el
    * vivo se abrió sin hashes. Se les pone el motivo y los hashes reales; los
@@ -2269,6 +2296,7 @@ class LpOrchestratorService {
 
     // Corte de tramo si el LP cambió sin pasar por recordTxFinalized (ajuste
     // desde otra página, pestaña cerrada): el tramo vivo apunta a otro tokenId.
+    let liveForOpenPrice = null;
     if (pool?.identifier != null) {
       let live = null;
       try {
@@ -2276,6 +2304,7 @@ class LpOrchestratorService {
       } catch (err) {
         this.logger.warn('lp_orchestrator_live_segment_load_failed', { orchestratorId: orch.id, error: err.message });
       }
+      liveForOpenPrice = live;
       if (live?.status === 'closing'
         && live.positionIdentifier != null
         && String(live.positionIdentifier) === String(pool.identifier)
@@ -2300,6 +2329,8 @@ class LpOrchestratorService {
           newPositionIdentifier: String(pool.identifier),
           openReason: 'rerange',
         });
+        // El tramo recién abierto ya lleva su precio de apertura.
+        liveForOpenPrice = null;
         orch = {
           ...orch,
           accounting: cut.accounting,
@@ -2341,6 +2372,10 @@ class LpOrchestratorService {
         }
       }
     }
+
+    // El tramo vivo sembrado por la 048 (o uno abierto con un snapshot pobre)
+    // no tiene open_price: se toma del primer priceAtOpen real de SU LP.
+    await this._fillLiveSegmentOpenPrice(orch, liveForOpenPrice, pool);
 
     // 2) Delta de contabilidad del LP (fees acumuladas + deriva de precio).
     //    Gas y slippage de swaps se aplican en recordTxFinalized.
