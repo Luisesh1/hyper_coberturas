@@ -205,6 +205,22 @@ describe('BotList', () => {
     expect(screen.getByText('Entrada 6:11')).toBeTruthy();
   });
 
+  it('sin entradas pendientes las horas relativas avanzan en cada render (y sin temporizador)', () => {
+    const make = (at) => [normalizeBot({
+      id: 3, name: 'BTC', underlying: 'BTC', mode: 'shadow', params: { structure: 'buy_with' }, alerts: [],
+      lastSignal: { direction: 'bullish', decision: 'opened', createdAt: at },
+    })];
+    const { rerender } = render(<BotList bots={make(NOW - 4 * 60e3)} selectedId={3} onSelect={() => {}} />);
+    expect(screen.getByText(/hace 4 min/)).toBeTruthy();
+    vi.setSystemTime(NOW + 6 * 60e3);
+    rerender(<BotList bots={make(NOW - 4 * 60e3)} selectedId={3} onSelect={() => {}} />);
+    expect(screen.getByText(/hace 10 min/)).toBeTruthy();
+    // Una señal posterior al montaje no sale como «ahora» congelado ni como fecha.
+    rerender(<BotList bots={make(NOW + 4 * 60e3)} selectedId={3} onSelect={() => {}} />);
+    expect(screen.getByText(/hace 2 min/)).toBeTruthy();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('sin entradas pendientes no hay temporizador', () => {
     const bots = [normalizeBot({ id: 2, name: 'SOL', underlying: 'SOL', mode: 'shadow', params: {}, alerts: [] })];
     const { container } = render(<BotList bots={bots} selectedId={2} onSelect={() => {}} />);
