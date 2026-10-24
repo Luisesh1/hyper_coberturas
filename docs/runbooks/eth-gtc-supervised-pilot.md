@@ -12,7 +12,11 @@ La alternativa sintética FOK de PR #20 **no** participa del piloto.
    `OPTIONS_LIVE_TRADING_ENABLED=false`,
    `OPTIONS_LIVE_PRODUCTION_APPROVED=false` y
    `OPTIONS_LIVE_PILOT_AUTHORIZED` diferente de `true`.
-2. La única apertura candidata sería **BUY ETH 0.01 LIMIT FOK**,
+2. La única apertura candidata sería **BUY ETH 0.01 LIMIT GTC al precio
+   medio**, supervisada 10 min y cancelada si no se llena (desde el 24 de
+   octubre de 2026 sustituye al FOK de entrada; los llenados parciales se
+   aceptan y un remanente inoperable bloquea el subyacente, con aviso por
+   Telegram y desbloqueo desde la UI),
    con símbolo, vencimiento, strike y precio máximo autorizados
    explícitamente por el operador para **esa** transacción. No reutilizar
    permisos caducados ni la referencia histórica
@@ -29,11 +33,14 @@ La alternativa sintética FOK de PR #20 **no** participa del piloto.
 5. Al dispararse un stop, señal de cierre o salida de tiempo, se solicita
    cancelar únicamente el TP original; se verifica su estado terminal
    y todos sus fills antes de mandar otro cierre
-   `LIMIT FOK reduceOnly` para la cantidad restante.
+   `LIMIT FOK reduceOnly` para la cantidad restante (los cierres ETH que no
+   son TP siguen en FOK; el TP residente, en GTC).
    Un FOK puede expirar sin ejecución; un stop local no garantiza la
    pérdida limitada. El coste de la prima comprada puede perderse entero.
 
 ## Comando de comprobación — sin dinero ni mutaciones
+
+El script imprime `gtc_pilot_entry_tif=GTC` y `gtc_pilot_exit_tif=FOK`.
 
 Con el servicio ya actualizado y el sistema **apagado**, dentro del
 contenedor `server` de la cuenta aislada:
