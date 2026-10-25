@@ -161,3 +161,61 @@ test('motor: una reentrada confirmada ordena el short equilibrado, no el delta',
   assert.equal(protection.strategyState.rangeExitPolicyState.committedRule, 'balanced');
   assert.ok(reason);
 });
+
+// --- Revision: preflight contra el objetivo y pools con la estable en token0 ---
+
+const { computeBalancedShortQty } = require('../src/services/protected-pool-delta-neutral/terminal-range');
+
+function wethUsdcSnapshot() {
+  const s = buildProtection().poolSnapshot;
+  return {
+    ...s, tickLower: -200340, tickUpper: -196260, liquidity: '100000000000000',
+    unclaimedFees0: 0, unclaimedFees1: 0, rangeLowerPrice: 2000, rangeUpperPrice: 3000,
+  };
+}
+
+test('equilibrado: un pool USDC/WETH (estable en token0) da lo mismo que su espejo WETH/USDC', () => {
+  const weth = computeBalancedShortQty(wethUsdcSnapshot());
+  const s = wethUsdcSnapshot();
+  const mirror = {
+    ...s,
+    token0: s.token1, token1: s.token0,
+    token0Address: s.token1Address, token1Address: s.token0Address,
+    // Mismo rango en el espacio crudo token1/token0 = WETH por USDC.
+    tickLower: 196260, tickUpper: 200340,
+    rangeLowerPrice: 1 / 3000, rangeUpperPrice: 1 / 2000, priceCurrent: 1 / 2500,
+  };
+  const usdc = computeBalancedShortQty(mirror);
+  assert.ok(weth > 0.15 && weth < 0.25, `weth ${weth}`);
+  assert.ok(Math.abs(usdc - weth) / weth < 0.01, `usdc ${usdc} vs weth ${weth}`);
+});
+
+test('motor: reentrada con el short pegado al delta (hueco < $11 contra el delta) igual ordena el equilibrado', async () => {
+  const protection = buildProtection({
+    policyVersion: 'range_exit_v1',
+    strategyState: {
+      policyVersion: 'range_exit_v1',
+      executionIntent: 'live',
+      modelConfidence: 'high',
+      rangeExitPolicyState: {
+        rangeKey: rangeKey(2000, 3000),
+        zone: 'below',
+        committedTargetQty: 0.1759,
+        committedRule: 'delta',
+        crossPendingZone: 'inside',
+        crossStartedAt: Date.now() - CROSS_CONFIRM_MS - 1,
+      },
+    },
+  });
+  Object.assign(protection.poolSnapshot, {
+    tickLower: -200340, tickUpper: -196260, liquidity: '100000000000000', unclaimedFees0: 0, unclaimedFees1: 0,
+  });
+  const expected = computeBalancedShortQty(protection.poolSnapshot);
+  let ordered = null;
+  await buildService(protection, {
+    actualQty: 0.1759, // delta 0.1739 + 0.002: $5 contra el delta, ~$20 contra el equilibrado
+    onExecute: (_r, { metrics }) => { ordered = Number(metrics.targetQty); },
+  }).evaluateProtection(protection);
+  assert.ok(ordered != null, 'el preflight no la bloquea por minimo medido contra el delta');
+  assert.ok(Math.abs(ordered - expected) < 1e-9);
+});

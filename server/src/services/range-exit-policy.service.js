@@ -284,7 +284,9 @@ function decideRangeExitV1({
       // sub-minimo cuando deja la posicion en cero, y es la unica via de sacar
       // un residuo. Sin esta rama, un resto de 1e-4 por encima del borde se
       // quedaria puesto para siempre.
-      const isFullClose = delta <= RESIDUAL_QTY && held > RESIDUAL_QTY;
+      const retryRule = zone === 'inside' && prior.committedRule === 'balanced' && balanced != null ? 'balanced' : 'delta';
+      const retryTarget = retryRule === 'balanced' ? balanced : delta;
+      const isFullClose = retryTarget <= RESIDUAL_QTY && held > RESIDUAL_QTY;
       const minNotional = Math.max(0, finite(minOrderNotionalUsd, DEFAULT_MIN_ORDER_NOTIONAL_USD));
       if (isFullClose || commitGap * price >= minNotional) {
         // Se reintenta con la regla que se ordeno, recalculada con los datos de
@@ -295,7 +297,7 @@ function decideRangeExitV1({
           zone,
           crossPendingZone: null,
           crossStartedAt: null,
-        }, {}, { rule: zone === 'inside' && prior.committedRule === 'balanced' ? 'balanced' : 'delta' });
+        }, {}, { rule: retryRule });
       }
       // Hay una orden sin cumplir, pero no se puede enviar. Se nombra distinto
       // de `inside_range_hold` a proposito: por fuera se parecen, y confundir
