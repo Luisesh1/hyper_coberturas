@@ -1174,6 +1174,10 @@ class ProtectedPoolDeltaNeutralService {
         });
         return null;
       });
+      // Mismo chequeo que arriba, otra vez: una evaluacion de ESTA proteccion
+      // pudo terminar mientras se esperaba el tick, y la fila que se tickeo ya
+      // no la refleja (re-detectaria el mismo cruce de borde).
+      if ((this.evalFinishedSeqById.get(protection.id) ?? 0) > listedSeq) continue;
       if (decision && !this.stopping) this._dispatchEvaluation(protection, decision, tickSeq);
     }
   }

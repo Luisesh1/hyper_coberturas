@@ -453,3 +453,32 @@ test('start() tras stop() vuelve a despachar', async () => {
   pending[0].resolve();
   await service.drain();
 });
+
+test('una evaluacion propia que termina durante el tick no se re-despacha con el cruce ya atendido', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 7 }];
+  const logger = { warn() {}, error() {}, info() {}, debug() {} };
+  const service = new ProtectedPoolDeltaNeutralService({
+    protectedPoolRepository: { listActiveDeltaNeutral: async () => list },
+    logger,
+    maxConcurrentEvals: 2,
+  });
+  const started = [];
+  const pending = [];
+  service.evaluateProtection = (_p, opts) => {
+    started.push(opts);
+    return new Promise((resolve) => { pending.push(resolve); });
+  };
+  let ticks = 0;
+  service._tickProtection = async () => {
+    ticks += 1;
+    // En el segundo tick, la evaluacion despachada en el primero termina
+    // mientras este tick aun espera: la fila leida ya es vieja.
+    if (ticks === 2) { pending[0](); await new Promise((r) => setImmediate(r)); }
+    return { marketContext: { a: 1 }, forceReason: 'boundary_cross' };
+  };
+  await service.evaluateAll();
+  await service.evaluateAll();
+  assert.equal(started.length, 1, 'el cruce ya atendido no dispara otra evaluacion urgente');
+  pending.forEach((resolve) => resolve());
+  await service.drain();
+});
