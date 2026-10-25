@@ -219,3 +219,34 @@ test('motor: reentrada con el short pegado al delta (hueco < $11 contra el delta
   assert.ok(ordered != null, 'el preflight no la bloquea por minimo medido contra el delta');
   assert.ok(Math.abs(ordered - expected) < 1e-9);
 });
+
+test('motor: con targetHedgeRatio 0.5 la reentrada ordena la mitad del equilibrado', async () => {
+  const protection = buildProtection({
+    policyVersion: 'range_exit_v1',
+    targetHedgeRatio: 0.5,
+    strategyState: {
+      policyVersion: 'range_exit_v1',
+      executionIntent: 'live',
+      modelConfidence: 'high',
+      rangeExitPolicyState: {
+        rangeKey: rangeKey(2000, 3000),
+        zone: 'below',
+        committedTargetQty: 0.205,
+        committedRule: 'delta',
+        crossPendingZone: 'inside',
+        crossStartedAt: Date.now() - CROSS_CONFIRM_MS - 1,
+      },
+    },
+  });
+  Object.assign(protection.poolSnapshot, {
+    tickLower: -200340, tickUpper: -196260, liquidity: '100000000000000', unclaimedFees0: 0, unclaimedFees1: 0,
+  });
+  const expected = 0.5 * computeBalancedShortQty(protection.poolSnapshot);
+  let ordered = null;
+  await buildService(protection, {
+    actualQty: 0.205,
+    onExecute: (_r, { metrics }) => { ordered = Number(metrics.targetQty); },
+  }).evaluateProtection(protection);
+  assert.ok(ordered != null);
+  assert.ok(Math.abs(ordered - expected) < 1e-9, `ordeno ${ordered}, esperado ${expected}`);
+});

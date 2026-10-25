@@ -477,9 +477,15 @@ const evaluateMethods = {
     // "borde de rango". Ese silencio es peor que no ofrecer la politica.
     const isRangeExitLive = policyVersion === RANGE_EXIT_V1
       && (activeProtection.strategyState?.executionIntent || strategyState.executionIntent) === 'live';
+    // El ratio de cobertura escala el objetivo de esta politica igual que el
+    // del motor: la politica recibe el delta YA escalado (`metrics.targetQty`)
+    // y el equilibrado escalado igual. Asi la orden y el `committedTargetQty`
+    // que guarda la politica hablan del mismo numero.
+    const rangeExitHedgeRatio = Number(activeProtection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
+    const rangeExitBalancedQty = isRangeExitLive ? computeBalancedShortQty(activeProtection.poolSnapshot) : null;
     const rangeExitDecision = isRangeExitLive
       ? decideRangeExitV1({
-        deltaQty: Number(metrics.deltaQty),
+        deltaQty: Number(metrics.targetQty),
         actualQty,
         currentPrice,
         rangeLowerPrice: activeProtection.rangeLowerPrice,
@@ -492,7 +498,9 @@ const evaluateMethods = {
         // Short equilibrado (secante entre bordes) del LP real: es a donde va
         // la reentrada. Sin valoracion posible llega null y la politica usa
         // el delta, como antes.
-        balancedQty: computeBalancedShortQty(activeProtection.poolSnapshot),
+        balancedQty: rangeExitBalancedQty != null && Number.isFinite(rangeExitHedgeRatio)
+          ? rangeExitBalancedQty * rangeExitHedgeRatio
+          : null,
       })
       : null;
     // `terminal_range_v1` viva. Mismo motivo que range_exit para rutearla
