@@ -216,8 +216,8 @@ test('la politica queda registrada en el motor de sombra', () => {
 // El corrimiento efectivo, fijado.
 //
 // La derivacion del coste NO gobierna: con el taker por defecto da 0.10%, por
-// debajo del piso de 0.15%, y ademas `assetContext.takerFeeRate` no lo puebla
-// nadie en todo el servidor. El offset real es 0.15% constante.
+// debajo del piso de 0.4%, y ademas `assetContext.takerFeeRate` no lo puebla
+// nadie en todo el servidor. El offset real es 0.4% constante.
 //
 // Estos tests fijan ese hecho para que un cambio en el piso, en el multiplo o
 // en la tasa no pase inadvertido — y para que quede escrito a partir de que
@@ -226,13 +226,13 @@ test('la politica queda registrada en el motor de sombra', () => {
 
 test('con la tasa por defecto manda el piso, no la derivacion', () => {
   assert.equal(resolveTriggerOffsetPct(), MIN_TRIGGER_OFFSET_PCT);
-  // 4 x 0.00025 = 0.10%, por debajo del piso de 0.15%.
+  // 4 x 0.00025 = 0.10%, por debajo del piso de 0.4%.
   assert.ok(4 * 0.00025 < MIN_TRIGGER_OFFSET_PCT);
 });
 
-test('la derivacion solo gobierna por encima del 0.0375% de tasa', () => {
+test('la derivacion solo gobierna por encima del 0.1% de tasa', () => {
   const umbral = MIN_TRIGGER_OFFSET_PCT / (2 * COST_COVERAGE_MULTIPLE);
-  assert.ok(Math.abs(umbral - 0.000375) < 1e-9);
+  assert.ok(Math.abs(umbral - 0.001) < 1e-9);
 
   assert.equal(resolveTriggerOffsetPct({ takerFeeRate: umbral * 0.9 }), MIN_TRIGGER_OFFSET_PCT);
   assert.ok(resolveTriggerOffsetPct({ takerFeeRate: umbral * 2 }) > MIN_TRIGGER_OFFSET_PCT);

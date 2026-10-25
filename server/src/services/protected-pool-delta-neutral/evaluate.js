@@ -43,6 +43,7 @@ const { accumulateFundingUsd } = require('../../utils/hl-funding');
 const {
   TERMINAL_RANGE_V1,
   buildLpValuation,
+  computeInitialTerminalQty,
   evaluateTerminalRange,
   resolveTerminalConfig,
 } = require('./terminal-range');
@@ -488,6 +489,10 @@ const evaluateMethods = {
         // El mismo piso que juzga el preflight. Sin esto la politica decide
         // ordenes que el exchange rechaza y las reintenta sin fin.
         minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
+        // Short equilibrado (secante entre bordes) del LP real: es a donde va
+        // la reentrada. Sin valoracion posible llega null y la politica usa
+        // el delta, como antes.
+        balancedQty: computeInitialTerminalQty(activeProtection.poolSnapshot, { volatilePriceUsd: currentPrice }),
       })
       : null;
     // `terminal_range_v1` viva. Mismo motivo que range_exit para rutearla
@@ -545,7 +550,11 @@ const evaluateMethods = {
           targetQty: actualQty + Number(netProfitDecision.adjustQty || 0),
           policyTargetQty: Number(metrics.deltaQty),
         }
-        : metrics;
+        // `range_exit_v1` va al delta salvo en la reentrada (equilibrado):
+        // la orden lleva SU objetivo, no el del motor.
+        : isRangeExitLive && rangeExitDecision?.decision === 'rebalance'
+          ? { ...metrics, targetQty: Number(rangeExitDecision.targetQty) }
+          : metrics;
     const executionTracking = isTerminalLive
       ? terminalResult.executionTracking
       : isNetProfitLive && netProfitDecision?.decision === 'rebalance'

@@ -36,16 +36,18 @@ const {
 
 const RANGE_EXIT_V1 = 'range_exit_v1';
 
-// Confirmacion temporal del cruce, en linea con `UPPER_HYSTERESIS_CONFIRM_MS`
-// de la politica net_profit: una mecha que pincha el borde y vuelve no es una
-// salida del rango.
-const CROSS_CONFIRM_MS = 120_000;
+// Confirmacion temporal del cruce: una mecha que pincha el borde y vuelve no es
+// una salida del rango. Era 120 s; el #57 reboto 8 veces en el borde inferior
+// en dos dias (2026-10-22/23) con 120 s y 0,15%, y cada rebote era una orden.
+// Se subio a 5 min junto con el margen (2026-10-24, decision del usuario).
+const CROSS_CONFIRM_MS = 300_000;
 
 // Limites del corrimiento del trigger. El MINIMO es hoy el valor efectivo en
 // el 100% de los casos: la derivacion por coste queda siempre por debajo (ver
 // `resolveTriggerOffsetPct`). El maximo evita el otro extremo degenerado, un
 // offset tan ancho que la cobertura llegue tarde a un movimiento real.
-const MIN_TRIGGER_OFFSET_PCT = 0.0015; // 0.15%
+// El piso era 0,15%; con el precio oscilando sobre el borde no frenaba nada.
+const MIN_TRIGGER_OFFSET_PCT = 0.004; // 0.4%
 const MAX_TRIGGER_OFFSET_PCT = 0.02;   // 2%
 
 // Cuantas veces el coste de ida y vuelta debe cubrir el movimiento antes de
@@ -102,16 +104,16 @@ function resolveZone(price, lower, upper) {
  *
  * ⚠️ Esa derivacion NO gobierna, y decirlo importa mas que conservarla:
  *
- *   - Con el taker en 0.00025 da 0.10%, POR DEBAJO del piso de 0.15%. El clamp
+ *   - Con el taker en 0.00025 da 0.10%, POR DEBAJO del piso de 0.4%. El clamp
  *     gana siempre.
  *   - Y no hay tasa real que pasar: `assetContext.takerFeeRate` no lo puebla
  *     nadie en todo el servidor (verificado con grep el 2026-09-23). El motor
  *     tampoco se la pasa a esta funcion.
  *
- * O sea que el offset efectivo es 0.15%, constante, en el 100% de los casos.
+ * O sea que el offset efectivo es 0.4%, constante, en el 100% de los casos.
  * Se deja la derivacion escrita porque es el razonamiento que justifica el
  * valor, pero el codigo ya no aparenta que la tasa manda. Para que vuelva a
- * mandar hace falta que la tasa supere 0.0375% Y que alguien la pueble de
+ * mandar hace falta que la tasa supere 0.1% Y que alguien la pueble de
  * verdad; ese dia hay que revisar tambien el piso.
  *
  * Y ojo con la premisa: la cancelacion de `adjustQty` supone que el coste no
@@ -140,6 +142,9 @@ function resolveTriggerOffsetPct({ takerFeeRate = ESTIMATED_TAKER_FEE_RATE } = {
  * @param {number}  p.now
  * @param {boolean} p.forceRebalance    Forzado del orquestador (se respeta).
  * @param {number}  p.takerFeeRate      Tasa taker que fija el corrimiento del trigger.
+ * @param {number}  p.balancedQty       Short equilibrado del rango (secante entre
+ *                                      bordes). Lo usa SOLO la reentrada; sin un
+ *                                      valor positivo cae al delta.
  * @returns {{decision,gate,targetQty,adjustQty,nextState,...}}
  */
 function decideRangeExitV1({
@@ -153,8 +158,10 @@ function decideRangeExitV1({
   forceRebalance = false,
   takerFeeRate = ESTIMATED_TAKER_FEE_RATE,
   minOrderNotionalUsd = DEFAULT_MIN_ORDER_NOTIONAL_USD,
+  balancedQty = null,
 } = {}) {
   const delta = Math.max(0, finite(deltaQty, 0));
+  const balanced = finite(balancedQty, 0) > 0 ? finite(balancedQty) : null;
   const held = Math.max(0, finite(actualQty, 0));
   const price = finite(currentPrice, 0);
   const lower = finite(rangeLowerPrice, 0);
@@ -175,24 +182,32 @@ function decideRangeExitV1({
     ...extra,
   });
 
-  const rebalance = (gate, nextState, extra = {}) => ({
-    policyVersion: RANGE_EXIT_V1,
-    decision: 'rebalance',
-    gate,
-    targetQty: delta,
-    adjustQty: delta - held,
-    errorQty: delta - held,
-    minNotionalUsd: null,
-    nextState: {
-      ...nextState,
-      lastRebalanceAt: now,
-      lastSnapshotPrice: price,
-      // Lo que esta politica ORDENO. Es la referencia contra la que el tick
-      // siguiente comprueba si la orden llego a ejecutarse.
-      committedTargetQty: delta,
-    },
-    ...extra,
-  });
+  // `rule` dice con que regla se fijo el objetivo: 'delta' (salir, abrir,
+  // re-centrar, forzado) o 'balanced' (reentrar). Se guarda para que un
+  // reintento por orden incumplida recalcule con la MISMA regla.
+  const rebalance = (gate, nextState, extra = {}, { rule = 'delta' } = {}) => {
+    const useBalanced = rule === 'balanced' && balanced != null;
+    const target = useBalanced ? balanced : delta;
+    return {
+      policyVersion: RANGE_EXIT_V1,
+      decision: 'rebalance',
+      gate,
+      targetQty: target,
+      adjustQty: target - held,
+      errorQty: target - held,
+      minNotionalUsd: null,
+      nextState: {
+        ...nextState,
+        lastRebalanceAt: now,
+        lastSnapshotPrice: price,
+        // Lo que esta politica ORDENO. Es la referencia contra la que el tick
+        // siguiente comprueba si la orden llego a ejecutarse.
+        committedTargetQty: target,
+        committedRule: useBalanced ? 'balanced' : 'delta',
+      },
+      ...extra,
+    };
+  };
 
   // Sin rango utilizable no hay politica de borde que valga: se queda quieta en
   // vez de inventar un ancla. Es el unico caso en que devuelve `hold` sin
@@ -272,13 +287,15 @@ function decideRangeExitV1({
       const isFullClose = delta <= RESIDUAL_QTY && held > RESIDUAL_QTY;
       const minNotional = Math.max(0, finite(minOrderNotionalUsd, DEFAULT_MIN_ORDER_NOTIONAL_USD));
       if (isFullClose || commitGap * price >= minNotional) {
+        // Se reintenta con la regla que se ordeno, recalculada con los datos de
+        // ahora: una reentrada equilibrada vuelve al equilibrado, no al delta.
         return rebalance('commit_incomplete', {
           ...prior,
           rangeKey: key,
           zone,
           crossPendingZone: null,
           crossStartedAt: null,
-        });
+        }, {}, { rule: zone === 'inside' && prior.committedRule === 'balanced' ? 'balanced' : 'delta' });
       }
       // Hay una orden sin cumplir, pero no se puede enviar. Se nombra distinto
       // de `inside_range_hold` a proposito: por fuera se parecen, y confundir
@@ -333,10 +350,14 @@ function decideRangeExitV1({
     return hold('cross_confirming', prior, { triggerPrice });
   }
 
+  // Al salir, el delta (por abajo el LP es todo volatil, por arriba cero). Al
+  // reentrar, el short equilibrado: se va a congelar en todo el rango, y el
+  // delta del borde (~100% o ~0%) seria el peor punto para congelarlo.
   return rebalance(
     anchoredZone === 'inside' ? 'range_exit' : 'range_reentry',
     { ...prior, rangeKey: key, zone, crossPendingZone: null, crossStartedAt: null },
     { triggerPrice },
+    { rule: anchoredZone === 'inside' ? 'delta' : 'balanced' },
   );
 }
 
