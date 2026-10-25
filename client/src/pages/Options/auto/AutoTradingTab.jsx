@@ -6,7 +6,7 @@ import { optionsApi } from '../../../services/api';
 import LiveConfirmDialog from '../strategies/LiveConfirmDialog';
 import Sheet from '../strategies/common/Sheet';
 import { PlusIcon } from '../strategies/common/icons';
-import { useVisibleInterval } from '../strategies/common/useVisibleInterval';
+import { useVisibleInterval } from '../../../hooks/useVisibleInterval';
 import { formatDateTime } from '../strategies/common/format';
 import BotList from './BotList';
 import BotDetail from './BotDetail';

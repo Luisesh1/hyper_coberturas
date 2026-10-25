@@ -21,6 +21,7 @@ const {
 } = require('./delta-neutral-snapshot.service');
 const { resetDecisionStateForNewSegment } = require('./protected-pool-delta-neutral/segment-reset');
 const { computeExtractableSlotSurplusUsd } = require('../utils/isolated-margin');
+const KeyedLimiter = require('../utils/keyed-limiter');
 const BLOCK_NOTIFICATION_THROTTLE_MS = 15 * 60_000;
 const BLOCK_NOTIFICATION_DEDUPE_MS = 2 * 60_000;
 // Margen de seguridad al recortar una orden a lo que el colateral permite. El
@@ -37,6 +38,27 @@ const POSITION_MISSING_GRACE_MS = 15 * 60_000;
 const DEACTIVATION_RESIDUAL_DUST_USD = 1;
 const DEACTIVATION_RESIDUAL_PCT = 0.01;
 const DELTA_NEUTRAL_LOCK_NAMESPACE = 0x444e;
+const DEFAULT_MAX_CONCURRENT_EVALS = 3;
+// Cada evaluacion puede retener una conexion del pool de Postgres (max 10)
+// para su lock consultivo: mas de 5 a la vez dejaria al resto del servidor sin
+// conexiones.
+const MAX_CONCURRENT_EVALS_CAP = 5;
+
+// Clave del limitador de evaluaciones: la cuenta de Hyperliquid. Activos
+// distintos de la misma cuenta comparten `withdrawable` para los top-ups de
+// margen, y dos preflights a la vez contra el margen previo al trade del otro
+// darian por bueno un colateral que ya no esta. Sin cuenta, todas comparten
+// la clave 'unknown' y van en serie (lo conservador).
+function deltaNeutralEvalKey(protection) {
+  const accountId = protection?.accountId;
+  return accountId == null || accountId === '' ? 'unknown' : String(accountId);
+}
+
+// Un valor de entorno roto (NaN, 0, negativo) no puede tumbar el arranque: el
+// constructor de `KeyedLimiter` lanza con cualquier cosa que no sea un entero >= 1.
+function sanitizeMaxConcurrentEvals(value) {
+  return Number.isInteger(value) && value >= 1 ? Math.min(value, MAX_CONCURRENT_EVALS_CAP) : null;
+}
 
 // El snapshot leido es de una posicion que la proteccion ya no sigue: un
 // modify-range la migro al tokenId nuevo mientras se leia el viejo.
@@ -146,6 +168,26 @@ class ProtectedPoolDeltaNeutralService {
     // tras una ejecución, no de forma continua.
     this.userFillsCache = new Map();
     this.evaluationLocks = new Map();
+    // Las evaluaciones completas salen del bucle de 2 s por este limitador:
+    // tope global (cada una puede retener una conexion del pool para el lock
+    // consultivo) y en serie por cuenta de Hyperliquid. `queuedEvals` evita encolar
+    // otra vez una proteccion que sigue en cola o en curso.
+    this.maxConcurrentEvals = sanitizeMaxConcurrentEvals(deps.maxConcurrentEvals)
+      || sanitizeMaxConcurrentEvals(config.deltaNeutral.maxConcurrentEvals)
+      || DEFAULT_MAX_CONCURRENT_EVALS;
+    this.evalLimiter = new KeyedLimiter({ maxConcurrent: this.maxConcurrentEvals });
+    this.queuedEvals = new Set();
+    // Contador monotono de evaluaciones despachadas terminadas, y el valor que
+    // tenia al terminar la ultima de cada proteccion y de cada clave. Un
+    // contador y no `Date.now()`: dos sucesos en el mismo milisegundo no se
+    // pueden ordenar con el reloj. Ver `evaluateAll` y `_dispatchEvaluation`.
+    this.evalFinishSeq = 0;
+    this.evalFinishedSeqById = new Map();
+    this.evalFinishedSeqByKey = new Map();
+    // `stop()` lo activa: las evaluaciones en cola se resuelven sin ejecutarse
+    // y el bucle deja de despachar. `drain()` espera a la vuelta en curso.
+    this.stopping = false;
+    this.currentLoop = null;
     // Estado de las politicas en sombra, indexado por `protectionId:politica`.
     // Vive en memoria durante la sesion y se rehidrata desde
     // `strategy_state_json.shadowSnapshots` al arrancar.
@@ -195,6 +237,7 @@ class ProtectedPoolDeltaNeutralService {
   }
 
   start() {
+    this.stopping = false;
     if (this.interval) return;
     this.hyperliquidStreamService.start?.();
     this.interval = setInterval(() => {
@@ -206,6 +249,7 @@ class ProtectedPoolDeltaNeutralService {
   }
 
   stop() {
+    this.stopping = true;
     if (!this.interval) return;
     clearInterval(this.interval);
     this.interval = null;
@@ -1100,19 +1144,109 @@ class ProtectedPoolDeltaNeutralService {
   async evaluateAll() {
     if (this.running) return;
     this.running = true;
-    try {
-      const protections = await this.repo.listActiveDeltaNeutral();
-      for (const protection of protections) {
-        await this._tickProtection(protection).catch((err) => {
-          this.logger.warn('protected_pool_delta_neutral_tick_failed', {
-            protectionId: protection.id,
-            userId: protection.userId,
-            error: err.message,
-          });
-        });
-      }
-    } finally {
+    // Se guarda la vuelta en curso para que `drain()` la espere.
+    const loop = this._evaluateAllOnce().finally(() => {
       this.running = false;
+      this.currentLoop = null;
+    });
+    this.currentLoop = loop;
+    await loop;
+  }
+
+  async _evaluateAllOnce() {
+    // Una evaluacion que termina despues de este punto puede haber persistido
+    // estado (p. ej. `lastObservedBoundarySide`) que la lista leida ya no ve.
+    const listedSeq = this.evalFinishSeq;
+    const protections = await this.repo.listActiveDeltaNeutral();
+    for (const protection of protections) {
+      if (this.stopping) break;
+      // Fila posiblemente vieja: tickearla re-detectaria un cruce ya atendido
+      // y despacharia otra evaluacion urgente. La vuelta siguiente (2 s) trae
+      // la fila fresca.
+      if ((this.evalFinishedSeqById.get(protection.id) ?? 0) > listedSeq) continue;
+      const tickSeq = this.evalFinishSeq;
+      // El chequeo ligero sigue en serie; la evaluacion completa se despacha
+      // sin esperarla para que una RPC lenta no frene al resto del bucle.
+      const decision = await this._tickProtection(protection).catch((err) => {
+        this.logger.warn('protected_pool_delta_neutral_tick_failed', {
+          protectionId: protection.id,
+          userId: protection.userId,
+          error: err.message,
+        });
+        return null;
+      });
+      // Mismo chequeo que arriba, otra vez: una evaluacion de ESTA proteccion
+      // pudo terminar mientras se esperaba el tick, y la fila que se tickeo ya
+      // no la refleja (re-detectaria el mismo cruce de borde).
+      if ((this.evalFinishedSeqById.get(protection.id) ?? 0) > listedSeq) continue;
+      if (decision && !this.stopping) this._dispatchEvaluation(protection, decision, tickSeq);
+    }
+  }
+
+  _dispatchEvaluation(protection, decision, tickSeq = this.evalFinishSeq) {
+    const id = protection.id;
+    if (this.queuedEvals.has(id)) return false;
+    this.queuedEvals.add(id);
+    const key = deltaNeutralEvalKey(protection);
+    // El `marketContext` del tick (precio, bbo, clearinghouseState del
+    // preflight de margen) solo vale si la evaluacion arranca ya y ninguna
+    // otra de la misma cuenta termino mientras se tomaba (su trade lo deja
+    // viejo). `KeyedLimiter` ejecuta `fn` en sincrono dentro de `run` cuando
+    // hay hueco y la clave esta libre; si espero en la cola, arranca despues
+    // de que `startedInline` pase a false. Sin contexto, `evaluate` lo pide de
+    // nuevo con los precios y el margen actuales.
+    let startedInline = true;
+    const contextFresh = (this.evalFinishedSeqByKey.get(key) ?? 0) <= tickSeq;
+    const task = async () => {
+      if (this.stopping) return null;
+      try {
+        return await this.evaluateProtection(
+          protection,
+          startedInline && contextFresh ? decision : { forceReason: decision.forceReason },
+        );
+      } finally {
+        // Se anota dentro de la tarea, antes de que el limitador libere la
+        // clave: cualquier despacho posterior en la misma cuenta ya lo ve.
+        this.evalFinishSeq += 1;
+        this.evalFinishedSeqById.set(id, this.evalFinishSeq);
+        this.evalFinishedSeqByKey.set(key, this.evalFinishSeq);
+      }
+    };
+    // `run` nunca lanza en sincrono (un throw de `fn` llega como rechazo), y
+    // el `catch` deja la promesa siempre resuelta: no hay rechazos sin manejar.
+    this.evalLimiter.run(key, task)
+      .catch((err) => {
+        this.logger.warn('protected_pool_delta_neutral_tick_failed', {
+          protectionId: id,
+          userId: protection.userId,
+          error: err?.message,
+        });
+      })
+      .finally(() => {
+        this.queuedEvals.delete(id);
+      });
+    startedInline = false;
+    return true;
+  }
+
+  // Espera a que terminen las evaluaciones en cola o en curso, con tope: el
+  // apagado no puede colgarse por una RPC que no vuelve.
+  async drain(timeoutMs = 30_000) {
+    let timer = null;
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+    });
+    const settle = async () => {
+      // Primero la vuelta en curso (puede despachar aun si no se llamo a
+      // `stop()`), luego la cola del limitador.
+      if (this.currentLoop) await this.currentLoop.catch(() => {});
+      await this.evalLimiter.idle();
+    };
+    try {
+      await Promise.race([settle(), timeout]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -1291,14 +1425,15 @@ class ProtectedPoolDeltaNeutralService {
     const nearBoundaryFresh = nearBoundary
       && (now - (this.nearBoundarySince.get(protection.id) || now)) <= NEAR_BOUNDARY_URGENCY_MS;
 
-    if (!evalDue && !crossedBoundary && !nearBoundaryFresh) return;
+    if (!evalDue && !crossedBoundary && !nearBoundaryFresh) return null;
 
     this._recordHybridStat('marketTicks');
     this.lastEvalAt.set(protection.id, now);
-    await this.evaluateProtection(protection, {
+    // Devuelve la decision: la evaluacion la despacha `evaluateAll`.
+    return {
       marketContext,
       forceReason: crossedBoundary ? 'boundary_cross' : nearBoundary ? 'boundary_watch' : null,
-    });
+    };
   }
 
   /**
@@ -1680,6 +1815,7 @@ Object.assign(ProtectedPoolDeltaNeutralService.prototype, pricingMethods, evalua
 
 module.exports = new ProtectedPoolDeltaNeutralService();
 module.exports.ProtectedPoolDeltaNeutralService = ProtectedPoolDeltaNeutralService;
+module.exports.deltaNeutralEvalKey = deltaNeutralEvalKey;
 module.exports.DEFAULT_BAND_MODE = DEFAULT_BAND_MODE;
 module.exports.DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT = DEFAULT_BASE_REBALANCE_PRICE_MOVE_PCT;
 module.exports.DEFAULT_REBALANCE_INTERVAL_SEC = DEFAULT_REBALANCE_INTERVAL_SEC;

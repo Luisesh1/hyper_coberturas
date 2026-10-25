@@ -5,7 +5,6 @@ import './styles/tokens.css';
 import './styles/components.css';
 import App from './App';
 import { ThemeProvider } from './context/ThemeContext';
-import { WalletProvider } from './hooks/useWalletConnection';
 
 // Modo dev: instalamos los hooks globales de captura de errores ANTES del
 // primer render para no perder errores durante el bootstrap. En build de
@@ -21,9 +20,7 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
       <ThemeProvider>
-        <WalletProvider>
-          <App />
-        </WalletProvider>
+        <App />
       </ThemeProvider>
     </BrowserRouter>
   </StrictMode>

@@ -1,0 +1,484 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  ProtectedPoolDeltaNeutralService,
+  deltaNeutralEvalKey,
+} = require('../src/services/protected-pool-delta-neutral.service');
+
+/**
+ * El bucle de 2 s no puede quedarse esperando a una evaluacion completa (RPC
+ * lenta): eso retrasa la deteccion de borde de todas las demas protecciones.
+ * El chequeo ligero sigue en serie y las evaluaciones completas se despachan a
+ * un limitador (tope global, en serie por cuenta de Hyperliquid).
+ */
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+function makeLogger() {
+  const calls = { warn: [], error: [], info: [] };
+  return {
+    calls,
+    warn: (event, meta) => calls.warn.push({ event, meta }),
+    error: (event, meta) => calls.error.push({ event, meta }),
+    info: (event, meta) => calls.info.push({ event, meta }),
+    debug: () => {},
+  };
+}
+
+function buildService(list, { maxConcurrentEvals = 2, listFn = null } = {}) {
+  const logger = makeLogger();
+  const service = new ProtectedPoolDeltaNeutralService({
+    protectedPoolRepository: { listActiveDeltaNeutral: listFn || (async () => list) },
+    logger,
+    maxConcurrentEvals,
+  });
+  const started = [];
+  const pending = [];
+  service._tickProtection = async () => ({ marketContext: null, forceReason: null });
+  service.evaluateProtection = (protection) => {
+    started.push(protection.id);
+    const d = deferred();
+    pending.push(d);
+    return d.promise;
+  };
+  return { service, logger, started, pending };
+}
+
+// Vacia la cola de microtareas sin depender de temporizadores reales.
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('evaluateAll vuelve sin esperar a las evaluaciones', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 2, inferredAsset: 'ETH' },
+    { id: 3, userId: 1, accountId: 3, inferredAsset: 'BTC' },
+  ];
+  const { service, started, pending } = buildService(list);
+
+  await service.evaluateAll();
+
+  assert.deepEqual(started, [1, 2], 'solo arrancan las que caben en el tope');
+  assert.equal(service.running, false, 'el bucle ya termino su vuelta');
+
+  pending[0].resolve();
+  await flush();
+  assert.deepEqual(started, [1, 2, 3], 'la tercera entra al liberarse un hueco');
+
+  pending[1].resolve();
+  pending[2].resolve();
+  await service.drain();
+  assert.equal(service.queuedEvals.size, 0);
+});
+
+test('misma cuenta se evalúa en serie aunque el activo cambie', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 7, inferredAsset: 'BTC' },
+  ];
+  const { service, started, pending } = buildService(list);
+
+  await service.evaluateAll();
+  assert.deepEqual(started, [1]);
+
+  pending[0].resolve();
+  await flush();
+  assert.deepEqual(started, [1, 2]);
+
+  pending[1].resolve();
+  await service.drain();
+});
+
+test('no encola duplicados mientras una evaluación sigue en curso', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' }];
+  const { service, started, pending } = buildService(list);
+
+  await service.evaluateAll();
+  await service.evaluateAll();
+  await service.evaluateAll();
+  assert.deepEqual(started, [1]);
+  assert.equal(service.evalLimiter.size, 1);
+
+  pending[0].resolve();
+  await service.drain();
+  assert.equal(service.queuedEvals.size, 0);
+});
+
+test('un fallo se registra y la siguiente vuelta reintenta', async (t) => {
+  const unhandled = [];
+  const onUnhandled = (err) => unhandled.push(err);
+  process.on('unhandledRejection', onUnhandled);
+  t.after(() => process.off('unhandledRejection', onUnhandled));
+
+  const list = [{ id: 9, userId: 4, accountId: 7, inferredAsset: 'ETH' }];
+  const { service, logger, started, pending } = buildService(list);
+
+  await service.evaluateAll();
+  pending[0].reject(new Error('rpc timeout'));
+  await service.drain();
+  await flush();
+
+  const warn = logger.calls.warn.find((c) => c.event === 'protected_pool_delta_neutral_tick_failed');
+  assert.ok(warn, 'el fallo se registra');
+  assert.equal(warn.meta.protectionId, 9);
+  assert.equal(warn.meta.userId, 4);
+  assert.equal(warn.meta.error, 'rpc timeout');
+  assert.equal(service.queuedEvals.size, 0);
+  assert.deepEqual(unhandled, []);
+
+  await service.evaluateAll();
+  assert.deepEqual(started, [9, 9], 'la siguiente vuelta reintenta');
+  pending[1].resolve();
+  await service.drain();
+});
+
+test('un throw sincrono en evaluateProtection no deja la proteccion bloqueada', async () => {
+  const list = [{ id: 5, userId: 1, accountId: 7, inferredAsset: 'ETH' }];
+  const { service, logger } = buildService(list);
+  let calls = 0;
+  service.evaluateProtection = () => {
+    calls += 1;
+    throw new Error('boom');
+  };
+
+  await service.evaluateAll();
+  await service.drain();
+  await flush();
+  assert.equal(service.queuedEvals.size, 0);
+  assert.ok(logger.calls.warn.some((c) => c.event === 'protected_pool_delta_neutral_tick_failed'));
+
+  await service.evaluateAll();
+  await service.drain();
+  assert.equal(calls, 2);
+});
+
+test('_tickProtection nulo no despacha nada y un fallo del tick se registra', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 2, inferredAsset: 'ETH' },
+  ];
+  const { service, logger, started, pending } = buildService(list);
+  service._tickProtection = async (p) => {
+    if (p.id === 1) throw new Error('tick roto');
+    return null;
+  };
+
+  await service.evaluateAll();
+  assert.deepEqual(started, []);
+  assert.equal(pending.length, 0);
+  assert.ok(logger.calls.warn.some((c) => c.event === 'protected_pool_delta_neutral_tick_failed'
+    && c.meta.protectionId === 1));
+});
+
+test('drain respeta el timeout aunque una evaluacion no termine', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' }];
+  const { service } = buildService(list);
+  await service.evaluateAll();
+  // Diferido que nunca se resuelve: drain debe volver por el temporizador.
+  await service.drain(1);
+  assert.equal(service.queuedEvals.size, 1);
+});
+
+test('maxConcurrentEvals invalido cae a 3 en lugar de romper el arranque', () => {
+  for (const bad of [0, -1, NaN, 1.5, '2']) {
+    const service = new ProtectedPoolDeltaNeutralService({
+      protectedPoolRepository: { listActiveDeltaNeutral: async () => [] },
+      logger: makeLogger(),
+      maxConcurrentEvals: bad,
+    });
+    assert.equal(service.maxConcurrentEvals, 3, `valor ${String(bad)}`);
+  }
+});
+
+test('deltaNeutralEvalKey es la cuenta de Hyperliquid', () => {
+  assert.equal(deltaNeutralEvalKey({ accountId: 7, inferredAsset: 'eth' }), '7');
+  assert.equal(deltaNeutralEvalKey({ accountId: 7, inferredAsset: 'BTC' }), '7');
+  assert.equal(deltaNeutralEvalKey({ accountId: null, inferredAsset: 'ETH' }), 'unknown');
+  assert.equal(deltaNeutralEvalKey({ inferredAsset: 'ETH' }), 'unknown');
+});
+
+test('cuentas distintas se evalúan en paralelo', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 8, inferredAsset: 'ETH' },
+  ];
+  const { service, started, pending } = buildService(list);
+  await service.evaluateAll();
+  assert.deepEqual(started, [1, 2]);
+  pending.forEach((d) => d.resolve());
+  await service.drain();
+});
+
+test('sin cuenta, las protecciones comparten clave y van en serie', async () => {
+  const list = [
+    { id: 1, userId: 1, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: null, inferredAsset: 'BTC' },
+  ];
+  const { service, started, pending } = buildService(list);
+  await service.evaluateAll();
+  assert.deepEqual(started, [1]);
+  pending[0].resolve();
+  await flush();
+  assert.deepEqual(started, [1, 2]);
+  pending[1].resolve();
+  await service.drain();
+});
+
+// El contexto de mercado del tick (precio, bbo, clearinghouseState del
+// preflight de margen) solo vale si la evaluacion arranca en el acto.
+function buildContextService(list, opts) {
+  const ctx = buildService(list, opts);
+  const options = new Map();
+  ctx.service._tickProtection = async (p) => ({
+    marketContext: { tag: `ctx-${p.id}` },
+    forceReason: 'boundary_cross',
+  });
+  const inner = ctx.service.evaluateProtection;
+  ctx.service.evaluateProtection = (protection, opt) => {
+    options.set(protection.id, opt);
+    return inner(protection, opt);
+  };
+  return { ...ctx, options };
+}
+
+test('KeyedLimiter arranca fn en sincrono si hay hueco y la clave esta libre', () => {
+  const KeyedLimiter = require('../src/utils/keyed-limiter');
+  const limiter = new KeyedLimiter({ maxConcurrent: 1 });
+  let ran = false;
+  limiter.run('a', () => { ran = true; });
+  assert.equal(ran, true);
+});
+
+test('una evaluacion que arranca en el acto recibe el marketContext del tick', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' }];
+  const { service, options, pending } = buildContextService(list);
+  await service.evaluateAll();
+  assert.deepEqual(options.get(1), { marketContext: { tag: 'ctx-1' }, forceReason: 'boundary_cross' });
+  pending[0].resolve();
+  await service.drain();
+});
+
+test('una evaluacion encolada tras la misma cuenta no reusa el marketContext', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 7, inferredAsset: 'BTC' },
+  ];
+  const { service, options, pending } = buildContextService(list);
+  await service.evaluateAll();
+  pending[0].resolve();
+  await flush();
+  const opt = options.get(2);
+  assert.ok(opt, 'la segunda arranco');
+  assert.equal(opt.marketContext, undefined);
+  assert.equal(opt.forceReason, 'boundary_cross');
+  pending[1].resolve();
+  await service.drain();
+});
+
+test('una evaluacion encolada por el tope global no reusa el marketContext', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 2, inferredAsset: 'ETH' },
+    { id: 3, userId: 1, accountId: 3, inferredAsset: 'ETH' },
+  ];
+  const { service, options, pending } = buildContextService(list);
+  await service.evaluateAll();
+  assert.equal(options.get(2).marketContext.tag, 'ctx-2');
+  pending[0].resolve();
+  await flush();
+  const opt = options.get(3);
+  assert.ok(opt, 'la tercera arranco');
+  assert.equal(opt.marketContext, undefined);
+  assert.equal(opt.forceReason, 'boundary_cross');
+  pending[1].resolve();
+  pending[2].resolve();
+  await service.drain();
+});
+
+test('maxConcurrentEvals se limita a 5 (cada evaluacion retiene una conexion del pool)', () => {
+  const config = require('../src/config');
+  const original = config.deltaNeutral.maxConcurrentEvals;
+  try {
+    const fromDeps = new ProtectedPoolDeltaNeutralService({
+      protectedPoolRepository: { listActiveDeltaNeutral: async () => [] },
+      logger: makeLogger(),
+      maxConcurrentEvals: 10,
+    });
+    assert.equal(fromDeps.maxConcurrentEvals, 5);
+    config.deltaNeutral.maxConcurrentEvals = 8;
+    const fromConfig = new ProtectedPoolDeltaNeutralService({
+      protectedPoolRepository: { listActiveDeltaNeutral: async () => [] },
+      logger: makeLogger(),
+    });
+    assert.equal(fromConfig.maxConcurrentEvals, 5);
+  } finally {
+    config.deltaNeutral.maxConcurrentEvals = original;
+  }
+});
+
+test('una evaluacion que termina tras leer la lista no se vuelve a despachar con la fila vieja', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' }];
+  let onList = null;
+  const { service, started, pending } = buildService(list, {
+    listFn: async () => {
+      if (onList) await onList();
+      return list;
+    },
+  });
+  let ticks = 0;
+  service._tickProtection = async () => {
+    ticks += 1;
+    return { marketContext: null, forceReason: 'boundary_cross' };
+  };
+
+  await service.evaluateAll();
+  assert.deepEqual(started, [1]);
+  assert.equal(ticks, 1);
+
+  // La evaluacion de P termina mientras se lee la lista: la fila leida puede
+  // ser anterior a lo que esa evaluacion persistio.
+  onList = async () => { pending[0].resolve(); await flush(); };
+  await service.evaluateAll();
+  assert.equal(ticks, 1, 'no se tickea con la fila vieja');
+  assert.deepEqual(started, [1], 'no se re-despacha en esta vuelta');
+
+  onList = null;
+  await service.evaluateAll();
+  assert.equal(ticks, 2);
+  assert.deepEqual(started, [1, 1], 'la vuelta siguiente, con fila fresca, si');
+  pending[1].resolve();
+  await service.drain();
+});
+
+test('si otra evaluacion de la cuenta termina durante el tick, no se reusa su marketContext', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 7, inferredAsset: 'BTC' },
+  ];
+  const { service, started, pending } = buildService(list);
+  const options = new Map();
+  const inner = service.evaluateProtection;
+  service.evaluateProtection = (protection, opt) => {
+    options.set(protection.id, opt);
+    return inner(protection, opt);
+  };
+  service._tickProtection = async (p) => {
+    if (p.id === 2) {
+      // A (misma cuenta) termina mientras B lee su contexto de mercado: ese
+      // clearinghouseState es anterior al trade de A.
+      pending[0].resolve();
+      await flush();
+    }
+    return { marketContext: { tag: `ctx-${p.id}` }, forceReason: 'boundary_cross' };
+  };
+
+  await service.evaluateAll();
+  assert.deepEqual(started, [1, 2], 'B arranca en el acto: la clave ya esta libre');
+  assert.equal(options.get(1).marketContext.tag, 'ctx-1');
+  assert.equal(options.get(2).marketContext, undefined);
+  assert.equal(options.get(2).forceReason, 'boundary_cross');
+  pending[1].resolve();
+  await service.drain();
+});
+
+test('tras stop() las evaluaciones encoladas no llegan a ejecutarse', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 7, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 7, inferredAsset: 'BTC' },
+  ];
+  const { service, started, pending } = buildService(list);
+  await service.evaluateAll();
+  assert.deepEqual(started, [1]);
+
+  service.stop();
+  pending[0].resolve();
+  await service.drain();
+  assert.deepEqual(started, [1], 'la encolada se resuelve sin evaluar');
+  assert.equal(service.queuedEvals.size, 0);
+  assert.equal(service.evalLimiter.size, 0);
+});
+
+test('stop() a mitad de evaluateAll impide nuevos despachos', async () => {
+  const list = [
+    { id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' },
+    { id: 2, userId: 1, accountId: 2, inferredAsset: 'ETH' },
+  ];
+  const { service, started } = buildService(list);
+  service._tickProtection = async (p) => {
+    if (p.id === 1) service.stop();
+    return { marketContext: null, forceReason: null };
+  };
+  await service.evaluateAll();
+  assert.deepEqual(started, []);
+});
+
+test('drain espera a un evaluateAll en curso', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' }];
+  const listing = deferred();
+  const { service, started } = buildService(list, { listFn: () => listing.promise });
+
+  const loop = service.evaluateAll();
+  service.stop();
+  let drained = false;
+  const draining = service.drain().then(() => { drained = true; });
+  await flush();
+  assert.equal(drained, false, 'drain no vuelve con la vuelta a medias');
+
+  listing.resolve(list);
+  await loop;
+  await draining;
+  assert.equal(drained, true);
+  assert.deepEqual(started, [], 'la vuelta no despacha tras stop()');
+});
+
+test('start() tras stop() vuelve a despachar', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 1, inferredAsset: 'ETH' }];
+  const { service, started, pending } = buildService(list);
+  service.hyperliquidStreamService = { start() {}, stop() {} };
+  service.stop();
+  service.start();
+  service.stop();
+  service.start();
+  try {
+    await service.evaluateAll();
+    assert.deepEqual(started, [1]);
+  } finally {
+    service.stop();
+  }
+  pending[0].resolve();
+  await service.drain();
+});
+
+test('una evaluacion propia que termina durante el tick no se re-despacha con el cruce ya atendido', async () => {
+  const list = [{ id: 1, userId: 1, accountId: 7 }];
+  const logger = { warn() {}, error() {}, info() {}, debug() {} };
+  const service = new ProtectedPoolDeltaNeutralService({
+    protectedPoolRepository: { listActiveDeltaNeutral: async () => list },
+    logger,
+    maxConcurrentEvals: 2,
+  });
+  const started = [];
+  const pending = [];
+  service.evaluateProtection = (_p, opts) => {
+    started.push(opts);
+    return new Promise((resolve) => { pending.push(resolve); });
+  };
+  let ticks = 0;
+  service._tickProtection = async () => {
+    ticks += 1;
+    // En el segundo tick, la evaluacion despachada en el primero termina
+    // mientras este tick aun espera: la fila leida ya es vieja.
+    if (ticks === 2) { pending[0](); await new Promise((r) => setImmediate(r)); }
+    return { marketContext: { a: 1 }, forceReason: 'boundary_cross' };
+  };
+  await service.evaluateAll();
+  await service.evaluateAll();
+  assert.equal(started.length, 1, 'el cruce ya atendido no dispara otra evaluacion urgente');
+  pending.forEach((resolve) => resolve());
+  await service.drain();
+});

@@ -10,6 +10,7 @@ const deltaNeutralIntegrityService = require('../services/delta-neutral-integrit
 const lpOrchestratorMonitorService = require('../services/lp-orchestrator-monitor.service');
 const crossChainMonitorService = require('../services/cross-chain/cross-chain-monitor.service');
 const config = require('../config');
+const decisionLogRetentionService = require('../services/decision-log-retention.service');
 const walletMetricsService = require('../services/wallet-metrics.service');
 const uniswapOperationService = require('../services/uniswap-operation.service');
 const telegramCommandService = require('../services/telegram-command.service');
@@ -76,6 +77,8 @@ async function bootstrapInfra(httpServer) {
   deltaNeutralIntegrityService.start();
   protectedPoolDeltaNeutralService.start();
   lpOrchestratorMonitorService.start();
+  // Poda diaria del log de decisiones (acotada, en lotes).
+  decisionLogRetentionService.start();
   // Los envíos ya firmados se siguen vigilando aunque el modo sea solo lectura.
   if (config.crossChainFunding.mode !== 'off') crossChainMonitorService.start();
   walletMetricsService.start();
@@ -101,6 +104,8 @@ async function bootstrapInfra(httpServer) {
       protectedPoolDynamicService.stop();
       deltaNeutralIntegrityService.stop();
       protectedPoolDeltaNeutralService.stop();
+      await protectedPoolDeltaNeutralService.drain().catch(() => {});
+      decisionLogRetentionService.stop();
       lpOrchestratorMonitorService.stop();
       crossChainMonitorService.stop();
       walletMetricsService.stop();

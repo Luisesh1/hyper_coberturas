@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTradingContext } from '../../context/TradingContext';
 import { tradingApi } from '../../services/api';
+import { useVisibleInterval } from '../../hooks/useVisibleInterval';
 import { AccountAutocomplete } from '../shared/AccountAutocomplete';
 import { ConfirmDialog } from '../shared/ConfirmDialog';
 import { formatAccountIdentity } from '../../utils/hyperliquidAccounts';
@@ -85,12 +86,13 @@ export function TradingPanel({ selectedAsset }) {
     refreshAccount({ accountId: selectedAccountId, force: true }).catch(() => {});
     refreshOrders({ force: true });
     refreshAccountSummary(selectedAccountId, { force: true }).catch(() => {});
-    const interval = setInterval(() => {
-      refreshAccount({ accountId: selectedAccountId }).catch(() => {});
-      refreshOrders().catch(() => {});
-    }, 30_000);
-    return () => clearInterval(interval);
+    return undefined;
   }, [refreshAccount, refreshAccountSummary, refreshOrders, selectedAccountId]);
+
+  useVisibleInterval(() => {
+    refreshAccount({ accountId: selectedAccountId }).catch(() => {});
+    refreshOrders().catch(() => {});
+  }, 30_000, Boolean(selectedAccountId));
 
   // --- Handlers ---
 

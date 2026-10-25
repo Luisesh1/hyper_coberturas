@@ -31,6 +31,7 @@ const MultiTimeframePage   = lazy(() => import('./pages/TradingView/multi/MultiT
 const AlertsPage           = lazy(() => import('./pages/Alerts/AlertsPage'));
 const SmartContractsPage   = lazy(() => import('./pages/SmartContracts/SmartContractsPage'));
 const OptionsPage          = lazy(() => import('./pages/Options/OptionsPage'));
+const WalletLayout         = lazy(() => import('./wallet/WalletLayout'));
 const GtcDiagnosticPage    = lazy(() => import('./pages/Options/GtcDiagnosticPage'));
 
 // DevLogPanel: solo se carga (y aparece) en dev. Vite remueve el chunk
@@ -183,9 +184,13 @@ function AppContent() {
                 <Route path="/estrategias" element={<StrategyStudioPage />} />
                 <Route path="/backtesting" element={<BacktestingPage />} />
                 <Route path="/bots" element={<BotsPage selectedAsset={selectedAsset} />} />
-                <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
-                <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
-                <Route path="/contratos" element={<SmartContractsPage />} />
+                {/* Rutas que firman transacciones: el stack wallet se carga sólo aquí. */}
+                <Route element={<WalletLayout />}>
+                  <Route path="/uniswap-pools" element={<UniswapPoolsPage />} />
+                  <Route path="/lp-orchestrator" element={<LpOrchestratorPage />} />
+                  <Route path="/contratos" element={<SmartContractsPage />} />
+                  <Route path="/hidenActions" element={<HidenActionsPage />} />
+                </Route>
                 <Route path="/metricas"   element={<MetricasPage />} />
                 <Route path="/trading-view" element={<TradingViewPage />} />
                 <Route path="/trading-view/multi" element={<MultiTimeframePage />} />
@@ -194,9 +199,7 @@ function AppContent() {
                 {/* Diagnostico oculto para superuser: no se publica en la navegacion. */}
                 {isSuperuser && <Route path="/opciones/diagnosticos" element={<GtcDiagnosticPage />} />}
                 <Route path="/config"     element={<SettingsPage />} />
-                {/* Ruta oculta — no aparece en el navbar. Acciones de
-                    recovery / mantenimiento manual. Acceso por URL directo. */}
-                <Route path="/hidenActions" element={<HidenActionsPage />} />
+                {/* /hidenActions (oculta, recovery manual) vive en el grupo wallet. */}
                 {isSuperuser && <Route path="/usuarios" element={<UsersPage />} />}
                 <Route path="*"           element={<Navigate to="/trade" replace />} />
               </Routes>
