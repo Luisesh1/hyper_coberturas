@@ -38,7 +38,10 @@ const TICKERS = [
   { symbol: 'BTC-261031-68000-P', bidPrice: '0', askPrice: '1330' },
 ];
 
-function mockFetch() {
+// Binance solo acepta estos límites en /eapi/v1/depth (-4021 con cualquier otro).
+const DEPTH_LIMITS = new Set(['10', '20', '50', '100', '500', '1000']);
+
+function mockFetch({ book = { bids: [['1490', '1']], asks: [['1510', '2']] } } = {}) {
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(url);
@@ -52,7 +55,12 @@ function mockFetch() {
       case '/eapi/v1/ticker': body = TICKERS; break;
       case '/eapi/v1/index': body = { indexPrice: searchParams.get('underlying') === 'BTCUSDT' ? '67800.5' : '2450' }; break;
       case '/eapi/v1/openInterest': body = [{ symbol: 'BTC-261031-68000-C', sumOpenInterest: '12.5' }]; break;
-      case '/eapi/v1/depth': body = { bids: [['1490', '1']], asks: [['1510', '2']] }; break;
+      case '/eapi/v1/depth':
+        if (!DEPTH_LIMITS.has(searchParams.get('limit') ?? '100')) {
+          return { ok: false, status: 400, json: async () => ({ code: -4021, msg: 'Invalid depth limit' }) };
+        }
+        body = book;
+        break;
       case '/api/v3/ticker/24hr': body = [{ symbol: 'BTCUSDT', priceChangePercent: '1.25' }, { symbol: 'ETHUSDT', priceChangePercent: '-0.5' }]; break;
       default: return { ok: false, status: 404, json: async () => ({ code: -1, msg: 'not found' }) };
     }
@@ -61,8 +69,8 @@ function mockFetch() {
   return { calls, fetchImpl };
 }
 
-function buildService() {
-  const { calls, fetchImpl } = mockFetch();
+function buildService(opts) {
+  const { calls, fetchImpl } = mockFetch(opts);
   let clock = NOW;
   const service = createOptionsMarketService({
     client: createBinanceOptionsClient({ fetchImpl }),
@@ -175,6 +183,18 @@ test('getQuote fresh exige libro real sin usar la caché de 30 s', async () => {
   assert.ok(calls.some((url) => new URL(url).pathname === '/eapi/v1/depth'));
   assert.ok(calls.some((url) => new URL(url).pathname === '/eapi/v1/mark'
     && new URL(url).searchParams.get('symbol') === 'BTC-261031-68000-C'));
+});
+
+test('getQuote fresh: un libro con un solo lado devuelve ese lado (el que decide es quien opera)', async () => {
+  const { service } = buildService({ book: { bids: [], asks: [['1510', '2']] } });
+  const quote = await service.getQuote('BTC-261031-68000-C', { fresh: true });
+  assert.equal(quote.bid, null);
+  assert.equal(quote.ask, 1510);
+});
+
+test('getQuote fresh: libro vacío no es ejecutable', async () => {
+  const { service } = buildService({ book: { bids: [], asks: [] } });
+  await assert.rejects(() => service.getQuote('BTC-261031-68000-C', { fresh: true }), /Libro o índice incompleto/);
 });
 
 test('getChain expone dteExact fraccional junto al dte entero', async () => {
