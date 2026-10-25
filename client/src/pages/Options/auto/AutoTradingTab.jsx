@@ -202,6 +202,12 @@ export default function AutoTradingTab({ underlying } = {}) {
     loadList();
   };
 
+  // Renombrar desde la tarjeta: el error lo muestra el propio editor.
+  const renameBot = async (id, name) => {
+    await autoBotsApi.update(id, { name });
+    patchLocal(id, { name });
+  };
+
   // ── Acciones ─────────────────────────────────────────────────────────
   const selectBot = (id) => {
     if (id !== selectedId) setSignalsFilter('all');
@@ -589,7 +595,7 @@ export default function AutoTradingTab({ underlying } = {}) {
         {listErrorAlert}
         {listLoading && !bots.length && skeletons(104)}
         {!listLoading && !bots.length && !listError && emptyState}
-        {bots.length > 0 && <BotList bots={bots} selectedId={selectedId} onSelect={selectBot} mobile />}
+        {bots.length > 0 && <BotList bots={bots} selectedId={selectedId} onSelect={selectBot} onRename={renameBot} mobile />}
         <button type="button" className={styles.fab} onClick={() => setForm({ mode: 'create' })}>
           <PlusIcon size={20} /> Nuevo bot
         </button>
@@ -608,7 +614,7 @@ export default function AutoTradingTab({ underlying } = {}) {
         </button>
         {listErrorAlert}
         {listLoading && !bots.length && skeletons(100)}
-        {bots.length > 0 && <BotList bots={bots} selectedId={selectedId} onSelect={selectBot} />}
+        {bots.length > 0 && <BotList bots={bots} selectedId={selectedId} onSelect={selectBot} onRename={renameBot} />}
       </aside>
       {detailProps
         ? <BotDetail {...detailProps} />

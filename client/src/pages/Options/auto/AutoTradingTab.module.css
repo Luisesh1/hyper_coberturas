@@ -103,6 +103,7 @@
 /* ── Tarjetas de la lista ─────────────────────────────────────── */
 .cardList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .card {
+  position: relative;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -120,16 +121,72 @@
   transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 .card:hover { border-color: var(--border-strong); }
-.card:focus-visible { outline: 2px solid var(--indigo); outline-offset: 2px; }
+/* El nombre es el botón que abre el bot; su ::after cubre toda la tarjeta
+   para que se pueda tocar en cualquier parte. El lápiz queda por encima. */
+.cardHit {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.cardHit:focus-visible { outline: none; }
+.cardHit::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.cardHit:focus-visible::after { outline: 2px solid var(--indigo); outline-offset: 2px; }
+.renameBtn {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin: -6px 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md, 8px);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.renameBtn:hover:not(:disabled) { color: var(--text-bright); background: var(--bg-hover); }
+.renameBtn:focus-visible { outline: 2px solid var(--indigo); outline-offset: 0; }
+.renameBtn:disabled { opacity: 0.5; cursor: default; }
+.renameForm { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.renameRow { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--indigo);
+  background: var(--bg-deep);
+  color: var(--text-bright);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+.renameInput:focus { outline: none; box-shadow: 0 0 0 2px var(--indigo-dark-bg); }
+.renameError { font-size: 12px; color: var(--red); }
 .cardSelected, .cardSelected:hover { background: var(--indigo-dark-bg); border-color: var(--indigo); }
 .cardMobile { gap: 8px; border-radius: 14px; }
 .cardMobile:active { background: var(--bg-hover); }
 .cardTop { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
 .cardName { font-size: 14px; font-weight: 600; color: var(--text-bright); min-width: 0; overflow-wrap: anywhere; }
 .cardMobile .cardName { font-size: 15px; }
+/* 16px evita el zoom automático de iOS al enfocar el campo. */
+.cardMobile .renameInput { height: 40px; font-size: 16px; }
+.cardMobile .renameBtn { width: 40px; height: 40px; margin: -8px 0; }
 .cardMeta { font-size: 12px; color: var(--text-secondary); }
 .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .cardPnlBig { font-size: 15px; }
+.cardBudget { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; font-size: 12px; color: var(--text-secondary); }
+.cardBudget b { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
 .skeletons { display: flex; flex-direction: column; gap: 10px; }
 
@@ -562,3 +619,6 @@
 @media (max-width: 1100px) {
   .grid2 { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Tiempo consumido de una posición (móvil). */
+.posTime { display: flex; flex-direction: column; gap: 6px; }

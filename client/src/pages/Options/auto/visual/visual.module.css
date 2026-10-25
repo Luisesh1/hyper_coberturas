@@ -263,6 +263,8 @@
 
 .expiry { position: relative; height: 6px; background: var(--bg-deep); border-radius: var(--radius-pill); overflow: hidden; }
 .expiryElapsed { position: absolute; left: 0; top: 0; bottom: 0; background: var(--cyan); }
+.expiry_warn { background: var(--amber); }
+.expiry_neg { background: var(--red); }
 .expiryExit { position: absolute; right: 0; top: 0; bottom: 0; background: var(--amber-bg); border-left: 1px solid var(--amber-border); }
 
 /* ── 5 · Cronología de señales ───────────────────────────────── */

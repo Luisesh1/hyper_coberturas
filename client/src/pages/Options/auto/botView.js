@@ -589,6 +589,26 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
   return payload;
 }
 
+// Dinero de la tarjeta: presupuesto total y lo que compromete cada entrada.
+// Con presupuesto, cada entrada es una fracción; sin él, el capital máximo
+// por entrada o, a falta de ambos, la cantidad fija de contratos.
+export function budgetSummary(bot = {}) {
+  const p = bot.params || {};
+  const usd = (x) => formatUsdt(x, { decimals: 2, minDecimals: 0 });
+  const perSignal = perSignalBudget({
+    budgetUsdt: p.budgetUsdt,
+    budgetFractions: toNumber(p.budgetFractions) ?? COMMON_DEFAULTS.budgetFractions,
+  });
+  if (perSignal !== null) {
+    return { budget: `${usd(toNumber(p.budgetUsdt))} USDT`, perEntry: `${usd(perSignal)} USDT` };
+  }
+  const capital = toNumber(p.capitalUsdt);
+  if (capital > 0) return { budget: 'sin tope', perEntry: `hasta ${usd(capital)} USDT` };
+  const structure = normalizeStructure(bot.structure || p.structure);
+  const qty = toNumber(p.quantity) ?? { ...COMMON_DEFAULTS, ...STRUCTURE_DEFAULTS[structure] }.quantity;
+  return { budget: 'sin tope', perEntry: qty > 0 ? `${formatNumber(qty, { decimals: 4, minDecimals: 0 })} contratos` : '—' };
+}
+
 // Resumen legible de los parámetros (tarjetas del detalle).
 export function describeParams(bot) {
   const p = bot.params || {};
