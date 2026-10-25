@@ -837,17 +837,14 @@ class OptionsStrategyRunner {
    */
   async openShadowEntry(strategy, action, ctx) {
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
-    const legs = [];
-    for (let i = 0; !missing && i < action.legs.length; i++) {
-      const price = await this.midEntryPrice(action.legs[i], quotes[i].quote);
-      if (price == null) break;
-      legs.push({ ...action.legs[i], price, spot: num(quotes[i].quote?.spot) ?? ctx.spot });
-    }
-    if (legs.length !== action.legs.length) {
-      await this.recordOutcome(strategy, 'shadow', {
-        type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido',
-      }, ctx);
+    if (missing) {
+      await this.recordOutcome(strategy, 'shadow', { type: 'skip', reason: 'no_liquidity', detail: `Sin precio en el libro para ${missing}` }, ctx);
       return null;
+    }
+    const legs = [];
+    for (let i = 0; i < action.legs.length; i++) {
+      const price = await this.midEntryPrice(action.legs[i], quotes[i]);
+      legs.push({ ...action.legs[i], price, spot: num(quotes[i].quote?.spot) ?? ctx.spot });
     }
     const decidesSignal = strategy.mode !== 'live' || ctx.shadowOnly === true;
     const signalId = decidesSignal && Number.isSafeInteger(Number(ctx.signal?.signalId))
@@ -1129,24 +1126,16 @@ class OptionsStrategyRunner {
     const midEntry = action.type === 'open' && strategy.template === 'alert_signal';
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
-      await this.recordOutcome(strategy, 'live', midEntry
-        ? { type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido' }
-        : { type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}` }, ctx);
+      await this.recordOutcome(strategy, 'live',
+        { type: 'skip', reason: 'no_liquidity', detail: `Sin precio para ${missing}` }, ctx);
       return null;
     }
     // Aperturas de bots por alertas: LIMIT GTC al medio del libro fresco,
-    // sobre la rejilla del contrato. Sin bid/ask, sin tick conocido o sin
-    // tick dentro del spread no hay entrada: nunca enviar un precio inválido.
+    // sobre la rejilla del contrato. Sin medio válido (un solo lado, sin
+    // tick conocido o sin tick dentro del spread) va al precio ejecutable.
     if (midEntry) {
       for (let i = 0; i < action.legs.length; i++) {
-        const mid = await this.midEntryPrice(action.legs[i], quotes[i].quote);
-        if (mid == null) {
-          await this.recordOutcome(strategy, 'live', {
-            type: 'skip', reason: 'no_mid_price', detail: 'Sin precio medio válido',
-          }, ctx);
-          return null;
-        }
-        quotes[i].price = mid;
+        quotes[i].price = await this.midEntryPrice(action.legs[i], quotes[i]);
       }
     }
     // ONLY the explicit one-contract ETH pilot experiment may replace the
@@ -1290,10 +1279,12 @@ class OptionsStrategyRunner {
   }
 
   /**
-   * Precio medio de entrada de una pata, o null. El tick sale de la
-   * cotización si lo trae; si no, del PRICE_FILTER del contrato.
+   * Precio de entrada de una pata: el medio sobre la rejilla o, si no hay
+   * medio válido, el precio ejecutable (ask al comprar, bid al vender), el
+   * que se llena antes. El tick sale de la cotización si lo trae; si no, del
+   * PRICE_FILTER del contrato. `quoted` es { quote, price } de quoteLegs.
    */
-  async midEntryPrice(leg, quote) {
+  async midEntryPrice(leg, { quote, price }) {
     let tickSize = Number(quote?.tickSize) > 0 ? quote.tickSize : null;
     let minPrice = tickSize != null ? quote.minPrice : null;
     if (tickSize == null && typeof this.market.getPriceFilter === 'function') {
@@ -1304,8 +1295,13 @@ class OptionsStrategyRunner {
         this.logger.warn('options_price_filter_failed', { symbol: leg.symbol, error: err.message });
       }
     }
-    if (tickSize == null) return null;
-    return midLimitPrice({ bid: quote?.bid, ask: quote?.ask, side: leg.side, tickSize, minPrice });
+    const mid = tickSize == null ? null
+      : midLimitPrice({ bid: quote?.bid, ask: quote?.ask, side: leg.side, tickSize, minPrice });
+    if (mid != null) return mid;
+    this.logger.info('options_entry_mid_fallback', {
+      symbol: leg.symbol, side: leg.side, bid: quote?.bid ?? null, ask: quote?.ask ?? null, price,
+    });
+    return price;
   }
 
   /** `kind`: 'trade' | 'error'. Respeta `params.notify` del bot (activo si falta). */
