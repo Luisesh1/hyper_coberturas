@@ -122,7 +122,7 @@ describe('AutoTradingTab · escritorio', () => {
     expect(screen.getByText(/Opera BTC cuando se dispara una de sus alertas · compra a favor de la señal/)).toBeTruthy();
 
     const list = screen.getByRole('list', { name: 'Bots' });
-    const card = within(list).getByRole('button', { name: /Momentum BTC/ });
+    const card = within(list).getByRole('button', { name: /Momentum BTC/ }).closest('li');
     expect(within(card).getByText('Alcista')).toBeTruthy();
     expect(within(card).getByText('Bajista')).toBeTruthy();
     expect(within(card).getByText('+214,60')).toBeTruthy();
@@ -441,7 +441,7 @@ describe('AutoTradingTab · estado actual', () => {
     renderTab();
     expect(await screen.findByRole('heading', { name: /Entrada pendiente · compra 0,05 BTC-261031-70000-C/ })).toBeTruthy();
     expect(screen.getByText('límite 712')).toBeTruthy();
-    const card = within(screen.getByRole('list', { name: 'Bots' })).getByRole('button', { name: /Momentum BTC/ });
+    const card = within(screen.getByRole('list', { name: 'Bots' })).getByRole('button', { name: /Momentum BTC/ }).closest('li');
     expect(within(card).getByText(/^Entrada \d:\d\d$/)).toBeTruthy();
   });
 });
@@ -537,7 +537,7 @@ describe('AutoTradingTab · móvil', () => {
     const list = screen.getByRole('list', { name: 'Bots' });
     // El banner va antes que las tarjetas.
     expect(banner.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const card = within(list).getByRole('button', { name: /Momentum BTC/ });
+    const card = within(list).getByRole('button', { name: /Momentum BTC/ }).closest('li');
     expect(within(card).getByText('Comisiones 31,85')).toBeTruthy();
     expect(within(card).getByRole('img', { name: 'P&L 30 días: +214,60' })).toBeTruthy();
     expect(within(card).getByText(/^Entrada \d:\d\d$/)).toBeTruthy();
@@ -545,6 +545,51 @@ describe('AutoTradingTab · móvil', () => {
 
     fireEvent.click(banner);
     expect(await screen.findByRole('dialog', { name: 'Momentum BTC' })).toBeTruthy();
+  });
+
+  it('cada tarjeta muestra el presupuesto y el valor de cada entrada', async () => {
+    mockViewport(true);
+    const base = autoBotsApi.list.getMockImplementation();
+    autoBotsApi.list.mockImplementation(async () => (await base()).map((b) => (b.id === 1
+      ? { ...b, params: { ...b.params, budgetUsdt: 1000, budgetFractions: 4 } } : b)));
+    renderTab();
+    const list = await screen.findByRole('list', { name: 'Bots' });
+    const card = within(list).getByRole('button', { name: 'Momentum BTC' }).closest('li');
+    expect(within(card).getByText('1.000 USDT')).toBeTruthy();
+    expect(within(card).getByText('250 USDT')).toBeTruthy();
+    const other = within(list).getByRole('button', { name: 'Breakout SOL' }).closest('li');
+    expect(within(other).getByText('sin tope')).toBeTruthy();
+  });
+
+  it('el lápiz de la tarjeta renombra el bot sin abrir su ficha', async () => {
+    mockViewport(true);
+    autoBotsApi.update.mockResolvedValue({});
+    renderTab();
+    const list = await screen.findByRole('list', { name: 'Bots' });
+    const card = within(list).getByRole('button', { name: 'Momentum BTC' }).closest('li');
+    fireEvent.click(within(card).getByRole('button', { name: 'Editar nombre' }));
+    expect(screen.queryByRole('dialog', { name: 'Momentum BTC' })).toBeNull();
+    const input = within(card).getByRole('textbox', { name: 'Nombre del bot' });
+    fireEvent.change(input, { target: { value: '  Momentum 4h  ' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Guardar nombre' }));
+    await waitFor(() => expect(autoBotsApi.update).toHaveBeenCalledWith(1, { name: 'Momentum 4h' }));
+    expect(await within(list).findByRole('button', { name: 'Momentum 4h' })).toBeTruthy();
+  });
+
+  it('renombrar: Esc cancela y un error del servidor se queda en el editor', async () => {
+    mockViewport(true);
+    autoBotsApi.update.mockRejectedValue(new Error('El nombre no puede estar vacío'));
+    renderTab();
+    const list = await screen.findByRole('list', { name: 'Bots' });
+    const card = within(list).getByRole('button', { name: 'Momentum BTC' }).closest('li');
+    fireEvent.click(within(card).getByRole('button', { name: 'Editar nombre' }));
+    fireEvent.keyDown(within(card).getByRole('textbox', { name: 'Nombre del bot' }), { key: 'Escape' });
+    expect(within(card).queryByRole('textbox')).toBeNull();
+    fireEvent.click(within(card).getByRole('button', { name: 'Editar nombre' }));
+    fireEvent.change(within(card).getByRole('textbox'), { target: { value: 'Otro' } });
+    fireEvent.submit(within(card).getByRole('textbox').closest('form'));
+    expect((await within(card).findByRole('alert')).textContent).toBe('El nombre no puede estar vacío');
+    expect(within(card).getByRole('textbox').value).toBe('Otro');
   });
 
   it('sin entradas pendientes no hay banner', async () => {

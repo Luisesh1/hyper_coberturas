@@ -30,6 +30,25 @@ describe('BotActivity', () => {
     expect(screen.getAllByText('Calculando objetivo…').length).toBeGreaterThan(0);
   });
 
+  it('móvil: barra del tiempo consumido entre la ejecución y el vencimiento', () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 9, 29, 8), toFake: ['Date'] });
+    try {
+      // Vence el 31 oct 08:00 UTC: ejecutada 48 h antes de ahora → 50 %.
+      const openedAt = Date.UTC(2026, 9, 27, 8);
+      render(<BotActivity bot={bot({ positions: [{ ...bot().positions[0], openedAt }] })} mobile part="top" />);
+      expect(screen.getByRole('img', { name: 'Transcurrido 50 % de la vida de la opción' })).toBeTruthy();
+      expect(screen.getByText('Consumido 50 % del tiempo')).toBeTruthy();
+      expect(screen.getByText(/^salida por tiempo en \d+ h$/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('móvil: sin fecha de ejecución no hay barra de tiempo', () => {
+    render(<BotActivity bot={bot()} mobile part="top" />);
+    expect(screen.queryByText(/^Consumido/)).toBeNull();
+  });
+
   it('posición abierta: prima total y fecha/hora de compra en escritorio y móvil', () => {
     const openedAt = new Date(2026, 9, 22, 14, 5).getTime();
     const withDate = bot({ positions: [{ ...bot().positions[0], openedAt, entryFeeUsdt: 0.5 }] });

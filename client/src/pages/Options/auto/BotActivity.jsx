@@ -70,28 +70,59 @@ function tpFact(bot, row) {
   return { label, value: 'GTC activo', tone: 'pos' };
 }
 
-function Expiry({ row, bot, now }) {
-  if (row.expiresAt === null) return null;
-  const atr = bot.params?.takeProfitMode === 'atr_band';
-  const exitH = toNumberOr(bot.params?.exitHoursBeforeExpiry, COMMON_DEFAULTS.exitHoursBeforeExpiry);
+// Tiempo de la posición: % consumido entre la ejecución y el vencimiento,
+// la franja final de la salida por tiempo y el texto de esa salida.
+function expiryModel(row, bot, now) {
+  const atr = bot?.params?.takeProfitMode === 'atr_band';
+  const exitH = toNumberOr(bot?.params?.exitHoursBeforeExpiry, COMMON_DEFAULTS.exitHoursBeforeExpiry);
   const left = row.hoursToExpiry === null ? null : row.hoursToExpiry - exitH;
   const exitText = atr ? 'sin salida por tiempo'
     : left === null ? '' : left > 0 ? `salida por tiempo en ${hoursText(left)}` : 'salida por tiempo en curso';
   const opened = toNumberOr(row.openedAt, null);
-  const life = opened !== null ? row.expiresAt - opened : null;
+  const life = opened !== null && row.expiresAt !== null ? row.expiresAt - opened : null;
   const clamp = (x) => Math.min(100, Math.max(0, x));
   const elapsed = life > 0 ? clamp(((now - opened) / life) * 100) : null;
   const exitPct = life > 0 && !atr ? clamp(((exitH * 3600e3) / life) * 100) : 0;
+  // Se tiñe al acercarse al límite efectivo: la salida por tiempo o el vencimiento.
+  const used = elapsed === null ? null : exitPct < 100 ? (elapsed / (100 - exitPct)) * 100 : 100;
+  const tone = used === null ? null : used >= 90 ? 'neg' : used >= 70 ? 'warn' : 'ok';
+  return { exitText, elapsed, exitPct, tone };
+}
+
+function ExpiryBar({ model: { elapsed, exitPct, tone } }) {
+  if (elapsed === null) return null;
+  return (
+    <div className={v.expiry} role="img" aria-label={`Transcurrido ${Math.round(elapsed)} % de la vida de la opción`}>
+      <i className={`${v.expiryElapsed} ${v[`expiry_${tone}`]}`} style={{ width: `${elapsed}%` }} />
+      {exitPct > 0 && <i className={v.expiryExit} style={{ width: `${exitPct}%` }} />}
+    </div>
+  );
+}
+
+function Expiry({ row, bot, now }) {
+  if (row.expiresAt === null) return null;
+  const model = expiryModel(row, bot, now);
   return (
     <>
-      <div className={v.split}><span>Vencimiento {utcText(row.expiresAt)}</span><span>{exitText}</span></div>
-      {elapsed !== null && (
-        <div className={v.expiry} role="img" aria-label={`Transcurrido ${Math.round(elapsed)} % de la vida de la opción`}>
-          <i className={v.expiryElapsed} style={{ width: `${elapsed}%` }} />
-          {exitPct > 0 && <i className={v.expiryExit} style={{ width: `${exitPct}%` }} />}
-        </div>
-      )}
+      <div className={v.split}><span>Vencimiento {utcText(row.expiresAt)}</span><span>{model.exitText}</span></div>
+      <ExpiryBar model={model} />
     </>
+  );
+}
+
+// Móvil: barra de tiempo consumido bajo «vence en», con el % y la salida.
+function MobileExpiry({ row, bot, now }) {
+  if (row.expiresAt === null) return null;
+  const model = expiryModel(row, bot, now);
+  if (model.elapsed === null) return null;
+  return (
+    <div className={styles.posTime}>
+      <ExpiryBar model={model} />
+      <div className={v.split}>
+        <span className={model.tone === 'ok' ? undefined : toneClass(model.tone)}>Consumido {Math.round(model.elapsed)} % del tiempo</span>
+        <span>{model.exitText}</span>
+      </div>
+    </div>
   );
 }
 
@@ -108,7 +139,7 @@ function netPnl(row) {
 
 // Tarjeta de posición (teléfono): contrato y P&L neto, barra compacta
 // stop–entrada–ahora–TP, comisiones y vencimiento, y «Cerrar» a todo ancho.
-function MobilePositionCard({ row: r, multi, onClosePosition, busy }) {
+function MobilePositionCard({ row: r, bot, now, multi, onClosePosition, busy }) {
   const { net, pct } = netPnl(r);
   const legend = [r.stopPrice !== null ? `Stop ${price(r.stopPrice)}` : null, r.tpPrice !== null ? `TP ${price(r.tpPrice)}${tpPctText(r)}` : null].filter(Boolean).join(' · ');
   const hasRange = r.tpPrice !== null && (r.stopPrice !== null || r.entry !== null);
@@ -136,6 +167,7 @@ function MobilePositionCard({ row: r, multi, onClosePosition, busy }) {
         <span>Comisiones <b className={v.t_fee}>{r.feesUsdt === null ? '—' : formatUsdt(r.feesUsdt)}</b></span>
         {r.hoursToExpiry !== null && <span>vence en {hoursText(r.hoursToExpiry)}</span>}
       </div>
+      <MobileExpiry row={r} bot={bot} now={now} />
       <div className={`${ui.muted} ${ui.small}`}>
         Entrada {price(r.entry)} · Mark {price(r.mark)} · Prima {usdt(r.premiumUsdt)} · ejecutada {formatDateTime(r.openedAt)}
       </div>
@@ -206,7 +238,7 @@ function Positions({ rows, bot, mobile, multi, onClosePosition, onCloseAll, busy
       {rows.length > 0 && mobile && (
         <ul className={styles.activityList}>
           {rows.map((r) => (
-            <MobilePositionCard key={r.id} row={r} multi={multi} onClosePosition={onClosePosition} busy={busy} />
+            <MobilePositionCard key={r.id} row={r} bot={bot} now={now} multi={multi} onClosePosition={onClosePosition} busy={busy} />
           ))}
         </ul>
       )}

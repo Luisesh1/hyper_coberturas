@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  budgetSummary,
   botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
   describeParams, coveredList, botStatus, flowSteps, feeSummary, ladder, signalFeeText, formatCountdown, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
@@ -578,5 +579,18 @@ describe('normalizeBot (campos de la lista)', () => {
     expect(b.pendingEntryUnknown).toBe(false);
     expect(normalizeBot({ id: 2 }).pnlSeries).toEqual([]);
     expect(normalizeBot({ id: 2 }).pendingEntry).toBeNull();
+  });
+});
+
+describe('budgetSummary', () => {
+  it('presupuesto total: cada entrada es una fracción', () => {
+    expect(budgetSummary({ params: { budgetUsdt: 1000, budgetFractions: 4 } }))
+      .toEqual({ budget: '1.000 USDT', perEntry: '250 USDT' });
+    // Sin fracciones guardadas, las de por defecto (4).
+    expect(budgetSummary({ params: { budgetUsdt: 300 } }).perEntry).toBe('75 USDT');
+  });
+  it('sin presupuesto: capital máximo por entrada o la cantidad fija', () => {
+    expect(budgetSummary({ params: { capitalUsdt: 120 } })).toEqual({ budget: 'sin tope', perEntry: 'hasta 120 USDT' });
+    expect(budgetSummary({ params: { quantity: 0.05 } })).toEqual({ budget: 'sin tope', perEntry: '0,05 contratos' });
   });
 });
