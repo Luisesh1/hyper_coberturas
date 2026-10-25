@@ -7,7 +7,7 @@
  *
  * Usage:
  *   const limiter = new KeyedLimiter({ maxConcurrent: 3 });
- *   await limiter.run(`${accountId}:${asset}`, async () => { ... });
+ *   await limiter.run(String(accountId), async () => { ... });
  */
 class KeyedLimiter {
   constructor({ maxConcurrent } = {}) {
