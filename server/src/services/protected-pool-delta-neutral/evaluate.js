@@ -43,6 +43,7 @@ const { accumulateFundingUsd } = require('../../utils/hl-funding');
 const {
   TERMINAL_RANGE_V1,
   buildLpValuation,
+  computeBalancedShortQty,
   evaluateTerminalRange,
   resolveTerminalConfig,
 } = require('./terminal-range');
@@ -476,9 +477,15 @@ const evaluateMethods = {
     // "borde de rango". Ese silencio es peor que no ofrecer la politica.
     const isRangeExitLive = policyVersion === RANGE_EXIT_V1
       && (activeProtection.strategyState?.executionIntent || strategyState.executionIntent) === 'live';
+    // El ratio de cobertura escala el objetivo de esta politica igual que el
+    // del motor: la politica recibe el delta YA escalado (`metrics.targetQty`)
+    // y el equilibrado escalado igual. Asi la orden y el `committedTargetQty`
+    // que guarda la politica hablan del mismo numero.
+    const rangeExitHedgeRatio = Number(activeProtection.targetHedgeRatio ?? DEFAULT_TARGET_HEDGE_RATIO);
+    const rangeExitBalancedQty = isRangeExitLive ? computeBalancedShortQty(activeProtection.poolSnapshot) : null;
     const rangeExitDecision = isRangeExitLive
       ? decideRangeExitV1({
-        deltaQty: Number(metrics.deltaQty),
+        deltaQty: Number(metrics.targetQty),
         actualQty,
         currentPrice,
         rangeLowerPrice: activeProtection.rangeLowerPrice,
@@ -488,6 +495,12 @@ const evaluateMethods = {
         // El mismo piso que juzga el preflight. Sin esto la politica decide
         // ordenes que el exchange rechaza y las reintenta sin fin.
         minOrderNotionalUsd: resolveMinOrderNotionalUsd(activeProtection),
+        // Short equilibrado (secante entre bordes) del LP real: es a donde va
+        // la reentrada. Sin valoracion posible llega null y la politica usa
+        // el delta, como antes.
+        balancedQty: rangeExitBalancedQty != null && Number.isFinite(rangeExitHedgeRatio)
+          ? rangeExitBalancedQty * rangeExitHedgeRatio
+          : null,
       })
       : null;
     // `terminal_range_v1` viva. Mismo motivo que range_exit para rutearla
@@ -545,10 +558,19 @@ const evaluateMethods = {
           targetQty: actualQty + Number(netProfitDecision.adjustQty || 0),
           policyTargetQty: Number(metrics.deltaQty),
         }
-        : metrics;
+        // `range_exit_v1` va al delta salvo en la reentrada (equilibrado):
+        // la orden lleva SU objetivo, no el del motor.
+        : isRangeExitLive && rangeExitDecision?.decision === 'rebalance'
+          ? { ...metrics, targetQty: Number(rangeExitDecision.targetQty) }
+          : metrics;
+    // El preflight (minimo de orden, margen, cierre total) tiene que medir la
+    // orden REAL. Sin esto, una reentrada equilibrada se juzgaba contra el
+    // delta: con el short pegado al delta el hueco caia bajo el minimo y la
+    // orden de verdad (~50% del LP) se bloqueaba para siempre.
     const executionTracking = isTerminalLive
       ? terminalResult.executionTracking
-      : isNetProfitLive && netProfitDecision?.decision === 'rebalance'
+      : (isNetProfitLive && netProfitDecision?.decision === 'rebalance')
+        || (isRangeExitLive && rangeExitDecision?.decision === 'rebalance')
         ? {
           trackingErrorQty: Number(executionMetrics.targetQty) - actualQty,
           trackingErrorUsd: Math.abs(Number(executionMetrics.targetQty) - actualQty) * currentPrice,
@@ -571,8 +593,10 @@ const evaluateMethods = {
       : isRangeExitLive
         ? {
           // A diferencia de net_profit, esta politica NO corrige parcialmente:
-          // cuando decide, va al delta completo. Por eso `metrics` se usa tal
-          // cual y no hace falta remapear `executionMetrics`.
+          // cuando decide va a SU objetivo completo (el delta, o el short
+          // equilibrado al reentrar). `executionMetrics`/`executionTracking`
+          // llevan ese objetivo; este `tracking` sigue midiendo contra el delta
+          // porque es la divergencia por diseno que se reporta.
           decision: rangeExitDecision.decision === 'rebalance' ? 'range_exit_rebalance' : 'hold',
           tracking: {
             trackingErrorQty: Number(metrics.deltaQty) - actualQty,
@@ -617,6 +641,11 @@ const evaluateMethods = {
         || strategyState.rangeExitPolicyState
         || {};
       nextState.rangeExitPolicyGate = rangeExitDecision.gate;
+      // En el tick que decide, el objetivo reportado es el de la politica (el
+      // equilibrado al reentrar), no el delta del motor.
+      if (rangeExitDecision.decision === 'rebalance') {
+        nextState.lastTargetQty = Number(rangeExitDecision.targetQty);
+      }
     }
     if (isNetProfitLive) {
       // El presupuesto de V2 se consume únicamente cuando el IOC/TWAP termina
@@ -1244,6 +1273,9 @@ const evaluateMethods = {
       nextState.rangeExitPolicyState = {
         ...(nextState.rangeExitPolicyState || {}),
         committedTargetQty: capTrimTargetQty,
+        // El recorte no es una reentrada: si no aterriza, se reintenta con la
+        // regla del delta, como antes de existir el equilibrado.
+        committedRule: 'delta',
       };
     }
 

@@ -96,6 +96,31 @@ function computeInitialTerminalQty(snapshot, { volatilePriceUsd } = {}) {
 }
 
 /**
+ * Short equilibrado (secante entre bordes) para `range_exit_v1`.
+ *
+ * `rangeLower/UpperPrice` del snapshot estan en el espacio crudo token1/token0,
+ * pero `valueAt` espera el precio en USD del token volatil. Cuando el volatil
+ * es token0 (WETH/USDC) los dos espacios coinciden; cuando la estable es token0
+ * (USDC/WETH) hay que invertir y cruzar los bordes, o la secante se evalua
+ * fuera del rango y sale el LP entero. `computeInitialTerminalQty` no lo hace
+ * (deuda conocida de terminal_range); este helper si.
+ */
+function computeBalancedShortQty(snapshot) {
+  const valuation = buildLpValuation(snapshot);
+  if (!valuation) return null;
+  const orientation = resolveDeltaNeutralOrientation(snapshot);
+  const rawLower = Number(snapshot?.rangeLowerPrice);
+  const rawUpper = Number(snapshot?.rangeUpperPrice);
+  if (!(rawLower > 0 && rawUpper > rawLower)) return null;
+  const invert = orientation?.volatileTokenIndex === 1;
+  const lower = invert ? 1 / rawUpper : rawLower;
+  const upper = invert ? 1 / rawLower : rawUpper;
+  // spot/execPrice se cancelan en la secante: se pasa 1 a ambos.
+  const qty = balancedQty({ valueAt: valuation.valueAt, lower, upper, spot: 1, execPrice: 1 });
+  return Number.isFinite(qty) && qty > 0 ? qty : null;
+}
+
+/**
  * Decide un tick en vivo.
  *
  * @returns {{
@@ -207,5 +232,6 @@ module.exports = {
   resolveHedgeNetUsd,
   resolveTerminalConfig,
   computeInitialTerminalQty,
+  computeBalancedShortQty,
   evaluateTerminalRange,
 };
