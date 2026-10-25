@@ -291,7 +291,8 @@ function createOptionsMarketService({
     const [markList, tickerList, spot, oi] = fresh
       ? await Promise.all([
         getClient().getMark(symbol),
-        getClient().getDepth(symbol, 5),
+        // Binance solo acepta 10/20/50/100/500/1000 (con 5 responde -4021).
+        getClient().getDepth(symbol, 10),
         getClient().getIndex(`${underlying}USDT`).then((v) => num(v?.indexPrice)),
         getOpenInterestMap(underlying, expiry),
       ])
@@ -308,7 +309,9 @@ function createOptionsMarketService({
       askPrice: Array.isArray(tickerList?.asks?.[0]) ? tickerList.asks[0][0] : null,
     } : (bySymbol(tickerList).get(symbol) || {});
 
-    if (fresh && (!positiveOrNull(ticker.bidPrice) || !positiveOrNull(ticker.askPrice) || !positiveOrNull(spot))) {
+    // Basta un lado: quien opera decide si le sirve (comprar necesita ask,
+    // vender bid; las entradas sin medio van al lado ejecutable).
+    if (fresh && ((!positiveOrNull(ticker.bidPrice) && !positiveOrNull(ticker.askPrice)) || !positiveOrNull(spot))) {
       throw new ValidationError('Libro o índice incompleto para ejecución real');
     }
     return {
