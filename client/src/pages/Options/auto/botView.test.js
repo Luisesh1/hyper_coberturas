@@ -121,7 +121,7 @@ describe('formulario de bot', () => {
         structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, expiryMinDays: null, expiryMaxDays: null, quantity: 0.01, onOpposite: 'reverse',
         takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxHoldMinutes: null, maxOpenPositions: 1, maxTradesPerDay: 4,
         maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null, budgetUsdt: null, budgetFractions: 4,
-        maxSpreadPct: null, minLeverage: null,
+        maxSpreadPct: null, minLeverage: null, minTpPct: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
         notify: { trades: true, errors: true },
       },
@@ -247,6 +247,21 @@ describe('formulario de bot', () => {
       expect.objectContaining({ label: 'Sin stop', value: 'se mantiene hasta vencer' }),
       expect.objectContaining({ label: 'Tiempo máx. en posición', value: 'sin límite' }),
     ]);
+  });
+
+  it('TP mínimo para entrar (banda ATR): formulario, validación, payload y ficha', () => {
+    const bot = normalizeBot({ id: 1, underlying: 'BTC', params: { structure: 'buy_with', takeProfitMode: 'atr_band', tpMaxGainPct: 200, minTpPct: 40, alertIds: [1] } });
+    const form = initialBotForm({ bot });
+    expect(form.minTpPct).toBe(40);
+    expect(initialBotForm({ bot: normalizeBot({ id: 2, params: { structure: 'buy_with', takeProfitMode: 'atr_band' } }) }).minTpPct).toBeNull();
+    expect(validateBotForm(form).minTpPct).toBeUndefined();
+    expect(validateBotForm({ ...form, minTpPct: '' }).minTpPct).toBeUndefined();
+    expect(validateBotForm({ ...form, minTpPct: 0.5 }).minTpPct).toBe('Entre 1 y el tope de ganancia (vacío = sin mínimo)');
+    expect(validateBotForm({ ...form, minTpPct: 250 }).minTpPct).toBe('Entre 1 y el tope de ganancia (vacío = sin mínimo)');
+    expect(buildBotPayload(form).params.minTpPct).toBe(40);
+    expect(buildBotPayload({ ...form, minTpPct: '' }).params.minTpPct).toBeNull();
+    expect(buildBotPayload({ ...form, takeProfitMode: 'fixed' }).params.minTpPct).toBeNull();
+    expect(describeParams(bot).exits).toContainEqual(expect.objectContaining({ label: 'TP mínimo para entrar', value: '+40 %' }));
   });
 
   it('al editar parte de los parámetros guardados', () => {

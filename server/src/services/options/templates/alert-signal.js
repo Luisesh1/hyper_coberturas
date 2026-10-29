@@ -34,6 +34,7 @@ const {
 } = require('./helpers');
 const { positionCommittedUsdt } = require('../options-committed-capital');
 const { normalizeUnderlyings } = require('../bot-underlyings');
+const { atrBandTakeProfit } = require('../options-atr-band-tp');
 
 const id = 'alert_signal';
 
@@ -74,6 +75,7 @@ const defaultParams = {
   atrBandLength: 14,
   atrBandMultiplier: 2,
   tpMaxGainPct: 200,
+  minTpPct: null,
   maxSpreadPct: null,
   minLeverage: null,
   notify: { trades: true, errors: true },
@@ -97,6 +99,7 @@ const NUMERIC_FIELDS = [
   { key: 'atrBandLength', label: 'Longitud de la banda ATR', type: 'number', integer: true, min: 2, max: 100, step: 1, unit: 'velas' },
   { key: 'atrBandMultiplier', label: 'Multiplicador de la banda ATR', type: 'number', min: 0.25, max: 10, step: 0.25 },
   { key: 'tpMaxGainPct', label: 'Tope de ganancia del TP', type: 'number', min: 10, max: 2000, step: 10, unit: '% de la prima' },
+  { key: 'minTpPct', label: 'TP mínimo para entrar', type: 'number', min: 1, max: 2000, step: 5, unit: '% de la prima', nullable: true },
 ];
 
 const paramSchema = [
@@ -175,6 +178,12 @@ function validateParams(raw = {}) {
   // en vencimiento − 1 h (Math.max(1, 0) del ejecutor). La señal contraria
   // sigue lo elegido, como en los demás modos.
   if (takeProfitMode === 'atr_band') numeric.exitHoursBeforeExpiry = 0;
+  // TP mínimo para entrar: solo con banda ATR, y como mucho el tope (el
+  // objetivo nunca lo supera, así que un mínimo mayor no dejaría operar).
+  if (takeProfitMode !== 'atr_band') numeric.minTpPct = null;
+  else if (numeric.minTpPct != null && numeric.minTpPct > numeric.tpMaxGainPct) {
+    throw new ValidationError('TP mínimo para entrar: no puede superar el tope de ganancia del TP');
+  }
   // Una sola opción por señal (y por subyacente). Los bots guardados con más
   // contratos se normalizan a 1 en vez de fallar la validación.
   const contractCount = 1;
@@ -190,6 +199,27 @@ function validateParams(raw = {}) {
   // Varios subyacentes (opcional): sin la clave el bot opera solo su `underlying`.
   const underlyings = normalizeUnderlyings(input.underlyings);
   return { alertIds: normalizeAlertIds(input.alertIds), ...(underlyings ? { underlyings } : {}), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, budgetUsdt, budgetFractions, maxSpreadPct, minLeverage, notify: normalizeNotify(input.notify) };
+}
+
+/**
+ * TP mínimo para entrar (banda ATR): el objetivo que se fijaría al llenarse,
+ * con el precio medio al que entra la LIMIT (el ask si no hay medio) y el
+ * tope aplicado. Por debajo del mínimo, o sin banda para comprobarlo, no se
+ * opera. Devuelve la acción skip o null.
+ */
+function minTpSkip(ctx, leg, quote) {
+  const { params, spot } = ctx;
+  if (params.takeProfitMode !== 'atr_band' || params.minTpPct == null) return null;
+  if (!ctx.atrBand) return skip('tp_unknown', 'Sin banda ATR: no se puede comprobar el TP mínimo para entrar');
+  const bid = Number(quote.bid);
+  const ask = Number(quote.ask);
+  const fillPrice = bid > 0 && ask > 0 ? (bid + ask) / 2 : ask;
+  const tp = atrBandTakeProfit({
+    fillPrice, spot, type: leg.type, band: ctx.atrBand, tickSize: 0.0001, minPrice: 0, maxGainPct: params.tpMaxGainPct,
+  });
+  const gain = tp ? tp.appliedGainPct : 0;
+  if (gain >= params.minTpPct) return null;
+  return skip('tp_below_min', `TP por banda ATR de +${fmtFilter(gain)} % por debajo del mínimo +${fmtFilter(params.minTpPct)} %`);
 }
 
 /** Pata que abre una señal según la estructura. */
@@ -424,6 +454,8 @@ function openFor(ctx, direction, openCount, released = 0) {
   if (leg.side === 'BUY' && params.maxPremiumUsdt != null && premium > params.maxPremiumUsdt) {
     return skip('max_premium', 'La prima supera el máximo configurado');
   }
+  const tpSkip = minTpSkip(ctx, leg, selected[0].quote);
+  if (tpSkip) return tpSkip;
   const description = legs.length === 1 ? describeLeg(leg, selected[0].row.strike) : `${legs.length} contratos`;
   const action = { type: 'open', reason: 'signal', detail: `Señal ${DIRECTION_LABEL[direction]}: ${description} (vence ${chain.expiry})`, legs };
   // Con presupuesto total, el ejecutor real revalida contra la parte de esta señal.

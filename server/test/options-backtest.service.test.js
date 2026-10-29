@@ -439,6 +439,18 @@ test('simulate atr_band: abre con la señal y cierra con take_profit_atr_band al
   assert.deepEqual(result.signals, { received: 1, traded: 1, ignored: 0 });
 });
 
+test('simulate atr_band con TP mínimo: la banda sintética filtra la entrada como en vivo', () => {
+  // Mismo caso que arriba: el objetivo de la banda es +100 %.
+  const run = (minTpPct) => simulate({
+    template: templatesIndex.getTemplate('alert_signal'), params: atrParams({ minTpPct }),
+    steps: controlledSteps([195, 400]), capitalUsdt: 1000, feePct: 0,
+    signals: [{ t: ATR_T0 - 10 * 60 * 1000, direction: 'bullish', alertId: 5 }], candles: atrCandles,
+  });
+  assert.equal(run(150).metrics.cycles, 0, '+100 % < mínimo +150 %: no opera');
+  assert.deepEqual(run(150).signals, { received: 1, traded: 0, ignored: 1 });
+  assert.equal(run(50).metrics.cycles, 1, '+100 % ≥ mínimo +50 %: opera');
+});
+
 test('simulate atr_band: sin llegar al objetivo no cierra por stop ni por tiempo y liquida al vencimiento', () => {
   // Desde el 1-oct 00:00 hasta pasado el 9-oct 08:00 en pasos de 1h; el bid nunca pasa de 300.
   const hours = 8 * 24 + 10;

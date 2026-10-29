@@ -23,8 +23,8 @@ function position({ id = 1, side, type, entryPrice = 1000, quote = { bid: 1000, 
   return { id, symbol: `BTC-261023-${type === 'C' ? 65000 : 55000}-${type}`, side, type, quantity: 0.01, entryPrice, expiryMs, quote };
 }
 
-function run(p, { signal, positions = [], tradesToday = 0, chain = chainFor(p.expiryDays) } = {}) {
-  return alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain, positions, params: p, signal, tradesToday });
+function run(p, { signal, positions = [], tradesToday = 0, chain = chainFor(p.expiryDays), atrBand } = {}) {
+  return alertSignal.evaluate({ now: NOW, underlying: 'BTC', spot: SPOT, chain, positions, params: p, signal, tradesToday, atrBand });
 }
 
 test('alert_signal: registrado pero fuera de la lista de plantillas de Estrategias', () => {
@@ -244,6 +244,45 @@ test('alert_signal atr_band: sin objetivo guardado espera (hold) y no inventa sa
   const actions = run(p, { positions: [{ ...pending, tpTargetPrice: null }] });
   assert.equal(actions[0].type, 'hold');
   assert.equal(actions[0].reason, 'atr_band_tp_pending');
+});
+
+// ---------- TP mínimo para entrar (solo banda ATR) ----------
+
+const band = (upper, lower = 2 * SPOT - upper) => ({ close: SPOT, atr: Math.abs(upper - SPOT) / 2, multiplier: 2, upper, lower });
+
+test('alert_signal minTpPct: por defecto sin filtro, solo con banda ATR y como mucho el tope', () => {
+  assert.equal(params().minTpPct, null);
+  assert.equal(params({ takeProfitMode: 'atr_band' }).minTpPct, null);
+  assert.equal(params({ takeProfitMode: 'atr_band', minTpPct: 40 }).minTpPct, 40);
+  assert.equal(params({ takeProfitMode: 'fixed', minTpPct: 40 }).minTpPct, null, 'sin banda ATR no aplica');
+  assert.throws(() => params({ takeProfitMode: 'atr_band', minTpPct: 0.5 }), /mínimo 1/);
+  assert.throws(() => params({ takeProfitMode: 'atr_band', tpMaxGainPct: 100, minTpPct: 150 }), /TP mínimo/);
+  assert.equal(params({ takeProfitMode: 'atr_band', tpMaxGainPct: 100, minTpPct: 100 }).minTpPct, 100);
+});
+
+test('alert_signal minTpPct: TP de la banda por debajo del mínimo → no opera', () => {
+  const p = params({ takeProfitMode: 'atr_band', minTpPct: 50 });
+  const actions = run(p, { signal: { direction: 'bullish' }, atrBand: band(SPOT + 30) });
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].type, 'skip');
+  assert.equal(actions[0].reason, 'tp_below_min');
+  assert.match(actions[0].detail, /^TP por banda ATR de \+[\d.,]+ % por debajo del mínimo \+50 %$/);
+});
+
+test('alert_signal minTpPct: TP de la banda suficiente → abre (con tope aplicado)', () => {
+  const p = params({ takeProfitMode: 'atr_band', minTpPct: 50 });
+  const actions = run(p, { signal: { direction: 'bullish' }, atrBand: band(SPOT * 1.05) });
+  assert.equal(actions.at(-1).type, 'open');
+  const bearish = run(p, { signal: { direction: 'bearish' }, atrBand: band(SPOT * 1.05) });
+  assert.equal(bearish.at(-1).type, 'open', 'la put usa la banda inferior');
+});
+
+test('alert_signal minTpPct: sin banda no se puede comprobar → no opera; sin filtro la banda no hace falta', () => {
+  const p = params({ takeProfitMode: 'atr_band', minTpPct: 50 });
+  const actions = run(p, { signal: { direction: 'bullish' } });
+  assert.equal(actions[0].reason, 'tp_unknown');
+  const off = run(params({ takeProfitMode: 'atr_band' }), { signal: { direction: 'bullish' } });
+  assert.equal(off.at(-1).type, 'open');
 });
 
 test('alert_signal: notify por defecto {trades:true, errors:true} y se valida', () => {

@@ -347,6 +347,7 @@ class OptionsStrategyRunner {
       const orders = await this.liveOrders.listByStrategy(strategy.id);
       const actions = template.evaluate({
         now: tickCtx.now, underlying, signal, spot, chain, positions: [],
+        atrBand: await this.entryAtrBand(params, underlying, signal),
         openCountAll: all.length + livePendingCount(orders),
         pendingEntries: livePendingEntries(orders, underlying),
         blockedUnderlyings: strategy.state?.blockedUnderlyings || {},
@@ -372,6 +373,22 @@ class OptionsStrategyRunner {
    * Estados: 'evaluated' | 'reversal_queued' | 'waiting' (nuevas entradas
    * pendientes que cancelar) | 'underlying_removed' | 'disabled'.
    */
+  /**
+   * Banda ATR para el TP mínimo de entrada: solo se pide con señal, TP por
+   * banda y `minTpPct`. Un fallo de mercado deja null (la plantilla no opera).
+   */
+  async entryAtrBand(params, underlying, signal) {
+    if (!signal || params?.takeProfitMode !== 'atr_band' || params.minTpPct == null) return null;
+    try {
+      return await this.market.getAtrBand(underlying, {
+        interval: params.atrBandInterval, length: params.atrBandLength, multiplier: params.atrBandMultiplier,
+      }) || null;
+    } catch (err) {
+      this.logger.warn('options_entry_atr_band_failed', { underlying, error: err.message });
+      return null;
+    }
+  }
+
   async reevaluateSignal(strategyId, signal) {
     const strategy = await this.repo.getStrategyById(strategyId);
     if (!strategy || strategy.mode !== 'live' || strategy.template !== 'alert_signal' ||
@@ -681,6 +698,7 @@ class OptionsStrategyRunner {
         lastOpenedAt,
         mode,
         signal: tickCtx.signal || null,
+        atrBand: await this.entryAtrBand(params, market.underlying, tickCtx.signal),
         tradesToday,
         committedUsdt: tickCtx.signal
           ? await this.committedFor(strategy, mode, params, allPositions, { spot, underlying: market.underlying, tickCtx, orders: reserved })

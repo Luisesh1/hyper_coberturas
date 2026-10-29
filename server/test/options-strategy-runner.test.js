@@ -551,6 +551,36 @@ test('sombra atr_band: la apertura fija y persiste el objetivo una vez; un segun
   assert.equal(repo.positions[0].closedAt, null, 'sin stop ni salida por tiempo');
 });
 
+test('atr_band con TP mínimo: el runner pasa la banda a la plantilla y filtra la entrada', async () => {
+  const run = async (minTpPct, band) => {
+    const env = await setup({
+      template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band', tpMaxGainPct: 2000, minTpPct },
+    });
+    withAtrBand(env.market, band ? { band } : undefined);
+    const { produced } = await env.runner.runForSignal(env.strategy, { direction: 'bullish' });
+    return { env, produced };
+  };
+  const low = await run(1900);
+  assert.equal(low.env.shadowEntries.entries.length, 0, 'TP por debajo del mínimo: no hay entrada');
+  assert.ok(low.produced.some((a) => a.reason === 'tp_below_min'));
+  assert.equal(low.env.market.state.calls.band, 1);
+
+  const ok = await run(1);
+  assert.equal(ok.env.shadowEntries.entries.length, 1, 'TP suficiente: entrada pendiente al medio');
+
+  const none = await run(1, new Error('sin velas'));
+  assert.equal(none.env.shadowEntries.entries.length, 0);
+  assert.ok(none.produced.some((a) => a.reason === 'tp_unknown'));
+});
+
+test('atr_band sin TP mínimo: la entrada no pide la banda', async () => {
+  const env = await setup({ template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' } });
+  withAtrBand(env.market);
+  await env.runner.runForSignal(env.strategy, { direction: 'bullish' });
+  assert.equal(env.market.state.calls.band, 0);
+  assert.equal(env.shadowEntries.entries.length, 1);
+});
+
 test('sombra atr_band: sin banda al abrir, el objetivo queda pendiente y se reintenta en el siguiente tick', async () => {
   const { repo, runner, market, strategy, clock } = await setup({
     template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' },

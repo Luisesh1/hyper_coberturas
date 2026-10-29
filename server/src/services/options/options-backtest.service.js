@@ -236,17 +236,22 @@ function candleRows(candles) {
  * La cadena sintética no tiene tick: 0.0001 desde 0. null si no hay banda.
  */
 function atrBandTarget({ rows, t, spot, fillPrice, type, params }) {
-  const length = params.atrBandLength;
-  const limit = Math.min(500, Math.max(200, length * 10));
-  let end = rows.length;
-  while (end > 0 && !(rows[end - 1][6] < t)) end -= 1;
-  const band = wilderAtrBands(rows.slice(Math.max(0, end - limit), end), { length, multiplier: params.atrBandMultiplier, now: t });
+  const band = atrBandAt(rows, t, params);
   if (!band) return null;
   const tp = atrBandTakeProfit({ fillPrice, spot, type, band, tickSize: 0.0001, minPrice: 0, maxGainPct: params.tpMaxGainPct });
   return tp ? tp.price : null;
 }
 
 const utcDay = (t) => Math.floor(t / DAY_MS);
+
+/** Banda ATR con las velas cerradas antes de `t`, o null. */
+function atrBandAt(rows, t, params) {
+  const length = params.atrBandLength;
+  const limit = Math.min(500, Math.max(200, length * 10));
+  let end = rows.length;
+  while (end > 0 && !(rows[end - 1][6] < t)) end -= 1;
+  return wilderAtrBands(rows.slice(Math.max(0, end - limit), end), { length, multiplier: params.atrBandMultiplier, now: t });
+}
 
 /**
  * Corre la simulación sobre `steps`. Puro: no hace E/S.
@@ -305,6 +310,8 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
       ctx.tradesToday = tradesToday;
       // Presupuesto total del bot: lo comprometido por las posiciones abiertas.
       if (params.budgetUsdt != null) ctx.committedUsdt = committedUsdt({ positions, spot });
+      // TP mínimo para entrar: la misma banda que fijará el objetivo.
+      if (atrBand && params.minTpPct != null) ctx.atrBand = atrBandAt(atrRows, t, params);
     }
     // La cadena es perezosa: si el template no la mira, no se calcula.
     Object.defineProperty(ctx, 'chain', { enumerable: true, get: chainFor });

@@ -434,6 +434,7 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       notifyErrors: p.notify?.errors !== false,
       maxPremiumUsdt: structure === 'buy_with' ? (toNumber(p.maxPremiumUsdt) ?? null) : defs.maxPremiumUsdt,
       maxSpreadPct: toNumber(p.maxSpreadPct) ?? null,
+      minTpPct: toNumber(p.minTpPct) ?? null,
       minLeverage: structure === 'buy_with' ? (toNumber(p.minLeverage) ?? null) : null,
       maxMarginUsdt: structure === 'sell_against' ? (toNumber(bot.limits?.maxMarginUsdt) ?? null) : null,
       // null guardado = sin límite; ausente = el valor por defecto del servidor.
@@ -544,6 +545,9 @@ export function validateBotForm(form, { alerts } = {}) {
     range('atrBandLength', 2, 100, { integer: true });
     range('atrBandMultiplier', 0.25, 10);
     range('tpMaxGainPct', 10, 2000);
+    if (isNum(form.minTpPct) && !(Number(form.minTpPct) >= 1 && Number(form.minTpPct) <= Number(form.tpMaxGainPct))) {
+      errors.minTpPct = 'Entre 1 y el tope de ganancia (vacío = sin mínimo)';
+    }
   } else {
     range('takeProfitPct', 1, 1000);
     range('tpAtrMultiplier', 0.25, 4);
@@ -612,6 +616,7 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
   // fusiona params al editar y una clave omitida conservaría el valor viejo.
   params.maxPremiumUsdt = buy && Number(form.maxPremiumUsdt) > 0 ? Number(form.maxPremiumUsdt) : null;
   params.maxSpreadPct = Number(form.maxSpreadPct) > 0 ? Number(form.maxSpreadPct) : null;
+  params.minTpPct = buy && form.takeProfitMode === 'atr_band' && Number(form.minTpPct) > 0 ? Number(form.minTpPct) : null;
   params.minLeverage = buy && Number(form.minLeverage) > 0 ? Number(form.minLeverage) : null;
   // 0 o vacío = sin margen propio (sólo el límite global).
   const limits = { ...(baseLimits || {}) };
@@ -692,6 +697,7 @@ export function describeParams(bot) {
     ? [
       { key: 'takeProfitPct', label: 'Venta por banda ATR',
         value: `${p.atrBandInterval || COMMON_DEFAULTS.atrBandInterval} ${formatNumber(v('atrBandLength'), { decimals: 0 })}/${formatNumber(v('atrBandMultiplier'), { decimals: 2, minDecimals: 0 })} · tope +${formatNumber(v('tpMaxGainPct'), { decimals: 0 })} %` },
+      ...(toNumber(p.minTpPct) > 0 ? [{ key: 'minTpPct', label: 'TP mínimo para entrar', value: `+${formatNumber(toNumber(p.minTpPct), { decimals: 2, minDecimals: 0 })} %` }] : []),
       { key: 'stopLossPct', label: 'Sin stop', value: 'se mantiene hasta vencer' },
     ]
     : [

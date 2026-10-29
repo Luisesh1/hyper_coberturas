@@ -663,6 +663,17 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
                 error={errors.tpMaxGainPct}
                 onChange={(v) => update({ tpMaxGainPct: v })}
               />
+              <NumberField
+                label="TP mínimo para entrar (%)"
+                help="Si la banda da un objetivo menor, no se opera. Vacío: sin mínimo"
+                unit="%"
+                value={form.minTpPct}
+                min={1}
+                max={2000}
+                step={5}
+                error={errors.minTpPct}
+                onChange={(v) => update({ minTpPct: v })}
+              />
               <p className={styles.note}>{ATR_BAND_NOTE}</p>
             </>
           ) : form.takeProfitMode === 'volatility' ? (
