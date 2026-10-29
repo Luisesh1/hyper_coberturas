@@ -58,12 +58,24 @@ function createOptionsIvSnapshotsRepository({ db = defaultDb } = {}) {
     return rows.map(mapSnapshot);
   }
 
+  /** Snapshots de unos símbolos en [from, to], ordenados por tiempo. */
+  async function listBySymbols(symbols, from, to) {
+    if (!symbols.length) return [];
+    const { rows } = await db.query(
+      `SELECT * FROM options_iv_snapshots
+        WHERE symbol = ANY($1::text[]) AND captured_at BETWEEN $2 AND $3
+        ORDER BY captured_at`,
+      [symbols, from, to]
+    );
+    return rows.map(mapSnapshot);
+  }
+
   async function deleteOlderThan(cutoffMs) {
     const { rowCount } = await db.query('DELETE FROM options_iv_snapshots WHERE captured_at < $1', [cutoffMs]);
     return rowCount || 0;
   }
 
-  return { insertMany, listRange, deleteOlderThan };
+  return { insertMany, listRange, listBySymbols, deleteOlderThan };
 }
 
 module.exports = createOptionsIvSnapshotsRepository();

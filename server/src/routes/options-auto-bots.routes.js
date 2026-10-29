@@ -40,6 +40,12 @@ router.get('/:id/signals', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+router.get('/:id/exit-simulation', asyncHandler(async (req, res) => {
+  const { mode = 'shadow', since } = req.query;
+  const data = await service().exitSimulation(req.user.userId, requireIntParam(req, 'id'), { mode: String(mode), since });
+  res.json({ success: true, data });
+}));
+
 // Cerrar posiciones (en Real envía órdenes LIMIT): exige confirm: true.
 function requireConfirm(req, _res, next) {
   if (req.body?.confirm !== true) {
