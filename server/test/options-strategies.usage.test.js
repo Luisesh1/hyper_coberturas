@@ -109,6 +109,19 @@ test('GET detalle de un bot trae solo las órdenes sin finalizar como pendingOrd
   assert.equal(o.limitPrice, undefined);
 });
 
+test('GET detalle: closedPositions incluye el rango de la prima (o null sin registro)', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });
+  const range = { high: { price: 14, at: NOW - 4000 }, low: { price: 8, at: NOW - 7000 }, partial: false };
+  const a = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2500-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 9e6, premiumRange: range });
+  await repo.closePosition(a.id, { exitPrice: 12, closedAt: NOW - 1000, pnlUsdt: 0.2, feesUsdt: 0.01 });
+  const b = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2600-C', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 9e6 });
+  await repo.closePosition(b.id, { exitPrice: 12, closedAt: NOW - 2000, pnlUsdt: 0.2, feesUsdt: 0.01 });
+  const detail = await service.get(USER, s.id);
+  assert.deepEqual(detail.closedPositions[0].premiumRange, range);
+  assert.equal(detail.closedPositions[1].premiumRange, null);
+});
+
 test('GET detalle: closedPositions ordena por cierre desc con motivo y una plantilla ajena no trae pendingOrders', async () => {
   const { repo, service } = setup();
   const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });

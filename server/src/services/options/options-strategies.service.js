@@ -334,6 +334,7 @@ function createOptionsStrategiesService(deps = {}) {
           closeReason: p.closeReason ?? null,
           entryFeeUsdt: p.entryFeeUsdt ?? null, exitFeeUsdt: p.exitFeeUsdt ?? null,
           exerciseFeeUsdt: p.exerciseFeeUsdt ?? null,
+          premiumRange: p.premiumRange ?? null,
         })),
       usage: await limitsUsage({ repo, market, strategy, positions, at, quotes, orders: standingOrders, shadowPending }),
       events,

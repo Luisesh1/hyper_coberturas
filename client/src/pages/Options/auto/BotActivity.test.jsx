@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import BotActivity from './BotActivity';
+import { formatDateTime } from '../strategies/common/format';
 
 const NOW = Date.now();
 const bot = (extra = {}) => ({
@@ -158,6 +159,10 @@ describe('BotActivity', () => {
     expect(screen.getByText('Prima máxima (bid)')).toBeTruthy();
     expect(screen.getByText('a 1 h 11 min de la compra')).toBeTruthy();
     expect(screen.getByText('a 12 min de la compra')).toBeTruthy();
+    // La fecha exacta de cada extremo se ve (no solo en el title, que el móvil no muestra).
+    const highTime = screen.getByText(formatDateTime(OPEN + 71 * 60e3), { selector: 'time' });
+    expect(highTime.getAttribute('datetime')).toBe(new Date(OPEN + 71 * 60e3).toISOString());
+    expect(screen.getByText(formatDateTime(OPEN + 12 * 60e3), { selector: 'time' })).toBeTruthy();
     expect(screen.getByText('+34,0 %')).toBeTruthy();
     expect(screen.getByText('−20,0 %')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /prima de ETH-261027-2300-P/ }));
