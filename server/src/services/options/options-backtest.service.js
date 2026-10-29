@@ -286,6 +286,7 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
     const cycle = position.cycle;
     cycle.pnl += pnl;
     cycle.fees += feeUsdt;
+    if (position.leg) position.leg.exitPrice = round(price, 4);
     cycle.openLegs -= 1;
     if (cycle.openLegs === 0) {
       cycle.closedAt = t;
@@ -320,8 +321,10 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
           const meta = parseSymbol(leg.symbol);
           const position = { id: seq++, symbol: leg.symbol, side: leg.side, quantity: leg.quantity, entryPrice: price, fee: f, openedAt: t, ...meta, cycle };
           if (atrBand) position.tpTargetPrice = atrBandTarget({ rows: atrRows, t, spot, fillPrice: price, type: meta?.type, params });
+          const legRow = { symbol: leg.symbol, side: leg.side, quantity: leg.quantity, price: round(price, 4), exitPrice: null };
+          position.leg = legRow;
           positions.push(position);
-          cycle.legs.push({ symbol: leg.symbol, side: leg.side, quantity: leg.quantity, price: round(price, 4) });
+          cycle.legs.push(legRow);
           cycle.premium += signedPremium(leg.side, price, leg.quantity);
           cycle.fees += f;
           cycle.openLegs += 1;

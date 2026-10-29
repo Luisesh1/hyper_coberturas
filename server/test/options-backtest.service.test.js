@@ -434,6 +434,8 @@ test('simulate atr_band: abre con la señal y cierra con take_profit_atr_band al
   assert.equal(cycle.exitReason, 'take_profit_atr_band');
   assert.equal(cycle.closedAt ?? null, null, 'el DTO no expone closedAt');
   assert.equal(cycle.pnlUsdt, 2, '(400 − 200) × 0,01');
+  assert.equal(cycle.legs[0].exitPrice, 400);
+  assert.equal(typeof cycle.feesUsdt, 'number');
   assert.deepEqual(result.signals, { received: 1, traded: 1, ignored: 0 });
 });
 

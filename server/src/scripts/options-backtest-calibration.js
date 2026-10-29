@@ -8,34 +8,17 @@
  *
  * Uso (dentro del contenedor):
  *   docker exec testbot-server node src/scripts/options-backtest-calibration.js \
- *     --strategy <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--source realized|dvol] [--json]
+ *     --strategy <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--underlying BTC] [--source realized|dvol] [--json]
  *
+ * Un bot multi-subyacente se backtestea una vez por subyacente (o solo --underlying).
  * Por defecto el periodo va de la primera posición de sombra a ahora. El backtest
  * exige un rango mínimo de 2 días: si el periodo es menor se amplía hacia atrás
  * y solo se comparan operaciones desde el inicio pedido.
  */
 const { createOptionsBacktestService } = require('../services/options/options-backtest.service');
-const { pairTrades, summarize, formatReport } = require('../services/options/options-calibration');
-const { DAY_MS } = require('../services/options/options-utils');
-
-function parseArgs(argv) {
-  const args = { json: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === '--json') args.json = true;
-    else if (['--strategy', '--since', '--until', '--source'].includes(a)) { args[a.slice(2)] = argv[i + 1]; i += 1; }
-    else throw new Error(`Argumento desconocido: ${a}`);
-  }
-  if (!/^\d+$/.test(String(args.strategy || ''))) throw new Error('Falta --strategy <id>');
-  return args;
-}
-
-function parseDay(value, name) {
-  if (value == null) return null;
-  const ms = /^\d{4}-\d{2}-\d{2}$/.test(value) ? Date.parse(`${value}T00:00:00Z`) : NaN;
-  if (!Number.isFinite(ms)) throw new Error(`${name} debe ser YYYY-MM-DD`);
-  return ms;
-}
+const { pairTrades, summarize, formatReport, mergeResults, parseArgs, parseDay } = require('../services/options/options-calibration');
+const { botUnderlyings } = require('../services/options/bot-underlyings');
+const { DAY_MS, parseSymbol } = require('../services/options/options-utils');
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -49,22 +32,32 @@ async function main() {
   const until = parseDay(args.until, '--until') ?? Date.now();
   if (!(since < until)) throw new Error('--since debe ser anterior a --until');
 
+  const wanted = args.underlying ? [args.underlying] : botUnderlyings(strategy);
   const service = createOptionsBacktestService();
-  const config = await service.normalizeConfig(strategy.userId, {
-    strategyId: strategy.id,
-    from: Math.min(since, until - 2 * DAY_MS),
-    to: until,
-    ...(args.source ? { source: args.source } : {}),
-  });
-  const result = await service.runBacktest(config);
-
   const inPeriod = (t) => t >= since && t <= until;
-  const positions = shadow.filter((p) => inPeriod(p.openedAt));
-  const cycles = result.cycles.filter((c) => inPeriod(c.openedAt));
-  const paired = pairTrades({ cycles, positions });
-  const report = { strategyId: strategy.id, from: since, until, summary: summarize(paired), ...paired };
+  const results = [];
+  const byUnderlying = {};
+  const notes = {};
+  for (const underlying of wanted) {
+    const config = await service.normalizeConfig(strategy.userId, {
+      strategyId: strategy.id,
+      underlying,
+      from: Math.min(since, until - 2 * DAY_MS),
+      to: until,
+      ...(args.source ? { source: args.source } : {}),
+    });
+    const result = await service.runBacktest(config);
+    const positions = shadow.filter((p) => inPeriod(p.openedAt) && parseSymbol(p.symbol)?.underlying === underlying);
+    const cycles = result.cycles.filter((c) => inPeriod(c.openedAt));
+    const paired = pairTrades({ cycles, positions });
+    results.push(paired);
+    byUnderlying[underlying] = summarize(paired);
+    notes[underlying] = result.sourceNote;
+  }
+  const paired = mergeResults(results);
+  const report = { strategyId: strategy.id, from: since, until, summary: summarize(paired), byUnderlying, ...paired };
 
-  process.stdout.write(args.json ? `${JSON.stringify({ ...report, sourceNote: result.sourceNote }, null, 2)}\n` : `${formatReport(report)}\n`);
+  process.stdout.write(args.json ? `${JSON.stringify({ ...report, sourceNotes: notes }, null, 2)}\n` : `${formatReport(report)}\n`);
 }
 
 main().catch((err) => {

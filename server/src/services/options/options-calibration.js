@@ -49,7 +49,7 @@ function backtestTrades(cycles) {
     closeReason: c.exitReason || null,
     pnlUsdt: Number(c.pnlUsdt) || 0,
     feesUsdt: Number(c.feesUsdt) || 0,
-    legs: (c.legs || []).map((l) => ({ ...l, exitPrice: null })),
+    legs: (c.legs || []).map((l) => ({ ...l, exitPrice: l.exitPrice ?? null })),
   }));
 }
 
@@ -125,17 +125,53 @@ function summarize({ pairs, backtestOnly, shadowOnly }) {
 
 const day = (ms) => (ms == null ? '-' : new Date(ms).toISOString().slice(0, 16).replace('T', ' '));
 const usd = (v) => (v == null ? '-' : Number(v).toFixed(2));
+const px = (v) => (v == null ? 'abierta' : Number(v).toFixed(2));
+const legsText = (t) => t.legs.map((l) => `${l.side} ${l.symbol} ${px(l.price)}->${px(l.exitPrice)}`).join('; ');
 const pct = (v) => (v == null ? 'n/d' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`);
 
-function formatReport({ strategyId, from, until, summary, pairs, backtestOnly, shadowOnly }) {
+/** Une los resultados de varios subyacentes (pares y solo-lado) en uno. */
+function mergeResults(results) {
+  return {
+    pairs: results.flatMap((r) => r.pairs).sort((a, b) => a.shadow.openedAt - b.shadow.openedAt),
+    backtestOnly: results.flatMap((r) => r.backtestOnly),
+    shadowOnly: results.flatMap((r) => r.shadowOnly),
+  };
+}
+
+function parseDay(value, name) {
+  if (value == null) return null;
+  const ms = /^\d{4}-\d{2}-\d{2}$/.test(value) ? Date.parse(`${value}T00:00:00Z`) : NaN;
+  if (!Number.isFinite(ms)) throw new Error(`${name} debe ser YYYY-MM-DD`);
+  return ms;
+}
+
+function parseArgs(argv) {
+  const args = { json: false };
+  const valued = ['--strategy', '--since', '--until', '--source', '--underlying'];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--json') args.json = true;
+    else if (valued.includes(a)) {
+      const v = argv[i + 1];
+      if (v == null || v.startsWith('--')) throw new Error(`Falta el valor de ${a}`);
+      args[a.slice(2)] = v;
+      i += 1;
+    } else throw new Error(`Argumento desconocido: ${a}`);
+  }
+  if (!/^\d+$/.test(String(args.strategy || ''))) throw new Error('Falta --strategy <id>');
+  if (args.underlying) args.underlying = args.underlying.toUpperCase();
+  return args;
+}
+
+function formatReport({ strategyId, from, until, summary, byUnderlying, pairs, backtestOnly, shadowOnly }) {
   const lines = [`Calibración del backtest - Estrategia ${strategyId}`];
   if (from != null) lines.push(`Periodo: ${day(from)} a ${day(until)} UTC`);
   lines.push('', 'Pares (sintético vs sombra):');
   for (const p of pairs) {
     lines.push(
       `- ${p.underlying} ${p.symbols.join(' / ')} | entrada ${day(p.shadow.openedAt)} | prima sintética vs real: ${pct(p.entryErrorPct)}`,
-      `    backtest: salida ${day(p.backtest.closedAt)} (${p.backtest.closeReason || '-'}) P&L ${usd(p.backtest.pnlUsdt)}`,
-      `    sombra:   salida ${day(p.shadow.closedAt)} (${p.shadow.closeReason || '-'}) P&L ${usd(p.shadow.pnlUsdt)}`,
+      `    backtest: ${legsText(p.backtest)} | salida ${day(p.backtest.closedAt)} (${p.backtest.closeReason || '-'}) P&L ${usd(p.backtest.pnlUsdt)}`,
+      `    sombra:   ${legsText(p.shadow)} | salida ${day(p.shadow.closedAt)} (${p.shadow.closeReason || '-'}) P&L ${usd(p.shadow.pnlUsdt)}`,
     );
   }
   if (!pairs.length) lines.push('- (ninguno)');
@@ -148,7 +184,13 @@ function formatReport({ strategyId, from, until, summary, pairs, backtestOnly, s
     `Error medio de prima de entrada: ${pct(summary.meanEntryErrorPct)} (absoluto ${pct(summary.meanAbsEntryErrorPct)})`,
     `Comisiones: backtest ${usd(summary.backtestFeesUsdt)} | sombra ${usd(summary.shadowFeesUsdt)} USDT`,
   );
+  if (byUnderlying && Object.keys(byUnderlying).length > 1) {
+    lines.push('', 'Por subyacente:');
+    for (const [u, s] of Object.entries(byUnderlying)) {
+      lines.push(`- ${u}: pares ${s.pairs}, solo backtest ${s.backtestOnly}, solo sombra ${s.shadowOnly}, P&L backtest ${usd(s.backtestPnlUsdt)} | sombra ${usd(s.shadowPnlUsdt)}, error prima ${pct(s.meanEntryErrorPct)}`);
+    }
+  }
   return lines.join('\n');
 }
 
-module.exports = { pairTrades, summarize, groupShadowTrades, formatReport, PAIR_TOLERANCE_MS };
+module.exports = { mergeResults, parseDay, parseArgs, pairTrades, summarize, groupShadowTrades, formatReport, PAIR_TOLERANCE_MS };

@@ -97,3 +97,30 @@ test('formatReport produce texto legible', () => {
   assert.match(text, /BTC/);
   assert.match(text, /Pares: 1/);
 });
+
+test('parseArgs y parseDay validan valores', () => {
+  const { parseArgs, parseDay, mergeResults } = require('../src/services/options/options-calibration');
+  assert.deepEqual(parseArgs(['--strategy', '7', '--json', '--underlying', 'eth']), { json: true, strategy: '7', underlying: 'ETH' });
+  assert.throws(() => parseArgs(['--strategy', '7', '--since']), /Falta el valor de --since/);
+  assert.throws(() => parseArgs(['--strategy', '7', '--since', '--json']), /Falta el valor de --since/);
+  assert.throws(() => parseArgs([]), /--strategy/);
+  assert.throws(() => parseArgs(['--strategy', '7', '--x']), /desconocido/);
+  assert.equal(parseDay(undefined, '--since'), null);
+  assert.equal(parseDay('2026-10-01', '--since'), Date.UTC(2026, 9, 1));
+  assert.throws(() => parseDay('01/10', '--since'), /YYYY-MM-DD/);
+  const a = pairTrades({ cycles: [cycle()], positions: [pos()] });
+  const b = pairTrades({ cycles: [], positions: [pos({ symbol: 'ETH-261030-3000-P' })] });
+  const m = mergeResults([a, b]);
+  assert.equal(m.pairs.length, 1);
+  assert.equal(m.shadowOnly.length, 1);
+});
+
+test('formatReport imprime entrada y salida de ambos lados; sin salida: abierta', () => {
+  const r = pairTrades({
+    cycles: [cycle({ legs: [{ symbol: SYM, side: 'SELL', quantity: 0.1, price: 110, exitPrice: 60 }] })],
+    positions: [pos({ exitPrice: null, closedAt: null })],
+  });
+  const text = formatReport({ strategyId: 1, summary: summarize(r), ...r });
+  assert.match(text, /backtest: SELL .* 110\.00->60\.00/);
+  assert.match(text, /sombra: .* 100\.00->abierta/);
+});
