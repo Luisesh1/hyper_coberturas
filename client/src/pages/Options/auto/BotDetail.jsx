@@ -9,6 +9,7 @@ import Mapping from './Mapping';
 import SignalsFeed, { SignalFilter } from './SignalsFeed';
 import LiveTpStatus from './LiveTpStatus';
 import BotActivity from './BotActivity';
+import ExitSimulator from './ExitSimulator';
 import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, botDirections, botStatus, buildBotKpis, describeParams, flowSteps } from './botView';
 import { pendingEntryRows } from './botActivity';
 import BotFlow from './visual/BotFlow';
@@ -161,6 +162,7 @@ export default function BotDetail({
   unblocking = null,
   actionBusy = false,
   actionNotice = null,
+  since = undefined,
 }) {
   const kpis = useMemo(() => buildBotKpis(bot, stats), [bot, stats]);
   const desc = useMemo(() => describeParams(bot), [bot]);
@@ -274,6 +276,7 @@ export default function BotDetail({
             <AlertRows alerts={bot.alerts} />
           </section>
           <BotActivity {...activity} part="bottom" />
+          <ExitSimulator key={`sim-${bot.id}`} bot={bot} mobile since={since} />
         </div>
       </div>
     );
@@ -380,6 +383,7 @@ export default function BotDetail({
       </div>
 
       <BotActivity {...activity} part="bottom" />
+      <ExitSimulator key={`sim-${bot.id}`} bot={bot} since={since} />
     </section>
   );
 }
