@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { avgHoldText, bestRows, buildGrid, coverageText, defaultStop, nearestCell } from './exitSimulator';
+import { actualModel, vsReal, avgHoldText, bestRows, buildGrid, coverageText, defaultStop, nearestCell } from './exitSimulator';
 
 const sc = (tpPct, maxHoldHours, stopPct, pnlUsdt, extra = {}) => ({ tpPct, maxHoldHours, stopPct, pnlUsdt, trades: 4, wins: 3, avgHoldMinutes: 90, incomplete: 0, ...extra });
 
@@ -18,8 +18,10 @@ describe('exitSimulator', () => {
     const g = buildGrid(scenarios, null);
     expect(g.tps).toEqual([20, null]);
     expect(g.holds).toEqual([1, null]);
-    expect(g.rows[0].cells[1]).toMatchObject({ pnl: -10, sign: 'neg', intensity: 1 });
-    expect(g.rows[0].cells[0].intensity).toBe(0.5);
+    expect(g.rows[0].cells[1]).toMatchObject({ pnl: -10, sign: 'neg' });
+    // Escala global: el 99 del stop 30 % también ancla este mapa.
+    expect(g.rows[0].cells[0].intensity).toBeCloseTo(5 / 99);
+    expect(g.rows[0].cells[1].intensity).toBeCloseTo(10 / 99);
     expect(buildGrid(scenarios, 30).rows[0].cells[0].pnl).toBe(99);
   });
 
@@ -30,5 +32,13 @@ describe('exitSimulator', () => {
     expect(nearestCell({ takeProfitMode: 'volatility' }, g)).toBeNull();
     expect(defaultStop({ stopLossPct: 45 })).toBe(50);
     expect(defaultStop({})).toBeNull();
+  });
+
+  it('referencia real: con datos y total solo si difiere; vs real firmado', () => {
+    const base = { actual: { pnlUsdt: -4.5, trades: 32 }, actualCovered: { pnlUsdt: 3.25, trades: 25 } };
+    expect(actualModel(base)).toMatchObject({ trades: 25, main: 'Real con datos: 3,25 USDT · 25 operaciones', secondary: 'Real total: −4,50 USDT (32)' });
+    expect(actualModel({ actual: base.actualCovered, actualCovered: base.actualCovered }).secondary).toBeNull();
+    expect(vsReal({ pnlUsdt: 10, actualPnlUsdt: 12.5 })).toEqual({ text: '−2,50 USDT', value: -2.5 });
+    expect(vsReal({ pnlUsdt: 10 }).text).toBe('—');
   });
 });

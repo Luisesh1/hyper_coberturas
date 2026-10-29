@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import { autoBotsApi } from '../autoTradingApi';
 import { ChevronRightIcon } from '../strategies/common/icons';
 import {
-  SMALL_SAMPLE, SMALL_SAMPLE_TEXT, STOP_OPTIONS, actualText, bestRows, buildGrid, coverageText,
+  SMALL_SAMPLE, SMALL_SAMPLE_TEXT, STOP_OPTIONS, actualModel, bestRows, buildGrid, coverageText,
   defaultStop, holdText, nearestCell, tpText,
 } from './exitSimulator';
 import ui from '../strategies/common/ui.module.css';
@@ -22,7 +22,7 @@ function BestTable({ rows, mobile }) {
               <strong>TP {r.tp} · {r.hold} · stop {r.stop}</strong>
               <span className={`${ui.mono} ${toneClass(r.pnlValue)}`}>{r.pnl}</span>
             </div>
-            <span className={`${ui.muted} ${ui.small}`}>Acierto {r.hits} · media {r.avgHold}{r.incomplete ? ' · con datos incompletos' : ''}</span>
+            <span className={`${ui.muted} ${ui.small}`}>Acierto {r.hits} · media {r.avgHold} · vs real <span className={toneClass(r.vsValue)}>{r.vs}</span>{r.incomplete ? ' · con datos incompletos' : ''}</span>
           </li>
         ))}
       </ul>
@@ -32,7 +32,7 @@ function BestTable({ rows, mobile }) {
     <div className={ui.tableWrap}>
       <table className={ui.table} aria-label="Mejores combinaciones">
         <thead>
-          <tr><th>TP</th><th>Tiempo máx.</th><th>Stop</th><th>P&amp;L</th><th>Acierto</th><th>Tiempo medio</th></tr>
+          <tr><th>TP</th><th>Tiempo máx.</th><th>Stop</th><th>P&amp;L</th><th>Acierto</th><th>Tiempo medio</th><th>vs real</th></tr>
         </thead>
         <tbody>
           {rows.map((r) => (
@@ -40,6 +40,7 @@ function BestTable({ rows, mobile }) {
               <td>{r.tp}</td><td>{r.hold}</td><td>{r.stop}</td>
               <td className={`${ui.mono} ${toneClass(r.pnlValue)}`}>{r.pnl}</td>
               <td>{r.hits}</td><td>{r.avgHold}</td>
+              <td className={`${ui.mono} ${toneClass(r.vsValue)}`}>{r.vs}</td>
             </tr>
           ))}
         </tbody>
@@ -48,7 +49,7 @@ function BestTable({ rows, mobile }) {
   );
 }
 
-function HeatMap({ grid, mark }) {
+function HeatMap({ grid, mark, selected, onSelect }) {
   return (
     <div className={x.mapWrap} tabIndex={0} role="region" aria-label="Mapa de P&L por TP y tiempo máximo">
       <table className={x.map}>
@@ -61,18 +62,20 @@ function HeatMap({ grid, mark }) {
               <th scope="row">{tpText(r.tp)}</th>
               {r.cells.map((c) => {
                 const isMark = mark && mark.tp === r.tp && mark.hold === c.hold;
-                const bg = c.sign === 'zero' ? undefined : `rgba(${c.sign === 'pos' ? '34, 197, 94' : '239, 68, 68'}, ${(0.12 + 0.5 * c.intensity).toFixed(2)})`;
+                const bg = c.sign === 'zero' ? undefined : `color-mix(in srgb, var(${c.sign === 'pos' ? '--green' : '--red'}) ${Math.round(12 + 50 * c.intensity)}%, transparent)`;
+                const isSel = selected && selected.tp === r.tp && selected.hold === c.hold;
                 return (
                   <td
                     key={String(c.hold)}
-                    className={`${x.cell} ${isMark ? x.cellMark : ''}`}
+                    className={`${x.cell} ${isMark ? x.cellMark : ''} ${isSel ? x.cellSel : ''}`}
                     style={bg ? { background: bg } : undefined}
                     title={c.title}
                     data-sign={c.sign}
                     data-current={isMark ? 'true' : undefined}
-                    aria-label={isMark ? `${c.title} (configuración actual)` : undefined}
                   >
-                    {c.text}
+                    <button type="button" className={x.cellBtn} onClick={() => onSelect({ tp: r.tp, hold: c.hold })} aria-pressed={!!isSel} aria-label={c.detail || undefined}>
+                      {c.text}
+                    </button>
                   </td>
                 );
               })}
@@ -92,6 +95,7 @@ export default function ExitSimulator({ bot, mobile = false, since }) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState({ loading: false, error: null, data: null });
   const [attempt, setAttempt] = useState(0);
+  const [picked, setPicked] = useState(null);
   const [stop, setStop] = useState(() => defaultStop(bot.params));
   const bodyId = useId();
 
@@ -110,7 +114,9 @@ export default function ExitSimulator({ bot, mobile = false, since }) {
   const grid = useMemo(() => (data ? buildGrid(data.scenarios, stop) : null), [data, stop]);
   const mark = useMemo(() => (grid ? nearestCell(bot.params, grid) : null), [grid, bot.params]);
   const rows = useMemo(() => bestRows(data), [data]);
-  const trades = data?.actual?.trades ?? data?.coverage?.positions ?? 0;
+  const actual = useMemo(() => actualModel(data), [data]);
+  const trades = actual.trades;
+  const pickedCell = useMemo(() => grid?.rows.find((r) => r.tp === picked?.tp)?.cells.find((cl) => cl.hold === picked?.hold) || null, [grid, picked]);
 
   return (
     <section className={mobile ? styles.mobileSection : `${ui.panel} ${styles.activityPanel}`} aria-label="Simulador de salidas">
@@ -125,14 +131,17 @@ export default function ExitSimulator({ bot, mobile = false, since }) {
           {error && (
             <p className={`${ui.alert} ${ui.alertError}`} role="alert">
               <span>No se pudo calcular el simulador: {error.message || 'error desconocido'}</span>
-              <button type="button" className={`${ui.btn} ${ui.btnSmall}`} onClick={() => setAttempt((n) => n + 1)}>Reintentar</button>
+              <button type="button" className={`${ui.btn} ${ui.btnSmall} ${x.retry}`} onClick={() => setAttempt((n) => n + 1)}>Reintentar</button>
             </p>
           )}
           {data && !loading && (
             <>
               <div className={x.head}>
                 <span className={ui.small}>{coverageText(data.coverage)}</span>
-                <strong className={ui.mono}>{actualText(data.actual)}</strong>
+                <span>
+                  <strong className={ui.mono}>{actual.main}</strong>
+                  {actual.secondary && <span className={`${ui.muted} ${ui.small}`}> · {actual.secondary}</span>}
+                </span>
               </div>
               {trades < SMALL_SAMPLE && <p className={`${ui.alert} ${ui.alertWarn}`} role="note">{SMALL_SAMPLE_TEXT}</p>}
               <h4 className={x.h4}>Mejores combinaciones</h4>
@@ -154,7 +163,13 @@ export default function ExitSimulator({ bot, mobile = false, since }) {
                   ))}
                 </div>
               </div>
-              <HeatMap grid={grid} mark={mark} />
+              {grid.rows.length ? (
+                <>
+                  <HeatMap grid={grid} mark={mark} selected={picked} onSelect={setPicked} />
+                  <p className={`${ui.small} ${x.detailLine}`} role="status">{pickedCell?.detail || 'Toca una celda para ver su detalle.'}</p>
+                </>
+              ) : <p className={ui.empty}>Sin escenarios para este stop.</p>}
+              <p className={`${ui.muted} ${ui.small}`}>La intensidad del color usa una escala común a todos los stops.</p>
               <p className={`${ui.muted} ${ui.small}`}>
                 {mark ? 'El borde marca la celda más cercana a la configuración actual del bot.' : 'Con este tipo de objetivo no se marca una celda: el TP no es un porcentaje fijo.'}
               </p>

@@ -30,7 +30,28 @@ export function coverageText(c) {
   return `${c.positions} operaciones · ${c.minute} con datos por minuto · ${c.hourly} solo horarios · ${c.none} sin datos`;
 }
 
-export const actualText = (actual) => `Real: ${formatUsdt(actual?.pnlUsdt ?? 0)} USDT`;
+// Referencia de la cabecera: lo real sobre las posiciones con datos (las que
+// entran en los escenarios). El total solo se añade si difiere.
+export function actualModel(data) {
+  const covered = data?.actualCovered || data?.actual || { pnlUsdt: 0, trades: 0 };
+  const total = data?.actual;
+  const differs = !!total && !!data?.actualCovered
+    && (Number(total.pnlUsdt) !== Number(covered.pnlUsdt) || Number(total.trades) !== Number(covered.trades));
+  return {
+    trades: Number(covered.trades) || 0,
+    main: `Real con datos: ${formatUsdt(covered.pnlUsdt ?? 0)} USDT · ${covered.trades ?? 0} operaciones`,
+    secondary: differs ? `Real total: ${formatUsdt(total.pnlUsdt ?? 0)} USDT (${total.trades})` : null,
+  };
+}
+
+// Diferencia contra lo real de las mismas posiciones que usó el escenario.
+export function vsReal(s) {
+  const a = toNumber(s?.actualPnlUsdt);
+  const p = toNumber(s?.pnlUsdt);
+  if (a === null || p === null) return { text: '—', value: null };
+  const d = Math.round((p - a) * 100) / 100;
+  return { text: `${formatUsdt(d, { sign: true })} USDT`, value: d };
+}
 
 export function bestRows(data) {
   return (data?.best || []).map((s, i) => ({
@@ -40,6 +61,8 @@ export function bestRows(data) {
     stop: stopText(s.stopPct),
     pnl: usdt(s.pnlUsdt),
     pnlValue: s.pnlUsdt,
+    vs: vsReal(s).text,
+    vsValue: vsReal(s).value,
     hits: `${s.wins}/${s.trades}`,
     avgHold: avgHoldText(s.avgHoldMinutes),
     incomplete: Number(s.incomplete) > 0,
@@ -54,7 +77,8 @@ export function buildGrid(scenarios, stopPct) {
   const list = (scenarios || []).filter((s) => (s.stopPct ?? null) === stopPct);
   const tps = sortedUnique(list.map((s) => s.tpPct ?? null)).sort(byNullLast);
   const holds = sortedUnique(list.map((s) => s.maxHoldHours ?? null)).sort(byNullLast);
-  const max = list.reduce((m, s) => Math.max(m, Math.abs(Number(s.pnlUsdt) || 0)), 0);
+  // Escala global (todos los stops) para que los colores sean comparables.
+  const max = (scenarios || []).reduce((m, s) => Math.max(m, Math.abs(Number(s.pnlUsdt) || 0)), 0);
   const find = (tp, h) => list.find((s) => (s.tpPct ?? null) === tp && (s.maxHoldHours ?? null) === h);
   const rows = tps.map((tp) => ({
     tp,
@@ -65,7 +89,9 @@ export function buildGrid(scenarios, stopPct) {
         hold: h,
         pnl: p,
         text: p === null || !Number.isFinite(p) ? '—' : formatNumber(p, { decimals: 0, sign: true }),
-        title: s ? `TP ${tpText(tp)} · tiempo ${holdText(h)}: ${usdt(p)} · acierto ${s.wins}/${s.trades}` : '',
+        detail: s ? `TP ${tpText(tp)} · tiempo ${holdText(h)}: ${usdt(p)} · acierto ${s.wins}/${s.trades} · vs real ${vsReal(s).text}` : '',
+        title: s ? `TP ${tpText(tp)} · tiempo ${holdText(h)}: ${usdt(p)} · acierto ${s.wins}/${s.trades} · vs real ${vsReal(s).text}` : '',
+        tp,
         // Intensidad proporcional al mayor |P&L| del mapa.
         intensity: max > 0 && p ? Math.min(1, Math.abs(p) / max) : 0,
         sign: p > 0 ? 'pos' : p < 0 ? 'neg' : 'zero',
