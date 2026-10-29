@@ -375,6 +375,25 @@ function PremiumPoint({ label, point, sell }) {
   );
 }
 
+// Objetivo de TP de una operación cerrada y si la prima llegó a tocarlo.
+function ClosedTarget({ target }) {
+  if (!target) return <p className={`${ui.muted} ${ui.small} ${styles.premiumNote}`}>Sin objetivo de TP registrado.</p>;
+  return (
+    <div className={styles.closedTarget}>
+      <span>
+        <strong>Objetivo {price(target.price)}{tpPctText({ tpPct: target.pct })}</strong>
+        {target.reached !== null && (
+          <span className={`${ui.small} ${styles.targetBadge} ${toneClass(target.reached ? 'pos' : 'neg')}`}>
+            {target.reached ? 'Alcanzado' : 'No alcanzado'}
+          </span>
+        )}
+      </span>
+      {target.breakdown && <span className={`${ui.muted} ${ui.small}`}>{target.breakdown}</span>}
+      {target.fromParams && <span className={`${ui.muted} ${ui.small}`}>Según la configuración actual del bot.</span>}
+    </div>
+  );
+}
+
 function PremiumRange({ premium }) {
   if (!premium) {
     return <p className={`${ui.muted} ${ui.small} ${styles.premiumNote}`}>Sin registro de la prima: la operación es anterior al muestreo.</p>;
@@ -428,6 +447,7 @@ function ClosedTrades({ rows, mobile }) {
                 </button>
                 {expanded && (
                   <div id={detailId(r.id)} className={styles.closedDetail}>
+                    <ClosedTarget target={r.target} />
                     <PremiumRange premium={r.premium} />
                   </div>
                 )}
@@ -473,7 +493,10 @@ function ClosedTrades({ rows, mobile }) {
                   expanded && (
                     <tr key={`${r.id}-premium`} id={detailId(r.id)} className={styles.premiumRow}>
                       <td />
-                      <td colSpan={7}><PremiumRange premium={r.premium} /></td>
+                      <td colSpan={7}>
+                        <ClosedTarget target={r.target} />
+                        <PremiumRange premium={r.premium} />
+                      </td>
                     </tr>
                   ),
                 ];

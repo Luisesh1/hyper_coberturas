@@ -122,6 +122,18 @@ test('GET detalle: closedPositions incluye el rango de la prima (o null sin regi
   assert.equal(detail.closedPositions[1].premiumRange, null);
 });
 
+test('GET detalle: closedPositions incluye el objetivo de TP fijado', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });
+  const meta = { spot: 2400, bandValue: 2350, distancePct: -2.1, leverage: 12, appliedGainPct: 25, capped: false };
+  const a = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'ETH-261031-2500-P', side: 'BUY', quantity: 0.1, entryPrice: 10, openedAt: NOW - 9e6 });
+  await repo.setTpTarget(a.id, 12.5, meta);
+  await repo.closePosition(a.id, { exitPrice: 12.5, closedAt: NOW - 1000, pnlUsdt: 0.25, feesUsdt: 0.01, closeReason: 'take_profit_atr_band' });
+  const [p] = (await service.get(USER, s.id)).closedPositions;
+  assert.equal(p.tpTargetPrice, 12.5);
+  assert.deepEqual(p.tpTargetMeta, meta);
+});
+
 test('GET detalle: closedPositions ordena por cierre desc con motivo y una plantilla ajena no trae pendingOrders', async () => {
   const { repo, service } = setup();
   const s = await repo.createStrategy({ userId: USER, name: 'x', template: 'alert_signal', underlying: 'ETH', mode: 'shadow' });

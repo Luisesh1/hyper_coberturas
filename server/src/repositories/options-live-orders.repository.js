@@ -1087,16 +1087,19 @@ function createOptionsLiveOrdersRepository({ db = dbDefault, now = Date.now } = 
             [position.id, held - quantity, Number(position.fees_usdt) - allocatedEntryFee]
           );
           await tx.query(
-            // La parte cerrada hereda el rango de prima muestreado hasta ahora.
+            // La parte cerrada hereda el rango de prima muestreado hasta ahora
+            // y el objetivo de TP fijado al llenarse.
             `INSERT INTO options_strategy_positions
              (strategy_id,user_id,mode,symbol,side,quantity,entry_price,exit_price,
               opened_at,closed_at,pnl_usdt,fees_usdt,close_reason,entry_fee_usdt,exit_fee_usdt,
-              premium_high,premium_high_at,premium_low,premium_low_at,premium_range_source)
-             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+              premium_high,premium_high_at,premium_low,premium_low_at,premium_range_source,tp_target_price,tp_target_meta)
+             VALUES ($1,$2,'live',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb)`,
             [position.strategy_id, position.user_id, position.symbol, position.side, quantity,
               position.entry_price, trade.price, position.opened_at, trade.at, pnl, fees, closeReason,
               allocatedEntryFee, trade.fee, position.premium_high ?? null, position.premium_high_at ?? null,
-              position.premium_low ?? null, position.premium_low_at ?? null, position.premium_range_source ?? null]
+              position.premium_low ?? null, position.premium_low_at ?? null, position.premium_range_source ?? null,
+              position.tp_target_price ?? null,
+              position.tp_target_meta == null ? null : JSON.stringify(position.tp_target_meta)]
           );
         }
       }

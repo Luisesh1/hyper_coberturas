@@ -1,17 +1,18 @@
 const { test, expect } = require('@playwright/test');
 
 // Operaciones cerradas · desplegable con el máximo y el mínimo de la prima
-// (bid al comprar) y cuánto tardó cada uno desde la apertura. /api mockeada.
+// (bid al comprar), cuándo se alcanzó cada uno y el objetivo de TP. /api mockeada.
 
 const MIN = 60_000;
 const OPEN = Date.UTC(2026, 9, 28, 4, 1);
 const BOT = {
   id: 7, name: 'Bot rango', template: 'alert_signal', mode: 'shadow', status: 'Sin posición', underlying: 'BTC',
-  limits: {}, alerts: [], params: { alertIds: [] }, pnl30d: { shadow: 0, live: null }, lastSignal: null,
+  limits: {}, alerts: [], params: { alertIds: [], takeProfitMode: 'atr_band' }, pnl30d: { shadow: 0, live: null }, lastSignal: null,
 };
 const CLOSED = [
   { id: 1, mode: 'shadow', symbol: 'BTC-261030-81500-P', side: 'BUY', quantity: 0.1, entryPrice: 765, exitPrice: 1025,
     pnlUsdt: 27.46, closeReason: 'take_profit_atr_band', openedAt: OPEN, closedAt: OPEN + 71 * MIN,
+    tpTargetPrice: 1025, tpTargetMeta: { spot: 81900, bandValue: 80800, distancePct: -1.3, leverage: 26, appliedGainPct: 34, capped: false },
     premiumRange: { high: { price: 1025, at: OPEN + 71 * MIN }, low: { price: 612, at: OPEN + 12 * MIN }, partial: false } },
   { id: 2, mode: 'shadow', symbol: 'BTC-261028-80750-C', side: 'BUY', quantity: 0.1, entryPrice: 650, exitPrice: 402.3948,
     pnlUsdt: -42.59, closeReason: 'expiry', openedAt: OPEN - 3 * 86400e3, closedAt: OPEN - 86400e3,
@@ -57,11 +58,14 @@ test.describe('Operaciones cerradas · rango de la prima (escritorio)', () => {
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await expect(detail.getByText('a 1 h 11 min de la compra')).toBeVisible();
     await expect(detail.getByText('a 12 min de la compra')).toBeVisible();
+    await expect(detail.getByText('Objetivo 1.025,00 (+34,0 %)')).toBeVisible();
+    await expect(detail.getByText('Alcanzado')).toBeVisible();
     await detail.getByRole('button', { name: /prima de BTC-261028-80750-C/ }).click();
     await expect(detail.getByText('a 1 día 4 h de la compra')).toBeVisible();
     await expect(detail.getByText(/Aproximado: la operación se abrió antes/)).toBeVisible();
     await detail.getByRole('button', { name: /prima de ETH-261027-2300-P/ }).click();
     await expect(detail.getByText(/Sin registro de la prima/)).toBeVisible();
+    await expect(detail.getByText('Sin objetivo de TP registrado.').first()).toBeVisible();
     await detail.getByText('Operaciones cerradas').scrollIntoViewIfNeeded();
     await page.screenshot({ path: 'test-results/options-premium-range-desktop.png', fullPage: true });
     expect(await horizontalOverflow(page)).toBe(0);
@@ -85,7 +89,8 @@ test.describe('Operaciones cerradas · rango de la prima (móvil 390px)', () => 
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await expect(detail.getByText('a 1 h 11 min de la compra')).toBeVisible();
-    await detail.getByText('a 12 min de la compra').scrollIntoViewIfNeeded();
+    await expect(detail.getByText('Objetivo 1.025,00 (+34,0 %)')).toBeVisible();
+    await detail.getByText('Objetivo 1.025,00 (+34,0 %)').scrollIntoViewIfNeeded();
     expect(await horizontalOverflow(page)).toBe(0);
     await page.screenshot({ path: 'test-results/options-premium-range-mobile.png' });
     expect(errores).toEqual([]);
