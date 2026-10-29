@@ -334,7 +334,9 @@ export default function BotDetail({
               <span>{kSignals.value} señales en 30 d</span> · <span>{kSignals.hint}</span> · <span>{stats.traded} operadas</span>
             </p>
           )}
-          <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} />
+          <div className={styles.signalsScroll}>
+            <SignalsFeed signals={signals} filter={signalsFilter} loading={signalsLoading} error={signalsError} />
+          </div>
         </div>
       </div>
 
