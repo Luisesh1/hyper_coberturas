@@ -285,6 +285,7 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
     const pnl = grossPnl({ side: position.side, entryPrice: position.entryPrice, exitPrice: price, quantity: position.quantity }) - position.fee - feeUsdt;
     const cycle = position.cycle;
     cycle.pnl += pnl;
+    cycle.fees += feeUsdt;
     cycle.openLegs -= 1;
     if (cycle.openLegs === 0) {
       cycle.closedAt = t;
@@ -310,7 +311,7 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
     let booked = 0;
     for (const action of template.evaluate(ctx)) {
       if (action.type === 'open') {
-        const cycle = { openedAt: t, expiry: action.legs[0]?.expiry || null, legs: [], premium: 0, pnl: 0, openLegs: 0, closedAt: null, exitReason: null };
+        const cycle = { openedAt: t, expiry: action.legs[0]?.expiry || null, legs: [], premium: 0, pnl: 0, fees: 0, openLegs: 0, closedAt: null, exitReason: null };
         for (const leg of action.legs) {
           const price = num(leg.price);
           if (!(price > 0)) continue;
@@ -322,6 +323,7 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
           positions.push(position);
           cycle.legs.push({ symbol: leg.symbol, side: leg.side, quantity: leg.quantity, price: round(price, 4) });
           cycle.premium += signedPremium(leg.side, price, leg.quantity);
+          cycle.fees += f;
           cycle.openLegs += 1;
         }
         if (cycle.openLegs) {
@@ -422,8 +424,10 @@ function simulate({ template, params: rawParams, steps, capitalUsdt, feePct, sig
       expiry: c.expiry,
       legs: c.legs,
       premiumUsdt: round(c.premium),
+      exitAt: c.closedAt,
       exitReason: c.exitReason,
       pnlUsdt: round(c.pnl),
+      feesUsdt: round(c.fees),
     })),
     ...(template.signalDriven ? { signals: signalStats } : {}),
   };
