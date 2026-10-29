@@ -122,6 +122,10 @@ export default function AutoTradingTab({ underlying } = {}) {
   periodRef.current = period;
   const loadedKey = useRef('');
   const periodKey = `${selectedId}|${period.kind}|${period.since ?? ''}`;
+  // `since` rodante (7 d/3 d) estable por periodo elegido: si cambiara en cada
+  // render, el simulador de salidas (que depende de él) se recargaría con cada refresco.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sólo cambia con periodKey
+  const simSince = useMemo(() => periodSince(period), [periodKey]);
   const changePeriod = (next) => {
     savePeriod(selectedId, next);
     setPeriodState({ id: selectedId, period: next });
@@ -472,7 +476,7 @@ export default function AutoTradingTab({ underlying } = {}) {
     period,
     // Periodo con el que se pidieron los datos mostrados (la etiqueta sale de aquí).
     dataPeriod: detail && detail.id === shown.id && detail.periodFetched ? detail.periodFetched : period,
-    since: periodSince(period),
+    since: simSince,
     onPeriodPick: pickPeriod,
     onPeriodDate: pickPeriodDate,
     signals: signalsReady ? signals.list : [],

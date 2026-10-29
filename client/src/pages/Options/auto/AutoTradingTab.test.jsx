@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import AutoTradingTab, { SIGNALS_POLL_MS } from './AutoTradingTab';
+import AutoTradingTab, { DETAIL_POLL_MS, SIGNALS_POLL_MS } from './AutoTradingTab';
 import { optionsStrategiesApi } from '../optionsAutomationApi';
 import { autoBotsApi } from '../autoTradingApi';
 import { optionsApi } from '../../../services/api';
@@ -15,7 +15,7 @@ vi.mock('../optionsAutomationApi', () => ({
 }));
 vi.mock('../autoTradingApi', () => ({
   SIGNAL_FILTERS: ['all', 'traded', 'ignored'],
-  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn(), simulate: vi.fn(), clone: vi.fn() },
+  autoBotsApi: { list: vi.fn(), eligibleAlerts: vi.fn(), create: vi.fn(), update: vi.fn(), signals: vi.fn(), close: vi.fn(), cancelOrder: vi.fn(), simulate: vi.fn(), clone: vi.fn(), exitSimulation: vi.fn() },
 }));
 
 vi.mock('../../../services/api', async (importOriginal) => ({
@@ -234,6 +234,30 @@ describe('AutoTradingTab · escritorio', () => {
     await waitFor(() => expect(autoBotsApi.signals).toHaveBeenCalledWith(1, { limit: 100, filter: 'ignored' }));
     expect(await screen.findByText('Ya hay una posición abierta (máx. 1)')).toBeTruthy();
     expect(screen.queryByText('Compra BTC-261024-70000-C a 905 · 0,05')).toBeNull();
+  });
+
+  it('simulador de salidas: el refresco del detalle no lo recarga y cambiar de periodo sí', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    autoBotsApi.exitSimulation.mockResolvedValue({ scenarios: [], actual: { pnlUsdt: 0, trades: 0, wins: 0 } });
+    renderTab();
+    await screen.findByRole('heading', { name: 'Momentum BTC' });
+    const group = screen.getByRole('group', { name: 'Periodo' });
+    fireEvent.click(within(group).getByRole('button', { name: '7 d' }));
+    await screen.findByText('P&L neto · 7 d');
+    fireEvent.click(screen.getByRole('button', { name: /Simulador de salidas/ }));
+    await waitFor(() => expect(autoBotsApi.exitSimulation).toHaveBeenCalledTimes(1));
+    const since7 = autoBotsApi.exitSimulation.mock.calls[0][1].since;
+    expect(Math.abs(since7 - (Date.now() - 7 * 86400e3))).toBeLessThan(60e3);
+
+    const gets = optionsStrategiesApi.get.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(DETAIL_POLL_MS + 1000); });
+    expect(optionsStrategiesApi.get.mock.calls.length).toBeGreaterThan(gets);
+    expect(autoBotsApi.exitSimulation).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(within(group).getByRole('button', { name: '3 d' }));
+    await waitFor(() => expect(autoBotsApi.exitSimulation).toHaveBeenCalledTimes(2));
+    const since3 = autoBotsApi.exitSimulation.mock.calls[1][1].since;
+    expect(Math.abs(since3 - (Date.now() - 3 * 86400e3))).toBeLessThan(60e3);
   });
 
   it('refresca las señales cada ~15 s', async () => {
