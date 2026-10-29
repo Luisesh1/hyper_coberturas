@@ -15,6 +15,9 @@ function fakeChart() {
         applyOptions: vi.fn((o) => Object.assign(s.opts, o)),
         options: () => s.opts,
         priceScale: () => ({ applyOptions: vi.fn() }),
+        priceLines: [],
+        createPriceLine: vi.fn((o) => { const line = { ...o }; s.priceLines.push(line); return line; }),
+        removePriceLine: vi.fn((line) => { s.priceLines = s.priceLines.filter((l) => l !== line); }),
       };
       series.push(s);
       while (panes.length <= paneIndex) panes.push({ setStretchFactor: vi.fn() });
@@ -84,5 +87,42 @@ describe('createIndicatorsController — ATR Bands', () => {
     ctrl.render([entry], candles);
     ctrl.render([{ ...entry, style: { color: '#123456' } }], candles);
     expect(chart.series.map((s) => s.opts.color)).toEqual(['#123456', '#123456']);
+  });
+});
+
+describe('createIndicatorsController — nivel de referencia del ADX', () => {
+  const adx = (params) => ({ uid: 'adx', type: 'adx', visible: true, style: {}, params });
+
+  it('dibuja una línea fija en 25 aunque el indicador guardado no traiga nivel', () => {
+    const chart = fakeChart();
+    createIndicatorsController(chart).render([adx({ length: 14 })], candles);
+    expect(chart.series[0].priceLines).toHaveLength(1);
+    expect(chart.series[0].priceLines[0]).toMatchObject({ price: 25, title: 'Nivel 25', axisLabelVisible: true });
+  });
+
+  it('mueve la línea al cambiar el nivel y la quita al ocultarla', () => {
+    const chart = fakeChart();
+    const ctrl = createIndicatorsController(chart);
+    ctrl.render([adx({ length: 14, level: 25 })], candles);
+    ctrl.render([adx({ length: 14, level: 30 })], candles);
+    expect(chart.series[0].priceLines.map((l) => l.price)).toEqual([30]);
+    ctrl.render([adx({ length: 14, level: 30 })], candles);
+    expect(chart.series[0].createPriceLine).toHaveBeenCalledTimes(2);
+    ctrl.render([adx({ length: 14, level: 30, showLevel: false })], candles);
+    expect(chart.series[0].priceLines).toHaveLength(0);
+  });
+
+  it('sigue en el pane si se oculta la línea ADX y quedan los DI', () => {
+    const chart = fakeChart();
+    createIndicatorsController(chart).render([adx({ length: 14, showADX: false })], candles);
+    expect(chart.series).toHaveLength(2);
+    expect(chart.series[0].opts.title).toBe('+DI');
+    expect(chart.series[0].priceLines[0].price).toBe(25);
+  });
+
+  it('compacto: sin título en la línea para no encimar', () => {
+    const chart = fakeChart();
+    createIndicatorsController(chart, { compact: true }).render([adx({ length: 14 })], candles);
+    expect(chart.series[0].priceLines[0].title).toBe('');
   });
 });
