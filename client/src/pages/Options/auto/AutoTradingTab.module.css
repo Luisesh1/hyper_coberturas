@@ -613,8 +613,11 @@
 .detailHead { flex-direction: column; align-items: stretch; }
 .detailHeadRow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; }
 .titleRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
-.grid2 { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.signalsPanel { min-width: 0; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
+/* El feed no marca la altura de la fila (base 0): ocupa la de las posiciones,
+   con un mínimo, y hace scroll por dentro en vez de alargar la página. */
+.signalsPanel { min-width: 0; display: flex; flex-direction: column; }
+.signalsScroll { flex: 1 1 0; min-height: 420px; overflow-y: auto; overscroll-behavior: contain; margin-right: -8px; padding-right: 8px; }
 .signalsStats { margin: 0; font-size: 12px; color: var(--text-secondary); }
 @media (max-width: 1100px) {
   .grid2 { grid-template-columns: minmax(0, 1fr); }
