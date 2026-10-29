@@ -51,7 +51,7 @@ test('tiempo máximo sale al primer punto con bid pasado el límite', () => {
   assert.equal(s.avgHoldMinutes, 90);
 });
 
-test('prioridad TP > stop > tiempo en el mismo punto', () => {
+test('en el mismo punto TP gana al tiempo y stop gana al tiempo (TP y stop no pueden coincidir)', () => {
   const prepared = (path) => ({ position: position(), path, expiry: { price: 0, spot: SPOT, fee: 0 }, expiryMs: EXPIRY, entryFee: 0 });
   // Con bid alto cumple TP y tiempo: gana TP (nivel exacto 120).
   const tp = runScenario(prepared([{ at: OPEN + HOUR_MS, bid: 500, spot: SPOT }]), scenario(20, 1, 30));
@@ -128,6 +128,86 @@ test('rejilla completa y best ordenado y de 10', () => {
   assert.equal(res.best.length, 10);
   for (let i = 1; i < res.best.length; i += 1) assert.ok(res.best[i - 1].pnlUsdt >= res.best[i].pnlUsdt);
   assert.equal(res.best[0].pnlUsdt, Math.max(...res.scenarios.map((s) => s.pnlUsdt)));
+});
+
+test('actual por escenario y actualCovered con posiciones cubiertas, none e incompletas', () => {
+  const covered = position({ id: 1, pnlUsdt: 10 });
+  const noSnap = position({ id: 2, pnlUsdt: -5 }); // cubierta pero sin vencimiento: incompleta
+  const none = position({ id: 3, pnlUsdt: 100, symbol: 'BTC-261101-62000-C' });
+  const res = simulateExits({
+    positions: [covered, noSnap, none],
+    samples: new Map([[1, [sample(10, 150)]], [2, [sample(10, 150)]]]),
+    snapshots: new Map([[SYMBOL, [snap(EXPIRY - 30 * MIN, 0, 59000)]]]),
+  });
+  assert.deepEqual(res.actual, { pnlUsdt: 105, trades: 3, wins: 2 });
+  assert.deepEqual(res.actualCovered, { pnlUsdt: 5, trades: 2, wins: 1 });
+  const s = find(res, null, null, null);
+  assert.equal(s.trades, 2);
+  assert.equal(s.actualPnlUsdt, 5);
+  assert.equal(s.actualWins, 1);
+
+  const other = position({ id: 2, pnlUsdt: -5, symbol: 'BTC-261101-61000-C' });
+  const res2 = simulateExits({
+    positions: [covered, other],
+    samples: new Map([[1, [sample(10, 150)]], [2, [sample(10, 150)]]]),
+    snapshots: new Map([[SYMBOL, [snap(EXPIRY - 30 * MIN, 0, 59000)]]]),
+  });
+  const noTp = find(res2, null, null, null);
+  assert.equal(noTp.trades, 1);
+  assert.equal(noTp.incomplete, 1);
+  assert.equal(noTp.actualPnlUsdt, 10);
+  const tp = find(res2, 20, null, null);
+  assert.equal(tp.trades, 2);
+  assert.equal(tp.actualPnlUsdt, 5);
+  assert.equal(res2.actualCovered.pnlUsdt, 5);
+});
+
+test('un punto sin spot usa el spot más cercano en el tiempo para la comisión', () => {
+  const path = [{ at: OPEN + 10 * MIN, bid: 200, spot: null }, { at: OPEN + 20 * MIN, bid: 90, spot: 30000 }];
+  const prepared = { position: position({ entryFeeUsdt: 0 }), path, expiry: { price: 0, spot: SPOT, fee: 0 }, expiryMs: EXPIRY, entryFee: 0 };
+  const r = runScenario(prepared, scenario(20, null, null));
+  const fee = tradeFee({ spot: 30000, quantity: 1, price: 120 });
+  assert.ok(fee > 0);
+  assert.ok(Math.abs(r.pnl - (20 - fee)) < 1e-6);
+
+  // Entrada sin comisión guardada: spot más cercano a openedAt.
+  const res = simulateExits({
+    positions: [position({ entryFeeUsdt: null })],
+    samples: new Map([[1, [{ at: OPEN + 10 * MIN, bid: 100, ask: 101, spot: null }, { at: OPEN + 20 * MIN, bid: 100, ask: 101, spot: 30000 }]]]),
+    snapshots: new Map([[SYMBOL, [snap(EXPIRY - 30 * MIN, 0, 59000)]]]),
+  });
+  const entryFee = tradeFee({ spot: 30000, quantity: 1, price: 100 });
+  assert.ok(Math.abs(find(res, null, null, null).pnlUsdt - (-100 - entryFee)) < 1e-6);
+});
+
+test('un bid 0 de un snapshot cuenta como ausente y no dispara el stop', () => {
+  const { points } = buildPath(position(), [], [snap(OPEN + HOUR_MS, 0), snap(OPEN + 2 * HOUR_MS, 80)], EXPIRY);
+  assert.deepEqual(points.map((p) => p.bid), [null, 80]);
+  const res = run(position(), [], [snap(OPEN + HOUR_MS, 0), snap(EXPIRY - HOUR_MS, 0, 59000)]);
+  const s = find(res, null, null, 30);
+  // Sin bid válido nunca sale por stop: llega al vencimiento OTM (-100 - 1).
+  assert.ok(Math.abs(s.pnlUsdt - (-101)) < 1e-6);
+});
+
+test('best desempata por wins y luego por menor avgHoldMinutes', () => {
+  // Muchos escenarios empatan en pnl (p. ej. los que no llegan a salir antes del vencimiento).
+  const res = run(position(), [sample(10, 105)], [snap(EXPIRY - HOUR_MS, 0, 59000)]);
+  const tied = res.scenarios.filter((x) => x.pnlUsdt === res.best[0].pnlUsdt);
+  assert.ok(tied.length > 1);
+  const expected = [...tied].sort((a, b) => b.wins - a.wins || a.avgHoldMinutes - b.avgHoldMinutes);
+  assert.deepEqual(res.best.slice(0, Math.min(10, tied.length)), expected.slice(0, 10));
+  // Construcción directa: dos posiciones donde el empate se rompe por duración.
+  const a = position({ id: 1 });
+  const b = position({ id: 2 });
+  const two = simulateExits({
+    positions: [a, b],
+    samples: new Map([[1, [sample(10, 130)]], [2, [sample(40, 130)]]]),
+    snapshots: new Map([[SYMBOL, [snap(EXPIRY - HOUR_MS, 0, 59000)]]]),
+  });
+  for (let i = 1; i < two.best.length; i += 1) {
+    const p = two.best[i - 1]; const q = two.best[i];
+    assert.ok(p.pnlUsdt > q.pnlUsdt || (p.pnlUsdt === q.pnlUsdt && (p.wins > q.wins || (p.wins === q.wins && p.avgHoldMinutes <= q.avgHoldMinutes))));
+  }
 });
 
 // ---------- servicio ----------

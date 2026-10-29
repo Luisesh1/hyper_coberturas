@@ -17,6 +17,21 @@ const BEST_COUNT = 10;
 const MINUTE_MS = 60 * 1000;
 
 const numOrNull = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+// Un precio <= 0 de un snapshot es un libro vacío, no un precio real.
+const positiveOrNull = (v) => {
+  const n = numOrNull(v);
+  return n != null && n > 0 ? n : null;
+};
+
+/** Spot del punto del camino con spot más cercano en el tiempo a `at`. */
+function nearestSpot(points, at) {
+  let best = null;
+  for (const p of points) {
+    if (p.spot == null) continue;
+    if (best == null || Math.abs(p.at - at) < Math.abs(best.at - at)) best = p;
+  }
+  return best ? best.spot : null;
+}
 
 /** Recorrido de la prima de una posición: [{ at, bid, spot }] ordenado por tiempo. */
 function buildPath(position, minuteSamples = [], snapshots = [], expiryMs = null) {
@@ -28,7 +43,7 @@ function buildPath(position, minuteSamples = [], snapshots = [], expiryMs = null
   const hourly = snapshots
     .filter((s) => s.capturedAt >= position.openedAt && (expiryMs == null || s.capturedAt <= expiryMs))
     .filter((s) => firstMinute == null || s.capturedAt < firstMinute || s.capturedAt > end)
-    .map((s) => ({ at: s.capturedAt, bid: numOrNull(s.bid), spot: numOrNull(s.spot) }));
+    .map((s) => ({ at: s.capturedAt, bid: positiveOrNull(s.bid), spot: numOrNull(s.spot) }));
   const points = [...minute, ...hourly].sort((a, b) => a.at - b.at);
   let coverage = 'none';
   if (minute.length) coverage = 'minute';
@@ -48,7 +63,7 @@ function expiryValue(position, meta, snapshots, points) {
   let spot = snapSpot;
   if (position.closeReason === 'expiry' && position.exitPrice != null) {
     price = position.exitPrice;
-    if (spot == null) spot = points.length ? points[points.length - 1].spot : null;
+    if (spot == null) spot = nearestSpot(points, meta.expiryMs);
   } else {
     if (snapSpot == null) return null;
     price = meta.type === 'C' ? Math.max(snapSpot - meta.strike, 0) : Math.max(meta.strike - snapSpot, 0);
@@ -69,9 +84,9 @@ function runScenario(prepared, { tpPct, maxHoldHours, stopPct }) {
   for (const p of path) {
     if (timeLimit != null && p.at >= timeLimit) timeReached = true;
     if (p.bid == null) continue;
-    if (tpLevel != null && p.bid >= tpLevel) exit = { price: tpLevel, at: p.at, spot: p.spot };
-    else if (stopLevel != null && p.bid <= stopLevel) exit = { price: p.bid, at: p.at, spot: p.spot };
-    else if (timeReached) exit = { price: p.bid, at: p.at, spot: p.spot };
+    if (tpLevel != null && p.bid >= tpLevel) exit = { price: tpLevel, at: p.at, spot: p.spot ?? nearestSpot(path, p.at) };
+    else if (stopLevel != null && p.bid <= stopLevel) exit = { price: p.bid, at: p.at, spot: p.spot ?? nearestSpot(path, p.at) };
+    else if (timeReached) exit = { price: p.bid, at: p.at, spot: p.spot ?? nearestSpot(path, p.at) };
     if (exit) {
       exit.fee = tradeFee({ spot: exit.spot, quantity: position.quantity, price: exit.price });
       break;
@@ -90,7 +105,7 @@ function prepare(position, samples, snapshots) {
   const expiryMs = meta ? meta.expiryMs : null;
   const { points, coverage } = buildPath(position, samples.get(position.id) || [], snapshots.get(position.symbol) || [], expiryMs);
   const expiry = meta && coverage !== 'none' ? expiryValue(position, meta, snapshots.get(position.symbol) || [], points) : null;
-  const firstSpot = points.find((p) => p.spot != null)?.spot ?? null;
+  const firstSpot = nearestSpot(points, position.openedAt);
   const entryFee = position.entryFeeUsdt != null
     ? position.entryFeeUsdt
     : (firstSpot != null ? tradeFee({ spot: firstSpot, quantity: position.quantity, price: position.entryPrice }) : 0);
@@ -117,30 +132,40 @@ function simulateExits({ positions, samples = new Map(), snapshots = new Map() }
   }
   const usable = prepared.filter((p) => p.coverage !== 'none');
 
-  const actual = { pnlUsdt: 0, trades: positions.length, wins: 0 };
-  for (const p of positions) {
-    const pnl = Number(p.pnlUsdt) || 0;
-    actual.pnlUsdt += pnl;
-    if (pnl > 0) actual.wins += 1;
-  }
-  actual.pnlUsdt = round(actual.pnlUsdt);
+  const realPnl = (p) => Number(p.pnlUsdt) || 0;
+  const tally = (list) => {
+    const t = { pnlUsdt: 0, trades: list.length, wins: 0 };
+    for (const p of list) {
+      t.pnlUsdt += realPnl(p);
+      if (realPnl(p) > 0) t.wins += 1;
+    }
+    t.pnlUsdt = round(t.pnlUsdt);
+    return t;
+  };
+  const actual = tally(positions);
+  const actualCovered = tally(usable.map((p) => p.position));
 
   const scenarios = [];
   for (const tpPct of TP_GRID) {
     for (const maxHoldHours of MAX_HOLD_GRID) {
       for (const stopPct of STOP_GRID) {
         let pnl = 0; let trades = 0; let wins = 0; let holdMs = 0; let incomplete = 0;
+        let actualPnl = 0; let actualWins = 0;
         for (const p of usable) {
           const r = runScenario(p, { tpPct, maxHoldHours, stopPct });
           if (!r) { incomplete += 1; continue; }
           pnl += r.pnl; trades += 1; holdMs += r.holdMs;
           if (r.pnl > 0) wins += 1;
+          actualPnl += realPnl(p.position);
+          if (realPnl(p.position) > 0) actualWins += 1;
         }
         scenarios.push({
           tpPct, maxHoldHours, stopPct,
           pnlUsdt: round(pnl), trades, wins,
           avgHoldMinutes: trades ? round(holdMs / trades / MINUTE_MS, 2) : 0,
           incomplete,
+          // Lo real de exactamente las posiciones que usó este escenario.
+          actualPnlUsdt: round(actualPnl), actualWins,
         });
       }
     }
@@ -148,7 +173,7 @@ function simulateExits({ positions, samples = new Map(), snapshots = new Map() }
   const best = [...scenarios]
     .sort((a, b) => b.pnlUsdt - a.pnlUsdt || b.wins - a.wins || a.avgHoldMinutes - b.avgHoldMinutes)
     .slice(0, BEST_COUNT);
-  return { coverage, actual, scenarios, best };
+  return { coverage, actual, actualCovered, scenarios, best };
 }
 
 module.exports = { simulateExits, buildPath, expiryValue, runScenario, TP_GRID, MAX_HOLD_GRID, STOP_GRID };

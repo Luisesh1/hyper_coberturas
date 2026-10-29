@@ -513,8 +513,7 @@ function createOptionsAutoTradingService(deps = {}) {
     if (typeof repo.listPremiumSamples !== 'function') {
       throw new AppError('El repositorio no soporta muestras de prima por minuto (listPremiumSamples)', { status: 500, code: 'PREMIUM_SAMPLES_UNAVAILABLE' });
     }
-    const positions = (await repo.listPositions(id))
-      .filter((p) => p.mode === mode && p.side === 'BUY' && p.closedAt != null && (sinceMs == null || p.openedAt >= sinceMs));
+    const positions = await repo.listClosedBuyPositions(id, { mode, since: sinceMs });
     const samples = positions.length ? await repo.listPremiumSamples(positions.map((p) => p.id)) : new Map();
     const snapshots = new Map();
     if (positions.length) {
