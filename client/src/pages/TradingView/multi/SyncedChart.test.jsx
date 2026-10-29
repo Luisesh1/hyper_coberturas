@@ -5,6 +5,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 const lw = vi.hoisted(() => {
   const state = {
     chart: null, series: null, handler: null, visibleRange: null,
+    rangeHandler: null, logicalRange: null,
     charts: [], markerPlugins: [],
   };
   const LineStyle = { Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3, SparseDotted: 4 };
@@ -20,6 +21,10 @@ const lw = vi.hoisted(() => {
       getVisibleRange: vi.fn(() => state.visibleRange),
       applyOptions: vi.fn(),
       scrollToRealTime: vi.fn(),
+      getVisibleLogicalRange: vi.fn(() => state.logicalRange),
+      setVisibleLogicalRange: vi.fn(),
+      subscribeVisibleLogicalRangeChange: vi.fn((h) => { state.rangeHandler = h; }),
+      unsubscribeVisibleLogicalRangeChange: vi.fn(),
     };
     const local = { move: [], click: [] };
     const el = document.createElement('div');
@@ -130,6 +135,8 @@ function lastCrosshairOptions() {
 beforeEach(() => {
   vi.clearAllMocks();
   lw.state.visibleRange = null;
+  lw.state.rangeHandler = null;
+  lw.state.logicalRange = null;
   lw.state.charts = [];
   lw.state.markerPlugins = [];
   marketApi.getCandles.mockResolvedValue(CANDLES_1H.map((c) => ({ ...c })));
@@ -611,5 +618,83 @@ describe('SyncedChart · marcas de alertas', () => {
     await waitFor(() => expect(lastMarks(lw.state.chart)).toHaveLength(1));
     act(() => { lw.state.chart.local.click.forEach((h) => h({ time: T1400 / 1000, point: { x: 5, y: 5 } })); });
     expect(screen.getByRole('dialog', { name: 'Disparo de alerta' }).textContent).toContain('RSI rebote');
+  });
+});
+
+describe('SyncedChart · scroll infinito', () => {
+  const OLDER_1H = Array.from({ length: 24 }, (_, i) => ({
+    time: BASE_MS - (24 - i) * HOUR_MS,
+    open: 2400 + i, high: 2410 + i, low: 2390 + i, close: 2405 + i,
+  }));
+  const historyCalls = () => marketApi.getCandles.mock.calls.filter(([a]) => a.endTime != null);
+
+  async function scrollToLeftEdge() {
+    await act(async () => { lw.state.rangeHandler({ from: 2, to: 30 }); });
+  }
+
+  it('al llegar al borde izquierdo pide velas anteriores, las antepone y conserva el encuadre', async () => {
+    const onLoadedRange = vi.fn();
+    renderChart({ onLoadedRange });
+    await waitForData();
+    marketApi.getCandles.mockResolvedValueOnce(OLDER_1H.map((c) => ({ ...c })));
+    lw.state.logicalRange = { from: 2, to: 30 };
+    await scrollToLeftEdge();
+
+    // setData: [] al empezar, carga inicial y la del histórico.
+    await waitFor(() => expect(lw.state.series.setData).toHaveBeenCalledTimes(3));
+    expect(historyCalls()[0][0]).toMatchObject({
+      asset: 'ETH', datasource: 'binance', timeframe: '1h', endTime: BASE_MS - 1,
+    });
+    const bars = lw.state.series.setData.mock.calls[2][0];
+    expect(bars).toHaveLength(48);
+    expect(bars[0].time).toBe(Math.floor(OLDER_1H[0].time / 1000));
+    expect(lw.state.chart.timeScale().setVisibleLogicalRange).toHaveBeenCalledWith({ from: 26, to: 54 });
+    await waitFor(() => expect(onLoadedRange).toHaveBeenLastCalledWith(0, expect.objectContaining({
+      fromMs: OLDER_1H[0].time, timeframe: '1h',
+    })));
+    expect(ind.controller.render).toHaveBeenLastCalledWith([], expect.arrayContaining([OLDER_1H[0]]));
+  });
+
+  it('lejos del borde no pide histórico', async () => {
+    renderChart();
+    await waitForData();
+    await act(async () => { lw.state.rangeHandler({ from: 40, to: 60 }); });
+    expect(historyCalls()).toHaveLength(0);
+  });
+
+  it('no duplica peticiones mientras una está en vuelo y muestra el aviso de carga', async () => {
+    renderChart();
+    await waitForData();
+    let resolve;
+    marketApi.getCandles.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    await scrollToLeftEdge();
+    await scrollToLeftEdge();
+    expect(historyCalls()).toHaveLength(1);
+    expect(screen.getByTestId('history-loading-0').textContent).toContain('Cargando histórico');
+    await act(async () => { resolve(OLDER_1H.map((c) => ({ ...c }))); });
+    await waitFor(() => expect(screen.queryByTestId('history-loading-0')).toBeNull());
+  });
+
+  it('sin velas anteriores deja de pedir (inicio del histórico)', async () => {
+    renderChart();
+    await waitForData();
+    marketApi.getCandles.mockResolvedValueOnce([]);
+    await scrollToLeftEdge();
+    await waitFor(() => expect(screen.queryByTestId('history-loading-0')).toBeNull());
+    await scrollToLeftEdge();
+    expect(historyCalls()).toHaveLength(1);
+  });
+
+  it('descarta la respuesta si cambió la temporalidad mientras cargaba', async () => {
+    const { rerender } = renderChart();
+    await waitForData();
+    let resolve;
+    marketApi.getCandles.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    await scrollToLeftEdge();
+    rerender(<SyncedChart asset={ASSET} timeframe="15m" timeframes={TFS} index={0} />);
+    await waitFor(() => expect(lw.state.series.setData).toHaveBeenCalledTimes(4)); // [] + recarga
+    const before = lw.state.series.setData.mock.calls.length;
+    await act(async () => { resolve(OLDER_1H.map((c) => ({ ...c }))); });
+    expect(lw.state.series.setData.mock.calls.length).toBe(before);
   });
 });

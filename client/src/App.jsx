@@ -53,7 +53,7 @@ const BASE_NAV = [
   { id: 'smart-contracts', path: '/contratos', label: '◈ Contratos', activeClass: 'modeBtnActive', title: 'Contratos' },
   { id: 'metricas', path: '/metricas', label: '📊 Metricas', activeClass: 'modeBtnActive', title: 'Metricas' },
   { id: 'trading-view', path: '/trading-view', label: '📈 Trading View', activeClass: 'modeBtnActive', title: 'Trading View' },
-  { id: 'options', path: '/opciones', label: '◇ Opciones', activeClass: 'modeBtnActive', title: 'Opciones' },
+  { id: 'options', path: '/opciones', label: '🎯 Opciones', activeClass: 'modeBtnActive', title: 'Opciones' },
   { id: 'settings', path: '/config',     label: '⚙ Config',       activeClass: 'modeBtnActive',  title: 'Configuracion' },
 ];
 

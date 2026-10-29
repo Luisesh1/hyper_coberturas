@@ -110,6 +110,56 @@ test.describe('TradingView multi-temporalidad (escritorio)', () => {
   });
 });
 
+test.describe('TradingView multi-temporalidad · scroll infinito', () => {
+  test('al arrastrar hasta el borde izquierdo carga velas anteriores y sigue más atrás', async ({ page }) => {
+    const errores = [];
+    page.on('pageerror', (e) => errores.push(e.message));
+    await mockApi(page);
+    // Histórico: 500 velas que acaban justo antes de `endTime`.
+    const historyEnds = [];
+    await page.route((url) => url.pathname === '/api/market/candles' && url.searchParams.has('endTime'), (route) => {
+      const url = new URL(route.request().url());
+      const tf = url.searchParams.get('timeframe');
+      const step = TF_MS[tf];
+      const endTime = Number(url.searchParams.get('endTime'));
+      historyEnds.push({ tf, endTime });
+      const last = Math.floor(endTime / step) * step;
+      const data = buildCandles(tf, 500).map((c, i) => {
+        const time = last - (499 - i) * step;
+        return { ...c, time, closeTime: time + step };
+      });
+      return route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data }),
+      });
+    });
+    await page.goto('/trading-view/multi?symbol=ETH&datasource=hyperliquid');
+    await expect(page.locator('[data-testid="synced-chart-1"] canvas').first()).toBeVisible();
+    await page.waitForTimeout(300);
+
+    const box = await page.getByTestId('synced-chart-1').boundingBox();
+    const y = box.y + box.height * 0.35;
+    const drag = async () => {
+      await page.mouse.move(box.x + box.width * 0.1, y);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 0.9, y, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForTimeout(80);
+    };
+    const panel15 = () => historyEnds.filter((h) => h.tf === '15m');
+    for (let k = 0; k < 60 && panel15().length < 2; k++) await drag();
+
+    const reqs = panel15();
+    expect(reqs.length).toBeGreaterThanOrEqual(2);
+    // La primera pide justo antes de la vela más antigua de la carga inicial;
+    // la segunda, 500 velas de 15m antes.
+    expect(reqs[0].endTime - reqs[1].endTime).toBe(500 * TF_MS['15m']);
+    // Los demás paneles no se tocan.
+    expect(historyEnds.filter((h) => h.tf !== '15m')).toEqual([]);
+    await page.screenshot({ path: 'test-results/tv-multi-history.png' });
+    expect(errores).toEqual([]);
+  });
+});
+
 test.describe('TradingView multi-temporalidad (móvil 390px)', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
