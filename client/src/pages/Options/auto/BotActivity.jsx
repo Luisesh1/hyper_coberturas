@@ -354,7 +354,7 @@ function Usage({ rows, mobile }) {
 }
 
 // Un extremo de la prima: precio, variación sobre la entrada y cuándo se
-// alcanzó, como tiempo desde la apertura (la fecha exacta va en el title).
+// alcanzó: fecha y hora exactas y tiempo desde la apertura.
 function PremiumPoint({ label, point, sell }) {
   return (
     <div className={styles.premiumPoint}>
@@ -365,7 +365,10 @@ function PremiumPoint({ label, point, sell }) {
           <span className={`${ui.mono} ${ui.small} ${toneClass(point.tone)}`}>{formatPct(point.changePct, { sign: true })}</span>
         )}
       </span>
-      <span className={`${ui.muted} ${ui.small}`} title={formatDateTime(point.at)}>
+      {point.at !== null && (
+        <time className={`${ui.mono} ${ui.small}`} dateTime={new Date(point.at).toISOString()}>{formatDateTime(point.at)}</time>
+      )}
+      <span className={`${ui.muted} ${ui.small}`}>
         a {point.afterText} de la {sell ? 'venta' : 'compra'}
       </span>
     </div>
