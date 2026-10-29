@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pendingEntryRows, closedTradeRows, openPositionRows, pendingOrderRows, usageRows } from './botActivity';
+import { pendingEntryRows, closedTradeRows, formatElapsed, openPositionRows, pendingOrderRows, usageRows } from './botActivity';
 
 const buyPos = { id: 1, mode: 'shadow', symbol: 'ETH-251031-2500-C', side: 'BUY', quantity: 0.01, entryPrice: 10, openedAt: 1 };
 
@@ -149,5 +149,47 @@ describe('comisiones por fila', () => {
   it('abiertas exponen feesUsdt', () => {
     const [r] = openPositionRows({ positions: [{ ...buyPos, entryFeeUsdt: 0.5 }], params: {} }, 'shadow');
     expect(r.feesUsdt).toBe(0.5);
+  });
+});
+
+describe('formatElapsed', () => {
+  it('minutos, horas y días desde la compra', () => {
+    const MIN = 60_000;
+    expect(formatElapsed(20_000)).toBe('< 1 min');
+    expect(formatElapsed(45 * MIN)).toBe('45 min');
+    expect(formatElapsed(60 * MIN)).toBe('1 h');
+    expect(formatElapsed(135 * MIN)).toBe('2 h 15 min');
+    expect(formatElapsed(28 * 60 * MIN)).toBe('1 día 4 h');
+    expect(formatElapsed(3 * 24 * 60 * MIN)).toBe('3 días');
+    expect(formatElapsed(null)).toBe('—');
+    expect(formatElapsed(-1)).toBe('—');
+  });
+});
+
+describe('closedTradeRows · rango de la prima', () => {
+  const OPEN = Date.UTC(2026, 9, 28, 4, 1);
+  const MIN = 60_000;
+  const base = { id: 1, mode: 'shadow', symbol: 'BTC-261030-81500-P', side: 'BUY', entryPrice: 765, exitPrice: 1025, openedAt: OPEN, closedAt: OPEN + 71 * MIN };
+
+  it('máximo y mínimo con variación sobre la entrada y tiempo desde la apertura', () => {
+    const [r] = closedTradeRows({ closedPositions: [{ ...base, premiumRange: {
+      high: { price: 1025, at: OPEN + 71 * MIN }, low: { price: 612, at: OPEN + 12 * MIN }, partial: false,
+    } }] }, 'shadow');
+    expect(r.premium.high).toMatchObject({ price: 1025, afterMs: 71 * MIN, afterText: '1 h 11 min', tone: 'pos' });
+    expect(r.premium.high.changePct).toBeCloseTo(33.99, 1);
+    expect(r.premium.low).toMatchObject({ price: 612, afterText: '12 min', tone: 'neg' });
+    expect(r.premium.low.changePct).toBeCloseTo(-20);
+    expect(r.premium).toMatchObject({ partial: false, sell: false });
+  });
+
+  it('al vender una prima más alta es pérdida; sin registro es null', () => {
+    const [sell, none] = closedTradeRows({ closedPositions: [
+      { ...base, side: 'SELL', premiumRange: { high: { price: 900, at: OPEN }, low: { price: 500, at: OPEN + MIN }, partial: true } },
+      { ...base, id: 2, premiumRange: null },
+    ] }, 'shadow');
+    expect(sell.premium.high.tone).toBe('neg');
+    expect(sell.premium.low.tone).toBe('pos');
+    expect(sell.premium).toMatchObject({ partial: true, sell: true });
+    expect(none.premium).toBeNull();
   });
 });

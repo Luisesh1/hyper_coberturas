@@ -362,7 +362,7 @@ function createOptionsMarketService({
     cache.clear();
   }
 
-  return { listUnderlyings, getChain, getQuote, getMarks, getVolatilityInputs, getAtrBand, getPriceFilter, clearCache };
+  return { listUnderlyings, getChain, getQuote, getMarks, getTickers, getVolatilityInputs, getAtrBand, getPriceFilter, clearCache };
 }
 
 // Instancia por defecto (cliente público sin credenciales).
@@ -377,6 +377,7 @@ module.exports = {
   getChain: (...args) => defaultService.getChain(...args),
   getQuote: (...args) => defaultService.getQuote(...args),
   getMarks: (...args) => defaultService.getMarks(...args),
+  getTickers: (...args) => defaultService.getTickers(...args),
   getVolatilityInputs: (...args) => defaultService.getVolatilityInputs(...args),
   getAtrBand: (...args) => defaultService.getAtrBand(...args),
   getPriceFilter: (...args) => defaultService.getPriceFilter(...args),
