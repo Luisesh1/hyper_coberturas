@@ -40,9 +40,9 @@ async function withServer(fn) {
 
 test('GET /options/auto-bots/:id/exit-simulation responde la rejilla y valida mode', async () => {
   const repo = createFakeOptionsRepo();
-  repo.listPremiumSamples = async () => new Map();
+  const premiumSamples = { listPremiumSamples: async () => new Map() };
   const origAuto = { ...autoTradingService };
-  Object.assign(autoTradingService, createOptionsAutoTradingService({ repo, alerts: { listAlerts: async () => [] } }));
+  Object.assign(autoTradingService, createOptionsAutoTradingService({ repo, premiumSamples, alerts: { listAlerts: async () => [] } }));
   try {
     const id = (await repo.createStrategy({ userId: USER, name: 'Bot BTC', template: 'alert_signal', underlying: 'BTC', mode: 'shadow' })).id;
     await withServer(async (call) => {

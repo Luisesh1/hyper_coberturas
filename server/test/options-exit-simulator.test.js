@@ -214,9 +214,9 @@ test('best desempata por wins y luego por menor avgHoldMinutes', () => {
 
 function makeService(extra = {}) {
   const repo = createFakeOptionsRepo();
-  repo.listPremiumSamples = async (ids) => new Map(ids.map((id) => [id, [sample(10, 150)]]));
+  const premiumSamples = { listPremiumSamples: async (ids) => new Map(ids.map((id) => [id, [sample(10, 150)]])) };
   const ivSnapshots = { listBySymbols: async () => [snap(EXPIRY - HOUR_MS, 0, 59000)] };
-  const service = createOptionsAutoTradingService({ repo, ivSnapshots, now: () => 1234, alerts: { listAlerts: async () => [] }, ...extra });
+  const service = createOptionsAutoTradingService({ repo, premiumSamples, ivSnapshots, now: () => 1234, alerts: { listAlerts: async () => [] }, ...extra });
   return { repo, service };
 }
 
@@ -245,9 +245,3 @@ test('exitSimulation filtra por dueño, modo, lado, cierre y since', async () =>
   await assert.rejects(() => service.exitSimulation(7, bot.id, { mode: 'x' }), /mode/);
 });
 
-test('exitSimulation falla claro si falta listPremiumSamples', async () => {
-  const { repo, service } = makeService();
-  delete repo.listPremiumSamples;
-  const bot = await repo.createStrategy({ userId: 7, name: 'b', template: 'alert_signal', underlying: 'BTC' });
-  await assert.rejects(() => service.exitSimulation(7, bot.id, {}), /listPremiumSamples/);
-});

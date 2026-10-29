@@ -169,6 +169,10 @@ function createOptionsAutoTradingService(deps = {}) {
     // eslint-disable-next-line global-require
     listBySymbols: (...args) => require('../../repositories/options-iv-snapshots.repository').listBySymbols(...args),
   };
+  const premiumSamples = deps.premiumSamples || {
+    // eslint-disable-next-line global-require
+    listPremiumSamples: (...args) => require('../../repositories/options-premium-samples.repository').listPremiumSamples(...args),
+  };
   const log = deps.logger || logger;
   const now = deps.now || Date.now;
   let unsubscribe = null;
@@ -510,11 +514,8 @@ function createOptionsAutoTradingService(deps = {}) {
       sinceMs = Number(since);
       if (!Number.isFinite(sinceMs) || sinceMs < 0) throw new ValidationError('since debe ser un instante en milisegundos');
     }
-    if (typeof repo.listPremiumSamples !== 'function') {
-      throw new AppError('El repositorio no soporta muestras de prima por minuto (listPremiumSamples)', { status: 500, code: 'PREMIUM_SAMPLES_UNAVAILABLE' });
-    }
     const positions = await repo.listClosedBuyPositions(id, { mode, since: sinceMs });
-    const samples = positions.length ? await repo.listPremiumSamples(positions.map((p) => p.id)) : new Map();
+    const samples = positions.length ? await premiumSamples.listPremiumSamples(positions.map((p) => p.id)) : new Map();
     const snapshots = new Map();
     if (positions.length) {
       const symbols = [...new Set(positions.map((p) => p.symbol))];
