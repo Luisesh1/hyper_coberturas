@@ -1081,8 +1081,8 @@ test('reevaluation skipped for another reason resolves ignored with that reason'
 const { WINDOW_MS } = require('../src/services/options/options-live-execution.service');
 
 /** Bot por alertas en sombra con el libro del contrato fijado en bid/ask. */
-async function shadowEntrySetup({ mode = 'shadow', bid = 710, ask = 720 } = {}) {
-  const env = await setup({ mode, template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 } });
+async function shadowEntrySetup({ mode = 'shadow', bid = 710, ask = 720, params = {} } = {}) {
+  const env = await setup({ mode, template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5, ...params } });
   const book = { bid, ask };
   const original = env.market.getQuote;
   env.market.getQuote = async (symbol, opts) => ({ ...(await original(symbol, opts)), bid: book.bid, ask: book.ask });
@@ -1126,6 +1126,36 @@ test('shadow entry fills when ask reaches the limit', async () => {
   // Otra pasada (tick y conciliador a la vez) no vuelve a registrar.
   assert.deepEqual(await env.runner.processShadowEntries(), { filled: 0, expired: 0 });
   assert.equal(env.repo.positions.length, 1);
+});
+
+test('shadow entry with maxSpreadPct waits while the book spread is too wide at fill time', async () => {
+  const env = await shadowEntrySetup({ params: { maxSpreadPct: 5 } });
+  await env.runner.runForSignal(env.strategy, env.signal);
+  assert.equal(env.shadowEntries.entries[0].limitPrice, 715);
+  // El ask llega al límite, pero el bid se desploma: spread ≈ 56 %, no se llena.
+  env.book.ask = 714;
+  env.book.bid = 400;
+  env.clock.now = FRIDAY_9 + 60_000;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 0, expired: 0 });
+  // Sin bid tampoco: no hay spread que comprobar.
+  env.book.bid = 0;
+  env.clock.now = FRIDAY_9 + 90_000;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 0, expired: 0 });
+  assert.equal(env.repo.positions.length, 0);
+  // Libro sano otra vez: se llena al límite.
+  env.book.bid = 705;
+  env.clock.now = FRIDAY_9 + 120_000;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 1, expired: 0 });
+  assert.equal(env.repo.positions[0].entryPrice, 715);
+});
+
+test('shadow entry without maxSpreadPct fills on the ask alone', async () => {
+  const env = await shadowEntrySetup();
+  await env.runner.runForSignal(env.strategy, env.signal);
+  env.book.ask = 714;
+  env.book.bid = 400;
+  env.clock.now = FRIDAY_9 + 60_000;
+  assert.deepEqual(await env.runner.processShadowEntries(), { filled: 1, expired: 0 });
 });
 
 test('shadow entry: concurrent passes book the fill only once', async () => {

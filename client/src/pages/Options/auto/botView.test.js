@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   budgetSummary,
   botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
-  describeParams, maxHoldText, coveredList, botStatus, flowSteps, feeSummary, ladder, signalFeeText, formatCountdown, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  describeParams, maxHoldText, coveredList, botStatus, flowSteps, feeSummary, ladder, signalFeeText, formatCountdown, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, quantityPremiumWarning, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 
 describe('buildMapping', () => {
@@ -24,6 +24,31 @@ describe('buildMapping', () => {
       ['bullish', 'Vender put', 'Δ ≈ −0,25 · venc. ~14 d'],
       ['bearish', 'Vender call', 'Δ ≈ 0,25 · venc. ~14 d'],
     ]);
+  });
+});
+
+describe('delta ≥ 0,9 en el resumen del bot', () => {
+  it('ficha y flujo dicen «OTM más cercana» en vez de un delta que nunca se compra', () => {
+    const near = normalizeBot({ id: 1, params: { structure: 'buy_with', targetDelta: 0.95, expiryDays: 2 } });
+    expect(flowSteps(near)[1].subtitle).toBe('OTM más cercana al precio · vence ~2 d');
+    expect(describeParams(near).entry[0]).toMatchObject({ label: 'Strike', value: 'OTM más cercana al precio' });
+    const mid = normalizeBot({ id: 2, params: { structure: 'buy_with', targetDelta: 0.35, expiryDays: 7 } });
+    expect(flowSteps(mid)[1].subtitle).toBe('Δ ≈ 0,35 · vence ~7 d');
+    expect(describeParams(mid).entry[0]).toMatchObject({ label: 'Delta objetivo', value: '0,35' });
+  });
+});
+
+describe('aviso de cantidad frente a la prima máxima', () => {
+  const form = { structure: 'buy_with', quantity: 100, maxPremiumUsdt: 150, capitalUsdt: '', budgetUsdt: '' };
+  it('avisa cuando la prima máxima deja un precio por contrato irrisorio', () => {
+    expect(quantityPremiumWarning(form)).toBe('Con 100 contratos y prima máx. de 150 USDT solo entran opciones de hasta 1,5 USDT: casi todas las señales se saltarán. Baja la cantidad o usa un presupuesto.');
+  });
+  it('no avisa con presupuesto, capital por entrada, venta, sin prima máx. o un precio razonable', () => {
+    expect(quantityPremiumWarning({ ...form, budgetUsdt: 400 })).toBeNull();
+    expect(quantityPremiumWarning({ ...form, capitalUsdt: 100 })).toBeNull();
+    expect(quantityPremiumWarning({ ...form, structure: 'sell_against' })).toBeNull();
+    expect(quantityPremiumWarning({ ...form, maxPremiumUsdt: '' })).toBeNull();
+    expect(quantityPremiumWarning({ ...form, quantity: 0.1 })).toBeNull();
   });
 });
 

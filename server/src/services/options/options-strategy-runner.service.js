@@ -915,14 +915,22 @@ class OptionsStrategyRunner {
     const bid = num(quote?.bid);
     const reached = entry.side === 'BUY' ? ask > 0 && ask <= limit : bid != null && bid >= limit;
     if (!reached) return null;
-    const row = await this.shadowEntries.resolveEntry(entry.id, 'filled', now);
-    if (!row) return null;
     let params = null;
     try {
       params = templates.validateParams(strategy.template, strategy.params);
     } catch {
       params = strategy.params || null;
     }
+    // El spread máximo se valida al elegir el contrato; aquí se vuelve a exigir
+    // para no dar por llenada una entrada contra un libro roto (ask en el
+    // límite con el bid desplomado). Mientras no se cumpla, sigue pendiente.
+    const maxSpreadPct = num(params?.maxSpreadPct);
+    if (maxSpreadPct != null) {
+      const spread = bid > 0 && ask > 0 ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null;
+      if (spread == null || spread > maxSpreadPct) return null;
+    }
+    const row = await this.shadowEntries.resolveEntry(entry.id, 'filled', now);
+    if (!row) return null;
     const spot = num(quote?.spot) ?? num(entry.spot);
     const leg = {
       symbol: entry.symbol, side: entry.side, optionType: entry.optionType, quantity: entry.quantity,
