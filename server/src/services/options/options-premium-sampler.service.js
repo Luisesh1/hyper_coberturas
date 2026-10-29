@@ -86,7 +86,8 @@ class OptionsPremiumSampler {
     const ask = positiveOrNull(ticker?.askPrice);
     if (bid === null && ask === null) return;
     try {
-      const spot = positiveOrNull(ticker?.indexPrice) ?? await this.spotOf(position.symbol, spots);
+      // El ticker de opciones de Binance trae el índice del subyacente en `exercisePrice`.
+      const spot = positiveOrNull(ticker?.exercisePrice) ?? await this.spotOf(position.symbol, spots);
       await this.samplesRepo.insertSample(position.id, at, { bid, ask, spot });
     } catch (err) {
       this.logger.warn('options_premium_path_write_failed', { positionId: position.id, error: err.message });

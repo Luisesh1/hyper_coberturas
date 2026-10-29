@@ -118,7 +118,8 @@ test('recorrido: una fila bid/ask/spot por posición y pasada, spot una vez por 
     tickers: [
       { symbol: 'BTC-261030-81500-P', bidPrice: '1410', askPrice: '1660' },
       { symbol: 'BTC-261030-90000-C', bidPrice: '0', askPrice: '5' }, // solo ask: se guarda
-      { symbol: 'ETH-261030-2400-C', bidPrice: '20', askPrice: '22', indexPrice: '2500' },
+      // El ticker de opciones de Binance trae el subyacente en exercisePrice.
+      { symbol: 'ETH-261030-2400-C', bidPrice: '20', askPrice: '22', strikePrice: '2400', exercisePrice: '2500' },
     ],
   });
   await sampler.sample();
@@ -128,6 +129,21 @@ test('recorrido: una fila bid/ask/spot por posición y pasada, spot una vez por 
     [3, NOW, { bid: 20, ask: 22, spot: 2500 }],
   ]);
   assert.deepEqual(spotCalls, ['BTC']);
+});
+
+test('recorrido: exercisePrice 0 o ausente cae a getSpot; indexPrice no es un campo del ticker', async () => {
+  const spotCalls = [];
+  const { sampler, rows } = pathSampler({
+    spotCalls,
+    positions: [{ id: 1, symbol: 'BTC-261030-81500-P', side: 'BUY' }, { id: 2, symbol: 'ETH-261030-2400-C', side: 'BUY' }],
+    tickers: [
+      { symbol: 'BTC-261030-81500-P', bidPrice: '10', askPrice: '12', exercisePrice: '0' },
+      { symbol: 'ETH-261030-2400-C', bidPrice: '20', askPrice: '22', indexPrice: '9999' },
+    ],
+  });
+  await sampler.sample();
+  assert.deepEqual(rows, [[1, NOW, { bid: 10, ask: 12, spot: 81000 }], [2, NOW, { bid: 20, ask: 22, spot: 2400 }]]);
+  assert.deepEqual(spotCalls, ['BTC', 'ETH']);
 });
 
 test('recorrido: sin bid ni ask no hay fila; si el spot falla queda NULL', async () => {
