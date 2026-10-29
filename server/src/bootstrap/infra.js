@@ -21,6 +21,7 @@ const hedgeRegistry = require('../services/hedge.registry');
 const botRegistry = require('../services/bot.registry');
 const optionsStrategyRunner = require('../services/options/options-strategy-runner.service');
 const optionsIvRecorder = require('../services/options/options-iv-recorder.service');
+const optionsPremiumSampler = require('../services/options/options-premium-sampler.service');
 const optionsBacktestService = require('../services/options/options-backtest.service');
 const optionsAutoTradingService = require('../services/options/options-auto-trading.service');
 
@@ -88,10 +89,12 @@ async function bootstrapInfra(httpServer) {
   alertsSchedulerService.start().catch((err) =>
     logger.warn('alerts_scheduler_start_failed', { error: err.message })
   );
-  // Opciones: runner de estrategias (sombra/real), grabador horario de IV y
-  // limpieza de backtests que murieron con el proceso anterior.
+  // Opciones: runner de estrategias (sombra/real), grabador horario de IV,
+  // muestreo por minuto de la prima de las posiciones abiertas y limpieza
+  // de backtests que murieron con el proceso anterior.
   optionsStrategyRunner.start();
   optionsIvRecorder.start();
+  optionsPremiumSampler.start();
   optionsAutoTradingService.start();
   optionsBacktestService.start().catch((err) =>
     logger.warn('options_backtests_start_failed', { error: err.message })
@@ -116,6 +119,7 @@ async function bootstrapInfra(httpServer) {
       alertsSchedulerService.stop();
       optionsStrategyRunner.stop();
       optionsIvRecorder.stop();
+      optionsPremiumSampler.stop();
       optionsAutoTradingService.stop();
       optionsBacktestService.stop();
       await hedgeRegistry.destroyAll().catch((err) =>

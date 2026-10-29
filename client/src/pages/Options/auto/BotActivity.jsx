@@ -1,9 +1,9 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ChartLegend } from '../strategies/common/LineChart';
 import PnlChart from '../strategies/common/PnlChart';
 import { formatDateTime, formatNumber, formatPct, formatUsdt } from '../strategies/common/format';
 import { buildEquity } from '../strategies/strategyView';
-import { WarningIcon } from '../strategies/common/icons';
+import { ChevronRightIcon, WarningIcon } from '../strategies/common/icons';
 import { closedTradeRows, openPositionRows, pendingOrderRows, usageRows } from './botActivity';
 import { COMMON_DEFAULTS } from './botView';
 import { DirectionGlyph } from './DirectionChip';
@@ -353,41 +353,128 @@ function Usage({ rows, mobile }) {
   );
 }
 
+// Un extremo de la prima: precio, variación sobre la entrada y cuándo se
+// alcanzó, como tiempo desde la apertura (la fecha exacta va en el title).
+function PremiumPoint({ label, point, sell }) {
+  return (
+    <div className={styles.premiumPoint}>
+      <span className={`${ui.muted} ${ui.small}`}>{label}</span>
+      <span className={styles.premiumValue}>
+        <span className={ui.mono}>{price(point.price)}</span>
+        {point.changePct !== null && (
+          <span className={`${ui.mono} ${ui.small} ${toneClass(point.tone)}`}>{formatPct(point.changePct, { sign: true })}</span>
+        )}
+      </span>
+      <span className={`${ui.muted} ${ui.small}`} title={formatDateTime(point.at)}>
+        a {point.afterText} de la {sell ? 'venta' : 'compra'}
+      </span>
+    </div>
+  );
+}
+
+function PremiumRange({ premium }) {
+  if (!premium) {
+    return <p className={`${ui.muted} ${ui.small} ${styles.premiumNote}`}>Sin registro de la prima: la operación es anterior al muestreo.</p>;
+  }
+  return (
+    <div className={styles.premiumRange}>
+      <PremiumPoint label={premium.sell ? 'Prima máxima (ask)' : 'Prima máxima (bid)'} point={premium.high} sell={premium.sell} />
+      <PremiumPoint label={premium.sell ? 'Prima mínima (ask)' : 'Prima mínima (bid)'} point={premium.low} sell={premium.sell} />
+      {premium.partial && (
+        <p className={`${ui.muted} ${ui.small} ${styles.premiumNote}`}>
+          Aproximado: la operación se abrió antes del muestreo por minuto; incluye snapshots horarios.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ClosedTrades({ rows, mobile }) {
+  const [open, setOpen] = useState(() => new Set());
+  const toggle = useCallback((id) => {
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const detailId = (id) => `closed-premium-${id}`;
+
   return (
     <Section title="Operaciones cerradas" mobile={mobile}>
       {!rows.length && <p className={ui.empty}>Todavía no hay operaciones cerradas.</p>}
       {rows.length > 0 && mobile && (
         <ul className={styles.activityList}>
-          {rows.map((r) => (
-            <li key={r.id} className={styles.activityRow}>
-              <div className={styles.activityRowMain}>
-                <span className={ui.mono}>{r.symbol}</span>
-                <span className={`${ui.muted} ${ui.small}`}>{r.reasonLabel} · {formatDateTime(r.closedAt)}</span>
-              </div>
-              <span className={`${ui.mono} ${toneClass(r.pnlUsdt > 0 ? 'pos' : r.pnlUsdt < 0 ? 'neg' : 'neutral')}`}>{pnl(r.pnlUsdt)}</span>
-            </li>
-          ))}
+          {rows.map((r) => {
+            const expanded = open.has(r.id);
+            return (
+              <li key={r.id} className={styles.closedCard}>
+                <button
+                  type="button"
+                  className={styles.closedToggle}
+                  aria-expanded={expanded}
+                  aria-controls={detailId(r.id)}
+                  onClick={() => toggle(r.id)}
+                >
+                  <span className={styles.activityRowMain}>
+                    <span className={ui.mono}>{r.symbol}</span>
+                    <span className={`${ui.muted} ${ui.small}`}>{r.reasonLabel} · {formatDateTime(r.closedAt)}</span>
+                  </span>
+                  <span className={`${ui.mono} ${toneClass(r.pnlUsdt > 0 ? 'pos' : r.pnlUsdt < 0 ? 'neg' : 'neutral')}`}>{pnl(r.pnlUsdt)}</span>
+                  <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}><ChevronRightIcon size={16} /></span>
+                </button>
+                {expanded && (
+                  <div id={detailId(r.id)} className={styles.closedDetail}>
+                    <PremiumRange premium={r.premium} />
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {rows.length > 0 && !mobile && (
         <div className={ui.tableWrap}>
           <table className={ui.table}>
             <thead>
-              <tr><th>Símbolo</th><th>Abierta</th><th>Cerrada</th><th className={ui.num}>Entrada</th><th className={ui.num}>Salida</th><th className={ui.num}>P&amp;L</th><th>Motivo</th></tr>
+              <tr>
+                <th className={styles.expandCol}><span className={ui.srOnly}>Detalle</span></th>
+                <th>Símbolo</th><th>Abierta</th><th>Cerrada</th><th className={ui.num}>Entrada</th><th className={ui.num}>Salida</th><th className={ui.num}>P&amp;L</th><th>Motivo</th>
+              </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td className={ui.mono}>{r.symbol}</td>
-                  <td className={`${ui.mono} ${ui.muted}`}>{formatDateTime(r.openedAt)}</td>
-                  <td className={`${ui.mono} ${ui.muted}`}>{formatDateTime(r.closedAt)}</td>
-                  <td className={`${ui.mono} ${ui.num}`}>{price(r.entry)}</td>
-                  <td className={`${ui.mono} ${ui.num}`}>{price(r.exit)}</td>
-                  <td className={`${ui.mono} ${ui.num} ${toneClass(r.pnlUsdt > 0 ? 'pos' : r.pnlUsdt < 0 ? 'neg' : 'neutral')}`}>{pnl(r.pnlUsdt)}</td>
-                  <td>{r.reasonLabel}</td>
-                </tr>
-              ))}
+              {rows.map((r) => {
+                const expanded = open.has(r.id);
+                return [
+                  <tr key={r.id}>
+                    <td className={styles.expandCol}>
+                      <button
+                        type="button"
+                        className={styles.expandBtn}
+                        aria-expanded={expanded}
+                        aria-controls={detailId(r.id)}
+                        aria-label={`${expanded ? 'Ocultar' : 'Ver'} máximo y mínimo de la prima de ${r.symbol}`}
+                        onClick={() => toggle(r.id)}
+                      >
+                        <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}><ChevronRightIcon size={16} /></span>
+                      </button>
+                    </td>
+                    <td className={ui.mono}>{r.symbol}</td>
+                    <td className={`${ui.mono} ${ui.muted}`}>{formatDateTime(r.openedAt)}</td>
+                    <td className={`${ui.mono} ${ui.muted}`}>{formatDateTime(r.closedAt)}</td>
+                    <td className={`${ui.mono} ${ui.num}`}>{price(r.entry)}</td>
+                    <td className={`${ui.mono} ${ui.num}`}>{price(r.exit)}</td>
+                    <td className={`${ui.mono} ${ui.num} ${toneClass(r.pnlUsdt > 0 ? 'pos' : r.pnlUsdt < 0 ? 'neg' : 'neutral')}`}>{pnl(r.pnlUsdt)}</td>
+                    <td>{r.reasonLabel}</td>
+                  </tr>,
+                  expanded && (
+                    <tr key={`${r.id}-premium`} id={detailId(r.id)} className={styles.premiumRow}>
+                      <td />
+                      <td colSpan={7}><PremiumRange premium={r.premium} /></td>
+                    </tr>
+                  ),
+                ];
+              })}
             </tbody>
           </table>
         </div>

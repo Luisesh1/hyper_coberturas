@@ -584,7 +584,7 @@ test('live partial close allocates entry fee proportionally and keeps the breakd
   assert.ok(Math.abs(remainingQty - 0.3) < 1e-12);
   assert.ok(Math.abs(remainingFees - 0.9) < 1e-12);
   const ins = d.calls.find((c) => c.sql.includes('INSERT INTO options_strategy_positions'));
-  assert.match(ins.sql, /fees_usdt,close_reason,entry_fee_usdt,exit_fee_usdt\)/);
+  assert.match(ins.sql, /fees_usdt,close_reason,entry_fee_usdt,exit_fee_usdt,/);
   const fees = ins.args[10];
   const entry = ins.args[12];
   const exit = ins.args[13];
@@ -593,6 +593,16 @@ test('live partial close allocates entry fee proportionally and keeps the breakd
   assert.ok(Math.abs(fees - (entry + exit)) < 1e-12);
   // Entre las dos filas se conserva la comisión de entrada original.
   assert.ok(Math.abs(remainingFees + entry - 1.2) < 1e-12);
+});
+
+test('live partial close: la parte cerrada hereda el rango de prima muestreado', async () => {
+  const position = { ...livePosition(0.4, 1.2), premium_high: '150', premium_high_at: '20',
+    premium_low: '90', premium_low_at: '30', premium_range_source: 'full' };
+  const d = applyTradeDb({ position });
+  await d.repo.applyTrade({ id: 9 }, { id: 't4', quantity: '0.1', price: 130, fee: 0.05, at: 60 });
+  const ins = d.calls.find((c) => c.sql.includes('INSERT INTO options_strategy_positions'));
+  assert.match(ins.sql, /premium_high,premium_high_at,premium_low,premium_low_at,premium_range_source\)/);
+  assert.deepEqual(ins.args.slice(14), ['150', '20', '90', '30', 'full']);
 });
 
 test('lote: con solo una ENTRADA sin resolver se admite un cierre; otra entrada o un cierre pendiente bloquean', async () => {

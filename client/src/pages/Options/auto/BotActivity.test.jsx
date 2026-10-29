@@ -139,6 +139,47 @@ describe('BotActivity', () => {
     expect(screen.getByText('Curva de P&L · sombra vs real')).toBeTruthy();
   });
 
+  it('operaciones cerradas: el desplegable muestra máximo y mínimo de la prima y cuándo se alcanzaron', () => {
+    const OPEN = NOW - 5 * 3600e3;
+    const closed = [
+      { id: 3, mode: 'shadow', symbol: 'BTC-261030-81500-P', side: 'BUY', entryPrice: 765, exitPrice: 1025, pnlUsdt: 27.46,
+        closeReason: 'take_profit_atr_band', openedAt: OPEN, closedAt: OPEN + 71 * 60e3,
+        premiumRange: { high: { price: 1025, at: OPEN + 71 * 60e3 }, low: { price: 612, at: OPEN + 12 * 60e3 }, partial: false } },
+      { id: 4, mode: 'shadow', symbol: 'ETH-261027-2300-P', side: 'BUY', entryPrice: 15.4, exitPrice: 0, pnlUsdt: -104.46,
+        closeReason: 'expiry', openedAt: OPEN, closedAt: NOW, premiumRange: null },
+    ];
+    render(<BotActivity bot={bot({ closedPositions: closed })} part="bottom" />);
+    const toggle = screen.getByRole('button', { name: 'Ver máximo y mínimo de la prima de BTC-261030-81500-P' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Prima máxima (bid)')).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls'))).not.toBeNull();
+    expect(screen.getByText('Prima máxima (bid)')).toBeTruthy();
+    expect(screen.getByText('a 1 h 11 min de la compra')).toBeTruthy();
+    expect(screen.getByText('a 12 min de la compra')).toBeTruthy();
+    expect(screen.getByText('+34,0 %')).toBeTruthy();
+    expect(screen.getByText('−20,0 %')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /prima de ETH-261027-2300-P/ }));
+    expect(screen.getByText(/Sin registro de la prima/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Ocultar máximo y mínimo de la prima de BTC/ }));
+    expect(screen.queryByText('Prima máxima (bid)')).toBeNull();
+  });
+
+  it('operaciones cerradas en móvil: la tarjeta entera despliega el rango (aproximado si es parcial)', () => {
+    const OPEN = NOW - 3 * 86400e3;
+    const closed = [{ id: 3, mode: 'shadow', symbol: 'BTC-261026-81000-C', side: 'BUY', entryPrice: 315, exitPrice: 0, pnlUsdt: -105.11,
+      closeReason: 'expiry', openedAt: OPEN, closedAt: NOW,
+      premiumRange: { high: { price: 480, at: OPEN + 28 * 3600e3 }, low: { price: 0, at: NOW }, partial: true } }];
+    const { container } = render(<BotActivity bot={bot({ closedPositions: closed })} mobile part="bottom" />);
+    expect(container.querySelector('table')).toBeNull();
+    const toggle = screen.getByRole('button', { name: /BTC-261026-81000-C/ });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('a 1 día 4 h de la compra')).toBeTruthy();
+    expect(screen.getByText(/Aproximado: la operación se abrió antes del muestreo/)).toBeTruthy();
+  });
+
   it('muestra barras de uso de límites', () => {
     render(<BotActivity bot={bot()} part="top" />);
     expect(screen.getByText('Uso de límites')).toBeTruthy();

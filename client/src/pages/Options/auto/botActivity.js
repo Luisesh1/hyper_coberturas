@@ -160,6 +160,56 @@ function committedRow(committed, budget) {
   return { ...row, text: `${fmt(row.used)} de ${fmt(row.max)} USDT` };
 }
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+// Tiempo transcurrido legible: «< 1 min», «45 min», «2 h 15 min», «1 día 4 h».
+export function formatElapsed(ms) {
+  const n = toNumber(ms);
+  if (n === null || n < 0) return '—';
+  if (n < MINUTE_MS) return '< 1 min';
+  if (n < HOUR_MS) return `${Math.floor(n / MINUTE_MS)} min`;
+  if (n < DAY_MS) {
+    const h = Math.floor(n / HOUR_MS);
+    const m = Math.floor((n % HOUR_MS) / MINUTE_MS);
+    return m ? `${h} h ${m} min` : `${h} h`;
+  }
+  const d = Math.floor(n / DAY_MS);
+  const h = Math.floor((n % DAY_MS) / HOUR_MS);
+  const days = `${d} ${d === 1 ? 'día' : 'días'}`;
+  return h ? `${days} ${h} h` : days;
+}
+
+// Un extremo de la prima: precio, variación sobre la entrada y cuánto tardó
+// desde la apertura. Al vender, una prima más alta es una pérdida.
+function premiumPoint(point, p) {
+  const price = toNumber(point?.price);
+  if (price === null) return null;
+  const at = toMs(point.at);
+  const openedAt = toMs(p.openedAt);
+  const entry = toNumber(p.entryPrice);
+  const changePct = entry > 0 ? (price / entry - 1) * 100 : null;
+  const afterMs = at !== null && openedAt !== null ? Math.max(0, at - openedAt) : null;
+  return {
+    price,
+    at,
+    changePct,
+    afterMs,
+    afterText: formatElapsed(afterMs),
+    tone: tone(changePct === null ? null : isSell(p.side) ? -changePct : changePct),
+  };
+}
+
+function premiumRangeView(p) {
+  const r = p.premiumRange;
+  if (!r) return null;
+  const high = premiumPoint(r.high, p);
+  const low = premiumPoint(r.low, p);
+  if (!high || !low) return null;
+  return { high, low, partial: !!r.partial, sell: isSell(p.side) };
+}
+
 export function closedTradeRows(detail = {}, mode = 'shadow') {
   return list(detail.closedPositions)
     .filter((p) => (p.mode || 'shadow') === mode)
@@ -173,6 +223,7 @@ export function closedTradeRows(detail = {}, mode = 'shadow') {
       pnlUsdt: toNumber(p.pnlUsdt),
       reasonLabel: REASON_LABEL[p.closeReason] || '—',
       feesUsdt: positionFees(p),
+      premium: premiumRangeView(p),
     }));
 }
 

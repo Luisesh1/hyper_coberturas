@@ -33,6 +33,29 @@ function mapStrategy(row) {
   };
 }
 
+/**
+ * Máximo y mínimo de la prima durante la posición: las muestras guardadas
+ * más el precio de salida al cerrar (TP, vencimiento, ejercicio…), que no
+ * se muestrea. Ante un empate gana el instante más temprano. null sin
+ * registro (posiciones previas al muestreo sin snapshots).
+ */
+function premiumRange(row) {
+  if (!row.premium_range_source) return null;
+  const points = [];
+  if (row.premium_high != null) points.push({ price: Number(row.premium_high), at: Number(row.premium_high_at) });
+  if (row.premium_low != null) points.push({ price: Number(row.premium_low), at: Number(row.premium_low_at) });
+  if (row.closed_at != null && row.exit_price != null) {
+    points.push({ price: Number(row.exit_price), at: Number(row.closed_at) });
+  }
+  if (!points.length) return null;
+  const pick = (better) => points.reduce((a, b) => (better(b.price, a.price) || (b.price === a.price && b.at < a.at) ? b : a));
+  return {
+    high: pick((x, y) => x > y),
+    low: pick((x, y) => x < y),
+    partial: row.premium_range_source !== 'full',
+  };
+}
+
 function mapPosition(row) {
   return {
     id: Number(row.id),
@@ -55,6 +78,7 @@ function mapPosition(row) {
     closeReason: row.close_reason || null,
     tpTargetPrice: numberOrNull(row.tp_target_price),
     tpTargetMeta: parseJson(row.tp_target_meta, null),
+    premiumRange: premiumRange(row),
   };
 }
 
@@ -289,6 +313,24 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
         entryFeeUsdt, exitFeeUsdt, exerciseFeeUsdt]
     );
     return rows[0] ? mapPosition(rows[0]) : null;
+  }
+
+  /**
+   * Suma una muestra de la prima al rango de una posición abierta. El SET de
+   * Postgres lee los valores previos de la fila, así que cada instante se
+   * compara con el extremo anterior; los empates conservan el más temprano.
+   */
+  async function recordPremiumSample(id, price, at) {
+    const { rowCount } = await db.query(
+      `UPDATE options_strategy_positions
+          SET premium_high_at = CASE WHEN premium_high IS NULL OR $2 > premium_high THEN $3 ELSE premium_high_at END,
+              premium_high = GREATEST(premium_high, $2),
+              premium_low_at = CASE WHEN premium_low IS NULL OR $2 < premium_low THEN $3 ELSE premium_low_at END,
+              premium_low = LEAST(premium_low, $2)
+        WHERE id = $1 AND closed_at IS NULL`,
+      [id, price, at]
+    );
+    return rowCount === 1;
   }
 
   async function listOpenPositions(strategyId, mode) {
@@ -540,6 +582,7 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     clearUnderlyingBlock,
     deleteStrategy,
     insertPosition,
+    recordPremiumSample,
     setTpTarget,
     closePosition,
     listOpenPositions,
