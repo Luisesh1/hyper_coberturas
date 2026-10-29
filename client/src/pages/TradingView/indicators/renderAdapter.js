@@ -23,6 +23,36 @@ function getAdxRoles(params = {}) {
   return roles;
 }
 
+// Línea horizontal fija del ADX (p. ej. 25) para ver de un vistazo cuándo
+// la tendencia supera o pierde ese umbral. Va como price line de la primera
+// serie del pane; los indicadores guardados antes no traen `level`, así que
+// se cae al valor del catálogo.
+function getAdxLevel(params = {}) {
+  if (params.showLevel === false) return null;
+  const level = Number(params.level ?? INDICATORS.adx.defaultParams.level);
+  return Number.isFinite(level) ? level : null;
+}
+
+function syncAdxLevelLine(mount, params, compact) {
+  const level = getAdxLevel(params);
+  const host = mount.series[0];
+  if (mount.levelLine && mount.levelLine.value === level) return;
+  if (mount.levelLine) {
+    try { host?.removePriceLine(mount.levelLine.line); } catch { /* noop */ }
+    mount.levelLine = null;
+  }
+  if (level == null || !host) return;
+  const line = host.createPriceLine({
+    price: level,
+    color: '#94a3b8',
+    lineWidth: 1,
+    lineStyle: DASH_STYLE.dashed,
+    axisLabelVisible: true,
+    title: compact ? '' : `Nivel ${level}`,
+  });
+  mount.levelLine = { line, value: level };
+}
+
 function getSqzmomRoles(params = {}) {
   const roles = ['histogram', 'sqzDots'];
   if (params.showNormalUpper !== false) roles.push('normalUpper');
@@ -383,6 +413,8 @@ export function createIndicatorsController(chart, { compact = false } = {}) {
         }
         m.entry = entry;
       }
+
+      if (entry.type === 'adx') syncAdxLevelLine(mounted.get(entry.uid).mount, entry.params, compact);
 
       const computed = computeIndicator(entry.type, candles, entry.params);
       const current = mounted.get(entry.uid);
