@@ -71,18 +71,26 @@ function tpFact(bot, row) {
 }
 
 // Tiempo de la posición: % consumido entre la ejecución y el vencimiento,
-// la franja final de la salida por tiempo y el texto de esa salida.
+// la franja final desde la primera salida por tiempo (antes del vencimiento
+// o tiempo máximo en posición) y el texto de esa salida.
 function expiryModel(row, bot, now) {
   const atr = bot?.params?.takeProfitMode === 'atr_band';
-  const exitH = toNumberOr(bot?.params?.exitHoursBeforeExpiry, COMMON_DEFAULTS.exitHoursBeforeExpiry);
-  const left = row.hoursToExpiry === null ? null : row.hoursToExpiry - exitH;
-  const exitText = atr ? 'sin salida por tiempo'
-    : left === null ? '' : left > 0 ? `salida por tiempo en ${hoursText(left)}` : 'salida por tiempo en curso';
+  const exitH = atr ? 0 : toNumberOr(bot?.params?.exitHoursBeforeExpiry, COMMON_DEFAULTS.exitHoursBeforeExpiry);
+  const maxHold = toNumberOr(bot?.params?.maxHoldMinutes, null);
   const opened = toNumberOr(row.openedAt, null);
+  const expiryCut = row.expiresAt !== null && exitH > 0 ? row.expiresAt - exitH * 3600e3 : null;
+  const holdCut = maxHold > 0 && opened !== null ? opened + maxHold * 60e3 : null;
+  const byHold = holdCut !== null && (expiryCut === null || holdCut <= expiryCut);
+  const cut = byHold ? holdCut : expiryCut;
+  const leftH = cut === null ? null : Math.round((cut - now) / 3600e3);
+  const what = byHold ? 'cierre por tiempo máx.' : 'salida por tiempo';
+  const exitText = cut === null
+    ? (atr ? 'sin salida por tiempo' : '')
+    : cut > now ? `${what} en ${leftH >= 1 ? hoursText(leftH) : `${Math.max(1, Math.round((cut - now) / 60e3))} min`}` : `${what} en curso`;
   const life = opened !== null && row.expiresAt !== null ? row.expiresAt - opened : null;
   const clamp = (x) => Math.min(100, Math.max(0, x));
   const elapsed = life > 0 ? clamp(((now - opened) / life) * 100) : null;
-  const exitPct = life > 0 && !atr ? clamp(((exitH * 3600e3) / life) * 100) : 0;
+  const exitPct = life > 0 && cut !== null ? clamp(((row.expiresAt - cut) / life) * 100) : 0;
   // Se tiñe al acercarse al límite efectivo: la salida por tiempo o el vencimiento.
   const used = elapsed === null ? null : exitPct < 100 ? (elapsed / (100 - exitPct)) * 100 : 100;
   const tone = used === null ? null : used >= 90 ? 'neg' : used >= 70 ? 'warn' : 'ok';

@@ -10,6 +10,7 @@ export const REASON_LABEL = {
   take_profit_atr_band: 'TP banda ATR',
   stop_loss: 'Stop',
   time_exit: 'Por tiempo',
+  max_hold_exit: 'Tiempo máximo',
   opposite_signal: 'Señal contraria',
   expiry: 'Vencimiento',
   manual: 'Manual',

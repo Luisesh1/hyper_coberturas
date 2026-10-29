@@ -8,11 +8,12 @@ import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import {
   NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, ATR_BAND_INTERVALS, ATR_BAND_NOTE, ATR_BAND_SWITCH_WARNING, alertMeta, buildBotPayload,
-  coveredList, initialBotForm, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  coveredList, initialBotForm, maxHoldText, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  MAX_HOLD_MAX, MAX_HOLD_MIN,
 } from './botView';
 import {
-  EDITOR_MODES, EXIT_OPTIONS, EXPIRY_OPTIONS, PRESETS, STRIKE_OPTIONS, applyPreset, botSummary, errorMode, exitHelp, exitOf,
-  expiryHelp, expiryOf, presetOf, presetTags, strikeHelp, strikeOf, withExit, withExpiry, withRisk, withStrike,
+  EDITOR_MODES, EXIT_OPTIONS, EXPIRY_OPTIONS, MAX_HOLD_OPTIONS, PRESETS, STRIKE_OPTIONS, applyPreset, botSummary, errorMode, exitHelp, exitOf,
+  expiryHelp, expiryOf, maxHoldHelp, maxHoldOf, presetOf, presetTags, strikeHelp, strikeOf, withExit, withExpiry, withMaxHold, withRisk, withStrike,
 } from './editorModes';
 import { formatNumber } from '../strategies/common/format';
 import ui from '../strategies/common/ui.module.css';
@@ -79,6 +80,59 @@ function AlertPicker({ underlyings, alerts, loading, error, selected, onToggle, 
 }
 
 // Último modo usado (comodidad por navegador; sin almacenamiento, Simple).
+// Avanzado: duraciones rápidas y valor libre en minutos, horas o días.
+const HOLD_QUICK = [null, 30, 60, 120, 240, 720, 1440, 4320];
+const HOLD_UNITS = [{ value: 1, label: 'min' }, { value: 60, label: 'h' }, { value: 1440, label: 'días' }];
+const unitFor = (m) => (m % 1440 === 0 ? 1440 : m % 60 === 0 ? 60 : 1);
+
+function MaxHoldField({ value, atrBand, error, onChange }) {
+  const minutes = Number(value) > 0 ? Number(value) : null;
+  const [unit, setUnit] = useState(() => unitFor(minutes ?? 60));
+  const pick = (m) => {
+    if (m) setUnit(unitFor(m));
+    onChange(m);
+  };
+  const help = minutes === null
+    ? 'Sin límite: sigue abierta hasta TP, stop, señal contraria o vencimiento.'
+    : `Al cumplir ${maxHoldText(minutes)} desde el llenado ${atrBand ? 'se cancela el TP en Binance y ' : ''}se cierra al precio de mercado, aunque no haya tocado TP${atrBand ? '' : ' ni stop'}.`;
+  return (
+    <>
+      <ChoiceField
+        label="Cerrar como máximo a los…"
+        help={help}
+        options={HOLD_QUICK.map((m) => ({ value: m ?? 'none', label: m ? maxHoldText(m) : 'Sin límite' }))}
+        value={minutes !== null && HOLD_QUICK.includes(minutes) ? minutes : minutes === null ? 'none' : ''}
+        onChange={(v) => pick(v === 'none' ? null : Number(v))}
+        columns={4}
+      />
+      {minutes !== null && (
+        <>
+          {/* key: al cambiar de unidad se descarta lo que se estaba escribiendo. */}
+          <NumberField
+            key={unit}
+            label="Tiempo máximo en posición"
+            unit={HOLD_UNITS.find((u) => u.value === unit).label}
+            value={Math.round((minutes / unit) * 100) / 100}
+            min={unit === 1 ? MAX_HOLD_MIN : 1}
+            max={Math.floor(MAX_HOLD_MAX / unit)}
+            integer={unit !== 1440}
+            step={unit === 1440 ? 0.5 : 1}
+            error={error}
+            onChange={(n) => onChange(n === null ? null : Math.round(n * unit))}
+          />
+          <ChoiceField
+            label="Unidad"
+            options={HOLD_UNITS}
+            value={unit}
+            onChange={(u) => setUnit(Number(u))}
+            columns={3}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
 const MODE_KEY = 'options.botEditorMode';
 function readMode() {
   try {
@@ -287,11 +341,11 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             </div>
             {!preset && (
               <p className={`${ui.alert} ${ui.alertWarn}`} role="status">
-                Este bot tiene ajustes propios que no coinciden con ningún preset. Elegir uno reemplaza strike, vencimiento y salida.
+                Este bot tiene ajustes propios que no coinciden con ningún preset. Elegir uno reemplaza strike, vencimiento, salida y tiempo máximo.
               </p>
             )}
             <p className={styles.summaryBox}>{botSummary(form)}</p>
-            <p className={styles.note}>Un preset fija strike, vencimiento y salida. El riesgo, las alertas y la señal contraria se ajustan en Simple.</p>
+            <p className={styles.note}>Un preset fija strike, vencimiento, salida y tiempo máximo. El riesgo, las alertas y la señal contraria se ajustan en Simple.</p>
           </>
         ) : (
         <>
@@ -404,6 +458,14 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
                 columns={buy ? 2 : 1}
               />
               {switchingToAtr && <p className={`${ui.alert} ${ui.alertWarn}`} role="status">{ATR_BAND_SWITCH_WARNING}</p>}
+              <ChoiceField
+                label="Tiempo máximo en posición"
+                help={maxHoldHelp(form)}
+                options={MAX_HOLD_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                value={maxHoldOf(form)}
+                onChange={(v) => update(withMaxHold(form, v))}
+                columns={3}
+              />
               <ChoiceField
                 label="Si llega la señal contraria"
                 help={(ON_OPPOSITE.find((o) => o.value === form.onOpposite) || ON_OPPOSITE[0]).help}
@@ -660,6 +722,12 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             error={errors.exitHoursBeforeExpiry}
             onChange={(v) => update({ exitHoursBeforeExpiry: v })}
           />}
+          <MaxHoldField
+            value={form.maxHoldMinutes}
+            atrBand={atrBand}
+            error={errors.maxHoldMinutes}
+            onChange={(v) => update({ maxHoldMinutes: v })}
+          />
         </FieldGroup>
 
         <FieldGroup title="4 · Riesgo">

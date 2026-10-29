@@ -19,9 +19,12 @@
  *
  * `takeProfitMode = 'atr_band'` (solo `buy_with`): el precio de venta se fija
  * una vez al llenarse (banda ATR, ver options-atr-band-target) y queda como
- * LIMIT GTC en Binance. Sin stop ni salida por tiempo; la señal contraria
- * sigue `onOpposite` (en Real el cierre cancela antes la LIMIT residente).
- * Si no se vende ni se cierra, se mantiene hasta la liquidación.
+ * LIMIT GTC en Binance. Sin stop ni salida antes del vencimiento; la señal
+ * contraria sigue `onOpposite` (en Real el cierre cancela antes la LIMIT
+ * residente). Si no se vende ni se cierra, se mantiene hasta la liquidación.
+ *
+ * `maxHoldMinutes` (opcional, cualquier modo de TP): cierra la posición
+ * cuando lleva ese tiempo abierta desde el llenado (`max_hold_exit`).
  */
 
 const { ValidationError } = require('../../../errors/app-error');
@@ -56,6 +59,7 @@ const defaultParams = {
   quantity: 0.01,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
+  maxHoldMinutes: null,
   maxOpenPositions: 1,
   maxTradesPerDay: 4,
   maxPremiumUsdt: null,
@@ -84,6 +88,7 @@ const NUMERIC_FIELDS = [
   { ...FIELDS.takeProfitPct, max: 1000 },
   { key: 'stopLossPct', label: 'Stop por pérdida', type: 'number', min: 1, max: 1000, step: 5, unit: '% de la prima' },
   FIELDS.exitHoursBeforeExpiry,
+  { key: 'maxHoldMinutes', label: 'Tiempo máximo en posición', type: 'number', integer: true, min: 5, max: 43200, step: 1, unit: 'minutos', nullable: true },
   { key: 'maxOpenPositions', label: 'Máximo de posiciones abiertas', type: 'number', integer: true, min: 1, max: 20, step: 1 },
   { key: 'maxTradesPerDay', label: 'Máximo de operaciones por día', type: 'number', integer: true, min: 1, max: 100, step: 1 },
   { key: 'maxPremiumUsdt', label: 'Prima máxima por operación', type: 'number', min: 0, max: 1e7, step: 1, unit: 'USDT', nullable: true },
@@ -219,15 +224,39 @@ function pnlPct(position) {
   return (diff / premium) * 100;
 }
 
+const MINUTE_MS = 60e3;
+
+function holdText(minutes) {
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 1440) return `${Math.round((minutes / 60) * 10) / 10} h`;
+  return `${Math.round((minutes / 1440) * 10) / 10} d`;
+}
+
+/** Cierre por tiempo máximo en posición, contado desde el llenado. */
+function maxHoldExit(p, now, maxHoldMinutes) {
+  const opened = Number(p.openedAt);
+  if (!(maxHoldMinutes > 0) || !Number.isFinite(opened) || !Number.isFinite(Number(now))) return null;
+  if (Number(now) - opened < maxHoldMinutes * MINUTE_MS) return null;
+  return { type: 'close', reason: 'max_hold_exit',
+    detail: `Salida por tiempo máximo: ${holdText(maxHoldMinutes)} en posición en ${p.symbol}`,
+    legs: closeLegs([p]) };
+}
+
 /**
  * Banda ATR: emula la LIMIT en reposo. Cierra solo cuando el precio
  * ejecutable (bid al vender lo comprado) alcanza el objetivo fijado al
- * llenarse. Ninguna otra salida; el vencimiento lo liquida el runner.
+ * llenarse. Aparte, solo el tiempo máximo en posición (en Real cancela antes
+ * la LIMIT residente); el vencimiento lo liquida el runner.
  */
-function atrBandExits(positions) {
+function atrBandExits(positions, now, maxHoldMinutes) {
   const actions = [];
   let pending = false;
   for (const p of positions) {
+    const timedOut = maxHoldExit(p, now, maxHoldMinutes);
+    if (timedOut) {
+      actions.push(timedOut);
+      continue;
+    }
     const target = Number(p.tpTargetPrice);
     if (!(target > 0)) {
       pending = true;
@@ -251,7 +280,7 @@ function atrBandExits(positions) {
 /** Salidas por tiempo, toma de ganancia y stop, una por posición. */
 function exits(ctx) {
   const { now, positions = [], params } = ctx;
-  if (params.takeProfitMode === 'atr_band') return atrBandExits(positions);
+  if (params.takeProfitMode === 'atr_band') return atrBandExits(positions, now, params.maxHoldMinutes);
   const actions = [];
   let missingQuote = false;
   let missingVolatility = false;
@@ -260,6 +289,11 @@ function exits(ctx) {
     const hours = hoursToExpiry(p, now);
     if (params.exitHoursBeforeExpiry > 0 && hours <= params.exitHoursBeforeExpiry) {
       actions.push({ type: 'close', reason: 'time_exit', detail: `Salida por tiempo: quedan ${hours.toFixed(1)} h al vencimiento de ${p.symbol}`, legs });
+      continue;
+    }
+    const timedOut = maxHoldExit(p, now, params.maxHoldMinutes);
+    if (timedOut) {
+      actions.push(timedOut);
       continue;
     }
     const pct = pnlPct(p);

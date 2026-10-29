@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { initialBotForm } from './botView';
 import {
-  EDITOR_MODES, applyPreset, botSummary, errorMode, expiryOf, exitOf, presetOf, strikeOf,
-  withExit, withExpiry, withRisk, withStrike, RISK_QUANTITY_CAP,
+  EDITOR_MODES, PRESETS, applyPreset, botSummary, errorMode, expiryOf, exitOf, maxHoldHelp, maxHoldOf, presetOf, presetTags, strikeOf,
+  withExit, withExpiry, withMaxHold, withRisk, withStrike, RISK_QUANTITY_CAP,
 } from './editorModes';
 
 const base = () => ({ ...initialBotForm({ underlying: 'BTC' }), name: 'Bot', underlyings: ['BTC', 'ETH'], alertIds: [1] });
@@ -69,9 +69,31 @@ describe('editorModes', () => {
 
   it('resumen en una frase', () => {
     const f = withRisk(applyPreset(base(), 'fast'), 10);
-    expect(botSummary(f)).toBe('Con cada alerta en BTC o ETH compra la opción a favor (call si es alcista, put si es bajista), cercana al precio, que vence en 1–3 días, arriesgando hasta 10 USDT. Vende al tocar la banda ATR.');
+    expect(botSummary(f)).toBe('Con cada alerta en BTC o ETH compra la opción a favor (call si es alcista, put si es bajista), cercana al precio, que vence en 1–3 días, arriesgando hasta 10 USDT. Vende al tocar la banda ATR. Cierra como máximo tras 4 h en posición.');
     const sell = applyPreset({ ...base(), structure: 'sell_against', underlyings: ['ETH'] }, 'swing');
-    expect(botSummary(sell)).toMatch(/^Con cada alerta en ETH vende la opción en contra \(put si es alcista, call si es bajista\), equilibrada, que vence en ~1 semana, con la cantidad configurada\. Sale con TP \+50 % o stop −200 %\.$/);
+    expect(botSummary(sell)).toMatch(/^Con cada alerta en ETH vende la opción en contra \(put si es alcista, call si es bajista\), equilibrada, que vence en ~1 semana, con la cantidad configurada\. Sale con TP \+50 % o stop −200 %\. Cierra como máximo tras 3 días en posición\.$/);
+  });
+
+  it('tiempo máximo en Simple: seis opciones, otro valor = Personalizado', () => {
+    expect(maxHoldOf(base())).toBe('none');
+    expect(withMaxHold(base(), '4h').maxHoldMinutes).toBe(240);
+    expect(withMaxHold(base(), 'none').maxHoldMinutes).toBeNull();
+    expect(maxHoldOf({ ...base(), maxHoldMinutes: '1440' })).toBe('1d');
+    expect(maxHoldOf({ ...base(), maxHoldMinutes: 90 })).toBeNull();
+    expect(maxHoldHelp({ ...base(), maxHoldMinutes: 90 })).toBe('Personalizado: 1 h 30 min. Ajústalo en Avanzado.');
+    expect(maxHoldHelp({ ...base(), takeProfitMode: 'atr_band', maxHoldMinutes: 240 })).toMatch(/4 h abierta.*se cancela el TP/);
+  });
+
+  it('cada preset fija su tiempo máximo y cambiarlo rompe la coincidencia', () => {
+    expect(PRESETS.map((p) => [p.value, p.maxHoldMinutes])).toEqual([['fast', 240], ['swing', 4320], ['lottery', null]]);
+    const fast = applyPreset({ ...base(), maxHoldMinutes: 60 }, 'fast');
+    expect(fast.maxHoldMinutes).toBe(240);
+    expect(presetOf(fast)).toBe('fast');
+    expect(presetOf({ ...fast, maxHoldMinutes: 60 })).toBeNull();
+    expect(applyPreset(fast, 'lottery').maxHoldMinutes).toBeNull();
+    expect(presetTags(PRESETS[0], base())).toContain('Máx. 4 h en posición');
+    expect(presetTags(PRESETS[1], base())).toContain('Máx. 3 días en posición');
+    expect(presetTags(PRESETS[2], base())).toContain('Sin tiempo máximo');
   });
 
   it('errores: a qué modo llevar al usuario para verlos', () => {

@@ -1,7 +1,7 @@
 // Modos del editor de bots: Simple (lo esencial), Avanzado (todos los campos)
-// y Presets (estilos que rellenan strike, vencimiento y salida). Todos
+// y Presets (estilos que rellenan strike, vencimiento, salida y tiempo máximo). Todos
 // escriben los mismos parámetros del bot: no hay nada nuevo en el servidor.
-import { STRUCTURE_DEFAULTS, perSignalBudget, withTakeProfitMode } from './botView';
+import { STRUCTURE_DEFAULTS, maxHoldText, perSignalBudget, withTakeProfitMode } from './botView';
 import { formatNumber } from '../strategies/common/format';
 
 export const EDITOR_MODES = [
@@ -28,13 +28,23 @@ export const EXIT_OPTIONS = [
   { value: 'fixed', label: 'TP / SL fijo' },
 ];
 
+// Tiempo máximo en posición en Simple (minutos; null = sin límite).
+export const MAX_HOLD_OPTIONS = [
+  { value: 'none', label: 'Sin límite', minutes: null },
+  { value: '1h', label: '1 h', minutes: 60 },
+  { value: '4h', label: '4 h', minutes: 240 },
+  { value: '12h', label: '12 h', minutes: 720 },
+  { value: '1d', label: '1 día', minutes: 1440 },
+  { value: '3d', label: '3 días', minutes: 4320 },
+];
+
 export const PRESETS = [
   { value: 'fast', label: 'Rápido', desc: 'Para alertas de 15 m – 1 h. Entra cerca del precio y vende en la banda ATR.',
-    strike: 'near', expiry: 'short', exit: 'atr', tpMaxGainPct: 200 },
+    strike: 'near', expiry: 'short', exit: 'atr', tpMaxGainPct: 200, maxHoldMinutes: 240 },
   { value: 'swing', label: 'Swing', desc: 'Para alertas de 4 h – 1 d. Más plazo y salidas fijas.',
-    strike: 'mid', expiry: 'week', exit: 'fixed' },
+    strike: 'mid', expiry: 'week', exit: 'fixed', maxHoldMinutes: 4320 },
   { value: 'lottery', label: 'Lotería', desc: 'Opciones baratas y lejanas: pocas aciertan, pero pagan mucho.',
-    strike: 'far', expiry: 'short', exit: 'atr', tpMaxGainPct: 500 },
+    strike: 'far', expiry: 'short', exit: 'atr', tpMaxGainPct: 500, maxHoldMinutes: null },
 ];
 
 // Con «Riesgo por operación» manda el capital: la cantidad máxima sube hasta
@@ -76,6 +86,15 @@ export function withExit(form, value) {
   return form;
 }
 
+const holdMinutes = (form) => (num(form.maxHoldMinutes) > 0 ? num(form.maxHoldMinutes) : null);
+
+export const maxHoldOf = (form) => MAX_HOLD_OPTIONS.find((o) => o.minutes === holdMinutes(form))?.value ?? null;
+
+export function withMaxHold(form, value) {
+  const opt = MAX_HOLD_OPTIONS.find((o) => o.value === value);
+  return opt ? { ...form, maxHoldMinutes: opt.minutes } : form;
+}
+
 // Banda ATR solo existe al comprar: al vender, los presets salen con TP/SL fijo.
 const presetExit = (preset, form) => (isBuy(form) ? preset.exit : 'fixed');
 
@@ -89,12 +108,13 @@ export function applyPreset(form, value) {
   const preset = PRESETS.find((p) => p.value === value);
   if (!preset) return form;
   const next = withExit(withExpiry(withStrike(form, preset.strike), preset.expiry), presetExit(preset, form));
-  return { ...next, ...presetExtras(preset, next) };
+  return { ...next, ...presetExtras(preset, next), maxHoldMinutes: preset.maxHoldMinutes };
 }
 
 export function presetOf(form) {
   return PRESETS.find((p) => strikeOf(form) === p.strike && expiryOf(form) === p.expiry
     && exitOf(form) === presetExit(p, form)
+    && holdMinutes(form) === p.maxHoldMinutes
     && Object.entries(presetExtras(p, form)).every(([k, v]) => same(form[k], v)))?.value ?? null;
 }
 
@@ -118,9 +138,11 @@ function riskText(form) {
 }
 
 function exitText(form) {
-  if (form.takeProfitMode === 'atr_band') return 'Vende al tocar la banda ATR.';
-  if (form.takeProfitMode === 'volatility') return 'Sale con TP por volatilidad o stop.';
-  return `Sale con TP +${formatNumber(form.takeProfitPct, { decimals: 0 })} % o stop −${formatNumber(form.stopLossPct, { decimals: 0 })} %.`;
+  const m = holdMinutes(form);
+  const hold = m === null ? '' : ` Cierra como máximo tras ${maxHoldText(m)} en posición.`;
+  if (form.takeProfitMode === 'atr_band') return `Vende al tocar la banda ATR.${hold}`;
+  if (form.takeProfitMode === 'volatility') return `Sale con TP por volatilidad o stop.${hold}`;
+  return `Sale con TP +${formatNumber(form.takeProfitPct, { decimals: 0 })} % o stop −${formatNumber(form.stopLossPct, { decimals: 0 })} %.${hold}`;
 }
 
 // Etiquetas de un preset tal como quedaría con la estructura del formulario.
@@ -128,7 +150,8 @@ export function presetTags(preset, form) {
   const strike = STRIKE_OPTIONS.find((o) => o.value === preset.strike);
   const expiry = EXPIRY_OPTIONS.find((o) => o.value === preset.expiry);
   const exit = presetExit(preset, form) === 'atr' ? `Banda ATR · tope +${preset.tpMaxGainPct} %` : 'TP / SL fijo';
-  return [`Strike ${strike.label.toLowerCase()}`, expiry.label, exit];
+  const hold = preset.maxHoldMinutes ? `Máx. ${maxHoldText(preset.maxHoldMinutes)} en posición` : 'Sin tiempo máximo';
+  return [`Strike ${strike.label.toLowerCase()}`, expiry.label, exit, hold];
 }
 
 // Ayudas de los campos de Simple; sin opción equivalente, «Personalizado».
@@ -151,6 +174,14 @@ export function exitHelp(form) {
     return `TP +${formatNumber(form.takeProfitPct, { decimals: 0 })} % · stop −${formatNumber(form.stopLossPct, { decimals: 0 })} % de la prima. Ajústalos en Avanzado.`;
   }
   return 'Personalizado: TP por volatilidad. Ajústalo en Avanzado.';
+}
+
+export function maxHoldHelp(form) {
+  const m = holdMinutes(form);
+  if (m === null) return 'Sigue abierta hasta TP, stop, señal contraria o vencimiento.';
+  if (!maxHoldOf(form)) return `Personalizado: ${maxHoldText(m)}. Ajústalo en Avanzado.`;
+  const atr = form.takeProfitMode === 'atr_band' ? ' (antes se cancela el TP de la banda)' : '';
+  return `Si lleva ${maxHoldText(m)} abierta, se cierra al precio de mercado${atr}.`;
 }
 
 // Lo que hará el bot, en una frase (se muestra en Simple y Presets).
