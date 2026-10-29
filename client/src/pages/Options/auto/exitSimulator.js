@@ -5,6 +5,8 @@ import { formatNumber, formatUsdt, toNumber } from '../strategies/common/format'
 
 export const SMALL_SAMPLE = 20;
 export const SMALL_SAMPLE_TEXT = 'Muestra pequeña: úsalo para descartar ideas, no para afinar números.';
+// El servidor solo simula las posiciones cerradas más recientes (`truncated`).
+export const TRUNCATED_TEXT = 'Solo las últimas 1000 operaciones';
 export const STOP_OPTIONS = [
   { value: null, label: 'sin' },
   { value: 30, label: '30 %' },

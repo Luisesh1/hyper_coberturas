@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ExitSimulator from './ExitSimulator';
+import { TRUNCATED_TEXT } from './exitSimulator';
 import { autoBotsApi } from '../autoTradingApi';
 
 vi.mock('../autoTradingApi', () => ({ autoBotsApi: { exitSimulation: vi.fn() } }));
@@ -84,6 +85,20 @@ describe('ExitSimulator', () => {
     open();
     await screen.findByRole('region', { name: /Mapa/ });
     expect(document.querySelector('[data-current="true"]')).toBeNull();
+  });
+
+  it('con truncated avisa de que solo usa las últimas 1000 operaciones', async () => {
+    autoBotsApi.exitSimulation.mockResolvedValue({ ...data(), truncated: true });
+    const { unmount } = render(<ExitSimulator bot={bot()} mobile />);
+    open();
+    expect(await screen.findByText(TRUNCATED_TEXT)).toBeTruthy();
+    expect(TRUNCATED_TEXT).toBe('Solo las últimas 1000 operaciones');
+    unmount();
+    autoBotsApi.exitSimulation.mockResolvedValue({ ...data(), truncated: false });
+    render(<ExitSimulator bot={bot()} />);
+    open();
+    await screen.findByText(/Real con datos/);
+    expect(screen.queryByText(TRUNCATED_TEXT)).toBeNull();
   });
 
   it('muestra carga y error con reintento', async () => {

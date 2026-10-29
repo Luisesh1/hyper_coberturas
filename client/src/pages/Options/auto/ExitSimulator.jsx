@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import { autoBotsApi } from '../autoTradingApi';
 import { ChevronRightIcon } from '../strategies/common/icons';
 import {
-  SMALL_SAMPLE, SMALL_SAMPLE_TEXT, STOP_OPTIONS, actualModel, bestRows, buildGrid, coverageText,
+  SMALL_SAMPLE, SMALL_SAMPLE_TEXT, STOP_OPTIONS, TRUNCATED_TEXT, actualModel, bestRows, buildGrid, coverageText,
   defaultStop, holdText, nearestCell, tpText,
 } from './exitSimulator';
 import ui from '../strategies/common/ui.module.css';
@@ -143,6 +143,7 @@ export default function ExitSimulator({ bot, mobile = false, since }) {
                   {actual.secondary && <span className={`${ui.muted} ${ui.small}`}> · {actual.secondary}</span>}
                 </span>
               </div>
+              {data.truncated && <p className={`${ui.alert} ${ui.alertWarn}`} role="note">{TRUNCATED_TEXT}</p>}
               {trades < SMALL_SAMPLE && <p className={`${ui.alert} ${ui.alertWarn}`} role="note">{SMALL_SAMPLE_TEXT}</p>}
               <h4 className={x.h4}>Mejores combinaciones</h4>
               <BestTable rows={rows} mobile={mobile} />

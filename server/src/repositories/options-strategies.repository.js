@@ -366,14 +366,21 @@ function createOptionsStrategiesRepository({ db = defaultDb, now = Date.now } = 
     return rows.map(mapPosition);
   }
 
-  /** Posiciones cerradas y compradas de un modo (opcionalmente desde `since`), de la más antigua a la más nueva. */
-  async function listClosedBuyPositions(strategyId, { mode, since = null } = {}) {
+  /**
+   * Posiciones cerradas y compradas de un modo (opcionalmente desde `since`),
+   * de la más antigua a la más nueva. Con `limit`, solo las `limit` más recientes.
+   */
+  async function listClosedBuyPositions(strategyId, { mode, since = null, limit = null } = {}) {
     const { rows } = await db.query(
-      `SELECT * FROM options_strategy_positions
-        WHERE strategy_id = $1 AND mode = $2 AND side = 'BUY' AND closed_at IS NOT NULL
-          AND ($3::bigint IS NULL OR opened_at >= $3)
-        ORDER BY opened_at, id`,
-      [strategyId, mode, since]
+      `SELECT * FROM (
+         SELECT * FROM options_strategy_positions
+          WHERE strategy_id = $1 AND mode = $2 AND side = 'BUY' AND closed_at IS NOT NULL
+            AND ($3::bigint IS NULL OR opened_at >= $3)
+          ORDER BY opened_at DESC, id DESC
+          LIMIT $4
+       ) recent
+       ORDER BY opened_at, id`,
+      [strategyId, mode, since, limit]
     );
     return rows.map(mapPosition);
   }

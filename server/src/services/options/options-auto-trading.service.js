@@ -27,6 +27,9 @@ const TEMPLATE_ID = 'alert_signal';
 const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
 const SIGNAL_FILTERS = ['all', 'traded', 'ignored'];
 const SIMULATE_COOLDOWN_MS = 10_000;
+// Simulador de salidas: tope de posiciones (las más recientes) y vida de la caché.
+const EXIT_SIM_MAX_POSITIONS = 1000;
+const EXIT_SIM_CACHE_MS = 60_000;
 const QUOTE_SUFFIXES = ['USDT', 'USDC', 'USD'];
 
 /**
@@ -177,6 +180,7 @@ function createOptionsAutoTradingService(deps = {}) {
   const now = deps.now || Date.now;
   let unsubscribe = null;
   const lastSimulation = new Map(); // botId → instante de la última simulación
+  const exitSimCache = new Map(); // `${botId}:${mode}:${since}` → { at, value }
 
   // ---------- señales ----------
 
@@ -516,6 +520,8 @@ function createOptionsAutoTradingService(deps = {}) {
   /**
    * Simula salidas alternativas (TP / stop / tiempo máximo) sobre las
    * posiciones compradas ya cerradas del bot, en el modo y desde `since`.
+   * Usa solo las EXIT_SIM_MAX_POSITIONS más recientes (`truncated`) y guarda
+   * el resultado EXIT_SIM_CACHE_MS por (bot, modo, since).
    */
   async function exitSimulation(userId, id, { mode = 'shadow', since = null } = {}) {
     await requireBot(userId, id);
@@ -525,7 +531,15 @@ function createOptionsAutoTradingService(deps = {}) {
       sinceMs = Number(since);
       if (!Number.isFinite(sinceMs) || sinceMs < 0) throw new ValidationError('since debe ser un instante en milisegundos');
     }
-    const positions = await repo.listClosedBuyPositions(id, { mode, since: sinceMs });
+    const key = `${id}:${mode}:${sinceMs ?? ''}`;
+    const at = now();
+    const cached = exitSimCache.get(key);
+    if (cached && at - cached.at < EXIT_SIM_CACHE_MS) return cached.value;
+    for (const [k, entry] of exitSimCache) if (at - entry.at >= EXIT_SIM_CACHE_MS) exitSimCache.delete(k);
+    // Una de más para saber si hay más antiguas fuera del cálculo.
+    let positions = await repo.listClosedBuyPositions(id, { mode, since: sinceMs, limit: EXIT_SIM_MAX_POSITIONS + 1 });
+    const truncated = positions.length > EXIT_SIM_MAX_POSITIONS;
+    if (truncated) positions = positions.slice(positions.length - EXIT_SIM_MAX_POSITIONS);
     const samples = positions.length ? await premiumSamples.listPremiumSamples(positions.map((p) => p.id)) : new Map();
     const snapshots = new Map();
     if (positions.length) {
@@ -537,7 +551,9 @@ function createOptionsAutoTradingService(deps = {}) {
         snapshots.get(row.symbol).push(row);
       }
     }
-    return { mode, since: sinceMs, generatedAt: now(), ...simulateExits({ positions, samples, snapshots }) };
+    const value = { mode, since: sinceMs, generatedAt: at, truncated, ...simulateExits({ positions, samples, snapshots }) };
+    exitSimCache.set(key, { at, value });
+    return value;
   }
 
   // ---------- cierre manual y cancelación ----------

@@ -71,3 +71,16 @@ test('recordPremiumSample: UPDATE atómico solo sobre abiertas, con el extremo p
   const closed = createOptionsStrategiesRepository({ db: capturingDb([], 0) });
   assert.equal(await closed.recordPremiumSample(7, 1, 2), false);
 });
+
+test('listClosedBuyPositions: con limit toma las más recientes y las devuelve de antigua a nueva', async () => {
+  const db = capturingDb([]);
+  const repo = createOptionsStrategiesRepository({ db });
+  await repo.listClosedBuyPositions(4, { mode: 'shadow', since: 1000, limit: 1001 });
+  await repo.listClosedBuyPositions(4, { mode: 'live' });
+  const [limited, unlimited] = db.calls;
+  assert.deepEqual(limited.args, [4, 'shadow', 1000, 1001]);
+  assert.match(limited.sql, /ORDER BY opened_at DESC, id DESC\s+LIMIT \$4/);
+  assert.match(limited.sql, /\)\s*recent\s+ORDER BY opened_at, id/);
+  // Sin limit: LIMIT NULL en PostgreSQL = sin tope.
+  assert.deepEqual(unlimited.args, [4, 'live', null, null]);
+});

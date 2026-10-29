@@ -322,3 +322,49 @@ test('exitSimulation filtra por dueño, modo, lado, cierre y since', async () =>
   await assert.rejects(() => service.exitSimulation(7, bot.id, { mode: 'x' }), /mode/);
 });
 
+
+test('exitSimulation: solo las 1000 posiciones cerradas más recientes y truncated', async () => {
+  const { repo, service } = makeService();
+  const bot = await repo.createStrategy({ userId: 7, name: 'b', template: 'alert_signal', underlying: 'BTC' });
+  const { id: _id, ...rest } = position();
+  for (let i = 0; i < 1003; i += 1) {
+    await repo.insertPosition({ strategyId: bot.id, userId: 7, ...rest, openedAt: OPEN + i * MIN, closedAt: OPEN + i * MIN + HOUR_MS, pnlUsdt: i < 3 ? 1000 : -1 });
+  }
+  const res = await service.exitSimulation(7, bot.id, { mode: 'shadow' });
+  assert.equal(res.truncated, true);
+  assert.equal(res.coverage.positions, 1000);
+  // Las 3 más antiguas (las de +1000) quedan fuera.
+  assert.equal(res.actual.pnlUsdt, -1000);
+
+  const small = makeService();
+  const other = await small.repo.createStrategy({ userId: 7, name: 'b', template: 'alert_signal', underlying: 'BTC' });
+  await small.repo.insertPosition({ strategyId: other.id, userId: 7, ...rest });
+  assert.equal((await small.service.exitSimulation(7, other.id, {})).truncated, false);
+});
+
+test('exitSimulation: caché de 60 s por bot, modo y since', async () => {
+  const clock = { now: 1000 };
+  let loads = 0;
+  const { repo, service } = makeService({
+    now: () => clock.now,
+    premiumSamples: { listPremiumSamples: async (ids) => { loads += 1; return new Map(ids.map((id) => [id, [sample(10, 150)]])); } },
+  });
+  const bot = await repo.createStrategy({ userId: 7, name: 'b', template: 'alert_signal', underlying: 'BTC' });
+  const { id: _id, ...rest } = position();
+  await repo.insertPosition({ strategyId: bot.id, userId: 7, ...rest });
+  const first = await service.exitSimulation(7, bot.id, { mode: 'shadow' });
+  clock.now += 59_000;
+  assert.equal(await service.exitSimulation(7, bot.id, { mode: 'shadow' }), first);
+  assert.equal(loads, 1);
+  // Otro since u otro modo no comparten entrada.
+  await service.exitSimulation(7, bot.id, { mode: 'shadow', since: String(OPEN) });
+  await service.exitSimulation(7, bot.id, { mode: 'live' });
+  assert.equal(loads, 2); // live sin posiciones no carga muestras
+  // El dueño se sigue comprobando con la caché caliente.
+  await assert.rejects(() => service.exitSimulation(8, bot.id, { mode: 'shadow' }), /no encontrado/i);
+  clock.now += 2_000;
+  const fresh = await service.exitSimulation(7, bot.id, { mode: 'shadow' });
+  assert.notEqual(fresh, first);
+  assert.equal(fresh.generatedAt, clock.now);
+  assert.equal(loads, 3);
+});

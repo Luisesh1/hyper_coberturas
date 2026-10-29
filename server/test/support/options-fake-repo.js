@@ -108,10 +108,12 @@ function createFakeOptionsRepo({ now = () => Date.now() } = {}) {
     async listPositions(strategyId) {
       return positions.filter((p) => p.strategyId === strategyId).map(clone);
     },
-    async listClosedBuyPositions(strategyId, { mode, since = null } = {}) {
-      return positions
+    async listClosedBuyPositions(strategyId, { mode, since = null, limit = null } = {}) {
+      const list = positions
         .filter((p) => p.strategyId === strategyId && p.mode === mode && p.side === 'BUY' && p.closedAt != null && (since == null || p.openedAt >= since))
+        .sort((a, b) => a.openedAt - b.openedAt || a.id - b.id)
         .map(clone);
+      return limit == null ? list : list.slice(Math.max(0, list.length - limit));
     },
     async lastOpenedAt(strategyId, mode) {
       const times = positions.filter((p) => p.strategyId === strategyId && p.mode === mode).map((p) => p.openedAt);
