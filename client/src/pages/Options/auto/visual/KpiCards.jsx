@@ -83,7 +83,8 @@ function WinRing({ pct }) {
   );
 }
 
-function WinCard({ win, compact }) {
+function WinCard({ win, compact, periodText }) {
+  const label = periodText ? `Acierto · ${periodText}` : 'Acierto';
   let value = win.pct === null ? '—' : formatPct(win.pct, { decimals: 1 });
   let sub = win.wins !== null && win.total ? `${win.wins} de ${win.total} operaciones` : 'Sin operaciones cerradas';
   if (win.few) {
@@ -99,7 +100,7 @@ function WinCard({ win, compact }) {
     const short = win.few ? `${plural(win.closedTrades, 'cerrada', 'cerradas')} · mín. ${MIN_TRADES_FOR_WIN_RATE}`
       : win.wins !== null && win.total ? `${win.wins} de ${win.total}` : 'Sin cerradas';
     return (
-      <Card label="Acierto">
+      <Card label={label}>
         <span className={styles.kpiValue}>{value}</span>
         <div className={styles.meter} role="img"
           aria-label={win.pct === null ? 'Acierto sin datos suficientes' : `${formatPct(win.pct, { decimals: 1 })} de acierto`}>
@@ -110,7 +111,7 @@ function WinCard({ win, compact }) {
     );
   }
   return (
-    <Card label="Acierto">
+    <Card label={label}>
       <div className={styles.winRow}>
         <WinRing pct={win.pct} />
         <div className={styles.winText}>
@@ -123,13 +124,13 @@ function WinCard({ win, compact }) {
   );
 }
 
-function FeesCard({ fees, compact }) {
+function FeesCard({ fees, compact, periodText }) {
   const pct = fees.pct;
   let sub = fees.label ? `${fees.label}${fees.premium ? ` (${n2(fees.premium)} USDT)` : ''}` : 'Sin prima operada todavía';
   if (compact) sub = pct !== null ? `${formatPct(pct, { decimals: 1 })} de la prima` : 'Sin prima operada';
   const total = fees.total === null ? '—' : `${formatUsdt(fees.total)}${compact ? '' : ' USDT'}`;
   return (
-    <Card label={compact ? 'Comisiones' : 'Comisiones totales'}>
+    <Card label={periodText ? `Comisiones · ${periodText}` : compact ? 'Comisiones' : 'Comisiones totales'}>
       <span className={`${styles.kpiValue} ${styles.t_fee}`}>{total}</span>
       <div className={styles.meter} role="img" aria-label={pct === null ? 'Comisiones sin prima operada' : `Comisiones: ${fees.label}`}>
         {pct !== null && <i className={styles.meterFee} style={{ width: `${Math.min(100, Math.max(pct > 0 ? 1.5 : 0, pct))}%` }} />}
@@ -181,15 +182,16 @@ function BudgetCard({ budget: b, compact }) {
  * acierto, comisiones con barra y desglose, y presupuesto usado/reservado.
  * `model` sale de kpiCardsModel(bot). `compact` (teléfono): rejilla 2×2 con
  * mini curva y barras, sin desgloses ni leyendas. `periodText` (p. ej. «7 d»)
- * rotula el P&L con el periodo elegido en lugar de 30 d.
+ * rotula el P&L con el periodo elegido en lugar de 30 d, y también
+ * el acierto y las comisiones, que el servidor calcula sobre ese periodo.
  */
 export default function KpiCards({ model, compact = false, periodText = null }) {
   if (!model) return null;
   return (
     <div className={`${styles.kpis} ${compact ? styles.kpisCompact : ''}`}>
       <PnlCard pnl={model.pnl} mode={model.mode} compact={compact} periodText={periodText} />
-      <WinCard win={model.win} compact={compact} />
-      <FeesCard fees={model.fees} compact={compact} />
+      <WinCard win={model.win} compact={compact} periodText={periodText} />
+      <FeesCard fees={model.fees} compact={compact} periodText={periodText} />
       <BudgetCard budget={model.budget} compact={compact} />
     </div>
   );

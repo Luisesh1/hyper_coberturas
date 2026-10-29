@@ -119,6 +119,22 @@ describe('KpiCards', () => {
     expect(screen.getByLabelText(/Curva de P&L 7 d/)).toBeTruthy();
   });
 
+  it('con periodo: acierto y comisiones también rotulan el periodo (escritorio y teléfono)', () => {
+    const { unmount } = render(<KpiCards model={kpiCardsModel(bot, NOW, { kind: 'd7' })} periodText="7 d" />);
+    expect(screen.getByText('Acierto · 7 d')).toBeTruthy();
+    expect(screen.getByText('Comisiones · 7 d')).toBeTruthy();
+    unmount();
+    render(<KpiCards model={kpiCardsModel(bot, NOW, { kind: 'd7' })} periodText="7 d" compact />);
+    expect(screen.getByText('Acierto · 7 d')).toBeTruthy();
+    expect(screen.getByText('Comisiones · 7 d')).toBeTruthy();
+  });
+
+  it('sin periodo: «Acierto» y «Comisiones totales» sin sufijo', () => {
+    render(<KpiCards model={kpiCardsModel(bot, NOW)} />);
+    expect(screen.getByText('Acierto')).toBeTruthy();
+    expect(screen.getByText('Comisiones totales')).toBeTruthy();
+  });
+
   it('P&L real vs sombra, acierto, comisiones con desglose y presupuesto usado/reservado', () => {
     render(<KpiCards model={kpiCardsModel(bot, NOW)} />);
     expect(screen.getByText('P&L neto 30 d')).toBeTruthy();
