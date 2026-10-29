@@ -126,6 +126,11 @@ export const ON_OPPOSITE = [
   { value: 'ignore', label: 'Ignorar', help: 'Mantiene la posición abierta' },
 ];
 
+// El bot solo elige strikes OTM: un delta ≥ 0,9 no lo alcanza ninguna y gana
+// la más cercana al spot (el modo «Cercano» del editor guarda 0,95 a propósito).
+const isNearestOtm = (delta) => Math.abs(delta) >= 0.9;
+const NEAREST_OTM_TEXT = 'OTM más cercana al precio';
+
 // Qué abre cada dirección con la estructura y el delta elegidos.
 export function buildMapping(structure, { targetDelta, expiryDays } = {}) {
   const buy = normalizeStructure(structure) === 'buy_with';
@@ -134,7 +139,7 @@ export function buildMapping(structure, { targetDelta, expiryDays } = {}) {
   const delta = (sign) => formatNumber(sign * Math.abs(d), { decimals: 2 });
   const venc = `venc. ~${formatNumber(days, { decimals: 0 })} d`;
   // Delta ≥ 0,9 no lo alcanza ninguna OTM: el bot toma la más cercana al spot.
-  if (Math.abs(d) >= 0.9) {
+  if (isNearestOtm(d)) {
     const detail = `Más cercana al precio · ${venc}`;
     return [
       { direction: 'bullish', action: buy ? 'Comprar call' : 'Vender put', side: buy ? 'buy' : 'sell', detail },
@@ -637,6 +642,24 @@ export function budgetSummary(bot = {}) {
   return { budget: 'sin tope', perEntry: qty > 0 ? `${formatNumber(qty, { decimals: 4, minDecimals: 0 })} contratos` : '—' };
 }
 
+// Por debajo de este precio por contrato no hay opciones de BTC ni ETH cerca
+// del dinero: la prima máxima saltaría casi todas las señales.
+const MIN_REASONABLE_CONTRACT_USDT = 10;
+
+// Aviso del editor: con cantidad fija (sin presupuesto ni capital por entrada)
+// la prima máxima limita el precio por contrato a prima ÷ cantidad.
+export function quantityPremiumWarning(form = {}) {
+  if (normalizeStructure(form.structure) !== 'buy_with') return null;
+  if (toNumber(form.budgetUsdt) > 0 || toNumber(form.capitalUsdt) > 0) return null;
+  const qty = toNumber(form.quantity);
+  const premium = toNumber(form.maxPremiumUsdt);
+  if (!(qty > 0) || !(premium > 0)) return null;
+  const ceiling = premium / qty;
+  if (ceiling >= MIN_REASONABLE_CONTRACT_USDT) return null;
+  const n = (x) => formatNumber(x, { decimals: 4, minDecimals: 0 });
+  return `Con ${n(qty)} contratos y prima máx. de ${n(premium)} USDT solo entran opciones de hasta ${n(ceiling)} USDT: casi todas las señales se saltarán. Baja la cantidad o usa un presupuesto.`;
+}
+
 // Resumen legible de los parámetros (tarjetas del detalle).
 export function describeParams(bot) {
   const p = bot.params || {};
@@ -671,7 +694,9 @@ export function describeParams(bot) {
     ];
   return {
     entry: [
-      { key: 'targetDelta', label: 'Delta objetivo', value: formatNumber(Math.abs(v('targetDelta')), { decimals: 2 }) },
+      isNearestOtm(v('targetDelta'))
+        ? { key: 'targetDelta', label: 'Strike', value: NEAREST_OTM_TEXT }
+        : { key: 'targetDelta', label: 'Delta objetivo', value: formatNumber(Math.abs(v('targetDelta')), { decimals: 2 }) },
       { key: 'expiryDays', label: 'Vencimiento', value: `${formatNumber(v('expiryDays'), { decimals: 0 })} días` },
       {
         key: 'expiryWindow',
@@ -799,7 +824,7 @@ export function flowSteps(bot = {}) {
     { key: 'signal', title: 'Señal', value: '▲ Alcista / ▼ Bajista', subtitle: signalName },
     {
       key: 'contract', title: 'Contrato', value: buy ? 'Compra call / put' : 'Venta put / call',
-      subtitle: `Δ ≈ ${formatNumber(Math.abs(v('targetDelta')), { decimals: 2 })} · vence ~${n0(v('expiryDays'))} d`,
+      subtitle: `${isNearestOtm(v('targetDelta')) ? NEAREST_OTM_TEXT : `Δ ≈ ${formatNumber(Math.abs(v('targetDelta')), { decimals: 2 })}`} · vence ~${n0(v('expiryDays'))} d`,
     },
     { key: 'entry', title: 'Entrada', value: 'GTC al precio medio', subtitle: 'espera 10 min; si no, se cancela' },
     atr

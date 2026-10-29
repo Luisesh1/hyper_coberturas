@@ -8,7 +8,7 @@ import DirectionChip from './DirectionChip';
 import Mapping from './Mapping';
 import {
   NAME_MAX, ON_OPPOSITE, STRUCTURES, STRUCTURE_INFO, ATR_BAND_INTERVALS, ATR_BAND_NOTE, ATR_BAND_SWITCH_WARNING, alertMeta, buildBotPayload,
-  coveredList, initialBotForm, maxHoldText, normalizeAlert, perSignalBudget, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  coveredList, initialBotForm, maxHoldText, normalizeAlert, perSignalBudget, quantityPremiumWarning, structureLabels, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
   MAX_HOLD_MAX, MAX_HOLD_MIN,
 } from './botView';
 import {
@@ -596,6 +596,9 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
             error={errors.quantity}
             onChange={(v) => update({ quantity: v })}
           />
+          {quantityPremiumWarning(form) && (
+            <p className={`${ui.alert} ${ui.alertWarn}`} role="status">{quantityPremiumWarning(form)}</p>
+          )}
           <ChoiceField
             label="Si llega la señal contraria"
             help={(ON_OPPOSITE.find((o) => o.value === form.onOpposite) || ON_OPPOSITE[0]).help}
