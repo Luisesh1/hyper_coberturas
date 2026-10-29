@@ -657,3 +657,16 @@
 .closedDetail { padding: 0 12px 12px; border-top: 1px solid var(--border-subtle); }
 .closedDetail .premiumRange { flex-direction: column; gap: 10px; padding-top: 10px; }
 @media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
+
+/* ── Selector de periodo de los KPIs ──────────────────────────── */
+.periodBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.periodLabel { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-tertiary); align-self: center; margin-right: 2px; }
+.periodGroup { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.mobileDetail .periodBar { flex-direction: column; align-items: stretch; gap: 6px; }
+.mobileDetail .periodGroup { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--bg-input); border-radius: 12px; }
+.mobileDetail .periodDate { justify-content: space-between; }
+.periodDate { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+.periodDate input {
+  min-height: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-bright); font-family: inherit; font-size: 14px; min-width: 0;
+}

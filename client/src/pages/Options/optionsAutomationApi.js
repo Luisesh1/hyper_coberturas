@@ -14,7 +14,8 @@ export const optionsStrategiesApi = {
   // { name, template, underlying, params, limits }
   create: (data) => request('POST', '/options/strategies', data),
   // Estrategia + { kpis, equity: [{ t, shadow, live }], events }
-  get: (id) => request('GET', `/options/strategies/${enc(id)}`),
+  // `since` (ms) filtra kpis, curva y cerradas por apertura.
+  get: (id, { since } = {}) => request('GET', `/options/strategies/${enc(id)}${since != null ? `?since=${enc(since)}` : ''}`),
   update: (id, data) => request('PUT', `/options/strategies/${enc(id)}`, data),
   // `live` exige confirm: true; sin él el servidor responde 400.
   setMode: (id, mode, { confirm = false } = {}) => request(

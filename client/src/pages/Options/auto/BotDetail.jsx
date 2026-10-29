@@ -9,6 +9,8 @@ import Mapping from './Mapping';
 import SignalsFeed, { SignalFilter } from './SignalsFeed';
 import LiveTpStatus from './LiveTpStatus';
 import BotActivity from './BotActivity';
+import PeriodSelect from './PeriodSelect';
+import { PERIOD_ALL, periodLabel } from './botPeriod';
 import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, botDirections, botStatus, buildBotKpis, describeParams, flowSteps } from './botView';
 import { pendingEntryRows } from './botActivity';
 import BotFlow from './visual/BotFlow';
@@ -140,6 +142,11 @@ export default function BotDetail({
   signalsLoading = false,
   signalsError = null,
   stats = null,
+  period = PERIOD_ALL,
+  dataPeriod = period,
+  since = null, // inicio del periodo en ms (null = todo); lo recibirá el simulador de salidas
+  onPeriodPick = () => {},
+  onPeriodDate = () => {},
   mobile = false,
   modePending = null,
   modeError = null,
@@ -162,6 +169,10 @@ export default function BotDetail({
   actionBusy = false,
   actionNotice = null,
 }) {
+  const periodText = periodLabel(dataPeriod);
+  const periodActive = periodText !== null;
+  const kpiModel = useMemo(() => kpiCardsModel(bot, Date.now(), periodActive ? dataPeriod : null), [bot, dataPeriod, periodActive]);
+  const periodSelect = <PeriodSelect period={period} onPick={onPeriodPick} onDate={onPeriodDate} />;
   const kpis = useMemo(() => buildBotKpis(bot, stats), [bot, stats]);
   const desc = useMemo(() => describeParams(bot), [bot]);
   const info = STRUCTURE_INFO[bot.structure];
@@ -240,7 +251,8 @@ export default function BotDetail({
           {loadAlert}
           {noticeAlert}
           {nowStrip}
-          <KpiCards model={kpiCardsModel(bot)} compact />
+          {periodSelect}
+          <KpiCards model={kpiModel} compact periodText={periodText} />
           <LiveTpStatus bot={bot} />
           <BotActivity {...activity} part="positions" />
           <section className={`${styles.mobileSection} ${styles.mobileCard}`} aria-label="Regla del bot">
@@ -320,7 +332,8 @@ export default function BotDetail({
 
       {nowStrip}
 
-      <KpiCards model={kpiCardsModel(bot)} />
+      {periodSelect}
+      <KpiCards model={kpiModel} periodText={periodText} />
 
       <div className={styles.grid2}>
         <BotActivity {...activity} part="positions" />

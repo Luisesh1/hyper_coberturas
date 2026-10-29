@@ -358,3 +358,38 @@ test('atRiskUsdt suma la prima pagada de las compras abiertas del modo', async (
 
   assert.equal(detail.usage.atRiskUsdt, 2);
 });
+
+test('GET detalle con since filtra kpis, curva y cerradas por openedAt; no toca abiertas ni usage', async () => {
+  const { repo, service } = setup({ mode: 'shadow' });
+  const s = await repo.createStrategy({ userId: USER, name: 'p', template: 'short_strangle', underlying: 'BTC', mode: 'shadow' });
+  const mk = async (symbol, openedAt, pnl) => {
+    const p = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol, side: 'SELL', quantity: 0.01, entryPrice: 50, openedAt });
+    await repo.closePosition(p.id, { exitPrice: 40, closedAt: openedAt + 600e3, pnlUsdt: pnl, feesUsdt: 0 });
+  };
+  await mk('BTC-261017-64000-P', NOW - 10 * 86400e3, 30);
+  await mk('BTC-261017-63000-P', NOW - 2 * 86400e3, -5);
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-C', side: 'SELL', quantity: 0.01, entryPrice: 100, openedAt: NOW - 20 * 86400e3 });
+
+  const all = await service.get(USER, s.id);
+  assert.equal(all.kpis.shadow.realizedPnlUsdt, 25);
+  assert.equal(all.closedPositions.length, 2);
+  assert.equal(all.kpis.shadow.pnlPeriodUsdt, undefined);
+
+  const since = NOW - 3 * 86400e3;
+  const d = await service.get(USER, s.id, { since: String(since) });
+  assert.equal(d.kpis.shadow.realizedPnlUsdt, -5);
+  assert.equal(d.kpis.shadow.pnlPeriodUsdt, -5);
+  assert.deepEqual(d.closedPositions.map((p) => p.symbol), ['BTC-261017-63000-P']);
+  assert.equal(d.equity[0].t, since);
+  assert.equal(d.equity.at(-1).shadow, -5);
+  assert.equal(d.positions.length, 1); // la abierta (de hace 20 d) sigue visible
+  assert.equal(d.usage.mode, 'shadow');
+});
+
+test('GET detalle con since inválido responde 400 en español', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'p', template: 'short_strangle', underlying: 'BTC', mode: 'shadow' });
+  for (const bad of ['abc', '-5', '1.5', 'NaN']) {
+    await assert.rejects(service.get(USER, s.id, { since: bad }), (e) => e.status === 400 && /since/.test(e.message));
+  }
+});
