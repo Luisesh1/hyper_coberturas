@@ -45,6 +45,11 @@ export const PRESETS = [
     strike: 'mid', expiry: 'week', exit: 'fixed', maxHoldMinutes: 4320 },
   { value: 'lottery', label: 'Lotería', desc: 'Opciones baratas y lejanas: pocas aciertan, pero pagan mucho.',
     strike: 'far', expiry: 'short', exit: 'atr', tpMaxGainPct: 500, maxHoldMinutes: null },
+  // Lo aprendido en sombra (oct 2026): las ganadoras tocaron TP entre +30 y
+  // +97 % casi siempre antes de 6 h; las perdedoras vencían a −100 % y girar
+  // con la señal contraria perdió 11 de 12 veces.
+  { value: 'botx', label: 'Bot X', desc: 'Lo aprendido en sombra: cerca del precio, TP realista, corta a las 6 h y no gira con la señal contraria.',
+    strike: 'near', expiry: 'short', exit: 'atr', tpMaxGainPct: 100, maxHoldMinutes: 360, minTpPct: 20, onOpposite: 'ignore' },
 ];
 
 // Con «Riesgo por operación» manda el capital: la cantidad máxima sube hasta
@@ -98,6 +103,8 @@ export function withMaxHold(form, value) {
 // Banda ATR solo existe al comprar: al vender, los presets salen con TP/SL fijo.
 const presetExit = (preset, form) => (isBuy(form) ? preset.exit : 'fixed');
 
+const sameOrEmpty = (a, b) => (b === null ? num(a) === null : same(a, b));
+
 function presetExtras(preset, form) {
   if (presetExit(preset, form) === 'atr') return { tpMaxGainPct: preset.tpMaxGainPct };
   const d = STRUCTURE_DEFAULTS[isBuy(form) ? 'buy_with' : 'sell_against'];
@@ -108,13 +115,21 @@ export function applyPreset(form, value) {
   const preset = PRESETS.find((p) => p.value === value);
   if (!preset) return form;
   const next = withExit(withExpiry(withStrike(form, preset.strike), preset.expiry), presetExit(preset, form));
-  return { ...next, ...presetExtras(preset, next), maxHoldMinutes: preset.maxHoldMinutes };
+  // El TP mínimo es de cada preset (vacío si no lo fija); la señal contraria
+  // solo la cambia el preset que la fija.
+  return {
+    ...next, ...presetExtras(preset, next), maxHoldMinutes: preset.maxHoldMinutes,
+    minTpPct: preset.minTpPct ?? null,
+    ...(preset.onOpposite ? { onOpposite: preset.onOpposite } : {}),
+  };
 }
 
 export function presetOf(form) {
   return PRESETS.find((p) => strikeOf(form) === p.strike && expiryOf(form) === p.expiry
     && exitOf(form) === presetExit(p, form)
     && holdMinutes(form) === p.maxHoldMinutes
+    && (exitOf(form) !== 'atr' || sameOrEmpty(form.minTpPct, p.minTpPct ?? null))
+    && (!p.onOpposite || form.onOpposite === p.onOpposite)
     && Object.entries(presetExtras(p, form)).every(([k, v]) => same(form[k], v)))?.value ?? null;
 }
 
@@ -151,7 +166,11 @@ export function presetTags(preset, form) {
   const expiry = EXPIRY_OPTIONS.find((o) => o.value === preset.expiry);
   const exit = presetExit(preset, form) === 'atr' ? `Banda ATR · tope +${preset.tpMaxGainPct} %` : 'TP / SL fijo';
   const hold = preset.maxHoldMinutes ? `Máx. ${maxHoldText(preset.maxHoldMinutes)} en posición` : 'Sin tiempo máximo';
-  return [`Strike ${strike.label.toLowerCase()}`, expiry.label, exit, hold];
+  const extra = [
+    ...(presetExit(preset, form) === 'atr' && preset.minTpPct ? [`TP mín. +${preset.minTpPct} %`] : []),
+    ...(preset.onOpposite === 'ignore' ? ['Mantiene ante señal contraria'] : []),
+  ];
+  return [`Strike ${strike.label.toLowerCase()}`, expiry.label, exit, hold, ...extra];
 }
 
 // Ayudas de los campos de Simple; sin opción equivalente, «Personalizado».

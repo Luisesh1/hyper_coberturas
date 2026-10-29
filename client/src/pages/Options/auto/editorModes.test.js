@@ -50,6 +50,25 @@ describe('editorModes', () => {
     expect(presetOf({ ...fast, tpMaxGainPct: 300 })).toBeNull();
   });
 
+  it('Bot X: banda ATR con tope +100 %, 6 h máx., TP mínimo +20 % y mantiene ante la señal contraria', () => {
+    const x = applyPreset({ ...base(), onOpposite: 'reverse', minTpPct: null }, 'botx');
+    expect(x).toMatchObject({
+      targetDelta: 0.95, expiryDays: 2, expiryMinDays: 1, expiryMaxDays: 3, takeProfitMode: 'atr_band',
+      tpMaxGainPct: 100, maxHoldMinutes: 360, minTpPct: 20, onOpposite: 'ignore',
+    });
+    expect(presetOf(x)).toBe('botx');
+    expect(presetOf({ ...x, minTpPct: 30 })).toBeNull();
+    expect(presetOf({ ...x, onOpposite: 'reverse' })).toBeNull();
+    // Los demás presets no fijan la señal contraria y dejan el TP mínimo vacío.
+    const fast = applyPreset(x, 'fast');
+    expect(fast).toMatchObject({ minTpPct: null, onOpposite: 'ignore' });
+    expect(presetOf(fast)).toBe('fast');
+    expect(presetOf({ ...fast, onOpposite: 'reverse' })).toBe('fast');
+    expect(presetTags(PRESETS.find((p) => p.value === 'botx'), base())).toEqual([
+      'Strike cercano', '1–3 días', 'Banda ATR · tope +100 %', 'Máx. 6 h en posición', 'TP mín. +20 %', 'Mantiene ante señal contraria',
+    ]);
+  });
+
   it('vender en contra: los presets salen con TP/SL fijo y los valores de venta', () => {
     const sell = { ...base(), structure: 'sell_against' };
     const fast = applyPreset(sell, 'fast');
@@ -85,7 +104,7 @@ describe('editorModes', () => {
   });
 
   it('cada preset fija su tiempo máximo y cambiarlo rompe la coincidencia', () => {
-    expect(PRESETS.map((p) => [p.value, p.maxHoldMinutes])).toEqual([['fast', 240], ['swing', 4320], ['lottery', null]]);
+    expect(PRESETS.map((p) => [p.value, p.maxHoldMinutes])).toEqual([['fast', 240], ['swing', 4320], ['lottery', null], ['botx', 360]]);
     const fast = applyPreset({ ...base(), maxHoldMinutes: 60 }, 'fast');
     expect(fast.maxHoldMinutes).toBe(240);
     expect(presetOf(fast)).toBe('fast');

@@ -345,7 +345,7 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
               </p>
             )}
             <p className={styles.summaryBox}>{botSummary(form)}</p>
-            <p className={styles.note}>Un preset fija strike, vencimiento, salida y tiempo máximo. El riesgo, las alertas y la señal contraria se ajustan en Simple.</p>
+            <p className={styles.note}>Un preset fija strike, vencimiento, salida y tiempo máximo (Bot X también el TP mínimo y la señal contraria). El riesgo y las alertas se ajustan en Simple.</p>
           </>
         ) : (
         <>
