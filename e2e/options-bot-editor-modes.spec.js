@@ -46,6 +46,7 @@ async function run(page, shot) {
   await form.getByRole('radio', { name: 'Presets' }).click();
   await form.getByRole('radio', { name: /Rápido/ }).click();
   await expect(form.getByRole('radio', { name: /Rápido/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(form.getByText('Máx. 4 h en posición')).toBeVisible();
   await page.screenshot({ path: `test-results/${shot}-presets.png`, fullPage: false });
 
   await form.getByRole('radio', { name: 'Simple' }).click();
@@ -55,15 +56,24 @@ async function run(page, shot) {
   await form.getByRole('textbox', { name: /Riesgo por operación/ }).fill('10');
   await form.getByRole('checkbox', { name: new RegExp(ALERT_UP.name) }).click();
   await expect(form.getByText(/arriesgando hasta 10 USDT/)).toBeVisible();
+  await expect(form.getByRole('radio', { name: '4 h' })).toHaveAttribute('aria-checked', 'true');
+  await form.getByRole('radio', { name: '1 día' }).click();
+  await expect(form.getByText(/Cierra como máximo tras 1 día en posición/)).toBeVisible();
+  await form.getByRole('radio', { name: '1 día' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `test-results/${shot}-simple.png`, fullPage: false });
   expect(await horizontalOverflow(page)).toBe(0);
 
   await form.getByRole('radio', { name: 'Avanzado' }).click();
   await expect(form.getByText('Longitud del ATR')).toBeVisible();
+  await expect(form.getByRole('textbox', { name: /Tiempo máximo en posición/ })).toHaveValue('1');
+  await form.getByRole('radio', { name: '12 h' }).click();
+  await form.getByRole('radio', { name: '12 h' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `test-results/${shot}-advanced.png`, fullPage: false });
+  expect(await horizontalOverflow(page)).toBe(0);
 
   await form.getByRole('button', { name: 'Crear bot' }).click();
   await expect(form).toBeHidden();
-  expect(state.created.params).toMatchObject({ targetDelta: 0.95, expiryDays: 2, expiryMinDays: 1, expiryMaxDays: 3, takeProfitMode: 'atr_band', capitalUsdt: 10, quantity: 1 });
+  expect(state.created.params).toMatchObject({ targetDelta: 0.95, expiryDays: 2, expiryMinDays: 1, expiryMaxDays: 3, takeProfitMode: 'atr_band', capitalUsdt: 10, quantity: 1, maxHoldMinutes: 720 });
 }
 
 test.describe('Editor de bots · escritorio', () => {

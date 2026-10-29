@@ -44,6 +44,17 @@ describe('BotActivity', () => {
     }
   });
 
+  it('móvil: con tiempo máximo la salida se cuenta desde la ejecución', () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 9, 29, 8), toFake: ['Date'] });
+    try {
+      const openedAt = Date.UTC(2026, 9, 29, 7);
+      render(<BotActivity bot={bot({ params: { takeProfitMode: 'atr_band', maxHoldMinutes: 240 }, positions: [{ ...bot().positions[0], openedAt }] })} mobile part="top" />);
+      expect(screen.getByText('cierre por tiempo máx. en 3 h')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('móvil: sin fecha de ejecución no hay barra de tiempo', () => {
     render(<BotActivity bot={bot()} mobile part="top" />);
     expect(screen.queryByText(/^Consumido/)).toBeNull();

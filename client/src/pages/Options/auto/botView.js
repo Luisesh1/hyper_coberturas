@@ -78,6 +78,8 @@ export const COMMON_DEFAULTS = {
   minLeverage: null,
   onOpposite: 'reverse',
   exitHoursBeforeExpiry: 12,
+  // Tiempo máximo en posición (minutos desde el llenado); null = sin límite.
+  maxHoldMinutes: null,
   maxOpenPositions: 1,
   maxTradesPerDay: 4,
   notifyTrades: true,
@@ -96,7 +98,26 @@ export const takeProfitModesFor = (structure) => TAKE_PROFIT_MODES
 
 export const ATR_BAND_INTERVALS = ['5m', '15m', '1h', '4h', '1d'];
 
-export const ATR_BAND_NOTE = 'Sin stop ni salida por tiempo: si no se alcanza el objetivo, la opción se mantiene hasta su vencimiento y puede perderse toda la prima.';
+export const ATR_BAND_NOTE = 'Sin stop: si no se alcanza el objetivo ni el tiempo máximo, la opción se mantiene hasta su vencimiento y puede perderse toda la prima.';
+
+export const MAX_HOLD_MIN = 5;
+export const MAX_HOLD_MAX = 43200;
+
+// «90 min», «4 h», «1 h 30 min», «1 día», «3 días», «1 d 6 h».
+export function maxHoldText(minutes) {
+  const m = Math.round(Number(minutes));
+  if (!(m > 0)) return '';
+  if (m < 60) return `${m} min`;
+  if (m < 1440) {
+    const h = Math.floor(m / 60);
+    const r = m % 60;
+    return r ? `${h} h ${r} min` : `${h} h`;
+  }
+  const d = Math.floor(m / 1440);
+  const h = Math.round((m % 1440) / 60);
+  if (h) return `${d} d ${h} h`;
+  return d === 1 ? '1 día' : `${d} días`;
+}
 export const ATR_BAND_SWITCH_WARNING = 'Las posiciones abiertas calcularán su objetivo con el precio actual, no con el de su compra.';
 
 export const ON_OPPOSITE = [
@@ -399,6 +420,7 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       tpMaxGainPct: val('tpMaxGainPct'),
       stopLossPct: val('stopLossPct'),
       exitHoursBeforeExpiry: val('exitHoursBeforeExpiry'),
+      maxHoldMinutes: toNumber(p.maxHoldMinutes) ?? null,
       maxOpenPositions: val('maxOpenPositions'),
       maxTradesPerDay: val('maxTradesPerDay'),
       notifyTrades: p.notify?.trades !== false,
@@ -518,6 +540,10 @@ export function validateBotForm(form, { alerts } = {}) {
     range('stopLossPct', 1, 1000);
     range('exitHoursBeforeExpiry', 0, 168);
   }
+  if (isNum(form.maxHoldMinutes)) {
+    const m = Number(form.maxHoldMinutes);
+    if (!Number.isInteger(m) || m < MAX_HOLD_MIN || m > MAX_HOLD_MAX) errors.maxHoldMinutes = 'Indica entre 5 minutos y 30 días';
+  }
   range('maxOpenPositions', 1, 20, { integer: true });
   range('maxTradesPerDay', 1, 100, { integer: true });
   const riskKey = form.structure === 'sell_against' ? 'maxMarginUsdt' : 'maxPremiumUsdt';
@@ -555,6 +581,8 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
     tpHorizonHours: Number(form.tpHorizonHours),
     stopLossPct: Number(form.stopLossPct),
     exitHoursBeforeExpiry: Number(form.exitHoursBeforeExpiry),
+    // Siempre se envía (null = sin límite) para que editar pueda apagarlo.
+    maxHoldMinutes: Number(form.maxHoldMinutes) > 0 ? Math.round(Number(form.maxHoldMinutes)) : null,
     maxOpenPositions: Number(form.maxOpenPositions),
     maxTradesPerDay: Number(form.maxTradesPerDay),
     notify: { trades: form.notifyTrades !== false, errors: form.notifyErrors !== false },
@@ -626,6 +654,7 @@ export function describeParams(bot) {
   const maxSpread = toNumber(p.maxSpreadPct);
   const minLeverage = toNumber(p.minLeverage);
   const atr = p.takeProfitMode === 'atr_band' && buy;
+  const maxHold = toNumber(p.maxHoldMinutes);
   const exits = atr
     ? [
       { key: 'takeProfitPct', label: 'Venta por banda ATR',
@@ -663,7 +692,10 @@ export function describeParams(bot) {
       // La banda ATR fuerza «ignorar» y ya declara que no hay otras salidas.
       { key: 'onOpposite', label: 'Señal contraria', value: opposite.help, text: true },
     ],
-    exits,
+    exits: [
+      ...exits,
+      { key: 'maxHoldMinutes', label: 'Tiempo máx. en posición', value: maxHold ? maxHoldText(maxHold) : 'sin límite', text: !maxHold },
+    ],
     risk: [
       { key: 'maxOpenPositions', label: 'Posiciones abiertas máx.', value: formatNumber(v('maxOpenPositions'), { decimals: 0 }) },
       { key: 'maxTradesPerDay', label: 'Operaciones por día', value: formatNumber(v('maxTradesPerDay'), { decimals: 0 }) },
@@ -762,6 +794,7 @@ export function flowSteps(bot = {}) {
   const threshold = toNumber(alert?.thresholdPercent ?? alert?.threshold);
   const signalName = alert?.name ? `${alert.name}${threshold !== null ? ` · umbral ${n0(threshold)} %` : ''}` : 'Alertas del bot';
   const atr = p.takeProfitMode === 'atr_band' && buy;
+  const maxHold = toNumber(p.maxHoldMinutes) > 0 ? maxHoldText(p.maxHoldMinutes) : null;
   return [
     { key: 'signal', title: 'Señal', value: '▲ Alcista / ▼ Bajista', subtitle: signalName },
     {
@@ -770,13 +803,16 @@ export function flowSteps(bot = {}) {
     },
     { key: 'entry', title: 'Entrada', value: 'GTC al precio medio', subtitle: 'espera 10 min; si no, se cancela' },
     atr
-      ? { key: 'exit', title: 'Salida', value: 'TP banda ATR (GTC)', subtitle: 'sin stop; se mantiene hasta vencer' }
+      ? { key: 'exit', title: 'Salida', value: 'TP banda ATR (GTC)',
+        subtitle: maxHold ? `sin stop; cierre como máximo tras ${maxHold}` : 'sin stop; se mantiene hasta vencer' }
       : {
         key: 'exit', title: 'Salida',
         value: p.takeProfitMode === 'volatility'
           ? `TP volatilidad · Stop ${buy ? '−' : ''}${n0(v('stopLossPct'))} %`
           : `TP ${buy ? '+' : ''}${n0(v('takeProfitPct'))} % · Stop ${buy ? '−' : ''}${n0(v('stopLossPct'))} %`,
-        subtitle: `o ${n0(v('exitHoursBeforeExpiry'))} h antes del vencimiento`,
+        subtitle: maxHold
+          ? `cierre como máximo tras ${maxHold} o ${n0(v('exitHoursBeforeExpiry'))} h antes del venc.`
+          : `o ${n0(v('exitHoursBeforeExpiry'))} h antes del vencimiento`,
       },
   ];
 }

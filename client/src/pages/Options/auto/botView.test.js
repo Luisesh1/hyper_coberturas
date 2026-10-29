@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   budgetSummary,
   botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
-  describeParams, coveredList, botStatus, flowSteps, feeSummary, ladder, signalFeeText, formatCountdown, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
+  describeParams, maxHoldText, coveredList, botStatus, flowSteps, feeSummary, ladder, signalFeeText, formatCountdown, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
 } from './botView';
 
 describe('buildMapping', () => {
@@ -94,7 +94,7 @@ describe('formulario de bot', () => {
       alertIds: [3],
       params: {
         structure: 'buy_with', targetDelta: 0.35, expiryDays: 7, expiryMinDays: null, expiryMaxDays: null, quantity: 0.01, onOpposite: 'reverse',
-        takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
+        takeProfitPct: 80, stopLossPct: 50, exitHoursBeforeExpiry: 12, maxHoldMinutes: null, maxOpenPositions: 1, maxTradesPerDay: 4,
         maxPremiumUsdt: 150, contractCount: 1, capitalUsdt: null, budgetUsdt: null, budgetFractions: 4,
         maxSpreadPct: null, minLeverage: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
@@ -172,11 +172,28 @@ describe('formulario de bot', () => {
     expect(withTakeProfitMode(form, 'fixed')).toMatchObject({ takeProfitMode: 'fixed', onOpposite: 'ignore', exitHoursBeforeExpiry: 12, stopLossPct: 50 });
   });
 
+  it('tiempo máximo en posición: texto, validación, payload y regla', () => {
+    expect([30, 60, 90, 240, 1440, 2160, 4320].map(maxHoldText)).toEqual(['30 min', '1 h', '1 h 30 min', '4 h', '1 día', '1 d 12 h', '3 días']);
+    const form = { ...initialBotForm({ underlying: 'BTC' }), name: 'Bot', alertIds: [1] };
+    expect(validateBotForm({ ...form, maxHoldMinutes: 4 }).maxHoldMinutes).toBe('Indica entre 5 minutos y 30 días');
+    expect(validateBotForm({ ...form, maxHoldMinutes: 43201 }).maxHoldMinutes).toBeTruthy();
+    expect(validateBotForm({ ...form, maxHoldMinutes: 240 }).maxHoldMinutes).toBeUndefined();
+    expect(buildBotPayload({ ...form, maxHoldMinutes: 240 }).params.maxHoldMinutes).toBe(240);
+    expect(buildBotPayload({ ...form, maxHoldMinutes: '' }).params.maxHoldMinutes).toBeNull();
+    const bot = normalizeBot({ id: 1, params: { structure: 'buy_with', takeProfitMode: 'atr_band', maxHoldMinutes: 240 } });
+    expect(initialBotForm({ bot }).maxHoldMinutes).toBe(240);
+    expect(flowSteps(bot)[3]).toMatchObject({ value: 'TP banda ATR (GTC)', subtitle: 'sin stop; cierre como máximo tras 4 h' });
+    expect(describeParams(bot).exits.at(-1)).toMatchObject({ label: 'Tiempo máx. en posición', value: '4 h' });
+    const fixed = normalizeBot({ id: 2, params: { structure: 'buy_with', takeProfitMode: 'fixed', maxHoldMinutes: 1440 } });
+    expect(flowSteps(fixed)[3].subtitle).toBe('cierre como máximo tras 1 día o 12 h antes del venc.');
+  });
+
   it('describeParams en atr_band', () => {
     const d = describeParams(normalizeBot({ id: 1, underlying: 'ETH', params: { structure: 'buy_with', takeProfitMode: 'atr_band', atrBandInterval: '1h', atrBandLength: 14, atrBandMultiplier: 2, tpMaxGainPct: 200 } }));
     expect(d.exits).toEqual([
       expect.objectContaining({ label: 'Venta por banda ATR', value: '1h 14/2 · tope +200 %' }),
       expect.objectContaining({ label: 'Sin stop', value: 'se mantiene hasta vencer' }),
+      expect.objectContaining({ label: 'Tiempo máx. en posición', value: 'sin límite' }),
     ]);
   });
 

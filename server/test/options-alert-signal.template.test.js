@@ -512,3 +512,43 @@ test('blocked underlying skips', () => {
   const [open] = withPending(p, { mode: 'live', pendingEntries: [], blockedUnderlyings: { ETH: { reason: 'x' } } });
   assert.equal(open.type, 'open');
 });
+
+// ---------- tiempo máximo en posición (maxHoldMinutes) ----------
+
+test('alert_signal maxHoldMinutes: apagado por defecto, entero entre 5 min y 30 días', () => {
+  assert.equal(params().maxHoldMinutes, null);
+  assert.equal(params({ maxHoldMinutes: '' }).maxHoldMinutes, null);
+  assert.equal(params({ maxHoldMinutes: 240 }).maxHoldMinutes, 240);
+  assert.equal(params({ takeProfitMode: 'atr_band', maxHoldMinutes: 240 }).maxHoldMinutes, 240, 'banda ATR lo conserva');
+  assert.throws(() => params({ maxHoldMinutes: 4 }), /mínimo 5/);
+  assert.throws(() => params({ maxHoldMinutes: 43201 }), /máximo 43200/);
+  assert.throws(() => params({ maxHoldMinutes: 90.5 }), /entero/);
+});
+
+test('alert_signal maxHoldMinutes: cierra con max_hold_exit al cumplir el tiempo desde el llenado', () => {
+  const p = params({ maxHoldMinutes: 240 });
+  const open = (minutes) => ({ ...position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 110, ask: 120 } }), openedAt: NOW - minutes * 60e3 });
+  assert.equal(run(p, { positions: [open(239)] })[0].type, 'hold');
+  const out = run(p, { positions: [open(240)] });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].reason, 'max_hold_exit');
+  assert.match(out[0].detail, /4 h en posición/);
+  assert.equal(out[0].legs[0].side, 'SELL');
+  // Sin hora de llenado no se dispara.
+  assert.equal(run(p, { positions: [position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 110, ask: 120 } })] })[0].type, 'hold');
+  // La salida antes del vencimiento sigue mandando si llega antes.
+  const near = { ...position({ side: 'BUY', type: 'C', hoursLeft: 6 }), openedAt: NOW - 300 * 60e3 };
+  assert.equal(run(p, { positions: [near] })[0].reason, 'time_exit');
+});
+
+test('alert_signal maxHoldMinutes con banda ATR: cierra aunque el objetivo no se haya alcanzado', () => {
+  const p = params({ takeProfitMode: 'atr_band', maxHoldMinutes: 60 });
+  const base = { ...position({ side: 'BUY', type: 'C', entryPrice: 100, quote: { bid: 80, ask: 90 } }), tpTargetPrice: 300 };
+  assert.equal(run(p, { positions: [{ ...base, openedAt: NOW - 30 * 60e3 }] })[0].reason, 'in_position');
+  const out = run(p, { positions: [{ ...base, openedAt: NOW - 61 * 60e3 }] });
+  assert.equal(out[0].type, 'close');
+  assert.equal(out[0].reason, 'max_hold_exit');
+  assert.equal(out[0].legs[0].targetPrice, undefined, 'cierra al bid, no al objetivo');
+  // Sin tiempo máximo, la banda ATR sigue sin salida por tiempo.
+  assert.equal(run(params({ takeProfitMode: 'atr_band' }), { positions: [{ ...base, openedAt: NOW - 10 * 86400e3 }] })[0].reason, 'in_position');
+});

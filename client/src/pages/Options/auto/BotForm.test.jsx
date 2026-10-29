@@ -61,6 +61,27 @@ describe('BotForm · modos Simple, Avanzado y Presets', () => {
     expect(onSubmit.mock.calls[0][0].params).toMatchObject({ capitalUsdt: 10, quantity: 1 });
   });
 
+  it('tiempo máximo en los tres modos: Simple, Presets y Avanzado envían maxHoldMinutes', async () => {
+    const onSubmit = vi.fn(() => Promise.resolve());
+    renderEdit({ ...bot('fixed', []), alertIds: [7], alerts: [{ id: 7, name: 'A', direction: 'bullish', assetList: ['ETHUSDT'], coveredUnderlyings: ['ETH'] }] }, { onSubmit });
+    expect(screen.getByRole('radio', { name: 'Sin límite' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: '1 día' }));
+    expect(screen.getByText(/Cierra como máximo tras 1 día en posición/)).toBeTruthy();
+    toMode('Presets');
+    expect(screen.getByText('Máx. 4 h en posición')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: /Rápido/ }));
+    toMode('Avanzado');
+    expect(screen.getByRole('radio', { name: '4 h' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.change(screen.getByRole('textbox', { name: /Tiempo máximo en posición/ }), { target: { value: '90' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'min' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Tiempo máximo en posición/ }), { target: { value: '90' } });
+    toMode('Simple');
+    expect(screen.getByText('Personalizado: 1 h 30 min. Ajústalo en Avanzado.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0].params.maxHoldMinutes).toBe(90);
+  });
+
   it('un bot nuevo nace con el preset Rápido', () => {
     render(<MemoryRouter><BotForm open underlying="BTC" onCancel={() => {}} onSubmit={() => {}} /></MemoryRouter>);
     expect(screen.getByText('Preset: Rápido')).toBeTruthy();

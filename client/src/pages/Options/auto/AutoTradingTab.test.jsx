@@ -239,7 +239,7 @@ describe('AutoTradingTab · escritorio', () => {
       alertIds: [12],
       params: {
         structure: 'sell_against', targetDelta: 0.3, expiryDays: 2, expiryMinDays: 1, expiryMaxDays: 3, quantity: 0.01, onOpposite: 'close',
-        takeProfitPct: 50, stopLossPct: 200, exitHoursBeforeExpiry: 12, maxOpenPositions: 1, maxTradesPerDay: 4,
+        takeProfitPct: 50, stopLossPct: 200, exitHoursBeforeExpiry: 12, maxHoldMinutes: 240, maxOpenPositions: 1, maxTradesPerDay: 4,
         contractCount: 1, capitalUsdt: null, budgetUsdt: null, budgetFractions: 4,
         maxPremiumUsdt: null, maxSpreadPct: null, minLeverage: null,
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
