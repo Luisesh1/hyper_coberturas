@@ -100,6 +100,91 @@ function runScenario(prepared, { tpPct, maxHoldHours, stopPct }) {
   return { pnl, holdMs: Math.max(0, exit.at - position.openedAt) };
 }
 
+/**
+ * Primer índice de `path` (con bid) que cumple cada nivel; Infinity si ninguno.
+ * `up`: TP (bid >= nivel, niveles de menor a mayor); si no, stop (bid <= nivel,
+ * de mayor a menor). Ordenados así, una sola pasada basta para todos.
+ */
+function firstCrossings(path, levels, up) {
+  const hits = up ? (bid, level) => bid >= level : (bid, level) => bid <= level;
+  const order = levels
+    .map((level, k) => ({ level, k }))
+    .filter((x) => x.level != null && !Number.isNaN(x.level))
+    .sort((a, b) => (up ? a.level - b.level : b.level - a.level));
+  const out = levels.map(() => Infinity);
+  let next = 0;
+  for (let i = 0; i < path.length && next < order.length; i += 1) {
+    const bid = path[i].bid;
+    if (bid == null) continue;
+    while (next < order.length && hits(bid, order[next].level)) {
+      out[order[next].k] = i;
+      next += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Precalcula, en una pasada por umbral ordenado, el primer punto que alcanza
+ * cada TP y cada stop de la rejilla y, para cada tiempo máximo, el primer
+ * punto con bid pasado el límite. Cada escenario se resuelve luego en O(1)
+ * con las mismas reglas que `runScenario` (en el mismo punto: TP > stop > tiempo).
+ */
+function scenarioResolver(prepared) {
+  const { position, path, expiry } = prepared;
+  const entry = position.entryPrice;
+  const tpLevels = TP_GRID.map((pct) => (pct == null ? null : entry * (1 + pct / 100)));
+  const stopLevels = STOP_GRID.map((pct) => (pct == null ? null : entry * (1 - pct / 100)));
+  const tpIdx = firstCrossings(path, tpLevels, true);
+  const stopIdx = firstCrossings(path, stopLevels, false);
+  const holdLimits = MAX_HOLD_GRID.map((h) => (h == null ? null : position.openedAt + h * HOUR_MS));
+  const timeIdx = holdLimits.map(() => Infinity);
+  const pending = holdLimits
+    .map((limit, k) => ({ limit, k }))
+    .filter((x) => x.limit != null)
+    .sort((a, b) => a.limit - b.limit);
+  let next = 0;
+  for (let i = 0; i < path.length && next < pending.length; i += 1) {
+    if (path[i].bid == null) continue;
+    while (next < pending.length && path[i].at >= pending[next].limit) {
+      timeIdx[pending[next].k] = i;
+      next += 1;
+    }
+  }
+  const spotAt = new Map();
+  const spotOf = (i) => {
+    if (!spotAt.has(i)) spotAt.set(i, path[i].spot ?? nearestSpot(path, path[i].at));
+    return spotAt.get(i);
+  };
+  const finish = (price, at, fee) => ({
+    pnl: (price - entry) * position.quantity - prepared.entryFee - fee,
+    holdMs: Math.max(0, at - position.openedAt),
+  });
+  // Pocas salidas distintas por posición: al nivel de cada TP, al bid de un
+  // punto o al vencimiento. Se calculan una vez (resultados de solo lectura).
+  const atTp = new Map();
+  const atBid = new Map();
+  let atExpiry;
+  return (tpK, holdK, stopK) => {
+    const t = tpIdx[tpK]; const s = stopIdx[stopK]; const h = timeIdx[holdK];
+    const i = Math.min(t, s, h);
+    if (i === Infinity) {
+      if (atExpiry === undefined) atExpiry = expiry ? finish(expiry.price, prepared.expiryMs, expiry.fee) : null;
+      return atExpiry;
+    }
+    const p = path[i];
+    if (t === i) {
+      if (!atTp.has(tpK)) {
+        const price = tpLevels[tpK];
+        atTp.set(tpK, finish(price, p.at, tradeFee({ spot: spotOf(i), quantity: position.quantity, price })));
+      }
+      return atTp.get(tpK);
+    }
+    if (!atBid.has(i)) atBid.set(i, finish(p.bid, p.at, tradeFee({ spot: spotOf(i), quantity: position.quantity, price: p.bid })));
+    return atBid.get(i);
+  };
+}
+
 function prepare(position, samples, snapshots) {
   const meta = parseSymbol(position.symbol);
   const expiryMs = meta ? meta.expiryMs : null;
@@ -131,6 +216,7 @@ function simulateExits({ positions, samples = new Map(), snapshots = new Map() }
     if (p.coverage !== 'none' && !p.expiry) coverage.incomplete += 1;
   }
   const usable = prepared.filter((p) => p.coverage !== 'none');
+  const resolvers = usable.map(scenarioResolver);
 
   const realPnl = (p) => Number(p.pnlUsdt) || 0;
   const tally = (list) => {
@@ -146,13 +232,14 @@ function simulateExits({ positions, samples = new Map(), snapshots = new Map() }
   const actualCovered = tally(usable.map((p) => p.position));
 
   const scenarios = [];
-  for (const tpPct of TP_GRID) {
-    for (const maxHoldHours of MAX_HOLD_GRID) {
-      for (const stopPct of STOP_GRID) {
+  TP_GRID.forEach((tpPct, tpK) => {
+    MAX_HOLD_GRID.forEach((maxHoldHours, holdK) => {
+      STOP_GRID.forEach((stopPct, stopK) => {
         let pnl = 0; let trades = 0; let wins = 0; let holdMs = 0; let incomplete = 0;
         let actualPnl = 0; let actualWins = 0;
-        for (const p of usable) {
-          const r = runScenario(p, { tpPct, maxHoldHours, stopPct });
+        for (let j = 0; j < usable.length; j += 1) {
+          const p = usable[j];
+          const r = resolvers[j](tpK, holdK, stopK);
           if (!r) { incomplete += 1; continue; }
           pnl += r.pnl; trades += 1; holdMs += r.holdMs;
           if (r.pnl > 0) wins += 1;
@@ -167,13 +254,13 @@ function simulateExits({ positions, samples = new Map(), snapshots = new Map() }
           // Lo real de exactamente las posiciones que usó este escenario.
           actualPnlUsdt: round(actualPnl), actualWins,
         });
-      }
-    }
-  }
+      });
+    });
+  });
   const best = [...scenarios]
     .sort((a, b) => b.pnlUsdt - a.pnlUsdt || b.wins - a.wins || a.avgHoldMinutes - b.avgHoldMinutes)
     .slice(0, BEST_COUNT);
   return { coverage, actual, actualCovered, scenarios, best };
 }
 
-module.exports = { simulateExits, buildPath, expiryValue, runScenario, TP_GRID, MAX_HOLD_GRID, STOP_GRID };
+module.exports = { simulateExits, buildPath, expiryValue, runScenario, prepare, TP_GRID, MAX_HOLD_GRID, STOP_GRID };

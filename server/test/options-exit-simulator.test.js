@@ -210,6 +210,83 @@ test('best desempata por wins y luego por menor avgHoldMinutes', () => {
   }
 });
 
+// ---------- equivalencia y escala ----------
+
+/** Datos pseudoaleatorios reproducibles: caminos con huecos de bid/spot, snapshots y vencimientos. */
+function randomBook(n, perPosition, seed = 7) {
+  let x = seed;
+  const rnd = () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const positions = []; const samples = new Map(); const snapshots = new Map();
+  for (let i = 0; i < n; i += 1) {
+    const day = i % 5; const strike = 58000 + (i % 4) * 1000;
+    const symbol = `BTC-2611${String(day + 1).padStart(2, '0')}-${strike}-${i % 3 ? 'C' : 'P'}`;
+    const openedAt = OPEN - 12 * HOUR_MS + (i % 9) * HOUR_MS;
+    const closedAt = openedAt + perPosition * MIN;
+    const expiryClose = i % 11 === 0;
+    positions.push({ id: i + 1, side: 'BUY', symbol, quantity: 0.01 + (i % 3) * 0.05, entryPrice: 80 + (i % 7) * 10,
+      exitPrice: expiryClose ? 40 : 90, openedAt, closedAt, pnlUsdt: rnd() * 20 - 10,
+      entryFeeUsdt: i % 2 ? null : 0.5, closeReason: expiryClose ? 'expiry' : 'manual' });
+    const list = []; let bid = 80 + (i % 7) * 10;
+    for (let k = 0; k < perPosition; k += 1) {
+      bid = Math.max(1, bid * (1 + (rnd() - 0.5) * 0.12));
+      list.push({ at: openedAt + k * MIN, bid: rnd() < 0.08 ? null : bid, spot: rnd() < 0.1 ? null : 60000 + rnd() * 500 });
+    }
+    if (i % 13 !== 0) samples.set(i + 1, list);
+    if (!snapshots.has(symbol)) {
+      const expiry = Date.UTC(2026, 10, day + 1, 8); const snaps = [];
+      // Algunos símbolos sin snapshot cerca del vencimiento: escenarios incompletos.
+      const last = day % 2 ? expiry : expiry - 5 * HOUR_MS;
+      for (let t = openedAt - 2 * HOUR_MS; t <= last; t += HOUR_MS) snaps.push(snap(t, rnd() < 0.1 ? 0 : 20 + rnd() * 200, 59000 + rnd() * 2000));
+      snapshots.set(symbol, snaps.map((s) => ({ ...s, symbol })));
+    }
+  }
+  return { positions, samples, snapshots };
+}
+
+test('equivalencia: cada escenario coincide con recorrer el camino con runScenario', () => {
+  const { prepare, TP_GRID, MAX_HOLD_GRID, STOP_GRID } = require('../src/services/options/options-exit-simulator');
+  const book = randomBook(120, 300);
+  const res = simulateExits(book);
+  const usable = book.positions.map((p) => prepare(p, book.samples, book.snapshots)).filter((p) => p.coverage !== 'none');
+  assert.ok(usable.length > 50);
+  const r6 = (n) => Math.round(n * 1e6) / 1e6;
+  let k = 0;
+  for (const tpPct of TP_GRID) {
+    for (const maxHoldHours of MAX_HOLD_GRID) {
+      for (const stopPct of STOP_GRID) {
+        let pnl = 0; let trades = 0; let wins = 0; let holdMs = 0; let incomplete = 0;
+        for (const p of usable) {
+          const r = runScenario(p, { tpPct, maxHoldHours, stopPct });
+          if (!r) { incomplete += 1; continue; }
+          pnl += r.pnl; trades += 1; holdMs += r.holdMs;
+          if (r.pnl > 0) wins += 1;
+        }
+        const s = res.scenarios[k];
+        k += 1;
+        assert.deepEqual([s.tpPct, s.maxHoldHours, s.stopPct], [tpPct, maxHoldHours, stopPct]);
+        assert.equal(s.pnlUsdt, r6(pnl));
+        assert.equal(s.trades, trades);
+        assert.equal(s.wins, wins);
+        assert.equal(s.incomplete, incomplete);
+        assert.equal(s.avgHoldMinutes, trades ? Math.round((holdMs / trades / MIN) * 100) / 100 : 0);
+      }
+    }
+  }
+  // Hay escenarios de cada tipo de salida: no es una comparación trivial.
+  assert.ok(res.scenarios.some((s) => s.incomplete > 0));
+  assert.ok(new Set(res.scenarios.map((s) => s.pnlUsdt)).size > 100);
+});
+
+test('escala: 2000 posiciones × 480 muestras sin bloquear segundos el event loop', () => {
+  const book = randomBook(2000, 480, 11);
+  const t0 = process.hrtime.bigint();
+  const res = simulateExits(book);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.equal(res.scenarios.length, 216);
+  // Antes ~3,5 s en esta máquina; ahora ~0,4 s. Margen amplio para CI cargada.
+  assert.ok(ms < 2500, `tardó ${ms.toFixed(0)} ms`);
+});
+
 // ---------- servicio ----------
 
 function makeService(extra = {}) {
