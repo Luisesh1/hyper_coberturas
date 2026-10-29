@@ -82,6 +82,33 @@ describe('BotForm · modos Simple, Avanzado y Presets', () => {
     expect(onSubmit.mock.calls[0][0].params.maxHoldMinutes).toBe(90);
   });
 
+  it('pérdida diaria máx.: Simple no la muestra y conserva la del bot', async () => {
+    const onSubmit = vi.fn(() => Promise.resolve());
+    const withAlert = { ...bot('fixed', []), limits: { maxDailyLossUsdt: 40, maxOrdersPerDay: 10 }, alertIds: [7], alerts: [{ id: 7, name: 'A', direction: 'bullish', assetList: ['ETHUSDT'], coveredUnderlyings: ['ETH'] }] };
+    renderEdit(withAlert, { onSubmit });
+    expect(screen.queryByRole('textbox', { name: /Pérdida diaria máx/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].limits).toEqual({ maxDailyLossUsdt: 40, maxOrdersPerDay: 10 });
+  });
+
+  it('pérdida diaria máx. en Avanzado: valida > 0 y envía el valor editado', async () => {
+    const onSubmit = vi.fn(() => Promise.resolve());
+    const withAlert = { ...bot('fixed', []), limits: { maxDailyLossUsdt: 40, maxOrdersPerDay: 10 }, alertIds: [7], alerts: [{ id: 7, name: 'A', direction: 'bullish', assetList: ['ETHUSDT'], coveredUnderlyings: ['ETH'] }] };
+    renderEdit(withAlert, { onSubmit });
+    toMode('Avanzado');
+    const field = screen.getByRole('textbox', { name: /Pérdida diaria máx/ });
+    expect(field.value).toBe('40');
+    fireEvent.change(field, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+    expect(await screen.findByText('Debe ser mayor a 0')).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('textbox', { name: /Pérdida diaria máx/ }), { target: { value: '300' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].limits).toEqual({ maxDailyLossUsdt: 300, maxOrdersPerDay: 10 });
+  });
+
   it('un bot nuevo nace con el preset Rápido', () => {
     render(<MemoryRouter><BotForm open underlying="BTC" onCancel={() => {}} onSubmit={() => {}} /></MemoryRouter>);
     expect(screen.getByText('Preset: Rápido')).toBeTruthy();

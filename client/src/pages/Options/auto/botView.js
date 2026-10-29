@@ -82,6 +82,8 @@ export const COMMON_DEFAULTS = {
   maxHoldMinutes: null,
   maxOpenPositions: 1,
   maxTradesPerDay: 4,
+  // Límite de la estrategia (limits), no de params: el servidor da 100 por defecto.
+  maxDailyLossUsdt: 100,
   notifyTrades: true,
   notifyErrors: true,
 };
@@ -434,6 +436,10 @@ export function initialBotForm({ bot = null, underlying = 'BTC' } = {}) {
       maxSpreadPct: toNumber(p.maxSpreadPct) ?? null,
       minLeverage: structure === 'buy_with' ? (toNumber(p.minLeverage) ?? null) : null,
       maxMarginUsdt: structure === 'sell_against' ? (toNumber(bot.limits?.maxMarginUsdt) ?? null) : null,
+      // null guardado = sin límite; ausente = el valor por defecto del servidor.
+      maxDailyLossUsdt: bot.limits && 'maxDailyLossUsdt' in bot.limits
+        ? toNumber(bot.limits.maxDailyLossUsdt)
+        : COMMON_DEFAULTS.maxDailyLossUsdt,
     };
   }
   return {
@@ -553,6 +559,7 @@ export function validateBotForm(form, { alerts } = {}) {
   range('maxTradesPerDay', 1, 100, { integer: true });
   const riskKey = form.structure === 'sell_against' ? 'maxMarginUsdt' : 'maxPremiumUsdt';
   if (isNum(form[riskKey]) && Number(form[riskKey]) < 0) errors[riskKey] = 'No puede ser negativo';
+  if (form.maxDailyLossUsdt !== '' && form.maxDailyLossUsdt != null && !(Number(form.maxDailyLossUsdt) > 0)) errors.maxDailyLossUsdt = 'Debe ser mayor a 0';
   if (isNum(form.maxSpreadPct) && !(Number(form.maxSpreadPct) > 0 && Number(form.maxSpreadPct) <= 200)) errors.maxSpreadPct = 'Entre 0 y 200 (vacío = sin filtro)';
   if (form.structure === 'buy_with' && isNum(form.minLeverage) && !(Number(form.minLeverage) > 0 && Number(form.minLeverage) <= 1000)) errors.minLeverage = 'Entre 0 y 1000 (vacío = sin filtro)';
   return errors;
@@ -610,6 +617,8 @@ export function buildBotPayload(form, { editing = false, baseLimits = {} } = {})
   const limits = { ...(baseLimits || {}) };
   if (!buy && Number(form.maxMarginUsdt) > 0) limits.maxMarginUsdt = Number(form.maxMarginUsdt);
   else delete limits.maxMarginUsdt;
+  // Vacío = sin límite: se envía null para que editar pueda quitarlo.
+  limits.maxDailyLossUsdt = Number(form.maxDailyLossUsdt) > 0 ? Number(form.maxDailyLossUsdt) : null;
 
   const payload = {
     name: String(form.name).trim(),
@@ -671,6 +680,7 @@ export function describeParams(bot) {
   const opposite = ON_OPPOSITE.find((o) => o.value === p.onOpposite) || ON_OPPOSITE[0];
   const premium = toNumber(p.maxPremiumUsdt);
   const margin = toNumber(bot.limits?.maxMarginUsdt);
+  const dailyLoss = bot.limits && 'maxDailyLossUsdt' in bot.limits ? toNumber(bot.limits.maxDailyLossUsdt) : COMMON_DEFAULTS.maxDailyLossUsdt;
   const capital = toNumber(p.capitalUsdt);
   const budget = toNumber(p.budgetUsdt);
   const fractions = v('budgetFractions');
@@ -732,6 +742,8 @@ export function describeParams(bot) {
           : (margin ? `${formatUsdt(margin, { decimals: 0 })} USDT` : 'Límite global'),
         text: buy ? !premium : !margin,
       },
+      { key: 'maxDailyLossUsdt', label: 'Pérdida diaria máx.',
+        value: dailyLoss > 0 ? `${formatUsdt(dailyLoss, { decimals: 2, minDecimals: 0 })} USDT` : 'sin límite', text: !(dailyLoss > 0) },
     ],
   };
 }

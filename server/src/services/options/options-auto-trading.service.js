@@ -411,7 +411,15 @@ function createOptionsAutoTradingService(deps = {}) {
     return out;
   }
 
+  /** Con 0 ninguna compra cabe en el presupuesto diario: en un bot se exige > 0 (o null = sin límite). */
+  function assertDailyLoss(limits) {
+    const v = limits?.maxDailyLossUsdt;
+    if (v == null || v === '') return;
+    if (!(Number(v) > 0)) throw new ValidationError('maxDailyLossUsdt debe ser mayor que 0 o null (sin límite)');
+  }
+
   async function createBot(userId, body = {}) {
+    assertDailyLoss(body.limits);
     const underlyings = requestedUnderlyings(body);
     if (!underlyings) normalizeUnderlying(body.underlying);
     const explicit = body.underlyings != null || body.params?.underlyings != null;
@@ -469,7 +477,10 @@ function createOptionsAutoTradingService(deps = {}) {
     const bot = await requireBot(userId, id);
     const patch = {};
     if (body.name !== undefined) patch.name = body.name;
-    if (body.limits !== undefined) patch.limits = body.limits;
+    if (body.limits !== undefined) {
+      assertDailyLoss(body.limits);
+      patch.limits = body.limits;
+    }
     const params = body.params !== undefined ? { ...(body.params || {}) } : null;
     let underlyings = requestedUnderlyings({ underlyings: body.underlyings, params: body.params || {} });
     if (underlyings) {

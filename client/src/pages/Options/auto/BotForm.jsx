@@ -775,6 +775,16 @@ export default function BotForm({ open, bot = null, underlying = 'BTC', onCancel
               onChange={(v) => update({ maxMarginUsdt: v })}
             />
           )}
+          <NumberField
+            label="Pérdida diaria máx."
+            help="Vacío: sin límite. Una entrada cuya prima y comisión no quepan en lo que queda del día se salta."
+            unit="USDT"
+            value={form.maxDailyLossUsdt}
+            min={0}
+            step={10}
+            error={errors.maxDailyLossUsdt}
+            onChange={(v) => update({ maxDailyLossUsdt: v })}
+          />
         </FieldGroup>
 
         <FieldGroup title="5 · Avisos">

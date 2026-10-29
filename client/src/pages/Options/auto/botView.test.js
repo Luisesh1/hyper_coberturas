@@ -125,14 +125,41 @@ describe('formulario de bot', () => {
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
         notify: { trades: true, errors: true },
       },
-      limits: {},
+      limits: { maxDailyLossUsdt: 100 },
     });
     const sell = buildBotPayload({ ...withStructure(initialBotForm(), 'sell_against'), name: 'S', alertIds: [1] }, { editing: true, baseLimits: { maxDailyLossUsdt: 50 } });
     expect(sell.underlying).toBeUndefined();
     expect(sell.underlyings).toEqual(['BTC']);
     expect(sell.params.maxPremiumUsdt).toBeNull();
     expect(sell.params.minLeverage).toBeNull();
-    expect(sell.limits).toEqual({ maxDailyLossUsdt: 50, maxMarginUsdt: 1000 });
+    expect(sell.limits).toEqual({ maxDailyLossUsdt: 100, maxMarginUsdt: 1000 });
+  });
+
+  it('pérdida diaria máx.: se inicializa del bot, se valida > 0 y viaja en limits', () => {
+    const bot = { id: 1, name: 'B', underlying: 'BTC', alertIds: [1], params: { structure: 'buy_with' }, limits: { maxDailyLossUsdt: 50, maxOrdersPerDay: 10 } };
+    const form = initialBotForm({ bot });
+    expect(form.maxDailyLossUsdt).toBe(50);
+    expect(initialBotForm({ bot: { ...bot, limits: {} } }).maxDailyLossUsdt).toBe(100);
+    expect(initialBotForm({ bot: { ...bot, limits: { maxDailyLossUsdt: null } } }).maxDailyLossUsdt).toBeNull();
+    expect(initialBotForm().maxDailyLossUsdt).toBe(100);
+
+    const edited = buildBotPayload({ ...form, maxDailyLossUsdt: '250' }, { editing: true, baseLimits: bot.limits });
+    expect(edited.limits).toEqual({ maxDailyLossUsdt: 250, maxOrdersPerDay: 10 });
+    // Vacío = sin límite (null: el servidor fusiona los límites al editar).
+    expect(buildBotPayload({ ...form, maxDailyLossUsdt: '' }, { editing: true, baseLimits: bot.limits }).limits.maxDailyLossUsdt).toBeNull();
+
+    expect(validateBotForm({ ...form, maxDailyLossUsdt: 0 }).maxDailyLossUsdt).toBe('Debe ser mayor a 0');
+    expect(validateBotForm({ ...form, maxDailyLossUsdt: -5 }).maxDailyLossUsdt).toBe('Debe ser mayor a 0');
+    expect(validateBotForm({ ...form, maxDailyLossUsdt: '' }).maxDailyLossUsdt).toBeUndefined();
+    expect(validateBotForm({ ...form, maxDailyLossUsdt: 80 }).maxDailyLossUsdt).toBeUndefined();
+  });
+
+  it('pérdida diaria máx. en la ficha de riesgo', () => {
+    const base = { id: 1, underlying: 'BTC', params: { structure: 'buy_with' } };
+    expect(describeParams(normalizeBot({ ...base, limits: { maxDailyLossUsdt: 250 } })).risk)
+      .toContainEqual(expect.objectContaining({ key: 'maxDailyLossUsdt', label: 'Pérdida diaria máx.', value: '250 USDT' }));
+    expect(describeParams(normalizeBot({ ...base, limits: { maxDailyLossUsdt: null } })).risk)
+      .toContainEqual(expect.objectContaining({ key: 'maxDailyLossUsdt', value: 'sin límite', text: true }));
   });
 
   it('configura TP ATR/IV y valida parámetros de volatilidad', () => {

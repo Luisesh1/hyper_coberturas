@@ -343,7 +343,7 @@ describe('AutoTradingTab · escritorio', () => {
         takeProfitMode: 'fixed', tpAtrMultiplier: 1, tpHorizonHours: 4,
         notify: { trades: true, errors: true },
       },
-      limits: { maxMarginUsdt: 1000 },
+      limits: { maxMarginUsdt: 1000, maxDailyLossUsdt: 100 },
     });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Nuevo bot' })).toBeNull());
     // Recorre el formulario completo (modo Avanzado): con la suite entera tarda más de 5 s.
