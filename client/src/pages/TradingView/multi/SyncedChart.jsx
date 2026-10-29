@@ -22,6 +22,7 @@ import {
   formatPrice,
 } from './chartTheme';
 import { getInitialChartViewport } from '../chartViewport';
+import { mergeCandles } from '../overlays/historyJump';
 import { createIndicatorsController } from '../indicators/renderAdapter';
 import { ChevronDownIcon } from '../components/icons';
 import { alertRanges } from '../alertMarkers/markerModel';
@@ -32,6 +33,10 @@ import styles from './SyncedChart.module.css';
 
 const CANDLE_LIMIT = 500;
 const POLL_LIMIT = 2;
+// Al quedar a menos de estas velas del borde izquierdo se pide más histórico.
+const HISTORY_EDGE_BARS = 10;
+// Tras un error de histórico no se reintenta en cada desplazamiento.
+const HISTORY_RETRY_MS = 5_000;
 const NO_INDICATORS = [];
 const NO_ITEMS = [];
 // Sin `alertMarkers` (p. ej. Multi‑activo) no se engancha el plugin de marcas.
@@ -109,6 +114,10 @@ export default function SyncedChart({
   const onLastPriceRef = useRef(onLastPrice);
   const onLoadedRangeRef = useRef(onLoadedRange);
   const indexRef = useRef(index);
+  // Cada carga completa invalida las cargas de histórico en vuelo.
+  const loadSeqRef = useRef(0);
+  const historyRef = useRef({ fetching: false, ended: false, retryAt: 0 });
+  const loadHistoryRef = useRef(null);
   onPointerRef.current = onPointer;
   onLastPriceRef.current = onLastPrice;
   onLoadedRangeRef.current = onLoadedRange;
@@ -120,6 +129,7 @@ export default function SyncedChart({
   const [precision, setPrecision] = useState(DEFAULT_PRICE_PRECISION);
   const [reloadKey, setReloadKey] = useState(0);
   const [resolution, setResolution] = useState(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   const emitPointer = useCallback((value) => {
     onPointerRef.current?.(indexRef.current, value);
@@ -197,8 +207,15 @@ export default function SyncedChart({
     };
     chart.subscribeCrosshairMove(handleMove);
 
+    // Scroll infinito: cerca del borde izquierdo se carga histórico anterior.
+    const handleRange = (range) => {
+      if (range && range.from < HISTORY_EDGE_BARS) loadHistoryRef.current?.();
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleRange);
+
     return () => {
       chart.unsubscribeCrosshairMove(handleMove);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleRange);
       indicatorsCtrlRef.current?.removeAll();
       indicatorsCtrlRef.current = null;
       chart.remove();
@@ -213,6 +230,9 @@ export default function SyncedChart({
   useEffect(() => {
     if (!asset?.symbol || !timeframe) return undefined;
     let cancelled = false;
+    loadSeqRef.current += 1;
+    historyRef.current = { fetching: false, ended: false, retryAt: 0 };
+    setLoadingHistory(false);
     candlesRef.current = [];
     setCandles([]);
     setLoading(true);
@@ -297,7 +317,6 @@ export default function SyncedChart({
             next[next.length - 1] = { ...last, ...c };
           } else if (c.time > last.time) {
             next.push(c);
-            if (next.length > CANDLE_LIMIT) next.shift();
           } else {
             continue;
           }
@@ -328,6 +347,62 @@ export default function SyncedChart({
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [asset?.symbol, asset?.datasource, timeframe]);
+
+  // --- Scroll infinito: histórico hacia atrás al llegar al borde izquierdo ---
+  // Se reasigna en cada render para leer el activo y la temporalidad actuales.
+  loadHistoryRef.current = async () => {
+    const history = historyRef.current;
+    const current = candlesRef.current;
+    if (history.fetching || history.ended || current.length === 0) return;
+    if (Date.now() < history.retryAt || !asset?.symbol || !timeframe) return;
+    const seq = loadSeqRef.current;
+    history.fetching = true;
+    setLoadingHistory(true);
+    try {
+      const older = await marketApi.getCandles({
+        asset: asset.symbol,
+        datasource: asset.datasource || 'hyperliquid',
+        timeframe,
+        limit: CANDLE_LIMIT,
+        endTime: current[0].time - 1,
+      });
+      if (seq !== loadSeqRef.current) return; // cambió el par/TF o se recargó
+      // Se relee candlesRef: el polling pudo añadir velas mientras tanto.
+      const latest = candlesRef.current;
+      const firstTime = latest[0].time;
+      const newBars = (Array.isArray(older) ? older : []).filter((c) => c.time < firstTime);
+      if (newBars.length === 0) {
+        history.ended = true;
+        return;
+      }
+      const merged = mergeCandles(latest, newBars);
+      const added = merged.length - latest.length;
+      const timeScale = chartRef.current?.timeScale();
+      // Mismo encuadre tras el setData: los índices lógicos se desplazan `added`.
+      const prevRange = timeScale?.getVisibleLogicalRange();
+      candlesRef.current = merged;
+      const nextPrecision = getPricePrecisionFromCandles(merged);
+      seriesRef.current?.applyOptions({ priceFormat: getPriceFormatOptions(nextPrecision) });
+      seriesRef.current?.setData(merged.map(toBar));
+      if (prevRange) {
+        timeScale.setVisibleLogicalRange({ from: prevRange.from + added, to: prevRange.to + added });
+      }
+      setPrecision(nextPrecision);
+      setCandles(merged);
+      const range = alertRanges(merged, timeframe)[0];
+      if (range) {
+        onLoadedRangeRef.current?.(indexRef.current, {
+          ...range, timeframe, assetKey: `${asset.datasource || 'hyperliquid'}:${asset.symbol}`,
+        });
+      }
+    } catch (err) {
+      history.retryAt = Date.now() + HISTORY_RETRY_MS;
+      console.warn('[SyncedChart] history load error:', err?.message);
+    } finally {
+      history.fetching = false;
+      if (seq === loadSeqRef.current) setLoadingHistory(false);
+    }
+  };
 
   // --- 3a) Indicadores: al cargar, en cada polling con cambios y al cambiar
   // la lista. `render` ya omite los ocultos (`visible === false`). Sin velas
@@ -535,6 +610,12 @@ export default function SyncedChart({
               alertsById={alertMarkers?.alertsById}
               colorsById={alertColors}
             />
+          </div>
+        )}
+
+        {loadingHistory && (
+          <div className={styles.historyLoading} role="status" data-testid={`history-loading-${index}`}>
+            Cargando histórico…
           </div>
         )}
 

@@ -168,6 +168,21 @@
   right: 64px; /* deja libre la escala de precios */
 }
 
+.historyLoading {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--panel-muted);
+  background: rgba(15, 17, 20, 0.88);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 .overlay {
   position: absolute;
   inset: 0;
