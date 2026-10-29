@@ -105,6 +105,11 @@ describe('usageRows', () => {
     expect(rows[4]).toMatchObject({ label: 'Comprometido', used: 12, max: 48, pct: 25, text: '12 de 48 USDT' });
     expect(usageRows(bot).some((r) => r.label === 'Comprometido')).toBe(false);
   });
+  it('«Pérdida del día» lleva debajo «En riesgo abierto»', () => {
+    const rows = usageRows({ ...bot, usage: { ...bot.usage, atRiskUsdt: 12.5 } });
+    expect(rows[3].note).toBe('En riesgo abierto: 12,5 USDT');
+    expect(usageRows(bot)[3].note).toBeUndefined();
+  });
   it('no muestra fila de delta neto (null en bots con varios subyacentes)', () => {
     const rows = usageRows({ ...bot, usage: { ...bot.usage, netDelta: null } });
     expect(rows.some((r) => /delta|Δ/i.test(r.label))).toBe(false);

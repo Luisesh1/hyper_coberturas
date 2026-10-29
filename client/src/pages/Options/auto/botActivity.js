@@ -145,6 +145,13 @@ function usageRow(label, used, max) {
   return { label, used: u, max: m, pct: m === null || m <= 0 ? null : Math.min(100, Math.max(0, (u / m) * 100)) };
 }
 
+// Debajo de «Pérdida del día»: prima pagada de las compras abiertas.
+function atRiskRow(row, atRisk) {
+  const n = toNumber(atRisk);
+  if (n === null) return row;
+  return { ...row, note: `En riesgo abierto: ${formatNumber(n, { decimals: 2, minDecimals: 0 })} USDT` };
+}
+
 export function usageRows(bot = {}) {
   const params = bot.params || {};
   const limits = bot.limits || {};
@@ -155,7 +162,7 @@ export function usageRows(bot = {}) {
     usageRow('Posiciones abiertas', open, params.maxOpenPositions),
     usageRow('Operaciones de hoy', usage.ordersToday, params.maxTradesPerDay),
     usageRow('Margen usado', usage.marginUsedUsdt, limits.maxMarginUsdt),
-    usageRow('Pérdida del día', usage.dailyLossUsdt, limits.maxDailyLossUsdt),
+    atRiskRow(usageRow('Pérdida del día', usage.dailyLossUsdt, limits.maxDailyLossUsdt), usage.atRiskUsdt),
     ...(toNumber(params.budgetUsdt) > 0 ? [committedRow(usage.committedUsdt, params.budgetUsdt)] : []),
   ];
 }

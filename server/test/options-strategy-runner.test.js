@@ -257,6 +257,67 @@ test('modo real: pérdida diaria (estrategia y global) y |Δ| neta', async () =>
   assert.match(delta.repo.events.find((e) => e.mode === 'live').detail, /\|Δ\| neta/);
 });
 
+// Pérdida realizada hoy (UTC) de `loss` USDT en el modo, para el bot.
+async function seedLoss(ctx, mode, loss) {
+  await ctx.repo.insertPosition({ strategyId: ctx.strategy.id, userId: 7, mode, symbol: 'BTC-261009-50000-P', side: 'SELL', quantity: 0.01, entryPrice: 10, openedAt: FRIDAY_9 - DAY_MS });
+  await ctx.repo.closePosition(ctx.repo.positions[0].id, { exitPrice: 2000, closedAt: FRIDAY_9 - HOUR_MS, pnlUsdt: -loss, feesUsdt: 0 });
+}
+const BUY_LEGS = [{ symbol: 'BTC-261016-70000-C', side: 'BUY', quantity: 0.01, price: 100, spot: 68000 }];
+
+test('pérdida diaria que se anticipa: la prima + comisión que no cabe bloquea; la que cabe justo pasa', async () => {
+  const ctx = await setup({ mode: 'live', limits: { maxDailyLossUsdt: 10 } });
+  await seedLoss(ctx, 'live', 8);
+  // prima 1 USDT + comisión (mín 0,03 % nocional, 10 % prima = 0,1) = 1,1; quedan 2.
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 })).ok, true);
+  ctx.repo.positions[0].pnlUsdt = -9.0;
+  const blocked = await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, 'daily_loss_budget');
+  assert.equal(blocked.reason, 'La prima de esta entrada (1.00 USDT) no cabe en lo que queda del límite de pérdida diaria (9.00 de 10.00 USDT)');
+  // Cabe justo: pérdida 8,9 + 1,1 = 10.
+  ctx.repo.positions[0].pnlUsdt = -8.9;
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 })).ok, true);
+  // Las ventas no pagan prima: solo aplica la regla de «ya en el límite».
+  const sell = [{ ...BUY_LEGS[0], side: 'SELL' }];
+  ctx.repo.positions[0].pnlUsdt = -9.5;
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', sell, { now: FRIDAY_9 })).ok, true);
+});
+
+test('pérdida diaria que se anticipa: sin límite configurado no bloquea', async () => {
+  const ctx = await setup({ mode: 'live' });
+  ctx.strategy.limits = { ...ctx.strategy.limits, maxDailyLossUsdt: null };
+  await seedLoss(ctx, 'live', 500);
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 })).ok, true);
+});
+
+test('pérdida diaria: la entrada real que no cabe se salta con daily_loss_budget', async () => {
+  const ctx = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 }, limits: { maxDailyLossUsdt: 100 } });
+  await seedLoss(ctx, 'live', 90);
+  await ctx.runner.runForSignal(ctx.strategy, { direction: 'bullish' });
+  assert.equal(ctx.credentials.orders.length, 0);
+  assert.match(ctx.repo.events.find((e) => e.mode === 'live' && e.action === 'skip').detail, /^La prima de esta entrada/);
+});
+
+test('sombra aplica la regla actual y la nueva al crear la entrada', async () => {
+  const opts = { template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 }, limits: { maxDailyLossUsdt: 100 } };
+  const atLimit = await setup(opts);
+  await seedLoss(atLimit, 'shadow', 100);
+  await atLimit.runner.runForSignal(atLimit.strategy, { direction: 'bullish' });
+  assert.match(atLimit.repo.events.find((e) => e.mode === 'shadow' && e.action === 'skip').detail, /en el límite de 100 USDT/);
+  assert.equal((await atLimit.shadowEntries.listPending()).length, 0);
+
+  const budget = await setup(opts);
+  await seedLoss(budget, 'shadow', 90);
+  await budget.runner.runForSignal(budget.strategy, { direction: 'bullish' });
+  assert.match(budget.repo.events.find((e) => e.mode === 'shadow' && e.action === 'skip').detail, /no cabe en lo que queda del límite de pérdida diaria/);
+  assert.equal((await budget.shadowEntries.listPending()).length, 0);
+
+  const fits = await setup(opts);
+  await seedLoss(fits, 'shadow', 80);
+  await fits.runner.runForSignal(fits.strategy, { direction: 'bullish' });
+  assert.equal((await fits.shadowEntries.listPending()).length, 1);
+});
+
 test('modo real sin credenciales: registra error y avisa, la sombra sigue', async () => {
   const { repo, runner, credentials } = await setup({ mode: 'live' });
   credentials.getClientForUser = async () => { throw new Error('Sin credenciales de Binance Opciones'); };

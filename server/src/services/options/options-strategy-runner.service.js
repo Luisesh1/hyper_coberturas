@@ -827,7 +827,16 @@ class OptionsStrategyRunner {
       const spot = num(quote.spot) ?? ctx.spot;
       return { ...leg, price, spot, fee: tradeFee({ spot, quantity: leg.quantity, price }) };
     });
+    if (action.type === 'open' && !(await this.shadowDailyLossAllows(strategy, filled, ctx))) return null;
     return this.book(strategy, 'shadow', action, filled, ctx);
+  }
+
+  /** Misma regla de pérdida diaria que el real, sobre el libro sombra. */
+  async shadowDailyLossAllows(strategy, legs, ctx) {
+    const check = await this.checkDailyLossBudget(strategy, 'shadow', legs, ctx);
+    if (check.ok) return true;
+    await this.recordOutcome(strategy, 'shadow', { type: 'skip', reason: check.code, detail: check.reason }, ctx);
+    return false;
   }
 
   /**
@@ -846,6 +855,8 @@ class OptionsStrategyRunner {
       const price = await this.midEntryPrice(action.legs[i], quotes[i]);
       legs.push({ ...action.legs[i], price, spot: num(quotes[i].quote?.spot) ?? ctx.spot });
     }
+    // Se decide al crear la entrada (cuando la real enviaría la orden), no al llenarse.
+    if (!(await this.shadowDailyLossAllows(strategy, legs, ctx))) return null;
     const decidesSignal = strategy.mode !== 'live' || ctx.shadowOnly === true;
     const signalId = decidesSignal && Number.isSafeInteger(Number(ctx.signal?.signalId))
       ? Number(ctx.signal.signalId) : null;
@@ -1013,6 +1024,37 @@ class OptionsStrategyRunner {
 
   // ---------- ejecutor real ----------
 
+  /**
+   * Límite de pérdida diaria del bot (UTC) para un modo, compartido por real y
+   * sombra. Bloquea si la pérdida realizada ya alcanzó el límite o si, sumando
+   * la prima de las compras de la entrada y su comisión estimada, no cabe en lo
+   * que queda. Sin límite configurado no bloquea.
+   */
+  async checkDailyLossBudget(strategy, mode, legs, ctx) {
+    const max = strategy.limits?.maxDailyLossUsdt;
+    if (max == null || !Number.isFinite(Number(max))) return { ok: true };
+    const limit = Number(max);
+    const loss = -(await this.repo.realizedPnlSince({ userId: strategy.userId, strategyId: strategy.id, mode, since: utcDayStart(ctx.now) }));
+    if (loss >= limit) {
+      return { ok: false, code: 'daily_loss_limit',
+        reason: `Pérdida diaria de la estrategia (${loss.toFixed(2)} USDT) en el límite de ${max} USDT` };
+    }
+    let premium = 0;
+    let fees = 0;
+    for (const leg of legs) {
+      if (leg.side !== 'BUY') continue;
+      premium += leg.quantity * leg.price;
+      const spot = num(leg.spot) ?? ctx.spot;
+      if (spot != null) fees += tradeFee({ spot, quantity: leg.quantity, price: leg.price });
+    }
+    if (premium > 0 && Math.max(0, loss) + premium + fees > limit + 1e-8) {
+      const fmt = (n) => n.toFixed(2);
+      return { ok: false, code: 'daily_loss_budget',
+        reason: `La prima de esta entrada (${fmt(premium)} USDT) no cabe en lo que queda del límite de pérdida diaria (${fmt(Math.max(0, loss))} de ${fmt(limit)} USDT)` };
+    }
+    return { ok: true };
+  }
+
   /** Comprueba los límites globales y de la estrategia antes de abrir. */
   async checkLiveLimits(strategy, legs, ctx) {
     let globalLimits;
@@ -1025,10 +1067,8 @@ class OptionsStrategyRunner {
     const dayStart = utcDayStart(ctx.now);
     const has = (v) => v != null && Number.isFinite(Number(v));
 
-    const strategyLoss = -(await this.repo.realizedPnlSince({ userId: strategy.userId, strategyId: strategy.id, mode: 'live', since: dayStart }));
-    if (has(limits.maxDailyLossUsdt) && strategyLoss >= Number(limits.maxDailyLossUsdt)) {
-      return { ok: false, reason: `Pérdida diaria de la estrategia (${strategyLoss.toFixed(2)} USDT) en el límite de ${limits.maxDailyLossUsdt} USDT` };
-    }
+    const budget = await this.checkDailyLossBudget(strategy, 'live', legs, ctx);
+    if (!budget.ok) return { ok: false, reason: budget.reason, code: budget.code };
     const userLoss = -(await this.repo.realizedPnlSince({ userId: strategy.userId, mode: 'live', since: dayStart }));
     if (has(globalLimits.maxDailyLossUsdt) && userLoss >= Number(globalLimits.maxDailyLossUsdt)) {
       return { ok: false, reason: `Pérdida diaria global (${userLoss.toFixed(2)} USDT) en el límite de ${globalLimits.maxDailyLossUsdt} USDT` };
@@ -1247,8 +1287,10 @@ class OptionsStrategyRunner {
       }
       const limits = await this.checkLiveLimits(strategy, quoted, ctx);
       if (!limits.ok) {
+        const budgetBlock = limits.code === 'daily_loss_budget';
         await this.recordOutcome(strategy, 'live', {
-          type: 'skip', reason: 'live_risk_limit', detail: `Bloqueada por límite: ${limits.reason}`,
+          type: 'skip', reason: budgetBlock ? 'daily_loss_budget' : 'live_risk_limit',
+          detail: budgetBlock ? limits.reason : `Bloqueada por límite: ${limits.reason}`,
         }, ctx);
         await this.maybeNotify(strategy, `Orden real bloqueada: ${limits.reason}`, 'error');
         return null;
