@@ -193,3 +193,36 @@ describe('closedTradeRows · rango de la prima', () => {
     expect(none.premium).toBeNull();
   });
 });
+
+describe('closedTradeRows · objetivo de TP', () => {
+  const meta = { spot: 2400, bandValue: 2350, distancePct: -2.1, leverage: 12, appliedGainPct: 25, capped: false };
+  const range = (high, low) => ({ high: { price: high, at: 2 }, low: { price: low, at: 3 }, partial: false });
+
+  it('banda ATR: objetivo guardado, % sobre la entrada, desglose y si se alcanzó', () => {
+    const detail = { params: { takeProfitMode: 'atr_band' }, closedPositions: [
+      { id: 1, mode: 'shadow', side: 'BUY', entryPrice: 10, tpTargetPrice: 12.5, tpTargetMeta: meta, openedAt: 1, premiumRange: range(12.5, 9) },
+      { id: 2, mode: 'shadow', side: 'BUY', entryPrice: 10, tpTargetPrice: 12.5, tpTargetMeta: meta, openedAt: 1, premiumRange: range(11, 4) },
+      { id: 3, mode: 'shadow', side: 'BUY', entryPrice: 10, tpTargetPrice: 12.5, tpTargetMeta: meta, openedAt: 1, premiumRange: null },
+    ] };
+    const [hit, miss, unknown] = closedTradeRows(detail, 'shadow');
+    expect(hit.target).toMatchObject({ price: 12.5, pct: 25, fromParams: false, reached: true });
+    expect(hit.target.breakdown).toMatch(/^Spot 2\.400 → banda 2\.350/);
+    expect(miss.target.reached).toBe(false);
+    expect(unknown.target.reached).toBeNull();
+  });
+
+  it('porcentaje: se deriva de la configuración actual; al vender, alcanzado si la prima bajó al objetivo', () => {
+    const detail = { params: { takeProfitPct: 50 }, closedPositions: [
+      { id: 1, mode: 'shadow', side: 'SELL', entryPrice: 10, openedAt: 1, premiumRange: range(11, 4) },
+    ] };
+    const [r] = closedTradeRows(detail, 'shadow');
+    expect(r.target).toMatchObject({ price: 5, pct: -50, fromParams: true, reached: true, breakdown: null });
+  });
+
+  it('sin objetivo conocido (volatilidad o banda sin fijar) → null', () => {
+    const vol = closedTradeRows({ params: { takeProfitMode: 'volatility', takeProfitPct: 50 }, closedPositions: [{ id: 1, mode: 'shadow', entryPrice: 10 }] }, 'shadow');
+    const band = closedTradeRows({ params: { takeProfitMode: 'atr_band' }, closedPositions: [{ id: 1, mode: 'shadow', entryPrice: 10 }] }, 'shadow');
+    expect(vol[0].target).toBeNull();
+    expect(band[0].target).toBeNull();
+  });
+});

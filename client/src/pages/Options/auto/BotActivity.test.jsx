@@ -145,11 +145,12 @@ describe('BotActivity', () => {
     const closed = [
       { id: 3, mode: 'shadow', symbol: 'BTC-261030-81500-P', side: 'BUY', entryPrice: 765, exitPrice: 1025, pnlUsdt: 27.46,
         closeReason: 'take_profit_atr_band', openedAt: OPEN, closedAt: OPEN + 71 * 60e3,
+        tpTargetPrice: 1025, tpTargetMeta: { spot: 81900, bandValue: 80800, distancePct: -1.3, leverage: 26, appliedGainPct: 34, capped: false },
         premiumRange: { high: { price: 1025, at: OPEN + 71 * 60e3 }, low: { price: 612, at: OPEN + 12 * 60e3 }, partial: false } },
       { id: 4, mode: 'shadow', symbol: 'ETH-261027-2300-P', side: 'BUY', entryPrice: 15.4, exitPrice: 0, pnlUsdt: -104.46,
         closeReason: 'expiry', openedAt: OPEN, closedAt: NOW, premiumRange: null },
     ];
-    render(<BotActivity bot={bot({ closedPositions: closed })} part="bottom" />);
+    render(<BotActivity bot={bot({ params: { takeProfitMode: 'atr_band' }, closedPositions: closed })} part="bottom" />);
     const toggle = screen.getByRole('button', { name: 'Ver máximo y mínimo de la prima de BTC-261030-81500-P' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByText('Prima máxima (bid)')).toBeNull();
@@ -164,6 +165,9 @@ describe('BotActivity', () => {
     expect(highTime.getAttribute('datetime')).toBe(new Date(OPEN + 71 * 60e3).toISOString());
     expect(screen.getByText(formatDateTime(OPEN + 12 * 60e3), { selector: 'time' })).toBeTruthy();
     expect(screen.getByText('+34,0 %')).toBeTruthy();
+    expect(screen.getByText('Objetivo 1.025,00 (+34,0 %)')).toBeTruthy();
+    expect(screen.getByText('Alcanzado')).toBeTruthy();
+    expect(screen.getByText(/^Spot 81\.900 → banda/)).toBeTruthy();
     expect(screen.getByText('−20,0 %')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /prima de ETH-261027-2300-P/ }));
     expect(screen.getByText(/Sin registro de la prima/)).toBeTruthy();

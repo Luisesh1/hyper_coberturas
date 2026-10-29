@@ -601,8 +601,18 @@ test('live partial close: la parte cerrada hereda el rango de prima muestreado',
   const d = applyTradeDb({ position });
   await d.repo.applyTrade({ id: 9 }, { id: 't4', quantity: '0.1', price: 130, fee: 0.05, at: 60 });
   const ins = d.calls.find((c) => c.sql.includes('INSERT INTO options_strategy_positions'));
-  assert.match(ins.sql, /premium_high,premium_high_at,premium_low,premium_low_at,premium_range_source\)/);
-  assert.deepEqual(ins.args.slice(14), ['150', '20', '90', '30', 'full']);
+  assert.match(ins.sql, /premium_high,premium_high_at,premium_low,premium_low_at,premium_range_source,/);
+  assert.deepEqual(ins.args.slice(14, 19), ['150', '20', '90', '30', 'full']);
+});
+
+test('live partial close: la parte cerrada hereda el objetivo de TP fijado', async () => {
+  const meta = { spot: 100, bandValue: 95 };
+  const position = { ...livePosition(0.4, 1.2), tp_target_price: '180', tp_target_meta: meta };
+  const d = applyTradeDb({ position });
+  await d.repo.applyTrade({ id: 9 }, { id: 't5', quantity: '0.1', price: 130, fee: 0.05, at: 60 });
+  const ins = d.calls.find((c) => c.sql.includes('INSERT INTO options_strategy_positions'));
+  assert.match(ins.sql, /premium_range_source,tp_target_price,tp_target_meta\)/);
+  assert.deepEqual(ins.args.slice(19), ['180', JSON.stringify(meta)]);
 });
 
 test('lote: con solo una ENTRADA sin resolver se admite un cierre; otra entrada o un cierre pendiente bloquean', async () => {

@@ -43,9 +43,20 @@ export function atrBandBreakdown(p) {
   return m.capped ? `${text} (tope)` : text;
 }
 
+// Objetivo de TP que no depende del mercado: el fijado al llenarse (banda
+// ATR) o el porcentaje de la configuración. compra: entry·(1+tp); venta
+// (recompra): entry·(1−tp). null en modo volatilidad o sin datos.
+function fixedTpPrice(p, params = {}) {
+  if (params.takeProfitMode === 'atr_band') return toNumber(p.tpTargetPrice);
+  if (params.takeProfitMode === 'volatility') return null;
+  const entry = toNumber(p.entryPrice);
+  const tpPct = toNumber(params.takeProfitPct);
+  if (entry === null || tpPct === null) return null;
+  return round(entry * (isSell(p.side) ? 1 - tpPct / 100 : 1 + tpPct / 100));
+}
+
 export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now()) {
   const params = detail.params || {};
-  const tpPct = toNumber(params.takeProfitPct);
   const slPct = toNumber(params.stopLossPct);
   const volatility = params.takeProfitMode === 'volatility';
   const atrBand = params.takeProfitMode === 'atr_band';
@@ -57,11 +68,7 @@ export function openPositionRows(detail = {}, mode = 'shadow', now = Date.now())
       const qty = toNumber(p.quantity);
       const mark = toNumber(p.mark);
       const dir = sell ? -1 : 1;
-      let tpPrice = null;
-      if (atrBand) tpPrice = toNumber(p.tpTargetPrice);
-      else if (volatility) tpPrice = toNumber(p.takeProfitTarget?.price);
-      // compra: entry·(1+tp); venta (recompra): entry·(1−tp)
-      else if (entry !== null && tpPct !== null) tpPrice = round(entry * (sell ? 1 - tpPct / 100 : 1 + tpPct / 100));
+      const tpPrice = volatility ? toNumber(p.takeProfitTarget?.price) : fixedTpPrice(p, params);
       const stopPrice = !atrBand && entry !== null && slPct !== null ? round(entry * (sell ? 1 + slPct / 100 : 1 - slPct / 100)) : null;
       const pnlUsdt = mark !== null && entry !== null && qty !== null ? round((mark - entry) * dir * qty) : null;
       const pnlPct = mark !== null && entry ? ((mark - entry) * dir / entry) * 100 : null;
@@ -210,21 +217,46 @@ function premiumRangeView(p) {
   return { high, low, partial: !!r.partial, sell: isSell(p.side) };
 }
 
+// Objetivo de una operación cerrada y si la prima llegó a tocarlo (máximo al
+// comprar, mínimo al vender); reached null sin rango de prima. El objetivo
+// por porcentaje se deriva de la configuración actual del bot.
+function closedTargetView(p, params, premium) {
+  const price = fixedTpPrice(p, params);
+  if (price === null) return null;
+  const entry = toNumber(p.entryPrice);
+  const sell = isSell(p.side);
+  const atrBand = params.takeProfitMode === 'atr_band';
+  let reached = null;
+  if (premium) reached = sell ? premium.low.price <= price : premium.high.price >= price;
+  return {
+    price,
+    pct: entry ? ((price - entry) / entry) * 100 : null,
+    breakdown: atrBand && p.tpTargetMeta ? atrBandBreakdown(p) : null,
+    fromParams: !atrBand,
+    reached,
+  };
+}
+
 export function closedTradeRows(detail = {}, mode = 'shadow') {
+  const params = detail.params || {};
   return list(detail.closedPositions)
     .filter((p) => (p.mode || 'shadow') === mode)
-    .map((p) => ({
-      id: p.id,
-      symbol: p.symbol,
-      openedAt: p.openedAt ?? null,
-      closedAt: p.closedAt ?? null,
-      entry: toNumber(p.entryPrice),
-      exit: toNumber(p.exitPrice),
-      pnlUsdt: toNumber(p.pnlUsdt),
-      reasonLabel: REASON_LABEL[p.closeReason] || '—',
-      feesUsdt: positionFees(p),
-      premium: premiumRangeView(p),
-    }));
+    .map((p) => {
+      const premium = premiumRangeView(p);
+      return {
+        id: p.id,
+        symbol: p.symbol,
+        openedAt: p.openedAt ?? null,
+        closedAt: p.closedAt ?? null,
+        entry: toNumber(p.entryPrice),
+        exit: toNumber(p.exitPrice),
+        pnlUsdt: toNumber(p.pnlUsdt),
+        reasonLabel: REASON_LABEL[p.closeReason] || '—',
+        feesUsdt: positionFees(p),
+        premium,
+        target: closedTargetView(p, params, premium),
+      };
+    });
 }
 
 // Entradas GTC al medio en espera (sombra y real), con cuenta atrás.
