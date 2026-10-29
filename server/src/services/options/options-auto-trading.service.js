@@ -21,6 +21,7 @@ const { UNDERLYINGS } = require('./options-iv-recorder.service');
 const { botUnderlyings, normalizeUnderlyings } = require('./bot-underlyings');
 const { parseSymbol } = require('./options-utils');
 const { dailyPnlSeries } = require('./options-pnl-series');
+const { simulateExits } = require('./options-exit-simulator');
 
 const TEMPLATE_ID = 'alert_signal';
 const DIRECTIONS = ['bullish', 'bearish', 'neutral'];
@@ -164,6 +165,10 @@ function createOptionsAutoTradingService(deps = {}) {
   const shadowEntries = deps.shadowEntries || (repo === defaultRepo
     ? { listPending: (...args) => require('../../repositories/options-shadow-entries.repository').listPending(...args) }
     : { listPending: async () => [] });
+  const ivSnapshots = deps.ivSnapshots || {
+    // eslint-disable-next-line global-require
+    listBySymbols: (...args) => require('../../repositories/options-iv-snapshots.repository').listBySymbols(...args),
+  };
   const log = deps.logger || logger;
   const now = deps.now || Date.now;
   let unsubscribe = null;
@@ -493,6 +498,37 @@ function createOptionsAutoTradingService(deps = {}) {
     return (await repo.listAutoSignals(id, { limit: n, filter })).map(signalDto);
   }
 
+  /**
+   * Simula salidas alternativas (TP / stop / tiempo máximo) sobre las
+   * posiciones compradas ya cerradas del bot, en el modo y desde `since`.
+   */
+  async function exitSimulation(userId, id, { mode = 'shadow', since = null } = {}) {
+    await requireBot(userId, id);
+    if (mode !== 'shadow' && mode !== 'live') throw new ValidationError('mode debe ser shadow o live');
+    let sinceMs = null;
+    if (since != null && since !== '') {
+      sinceMs = Number(since);
+      if (!Number.isFinite(sinceMs) || sinceMs < 0) throw new ValidationError('since debe ser un instante en milisegundos');
+    }
+    if (typeof repo.listPremiumSamples !== 'function') {
+      throw new AppError('El repositorio no soporta muestras de prima por minuto (listPremiumSamples)', { status: 500, code: 'PREMIUM_SAMPLES_UNAVAILABLE' });
+    }
+    const positions = (await repo.listPositions(id))
+      .filter((p) => p.mode === mode && p.side === 'BUY' && p.closedAt != null && (sinceMs == null || p.openedAt >= sinceMs));
+    const samples = positions.length ? await repo.listPremiumSamples(positions.map((p) => p.id)) : new Map();
+    const snapshots = new Map();
+    if (positions.length) {
+      const symbols = [...new Set(positions.map((p) => p.symbol))];
+      const from = Math.min(...positions.map((p) => p.openedAt));
+      const to = Math.max(...symbols.map((s) => parseSymbol(s)?.expiryMs ?? 0), ...positions.map((p) => p.closedAt));
+      for (const row of await ivSnapshots.listBySymbols(symbols, from, to)) {
+        if (!snapshots.has(row.symbol)) snapshots.set(row.symbol, []);
+        snapshots.get(row.symbol).push(row);
+      }
+    }
+    return { mode, since: sinceMs, generatedAt: now(), ...simulateExits({ positions, samples, snapshots }) };
+  }
+
   // ---------- cierre manual y cancelación ----------
 
   /**
@@ -631,6 +667,7 @@ function createOptionsAutoTradingService(deps = {}) {
     cloneBot,
     updateBot,
     listSignals,
+    exitSimulation,
     closeBot,
     cancelOrder,
   };
