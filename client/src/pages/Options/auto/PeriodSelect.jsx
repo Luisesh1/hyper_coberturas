@@ -6,13 +6,13 @@ import styles from './AutoTradingTab.module.css';
 export default function PeriodSelect({ period, onPick, onDate }) {
   return (
     <div className={styles.periodBar}>
-      <div role="group" aria-label="Periodo" className={styles.filters}>
-        <span className={styles.periodLabel}>Periodo</span>
+      <span className={styles.periodLabel} aria-hidden="true">Periodo</span>
+      <div role="group" aria-label="Periodo" className={styles.periodGroup}>
         {PERIOD_OPTIONS.map((o) => (
           <button
             key={o.kind}
             type="button"
-            className={`${styles.filterBtn} ${styles.periodBtn} ${period.kind === o.kind ? styles.filterBtnOn : ''}`}
+            className={`${styles.filterBtn} ${period.kind === o.kind ? styles.filterBtnOn : ''}`}
             aria-pressed={period.kind === o.kind}
             onClick={() => onPick(o.kind)}
           >

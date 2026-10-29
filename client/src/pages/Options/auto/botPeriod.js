@@ -29,6 +29,8 @@ export function toDateInput(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+export const samePeriod = (a, b) => (a?.kind ?? 'all') === (b?.kind ?? 'all') && (a?.since ?? null) === (b?.since ?? null);
+
 // `since` en ms que se envía al servidor (null = sin filtro).
 export function periodSince(period, now = Date.now()) {
   if (!period) return null;

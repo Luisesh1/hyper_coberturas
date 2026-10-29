@@ -15,7 +15,7 @@ import DirectionChip from './DirectionChip';
 import PendingBanner from './visual/PendingBanner';
 import { pendingEntryRows } from './botActivity';
 import { AutoIcon as BoltIcon } from '../icons';
-import { loadPeriod, periodSince, savePeriod, startOfLocalDay } from './botPeriod';
+import { loadPeriod, periodSince, samePeriod, savePeriod, startOfLocalDay } from './botPeriod';
 import { DECISION_LABEL, filterSignals, latestSignal, normalizeBot, normalizeSignals, signalStats } from './botView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
@@ -116,7 +116,8 @@ export default function AutoTradingTab({ underlying } = {}) {
 
   // Periodo de los KPIs: por bot, recordado en localStorage.
   const [periodState, setPeriodState] = useState({ id: null, period: null });
-  const period = periodState.id === selectedId && periodState.period ? periodState.period : loadPeriod(selectedId);
+  const storedPeriod = useMemo(() => loadPeriod(selectedId), [selectedId]);
+  const period = periodState.id === selectedId && periodState.period ? periodState.period : storedPeriod;
   const periodRef = useRef(period);
   periodRef.current = period;
   const loadedKey = useRef('');
@@ -138,14 +139,17 @@ export default function AutoTradingTab({ underlying } = {}) {
 
   const loadDetail = useCallback(async (id) => {
     if (id === null || id === undefined) return;
+    const fetchedFor = periodRef.current;
     try {
-      const since = periodSince(periodRef.current);
+      const since = periodSince(fetchedFor);
       const data = await (since == null ? optionsStrategiesApi.get(id) : optionsStrategiesApi.get(id, { since }));
       if (!mounted.current || selectedRef.current !== id) return;
-      setDetail({ id, ...data });
+      // Respuesta de un periodo que ya no es el elegido (llegó tarde): se descarta.
+      if (!samePeriod(periodRef.current, fetchedFor)) return;
+      setDetail({ id, ...data, periodFetched: fetchedFor });
       setDetailError(null);
     } catch (err) {
-      if (mounted.current && selectedRef.current === id) setDetailError(err);
+      if (mounted.current && selectedRef.current === id && samePeriod(periodRef.current, fetchedFor)) setDetailError(err);
     }
   }, []);
 
@@ -466,6 +470,8 @@ export default function AutoTradingTab({ underlying } = {}) {
   const detailProps = shown && {
     bot: shown,
     period,
+    // Periodo con el que se pidieron los datos mostrados (la etiqueta sale de aquí).
+    dataPeriod: detail && detail.id === shown.id && detail.periodFetched ? detail.periodFetched : period,
     since: periodSince(period),
     onPeriodPick: pickPeriod,
     onPeriodDate: pickPeriodDate,

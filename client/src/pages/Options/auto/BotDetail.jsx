@@ -143,6 +143,7 @@ export default function BotDetail({
   signalsError = null,
   stats = null,
   period = PERIOD_ALL,
+  dataPeriod = period,
   since = null, // inicio del periodo en ms (null = todo); lo recibirá el simulador de salidas
   onPeriodPick = () => {},
   onPeriodDate = () => {},
@@ -168,9 +169,9 @@ export default function BotDetail({
   actionBusy = false,
   actionNotice = null,
 }) {
-  const periodText = periodLabel(period);
+  const periodText = periodLabel(dataPeriod);
   const periodActive = periodText !== null;
-  const kpiModel = useMemo(() => kpiCardsModel(bot, Date.now(), periodActive ? period : null), [bot, period, periodActive]);
+  const kpiModel = useMemo(() => kpiCardsModel(bot, Date.now(), periodActive ? dataPeriod : null), [bot, dataPeriod, periodActive]);
   const periodSelect = <PeriodSelect period={period} onPick={onPeriodPick} onDate={onPeriodDate} />;
   const kpis = useMemo(() => buildBotKpis(bot, stats), [bot, stats]);
   const desc = useMemo(() => describeParams(bot), [bot]);
