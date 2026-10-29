@@ -344,3 +344,17 @@ test('dailyPnlSeries: 30 puntos diarios acumulados del libro, más antiguo prime
   assert.deepEqual(s.slice(-4), [5, 8, 8, 7]);
   assert.equal(dailyPnlSeries([], 'live', NOW).every((v) => v === 0), true);
 });
+
+test('atRiskUsdt suma la prima pagada de las compras abiertas del modo', async () => {
+  const { repo, service } = setup();
+  const s = await repo.createStrategy({ userId: USER, name: 'r', template: 'alert_signal', underlying: 'BTC', mode: 'live' });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261031-70000-C', side: 'BUY', quantity: 0.02, entryPrice: 100, openedAt: NOW - 3600e3 });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261031-72000-C', side: 'SELL', quantity: 0.01, entryPrice: 50, openedAt: NOW - 3600e3 });
+  await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'shadow', symbol: 'BTC-261031-70000-P', side: 'BUY', quantity: 1, entryPrice: 100, openedAt: NOW - 3600e3 });
+  const closed = await repo.insertPosition({ strategyId: s.id, userId: USER, mode: 'live', symbol: 'BTC-261017-64000-P', side: 'BUY', quantity: 1, entryPrice: 9, openedAt: NOW - 7200e3 });
+  await repo.closePosition(closed.id, { exitPrice: 5, closedAt: NOW - 600e3, pnlUsdt: -4, feesUsdt: 0 });
+
+  const detail = await service.get(USER, s.id);
+
+  assert.equal(detail.usage.atRiskUsdt, 2);
+});

@@ -195,7 +195,10 @@ async function limitsUsage({ repo, market, strategy, positions, at, quotes = new
   const committedUsdt = Number.isFinite(total) ? round2(total) : null;
   const reservedUsdt = committedUsdt !== null && Number.isFinite(reserved) ? round2(reserved) : null;
 
-  return { mode, marginUsedUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta, committedUsdt, reservedUsdt };
+  // Prima pagada de las compras abiertas del modo: lo que perdería si caen a cero.
+  const atRiskUsdt = round2(open.reduce((sum, p) => sum + (p.side === 'BUY' ? Number(p.entryPrice) * Number(p.quantity) : 0), 0));
+
+  return { mode, marginUsedUsdt, atRiskUsdt, dailyLossUsdt: round2(Math.max(0, -pnlToday)), ordersToday, netDelta, committedUsdt, reservedUsdt };
 }
 
 function createOptionsStrategiesService(deps = {}) {

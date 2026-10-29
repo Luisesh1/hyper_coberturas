@@ -535,6 +535,7 @@
 .usageList { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .usageItem { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .usageHead { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+.usageNote { font-size: 12px; color: var(--text-secondary); }
 .usageTrack { height: 8px; border-radius: 4px; background: var(--bg-input); overflow: hidden; }
 .usageFill { display: block; height: 100%; background: var(--indigo); border-radius: 4px; }
 .usageFillHot { background: var(--red-light); }

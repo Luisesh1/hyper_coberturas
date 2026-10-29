@@ -336,6 +336,7 @@ function Usage({ rows, mobile }) {
                 {r.text ?? `${formatNumber(r.used, { decimals: 2, minDecimals: 0 })} / ${r.max === null ? '—' : formatNumber(r.max, { decimals: 2, minDecimals: 0 })}`}
               </span>
             </div>
+            {r.note && <div className={styles.usageNote}>{r.note}</div>}
             <div
               className={styles.usageTrack}
               role="progressbar"
