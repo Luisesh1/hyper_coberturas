@@ -111,6 +111,14 @@ describe('KpiCards', () => {
     },
   };
 
+  it('con periodo: etiqueta «P&L neto · 7 d» y valor del periodo del servidor', () => {
+    const b = { ...bot, kpis: { shadow: { pnl30dUsdt: 188.1, pnlPeriodUsdt: 12.5 }, live: { pnl30dUsdt: 214.6, pnlPeriodUsdt: 30 } } };
+    render(<KpiCards model={kpiCardsModel(b, NOW, { kind: 'd7' })} periodText="7 d" />);
+    expect(screen.getByText('P&L neto · 7 d')).toBeTruthy();
+    expect(screen.getAllByText(/\+30,00/).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText(/Curva de P&L 7 d/)).toBeTruthy();
+  });
+
   it('P&L real vs sombra, acierto, comisiones con desglose y presupuesto usado/reservado', () => {
     render(<KpiCards model={kpiCardsModel(bot, NOW)} />);
     expect(screen.getByText('P&L neto 30 d')).toBeTruthy();

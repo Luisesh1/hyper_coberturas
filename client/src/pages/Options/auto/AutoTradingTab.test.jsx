@@ -102,6 +102,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.localStorage.clear();
   window.matchMedia = originalMatchMedia;
   vi.clearAllMocks();
   vi.useRealTimers();
@@ -109,6 +110,37 @@ afterEach(() => {
 });
 
 describe('AutoTradingTab · escritorio', () => {
+  it('selector Periodo: pide el detalle con since, rotula el P&L y recuerda la elección por bot', async () => {
+    renderTab();
+    expect(await screen.findByRole('heading', { name: 'Momentum BTC' })).toBeTruthy();
+    await waitFor(() => expect(optionsStrategiesApi.get).toHaveBeenCalledWith(1));
+    const group = screen.getByRole('group', { name: 'Periodo' });
+    expect(within(group).getByRole('button', { name: 'Todo' }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(within(group).getByRole('button', { name: '7 d' }));
+    await waitFor(() => {
+      const call = optionsStrategiesApi.get.mock.calls.find((c) => c[1]?.since);
+      expect(call[0]).toBe(1);
+      expect(Math.abs(call[1].since - (Date.now() - 7 * 86400e3))).toBeLessThan(60e3);
+    });
+    expect(await screen.findByText('P&L neto · 7 d')).toBeTruthy();
+    expect(JSON.parse(window.localStorage.getItem('options.bot.period.1'))).toEqual({ kind: 'd7' });
+
+    fireEvent.click(within(group).getByRole('button', { name: 'Desde…' }));
+    fireEvent.change(screen.getByLabelText('Fecha de inicio'), { target: { value: '2026-10-25' } });
+    const since = new Date(2026, 9, 25).getTime();
+    await waitFor(() => expect(optionsStrategiesApi.get).toHaveBeenCalledWith(1, { since }));
+    expect(await screen.findByText('P&L neto · desde 25 oct')).toBeTruthy();
+  });
+
+  it('selector Periodo: restaura el periodo guardado del bot al abrirlo', async () => {
+    window.localStorage.setItem('options.bot.period.1', JSON.stringify({ kind: 'd3' }));
+    renderTab();
+    expect(await screen.findByRole('heading', { name: 'Momentum BTC' })).toBeTruthy();
+    await waitFor(() => expect(optionsStrategiesApi.get.mock.calls.some((c) => c[0] === 1 && c[1]?.since)).toBe(true));
+    expect(within(screen.getByRole('group', { name: 'Periodo' })).getByRole('button', { name: '3 d' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('carga la lista también en StrictMode (doble montaje de desarrollo)', async () => {
     render(<StrictMode><MemoryRouter><AutoTradingTab /></MemoryRouter></StrictMode>);
     expect(await screen.findByRole('heading', { name: 'Momentum BTC' })).toBeTruthy();

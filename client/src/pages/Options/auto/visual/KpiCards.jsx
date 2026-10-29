@@ -19,7 +19,7 @@ function Card({ label, children, className = '' }) {
 }
 
 // Curva real frente a sombra: el libro activo sólido con área, el otro a trazos.
-function PnlCurve({ pnl, mode, height = H, emptyText = 'Sin operaciones cerradas en 30 días' }) {
+function PnlCurve({ pnl, mode, height = H, emptyText = 'Sin operaciones cerradas en 30 días', windowText = '30 días' }) {
   const { live, shadow } = pnl.curve;
   const all = [...live, ...shadow].map((p) => p.y);
   if (!all.length) {
@@ -38,7 +38,7 @@ function PnlCurve({ pnl, mode, height = H, emptyText = 'Sin operaciones cerradas
     `sombra ${signed(pnl.shadow)}`,
   ].filter(Boolean).join(', ');
   return (
-    <svg className={styles.curve} viewBox={`0 0 ${W} ${H}`} width="100%" height={height} preserveAspectRatio="none" role="img" aria-label={`Curva de P&L 30 días: ${label}`}>
+    <svg className={styles.curve} viewBox={`0 0 ${W} ${H}`} width="100%" height={height} preserveAspectRatio="none" role="img" aria-label={`Curva de P&L ${windowText}: ${label}`}>
       {activePts.length > 1 && (
         <path className={styles[`area_${mode}`]} d={`M${xy(activePts[0])} L${line(activePts.slice(1))} L${W},${H} L0,${H} Z`} />
       )}
@@ -50,14 +50,14 @@ function PnlCurve({ pnl, mode, height = H, emptyText = 'Sin operaciones cerradas
   );
 }
 
-function PnlCard({ pnl, mode, compact }) {
+function PnlCard({ pnl, mode, compact, periodText }) {
   const showLive = mode === 'live' || pnl.curve.live.length > 0 || pnl.live !== null;
   return (
-    <Card label="P&L neto 30 d">
+    <Card label={periodText ? `P&L neto · ${periodText}` : 'P&L neto 30 d'}>
       <span className={`${styles.kpiValue} ${toneClass(pnl.value)}`}>{signed(pnl.value)}</span>
       {compact
-        ? <PnlCurve pnl={pnl} mode={mode} height={28} emptyText="Sin cerradas en 30 d" />
-        : <PnlCurve pnl={pnl} mode={mode} />}
+        ? <PnlCurve pnl={pnl} mode={mode} height={28} emptyText={periodText ? 'Sin cerradas en el periodo' : 'Sin cerradas en 30 d'} windowText={periodText || '30 días'} />
+        : <PnlCurve pnl={pnl} mode={mode} emptyText={periodText ? 'Sin operaciones cerradas en el periodo' : undefined} windowText={periodText || '30 días'} />}
       {!compact && (
         <div className={styles.split}>
           {showLive && <span className={styles.leg_live}>— real {signed(pnl.live)}</span>}
@@ -180,13 +180,14 @@ function BudgetCard({ budget: b, compact }) {
  * Cuatro KPIs con forma: P&L neto con curva real frente a sombra, anillo de
  * acierto, comisiones con barra y desglose, y presupuesto usado/reservado.
  * `model` sale de kpiCardsModel(bot). `compact` (teléfono): rejilla 2×2 con
- * mini curva y barras, sin desgloses ni leyendas.
+ * mini curva y barras, sin desgloses ni leyendas. `periodText` (p. ej. «7 d»)
+ * rotula el P&L con el periodo elegido en lugar de 30 d.
  */
-export default function KpiCards({ model, compact = false }) {
+export default function KpiCards({ model, compact = false, periodText = null }) {
   if (!model) return null;
   return (
     <div className={`${styles.kpis} ${compact ? styles.kpisCompact : ''}`}>
-      <PnlCard pnl={model.pnl} mode={model.mode} compact={compact} />
+      <PnlCard pnl={model.pnl} mode={model.mode} compact={compact} periodText={periodText} />
       <WinCard win={model.win} compact={compact} />
       <FeesCard fees={model.fees} compact={compact} />
       <BudgetCard budget={model.budget} compact={compact} />

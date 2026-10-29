@@ -93,6 +93,14 @@ function feeBreakdownFor(positions) {
   };
 }
 
+// `since` (ms epoch) opcional del detalle: vacío = sin filtro; inválido = 400.
+function parseSince(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = typeof raw === 'number' ? raw : (/^\d+$/.test(String(raw)) ? Number(raw) : NaN);
+  if (!Number.isSafeInteger(n) || n < 0) throw new ValidationError('El parámetro since debe ser una fecha en milisegundos (entero ≥ 0)');
+  return n;
+}
+
 function kpisFor(positions, events, mode, now) {
   const mine = positions.filter((p) => p.mode === mode);
   const closed = mine.filter((p) => p.closedAt != null);
@@ -267,7 +275,8 @@ function createOptionsStrategiesService(deps = {}) {
     });
   }
 
-  async function get(userId, id) {
+  async function get(userId, id, { since: rawSince } = {}) {
+    const since = parseSince(rawSince);
     const strategy = await requireStrategy(userId, id);
     const isBot = strategy.template === 'alert_signal';
     const [positions, events, standingOrders, shadowPending] = await Promise.all([
@@ -279,6 +288,13 @@ function createOptionsStrategiesService(deps = {}) {
       isBot ? shadowEntries.listPending({ strategyId: strategy.id }) : Promise.resolve([]),
     ]);
     const at = now();
+    // Periodo: kpis, curva y cerradas solo cuentan lo abierto desde `since`.
+    const inPeriod = since == null ? positions : positions.filter((p) => p.openedAt >= since);
+    const periodEvents = since == null ? events : events.filter((e) => e.createdAt >= since);
+    const periodKpis = (mode) => {
+      const k = kpisFor(inPeriod, periodEvents, mode, at);
+      return since == null ? k : { ...k, pnlPeriodUsdt: k.realizedPnlUsdt };
+    };
     // Una sola cotización por posición abierta: alimenta el mark que ve el
     // cliente y la delta neta de los límites. Una que falle no rompe el detalle.
     const openNow = positions.filter((p) => p.closedAt == null);
@@ -307,8 +323,8 @@ function createOptionsStrategiesService(deps = {}) {
       ...strategy,
       pendingEntries,
       blockedUnderlyings: strategy.state?.blockedUnderlyings || {},
-      kpis: { shadow: kpisFor(positions, events, 'shadow', at), live: kpisFor(positions, events, 'live', at) },
-      equity: equityCurve(positions, strategy.createdAt),
+      kpis: { shadow: periodKpis('shadow'), live: periodKpis('live') },
+      equity: equityCurve(inPeriod, since ?? strategy.createdAt),
       positions: openNow.map((p) => {
         const q = quotes.get(p.id);
         return { ...p, mark: q?.mark ?? null, bid: q?.bid ?? null, ask: q?.ask ?? null };
@@ -326,7 +342,7 @@ function createOptionsStrategiesService(deps = {}) {
         status: o.status, cancelRequested: o.cancelRequested,
         createdAt: o.createdAt, deadlineAt: o.deadlineAt, error: o.error ?? null,
       })) } : {}),
-      closedPositions: positions.filter((p) => p.closedAt != null)
+      closedPositions: inPeriod.filter((p) => p.closedAt != null)
         .sort((a, b) => b.closedAt - a.closedAt || b.id - a.id).slice(0, 50).map((p) => ({
           id: p.id, mode: p.mode, symbol: p.symbol, side: p.side, quantity: p.quantity,
           entryPrice: p.entryPrice, exitPrice: p.exitPrice, openedAt: p.openedAt,

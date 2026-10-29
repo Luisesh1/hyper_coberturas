@@ -29,7 +29,7 @@ router.post('/', validate(createStrategySchema), asyncHandler(async (req, res) =
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  res.json({ success: true, data: await service().get(req.user.userId, requireIntParam(req, 'id')) });
+  res.json({ success: true, data: await service().get(req.user.userId, requireIntParam(req, 'id'), { since: req.query.since }) });
 }));
 
 router.put('/:id', validate(updateStrategySchema), asyncHandler(async (req, res) => {

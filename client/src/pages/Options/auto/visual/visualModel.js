@@ -88,12 +88,13 @@ function seriesCurve(values) {
 }
 
 // Modelo de las cuatro tarjetas KPI del libro activo (real si el bot está en real).
-export function kpiCardsModel(bot = {}, now = Date.now()) {
+// `period` activo (no «Todo»): P&L y curva salen del periodo que filtró el servidor.
+export function kpiCardsModel(bot = {}, now = Date.now(), period = null) {
   const mode = bot.mode === 'live' ? 'live' : 'shadow';
   const k = bot.kpis && typeof bot.kpis === 'object' ? bot.kpis : {};
   const active = (k[mode] && typeof k[mode] === 'object') ? k[mode] : {};
-  const pnlShadow = toNumber(k.shadow?.pnl30dUsdt) ?? bot.pnlShadow ?? null;
-  const pnlLive = toNumber(k.live?.pnl30dUsdt) ?? bot.pnlLive ?? null;
+  const pnlShadow = period ? toNumber(k.shadow?.pnlPeriodUsdt) : (toNumber(k.shadow?.pnl30dUsdt) ?? bot.pnlShadow ?? null);
+  const pnlLive = period ? toNumber(k.live?.pnlPeriodUsdt) : (toNumber(k.live?.pnl30dUsdt) ?? bot.pnlLive ?? null);
 
   const cycles = toNumber(active.cycles);
   const winRate = toNumber(active.winRatePct);
@@ -117,7 +118,7 @@ export function kpiCardsModel(bot = {}, now = Date.now()) {
   const fractions = toNumber(params.budgetFractions);
   const pnlValue = mode === 'live' ? pnlLive : pnlShadow;
   const equityLoaded = Array.isArray(bot.equity);
-  let curve = pnlCurve(bot.equity, now);
+  let curve = pnlCurve(bot.equity, now, period ? Infinity : 30);
   if (!equityLoaded) {
     const fromList = seriesCurve(bot.pnlSeries);
     curve = mode === 'live' ? { live: fromList, shadow: [] } : { live: [], shadow: fromList };

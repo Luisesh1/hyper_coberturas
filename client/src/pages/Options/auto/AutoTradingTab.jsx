@@ -15,6 +15,7 @@ import DirectionChip from './DirectionChip';
 import PendingBanner from './visual/PendingBanner';
 import { pendingEntryRows } from './botActivity';
 import { AutoIcon as BoltIcon } from '../icons';
+import { loadPeriod, periodSince, savePeriod, startOfLocalDay } from './botPeriod';
 import { DECISION_LABEL, filterSignals, latestSignal, normalizeBot, normalizeSignals, signalStats } from './botView';
 import ui from '../strategies/common/ui.module.css';
 import styles from './AutoTradingTab.module.css';
@@ -113,10 +114,33 @@ export default function AutoTradingTab({ underlying } = {}) {
   const filterRef = useRef(signalsFilter);
   filterRef.current = signalsFilter;
 
+  // Periodo de los KPIs: por bot, recordado en localStorage.
+  const [periodState, setPeriodState] = useState({ id: null, period: null });
+  const period = periodState.id === selectedId && periodState.period ? periodState.period : loadPeriod(selectedId);
+  const periodRef = useRef(period);
+  periodRef.current = period;
+  const loadedKey = useRef('');
+  const periodKey = `${selectedId}|${period.kind}|${period.since ?? ''}`;
+  const changePeriod = (next) => {
+    savePeriod(selectedId, next);
+    setPeriodState({ id: selectedId, period: next });
+  };
+  const pickPeriod = (kind) => {
+    if (kind === 'since') {
+      // Sin fecha aún: por defecto, hoy a las 00:00 local.
+      changePeriod({ kind, since: period.since ?? startOfLocalDay(new Date().toLocaleDateString('sv')) });
+    } else changePeriod({ kind });
+  };
+  const pickPeriodDate = (dateStr) => {
+    const since = startOfLocalDay(dateStr);
+    if (since !== null) changePeriod({ kind: 'since', since });
+  };
+
   const loadDetail = useCallback(async (id) => {
     if (id === null || id === undefined) return;
     try {
-      const data = await optionsStrategiesApi.get(id);
+      const since = periodSince(periodRef.current);
+      const data = await (since == null ? optionsStrategiesApi.get(id) : optionsStrategiesApi.get(id, { since }));
       if (!mounted.current || selectedRef.current !== id) return;
       setDetail({ id, ...data });
       setDetailError(null);
@@ -149,8 +173,17 @@ export default function AutoTradingTab({ underlying } = {}) {
     setUnblock({ pending: null, error: null });
     if (!detailVisible) return;
     setDetail((prev) => (prev?.id === selectedId ? prev : null));
+    loadedKey.current = periodKey;
     loadDetail(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- el periodo se recarga en su propio efecto
   }, [detailVisible, selectedId, loadDetail]);
+
+  // Cambiar de periodo recarga el detalle sin tocar avisos ni diálogos.
+  useEffect(() => {
+    if (!detailVisible || loadedKey.current === periodKey) return;
+    loadedKey.current = periodKey;
+    loadDetail(selectedId);
+  }, [detailVisible, periodKey, selectedId, loadDetail]);
 
   useEffect(() => {
     if (!detailVisible) return;
@@ -432,6 +465,10 @@ export default function AutoTradingTab({ underlying } = {}) {
   const signalsReady = shown && signals.id === shown.id && signals.filter === signalsFilter;
   const detailProps = shown && {
     bot: shown,
+    period,
+    since: periodSince(period),
+    onPeriodPick: pickPeriod,
+    onPeriodDate: pickPeriodDate,
     signals: signalsReady ? signals.list : [],
     signalsFilter,
     onSignalsFilter: setSignalsFilter,
