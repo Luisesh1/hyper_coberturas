@@ -11,6 +11,7 @@ import LiveTpStatus from './LiveTpStatus';
 import BotActivity from './BotActivity';
 import PeriodSelect from './PeriodSelect';
 import { PERIOD_ALL, periodLabel } from './botPeriod';
+import ExitSimulator from './ExitSimulator';
 import { BOT_MODE_LABEL, STRUCTURE_INFO, alertMeta, botDirections, botStatus, buildBotKpis, describeParams, flowSteps } from './botView';
 import { pendingEntryRows } from './botActivity';
 import BotFlow from './visual/BotFlow';
@@ -144,7 +145,7 @@ export default function BotDetail({
   stats = null,
   period = PERIOD_ALL,
   dataPeriod = period,
-  since = null, // inicio del periodo en ms (null = todo); lo recibirá el simulador de salidas
+  since = null, // inicio del periodo en ms (null = todo), para el simulador de salidas
   onPeriodPick = () => {},
   onPeriodDate = () => {},
   mobile = false,
@@ -286,6 +287,7 @@ export default function BotDetail({
             <AlertRows alerts={bot.alerts} />
           </section>
           <BotActivity {...activity} part="bottom" />
+          <ExitSimulator key={`sim-${bot.id}`} bot={bot} mobile since={since} />
         </div>
       </div>
     );
@@ -393,6 +395,7 @@ export default function BotDetail({
       </div>
 
       <BotActivity {...activity} part="bottom" />
+      <ExitSimulator key={`sim-${bot.id}`} bot={bot} since={since} />
     </section>
   );
 }

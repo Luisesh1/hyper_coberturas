@@ -39,4 +39,11 @@ export const autoBotsApi = {
   simulate: (id, { direction, underlying }) => request('POST', `/options/auto-bots/${enc(id)}/simulate`, underlying ? { direction, underlying } : { direction }),
   // Pide cancelar una entrada real pendiente (las salidas y el TP no se cancelan). → orden con cancelRequested
   cancelOrder: (id, orderId) => request('POST', `/options/auto-bots/${enc(id)}/orders/${enc(orderId)}/cancel`),
+  // Qué habría pasado con otras salidas (TP, tiempo máx., stop) sobre las posiciones cerradas.
+  // mode: 'shadow' | 'live'; since: ms epoch opcional (filtra por openedAt >= since).
+  // → { mode, since, generatedAt, coverage, actual, scenarios[], best[] }
+  exitSimulation: (id, { mode = 'shadow', since } = {}) => {
+    const qs = `mode=${mode === 'live' ? 'live' : 'shadow'}${since ? `&since=${enc(since)}` : ''}`;
+    return request('GET', `/options/auto-bots/${enc(id)}/exit-simulation?${qs}`);
+  },
 };
