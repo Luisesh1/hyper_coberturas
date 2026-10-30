@@ -34,7 +34,7 @@ test('servicio: lastSignal y «Operadas» ignoran señales simuladas; «Todas» 
   const service = createOptionsAutoTradingService({ repo, strategies, logger: silent, now: () => NOW,
     runner: { async runForSignal() { return { produced: [] }; } }, alerts: { listAlerts: async () => [] } });
   const bot = await repo.createStrategy({ userId: USER, name: 'B', template: 'alert_signal', underlying: 'BTC',
-    params: { alertIds: [11] }, limits: {}, mode: 'shadow' });
+    params: { alertIds: [11], entryPricing: 'mid' }, limits: {}, mode: 'shadow' });
   await repo.claimAutoSignal({ strategyId: bot.id, userId: USER, alertId: 11, alertEventId: 1, alertName: 'Real',
     direction: 'bullish', asset: 'BTC', decision: 'opened', createdAt: NOW });
   await repo.claimAutoSignal({ strategyId: bot.id, userId: USER, alertId: null, alertEventId: null, alertName: 'Simulación',
@@ -74,7 +74,7 @@ test('"Probar señal" (simulate) uses the same pending flow', async () => {
   const service = createOptionsAutoTradingService({ repo, strategies, logger: silent, now: () => clock.now,
     runner, alerts: { listAlerts: async () => [] } });
   const bot = await repo.createStrategy({ userId: USER, name: 'B', template: 'alert_signal', underlying: 'BTC',
-    params: { alertIds: [11] }, limits: {}, mode: 'shadow' });
+    params: { alertIds: [11], entryPricing: 'mid' }, limits: {}, mode: 'shadow' });
 
   const outcome = await service.simulateSignal(USER, bot.id, { direction: 'bullish' });
   assert.deepEqual(outcome, { decision: 'pending', detail: 'Sombra: Orden LIMIT al medio, esperando ejecución' });

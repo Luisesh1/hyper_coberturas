@@ -75,7 +75,7 @@ test('el rango del bot restringe vencimientos en modo sombra; el de la señal se
   const shadowEntries = createFakeShadowEntries({ now: () => NOW });
   const runner = new OptionsStrategyRunner({ repo, market, shadowEntries, logger: log, now: () => NOW });
   const service = createOptionsAutoTradingService({ repo, runner, logger: log, now: () => NOW, alerts: { listAlerts: async () => [] } });
-  const bot = await repo.createStrategy({ userId: 7, name: 'Prueba en sombra', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [11], expiryMinDays: 2, expiryMaxDays: 4 }, limits: {}, mode: 'shadow' });
+  const bot = await repo.createStrategy({ userId: 7, name: 'Prueba en sombra', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [11], expiryMinDays: 2, expiryMaxDays: 4, entryPricing: 'mid' }, limits: {}, mode: 'shadow' });
   const narrow = await repo.createStrategy({ userId: 7, name: 'Fuera de rango', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [12], expiryMinDays: 90, expiryMaxDays: 91 }, limits: {}, mode: 'shadow' });
   const payload = { userId: 7, alertId: 11, alertName: 'BTC 15m', direction: 'bullish', asset: 'BTCUSDT', optionExpiryMinDays: 90, optionExpiryMaxDays: 91, eventId: 1 };
   const [accepted] = await service.handleAlertTriggered(payload);

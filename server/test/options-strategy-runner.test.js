@@ -262,36 +262,37 @@ async function seedLoss(ctx, mode, loss) {
   await ctx.repo.insertPosition({ strategyId: ctx.strategy.id, userId: 7, mode, symbol: 'BTC-261009-50000-P', side: 'SELL', quantity: 0.01, entryPrice: 10, openedAt: FRIDAY_9 - DAY_MS });
   await ctx.repo.closePosition(ctx.repo.positions[0].id, { exitPrice: 2000, closedAt: FRIDAY_9 - HOUR_MS, pnlUsdt: -loss, feesUsdt: 0 });
 }
+const ANTICIPATE = { now: FRIDAY_9, params: { anticipateDailyLoss: true } };
 const BUY_LEGS = [{ symbol: 'BTC-261016-70000-C', side: 'BUY', quantity: 0.01, price: 100, spot: 68000 }];
 
 test('pérdida diaria que se anticipa: la prima + comisión que no cabe bloquea; la que cabe justo pasa', async () => {
   const ctx = await setup({ mode: 'live', limits: { maxDailyLossUsdt: 10 } });
   await seedLoss(ctx, 'live', 8);
   // prima 1 USDT + comisión (mín 0,03 % nocional, 10 % prima = 0,1) = 1,1; quedan 2.
-  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 })).ok, true);
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, ANTICIPATE)).ok, true);
   ctx.repo.positions[0].pnlUsdt = -9.0;
-  const blocked = await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 });
+  const blocked = await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, ANTICIPATE);
   assert.equal(blocked.ok, false);
   assert.equal(blocked.code, 'daily_loss_budget');
   assert.equal(blocked.reason, 'La prima de esta entrada (1.00 USDT) no cabe en lo que queda del límite de pérdida diaria (9.00 de 10.00 USDT)');
   // Cabe justo: pérdida 8,9 + 1,1 = 10.
   ctx.repo.positions[0].pnlUsdt = -8.9;
-  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 })).ok, true);
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, ANTICIPATE)).ok, true);
   // Las ventas no pagan prima: solo aplica la regla de «ya en el límite».
   const sell = [{ ...BUY_LEGS[0], side: 'SELL' }];
   ctx.repo.positions[0].pnlUsdt = -9.5;
-  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', sell, { now: FRIDAY_9 })).ok, true);
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', sell, ANTICIPATE)).ok, true);
 });
 
 test('pérdida diaria que se anticipa: sin límite configurado no bloquea', async () => {
   const ctx = await setup({ mode: 'live' });
   ctx.strategy.limits = { ...ctx.strategy.limits, maxDailyLossUsdt: null };
   await seedLoss(ctx, 'live', 500);
-  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9 })).ok, true);
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, ANTICIPATE)).ok, true);
 });
 
 test('pérdida diaria: la entrada real que no cabe se salta con daily_loss_budget', async () => {
-  const ctx = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 }, limits: { maxDailyLossUsdt: 100 } });
+  const ctx = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5, anticipateDailyLoss: true }, limits: { maxDailyLossUsdt: 100 } });
   await seedLoss(ctx, 'live', 90);
   await ctx.runner.runForSignal(ctx.strategy, { direction: 'bullish' });
   assert.equal(ctx.credentials.orders.length, 0);
@@ -299,7 +300,7 @@ test('pérdida diaria: la entrada real que no cabe se salta con daily_loss_budge
 });
 
 test('sombra aplica la regla actual y la nueva al crear la entrada', async () => {
-  const opts = { template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5 }, limits: { maxDailyLossUsdt: 100 } };
+  const opts = { template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5, entryPricing: 'mid', anticipateDailyLoss: true }, limits: { maxDailyLossUsdt: 100 } };
   const atLimit = await setup(opts);
   await seedLoss(atLimit, 'shadow', 100);
   await atLimit.runner.runForSignal(atLimit.strategy, { direction: 'bullish' });
@@ -554,7 +555,7 @@ test('sombra atr_band: la apertura fija y persiste el objetivo una vez; un segun
 test('atr_band con TP mínimo: el runner pasa la banda a la plantilla y filtra la entrada', async () => {
   const run = async (minTpPct, band) => {
     const env = await setup({
-      template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band', tpMaxGainPct: 2000, minTpPct },
+      template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band', tpMaxGainPct: 2000, minTpPct, entryPricing: 'mid' },
     });
     withAtrBand(env.market, band ? { band } : undefined);
     const { produced } = await env.runner.runForSignal(env.strategy, { direction: 'bullish' });
@@ -574,7 +575,7 @@ test('atr_band con TP mínimo: el runner pasa la banda a la plantilla y filtra l
 });
 
 test('atr_band sin TP mínimo: la entrada no pide la banda', async () => {
-  const env = await setup({ template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band' } });
+  const env = await setup({ template: 'alert_signal', params: { alertIds: [1], takeProfitMode: 'atr_band', entryPricing: 'mid' } });
   withAtrBand(env.market);
   await env.runner.runForSignal(env.strategy, { direction: 'bullish' });
   assert.equal(env.market.state.calls.band, 0);
@@ -823,7 +824,7 @@ test('presupuesto: el ejecutor real revalida contra la parte de la señal e igno
 
 const MID_SYMBOL = 'BTC-261016-60000-C';
 const midLeg = (quantity = 0.1) => ({ symbol: MID_SYMBOL, side: 'BUY', quantity, optionType: 'C', strike: 60000 });
-const midCtx = (params) => ({ now: FRIDAY_9, spot: SPOT, positions: [], produced: [], params });
+const midCtx = (params) => ({ now: FRIDAY_9, spot: SPOT, positions: [], produced: [], params: { entryPricing: 'mid', ...params } });
 
 async function midSetup(book = { bid: 700, ask: 725 }, { filter = { tickSize: '5', minPrice: '5', maxPrice: '100000' } } = {}) {
   const env = await setup({ mode: 'live', template: 'alert_signal', params: { alertIds: [1] } });
@@ -1057,7 +1058,7 @@ test('cancel_entries shadow cancels at once and the evaluation continues', async
   const runner = new OptionsStrategyRunner({ repo, market: fakeMarket(), credentials: fakeCredentials(),
     shadowEntries, liveExecutor: { enabled: true, repo: {} }, logger: silent, now: () => FRIDAY_9 });
   const strategy = await repo.createStrategy({ userId: 7, name: 'Bot', template: 'alert_signal', underlying: 'BTC',
-    params: { alertIds: [1], maxOpenPositions: 5 }, mode: 'shadow' });
+    params: { alertIds: [1], maxOpenPositions: 5, entryPricing: 'mid' }, mode: 'shadow' });
   const { actions } = await runner.runForSignal(strategy, { eventId: '9', direction: 'bullish' });
   assert.deepEqual(actions.shadow.map((a) => a.type), ['cancel_entries', 'open']);
   assert.deepEqual(canceled, [{ ids: [3], at: FRIDAY_9 }]);
@@ -1173,7 +1174,7 @@ const { WINDOW_MS } = require('../src/services/options/options-live-execution.se
 
 /** Bot por alertas en sombra con el libro del contrato fijado en bid/ask. */
 async function shadowEntrySetup({ mode = 'shadow', bid = 710, ask = 720, params = {} } = {}) {
-  const env = await setup({ mode, template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5, ...params } });
+  const env = await setup({ mode, template: 'alert_signal', params: { alertIds: [1], maxOpenPositions: 5, entryPricing: 'mid', ...params } });
   const book = { bid, ask };
   const original = env.market.getQuote;
   env.market.getQuote = async (symbol, opts) => ({ ...(await original(symbol, opts)), bid: book.bid, ask: book.ask });
@@ -1368,4 +1369,31 @@ test('shadow expiry books exercise fee', async () => {
   assert.equal(p.exitFeeUsdt ?? null, null);
   assert.ok(Math.abs(p.exerciseFeeUsdt - exFee) < 1e-12);
   assert.ok(Math.abs(p.feesUsdt - (1.8 + exFee)) < 1e-12);
+});
+
+test('alert bot by default opens in shadow at once at the fresh ask, without a pending entry', async () => {
+  const env = await shadowEntrySetup({ params: { entryPricing: 'market' } });
+  const { produced } = await env.runner.runForSignal(env.strategy, env.signal);
+  assert.equal(env.shadowEntries.entries.length, 0);
+  assert.equal(env.repo.positions.length, 1);
+  assert.equal(env.repo.positions[0].entryPrice, 720);
+  const { decide } = require('../src/services/options/options-auto-trading.service');
+  assert.equal(decide(env.strategy, produced).decision, 'opened');
+});
+
+test('alert bot by default sends the live open at the ask', async () => {
+  const { runner, strategy, credentials } = await midSetup();
+  await runner.executeLive(strategy, { type: 'open', detail: 'entry', legs: [midLeg()] },
+    { now: FRIDAY_9, spot: SPOT, positions: [], produced: [], params: { capitalUsdt: 1000 } });
+  assert.equal(credentials.orders.length, 1);
+  assert.equal(credentials.orders[0].price, 725);
+});
+
+test('daily loss: by default an entry larger than what is left is not blocked, only a reached limit', async () => {
+  const ctx = await setup({ mode: 'live', limits: { maxDailyLossUsdt: 10 } });
+  await seedLoss(ctx, 'live', 9.5);
+  assert.equal((await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9, params: {} })).ok, true);
+  ctx.repo.positions[0].pnlUsdt = -10;
+  const blocked = await ctx.runner.checkDailyLossBudget(ctx.strategy, 'live', BUY_LEGS, { now: FRIDAY_9, params: {} });
+  assert.equal(blocked.code, 'daily_loss_limit');
 });

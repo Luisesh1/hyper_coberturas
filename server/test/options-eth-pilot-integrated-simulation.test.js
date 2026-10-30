@@ -5,8 +5,10 @@ const { OptionsStrategyRunner } =
   require('../src/services/options/options-strategy-runner.service');
 const { OptionsLiveExecution } =
   require('../src/services/options/options-live-execution.service');
-const { BOT_PARAMS, BOT_LIMITS } =
+const { BOT_PARAMS: PILOT_PARAMS, BOT_LIMITS } =
   require('../src/scripts/options-pilot-configure-paused');
+// La simulación del piloto cubre la entrada LIMIT al medio.
+const BOT_PARAMS = { ...PILOT_PARAMS, entryPricing: 'mid' };
 
 const SYMBOL = 'ETH-261023-2500-C';
 const START = Date.UTC(2026, 9, 17, 3);

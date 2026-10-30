@@ -831,11 +831,13 @@ class OptionsStrategyRunner {
   }
 
   async executeShadow(strategy, action, ctx) {
-    // Igual que en real: un bot por alertas abre con una LIMIT al medio que espera.
-    if (action.type === 'open' && strategy.template === 'alert_signal') {
+    // Un bot por alertas solo espera al medio si lo pide (`entryPricing: 'mid'`);
+    // por defecto entra ya al precio ejecutable del libro fresco, como en real.
+    const alertOpen = action.type === 'open' && strategy.template === 'alert_signal';
+    if (alertOpen && ctx.params?.entryPricing === 'mid') {
       return this.openShadowEntry(strategy, action, ctx);
     }
-    const { quotes, missing } = await this.quoteLegs(action.legs);
+    const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: alertOpen });
     if (missing) {
       await this.recordOutcome(strategy, 'shadow', { type: 'error', reason: 'no_liquidity', detail: `Sin precio en el libro para ${missing}` }, ctx);
       return null;
@@ -1044,9 +1046,10 @@ class OptionsStrategyRunner {
 
   /**
    * Límite de pérdida diaria del bot (UTC) para un modo, compartido por real y
-   * sombra. Bloquea si la pérdida realizada ya alcanzó el límite o si, sumando
-   * la prima de las compras de la entrada y su comisión estimada, no cabe en lo
-   * que queda. Sin límite configurado no bloquea.
+   * sombra. Bloquea si la pérdida realizada ya alcanzó el límite. Solo si el
+   * bot lo pide (`anticipateDailyLoss`) bloquea también cuando la prima de las
+   * compras y su comisión estimada no caben en lo que queda: con una entrada
+   * del tamaño del límite eso saltaba todas las señales. Sin límite no bloquea.
    */
   async checkDailyLossBudget(strategy, mode, legs, ctx) {
     const max = strategy.limits?.maxDailyLossUsdt;
@@ -1057,6 +1060,7 @@ class OptionsStrategyRunner {
       return { ok: false, code: 'daily_loss_limit',
         reason: `Pérdida diaria de la estrategia (${loss.toFixed(2)} USDT) en el límite de ${max} USDT` };
     }
+    if (ctx.params?.anticipateDailyLoss !== true) return { ok: true };
     let premium = 0;
     let fees = 0;
     for (const leg of legs) {
@@ -1187,9 +1191,11 @@ class OptionsStrategyRunner {
         detail: 'TP en cancelación; salida pendiente y persistida' });
       return { status: 'tp_cancel_requested', sent: 0 };
     }
-    // Solo los bots por alertas abren al medio; el resto de templates
-    // conserva el precio ejecutable (bid al vender, ask al comprar).
-    const midEntry = action.type === 'open' && strategy.template === 'alert_signal';
+    // Por defecto todas las aperturas van al precio ejecutable (ask al
+    // comprar, bid al vender) y se llenan al momento. Un bot por alertas
+    // puede pedir la LIMIT al medio con `entryPricing: 'mid'`.
+    const midEntry = action.type === 'open' && strategy.template === 'alert_signal' &&
+      ctx.params?.entryPricing === 'mid';
     const { quotes, missing } = await this.quoteLegs(action.legs, { fresh: true });
     if (missing) {
       await this.recordOutcome(strategy, 'live',

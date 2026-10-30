@@ -65,7 +65,7 @@ async function setup({ params = {}, underlying = 'BTC', underlyings = ['BTC', 'E
     name: 'Bot multi',
     template: 'alert_signal',
     underlying,
-    params: { alertIds: [11], ...(underlyings ? { underlyings } : {}), ...params },
+    params: { alertIds: [11], ...(underlyings ? { underlyings } : {}), entryPricing: 'mid', ...params },
     limits: {},
     mode: 'shadow',
   });
@@ -255,7 +255,7 @@ test('updateBot: no se puede quitar un subyacente con posiciones u órdenes abie
   const service = createOptionsAutoTradingService({ repo, strategies, liveOrders, logger: silent, now: () => NOW,
     runner: { async runForSignal() { return { produced: [] }; } }, alerts: { listAlerts: async () => alerts } });
   const create = () => repo.createStrategy({ userId: USER, name: 'Multi', template: 'alert_signal', underlying: 'BTC',
-    params: { alertIds: [11], underlyings: ['BTC', 'ETH'] }, limits: {}, mode: 'shadow' });
+    params: { alertIds: [11], underlyings: ['BTC', 'ETH'], entryPricing: 'mid' }, limits: {}, mode: 'shadow' });
   const position = (bot, mode, symbol) => repo.insertPosition({ strategyId: bot.id, userId: USER, mode, symbol, side: 'BUY', quantity: 0.01, entryPrice: 10, openedAt: NOW, feesUsdt: 0 });
   const expect409 = async (bot, body = { underlyings: ['BTC'] }) => {
     await assert.rejects(service.updateBot(USER, bot.id, body),

@@ -74,7 +74,7 @@ async function setup({ params = {}, mode = 'shadow', underlying = 'BTC' } = {}) 
     name: 'Bot BTC',
     template: 'alert_signal',
     underlying,
-    params: { alertIds: [11], ...params },
+    params: { alertIds: [11], entryPricing: 'mid', ...params },
     limits: {},
     mode,
   });
@@ -378,7 +378,7 @@ test('simular en un bot Real: solo corre la sombra, no envía órdenes y la fila
 
 test('simular: límite de 1 cada 10 s por bot (429 SIMULATE_RATE_LIMIT) y otro bot no se ve afectado', async () => {
   const { clock, repo, service, bot } = await setup();
-  const other = await repo.createStrategy({ userId: USER, name: 'Otro', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [11] }, mode: 'shadow' });
+  const other = await repo.createStrategy({ userId: USER, name: 'Otro', template: 'alert_signal', underlying: 'BTC', params: { alertIds: [11], entryPricing: 'mid' }, mode: 'shadow' });
   await service.simulateSignal(USER, bot.id, { direction: 'bullish' });
   clock.now += 9_000;
   await assert.rejects(service.simulateSignal(USER, bot.id, { direction: 'bearish' }), (err) => err.status === 429 && err.code === 'SIMULATE_RATE_LIMIT');

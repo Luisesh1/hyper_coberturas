@@ -41,6 +41,9 @@ const id = 'alert_signal';
 const STRUCTURES = ['buy_with', 'sell_against'];
 const ON_OPPOSITE = ['reverse', 'close', 'ignore'];
 const TAKE_PROFIT_MODES = ['fixed', 'volatility', 'atr_band'];
+// Precio de la entrada: 'market' = ejecutable (ask al comprar), se llena al
+// momento; 'mid' = LIMIT al medio que espera hasta 10 min.
+const ENTRY_PRICINGS = ['market', 'mid'];
 const ATR_BAND_INTERVALS = ['5m', '15m', '1h', '4h', '1d'];
 const DIRECTIONS = ['bullish', 'bearish'];
 const DIRECTION_LABEL = { bullish: 'alcista', bearish: 'bajista', neutral: 'neutral' };
@@ -78,6 +81,8 @@ const defaultParams = {
   minTpPct: null,
   maxSpreadPct: null,
   minLeverage: null,
+  entryPricing: 'market',
+  anticipateDailyLoss: false,
   notify: { trades: true, errors: true },
 };
 
@@ -111,6 +116,7 @@ const paramSchema = [
   { key: 'atrBandInterval', label: 'Temporalidad de la banda ATR', type: 'enum', options: ATR_BAND_INTERVALS },
   { key: 'structure', label: 'Estructura', type: 'enum', options: STRUCTURES },
   { key: 'onOpposite', label: 'Señal contraria', type: 'enum', options: ON_OPPOSITE },
+  { key: 'entryPricing', label: 'Precio de entrada', type: 'enum', options: ENTRY_PRICINGS },
   ...NUMERIC_FIELDS,
 ];
 
@@ -161,6 +167,11 @@ function validateParams(raw = {}) {
   const onOpposite = pickEnum(input.onOpposite, ON_OPPOSITE, defaultParams.onOpposite, 'Señal contraria');
   const takeProfitMode = pickEnum(input.takeProfitMode, TAKE_PROFIT_MODES, defaultParams.takeProfitMode, 'Tipo de Take Profit');
   const atrBandInterval = pickEnum(input.atrBandInterval, ATR_BAND_INTERVALS, defaultParams.atrBandInterval, 'Temporalidad de la banda ATR');
+  const entryPricing = pickEnum(input.entryPricing, ENTRY_PRICINGS, defaultParams.entryPricing, 'Precio de entrada');
+  if (input.anticipateDailyLoss != null && typeof input.anticipateDailyLoss !== 'boolean') {
+    throw new ValidationError('anticipateDailyLoss: debe ser booleano');
+  }
+  const anticipateDailyLoss = input.anticipateDailyLoss === true;
   if (takeProfitMode === 'atr_band' && structure !== 'buy_with') {
     throw new ValidationError('Tipo de Take Profit: la banda ATR solo existe con «Comprar a favor»');
   }
@@ -198,12 +209,12 @@ function validateParams(raw = {}) {
   const minLeverage = structure === 'buy_with' ? optionalPositive(input.minLeverage, 'Apalancamiento mínimo', 1000) : null;
   // Varios subyacentes (opcional): sin la clave el bot opera solo su `underlying`.
   const underlyings = normalizeUnderlyings(input.underlyings);
-  return { alertIds: normalizeAlertIds(input.alertIds), ...(underlyings ? { underlyings } : {}), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, budgetUsdt, budgetFractions, maxSpreadPct, minLeverage, notify: normalizeNotify(input.notify) };
+  return { alertIds: normalizeAlertIds(input.alertIds), ...(underlyings ? { underlyings } : {}), structure, onOpposite, takeProfitMode, atrBandInterval, ...numeric, contractCount, capitalUsdt, budgetUsdt, budgetFractions, maxSpreadPct, minLeverage, entryPricing, anticipateDailyLoss, notify: normalizeNotify(input.notify) };
 }
 
 /**
  * TP mínimo para entrar (banda ATR): el objetivo que se fijaría al llenarse,
- * con el precio medio al que entra la LIMIT (el ask si no hay medio) y el
+ * con el precio al que entra (ask, o el medio si `entryPricing` es 'mid') y el
  * tope aplicado. Por debajo del mínimo, o sin banda para comprobarlo, no se
  * opera. Devuelve la acción skip o null.
  */
@@ -213,7 +224,7 @@ function minTpSkip(ctx, leg, quote) {
   if (!ctx.atrBand) return skip('tp_unknown', 'Sin banda ATR: no se puede comprobar el TP mínimo para entrar');
   const bid = Number(quote.bid);
   const ask = Number(quote.ask);
-  const fillPrice = bid > 0 && ask > 0 ? (bid + ask) / 2 : ask;
+  const fillPrice = params.entryPricing === 'mid' && bid > 0 && ask > 0 ? (bid + ask) / 2 : ask;
   const tp = atrBandTakeProfit({
     fillPrice, spot, type: leg.type, band: ctx.atrBand, tickSize: 0.0001, minPrice: 0, maxGainPct: params.tpMaxGainPct,
   });
