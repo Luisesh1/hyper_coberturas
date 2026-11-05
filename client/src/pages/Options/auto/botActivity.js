@@ -16,6 +16,19 @@ export const REASON_LABEL = {
   manual: 'Manual',
 };
 
+// Píldora del motivo de cierre: ganancia, pérdida, por tiempo, señal o manual.
+export const REASON_TONE = {
+  take_profit: 'up',
+  take_profit_volatility: 'up',
+  take_profit_atr_band: 'up',
+  stop_loss: 'down',
+  time_exit: 'wait',
+  max_hold_exit: 'wait',
+  expiry: 'wait',
+  opposite_signal: 'shadow',
+  manual: 'mute',
+};
+
 const isSell = (side) => String(side || '').toUpperCase() === 'SELL';
 const sideLabel = (side) => (isSell(side) ? 'Vender' : String(side || '').toUpperCase() === 'BUY' ? 'Comprar' : '—');
 const round = (n) => Math.round(n * 1e8) / 1e8;
@@ -244,6 +257,16 @@ function closedTargetView(p, params, premium) {
   };
 }
 
+const resultTone = (n) => (n === null ? 'neutral' : n > 0 ? 'pos' : n < 0 ? 'neg' : 'neutral');
+
+// Salida mejor (pos) o peor (neg) que la entrada para el lado de la posición.
+function exitTone(p) {
+  const entry = toNumber(p.entryPrice);
+  const exit = toNumber(p.exitPrice);
+  if (entry === null || exit === null || exit === entry) return 'neutral';
+  return (exit > entry) !== isSell(p.side) ? 'pos' : 'neg';
+}
+
 export function closedTradeRows(detail = {}, mode = 'shadow') {
   const params = detail.params || {};
   return list(detail.closedPositions)
@@ -258,7 +281,10 @@ export function closedTradeRows(detail = {}, mode = 'shadow') {
         entry: toNumber(p.entryPrice),
         exit: toNumber(p.exitPrice),
         pnlUsdt: toNumber(p.pnlUsdt),
+        result: resultTone(toNumber(p.pnlUsdt)),
+        exitTone: exitTone(p),
         reasonLabel: REASON_LABEL[p.closeReason] || '—',
+        reasonTone: REASON_TONE[p.closeReason] || 'mute',
         feesUsdt: positionFees(p),
         premium,
         target: closedTargetView(p, params, premium),

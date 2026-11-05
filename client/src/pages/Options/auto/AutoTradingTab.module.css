@@ -662,6 +662,18 @@
 .closedDetail { padding: 0 12px 12px; border-top: 1px solid var(--border-subtle); }
 .closedDetail .premiumRange { flex-direction: column; gap: 10px; padding-top: 10px; }
 @media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
+/* Resultado de cada cerrada de un vistazo: franja a la izquierda y fondo
+   apenas teñido (verde gana, rojo pierde). */
+.result_pos { --result: var(--green-light); }
+.result_neg { --result: var(--red-light); }
+tr.result_pos > td, tr.result_neg > td { background: color-mix(in srgb, var(--result) 5%, transparent); }
+.resultEdge { box-shadow: inset 3px 0 0 var(--result, transparent); }
+.closedCard.result_pos, .closedCard.result_neg {
+  border-left: 3px solid var(--result);
+  background: color-mix(in srgb, var(--result) 5%, var(--bg-card));
+}
+.closedMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.closedPnl { font-weight: 600; }
 
 /* ── Selector de periodo de los KPIs ──────────────────────────── */
 .periodBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }

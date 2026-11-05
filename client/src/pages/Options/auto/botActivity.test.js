@@ -126,6 +126,22 @@ describe('closedTradeRows', () => {
     const rows = closedTradeRows({ closedPositions: closed }, 'shadow');
     expect(rows.map((r) => r.reasonLabel)).toEqual(['Stop', '—']);
   });
+
+  it('colores: resultado por P&L, salida según el lado y tono del motivo', () => {
+    const closed = [
+      { id: 1, symbol: 'A', side: 'BUY', entryPrice: 865, exitPrice: 1625, pnlUsdt: 78.31, closeReason: 'take_profit_atr_band' },
+      { id: 2, symbol: 'B', side: 'BUY', entryPrice: 21.6, exitPrice: 0, pnlUsdt: -104.03, closeReason: 'expiry' },
+      { id: 3, symbol: 'C', side: 'SELL', entryPrice: 10, exitPrice: 8, pnlUsdt: 2, closeReason: 'opposite_signal' },
+      { id: 4, symbol: 'D', side: 'BUY', entryPrice: 5, exitPrice: 5, pnlUsdt: 0, closeReason: 'foo' },
+    ];
+    const rows = closedTradeRows({ closedPositions: closed }, 'shadow');
+    expect(rows.map((r) => [r.result, r.exitTone, r.reasonTone])).toEqual([
+      ['pos', 'pos', 'up'],
+      ['neg', 'neg', 'wait'],
+      ['pos', 'pos', 'shadow'],
+      ['neutral', 'neutral', 'mute'],
+    ]);
+  });
 });
 
 describe('pendingEntryRows', () => {

@@ -412,6 +412,8 @@ function PremiumRange({ premium }) {
   );
 }
 
+const ReasonPill = ({ row }) => <span className={`${v.pill} ${v[`pill_${row.reasonTone}`]}`}>{row.reasonLabel}</span>;
+
 function ClosedTrades({ rows, mobile }) {
   const [open, setOpen] = useState(() => new Set());
   const toggle = useCallback((id) => {
@@ -431,7 +433,7 @@ function ClosedTrades({ rows, mobile }) {
           {rows.map((r) => {
             const expanded = open.has(r.id);
             return (
-              <li key={r.id} className={styles.closedCard}>
+              <li key={r.id} className={`${styles.closedCard} ${styles[`result_${r.result}`]}`}>
                 <button
                   type="button"
                   className={styles.closedToggle}
@@ -441,9 +443,12 @@ function ClosedTrades({ rows, mobile }) {
                 >
                   <span className={styles.activityRowMain}>
                     <span className={ui.mono}>{r.symbol}</span>
-                    <span className={`${ui.muted} ${ui.small}`}>{r.reasonLabel} · {formatDateTime(r.closedAt)}</span>
+                    <span className={styles.closedMeta}>
+                      <ReasonPill row={r} />
+                      <span className={`${ui.muted} ${ui.small}`}>{formatDateTime(r.closedAt)}</span>
+                    </span>
                   </span>
-                  <span className={`${ui.mono} ${toneClass(r.pnlUsdt > 0 ? 'pos' : r.pnlUsdt < 0 ? 'neg' : 'neutral')}`}>{pnl(r.pnlUsdt)}</span>
+                  <span className={`${ui.mono} ${toneClass(r.result)}`}>{pnl(r.pnlUsdt)}</span>
                   <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}><ChevronRightIcon size={16} /></span>
                 </button>
                 {expanded && (
@@ -470,8 +475,8 @@ function ClosedTrades({ rows, mobile }) {
               {rows.map((r) => {
                 const expanded = open.has(r.id);
                 return [
-                  <tr key={r.id}>
-                    <td className={styles.expandCol}>
+                  <tr key={r.id} className={styles[`result_${r.result}`]}>
+                    <td className={`${styles.expandCol} ${styles.resultEdge}`}>
                       <button
                         type="button"
                         className={styles.expandBtn}
@@ -487,9 +492,9 @@ function ClosedTrades({ rows, mobile }) {
                     <td className={`${ui.mono} ${ui.muted}`}>{formatDateTime(r.openedAt)}</td>
                     <td className={`${ui.mono} ${ui.muted}`}>{formatDateTime(r.closedAt)}</td>
                     <td className={`${ui.mono} ${ui.num}`}>{price(r.entry)}</td>
-                    <td className={`${ui.mono} ${ui.num}`}>{price(r.exit)}</td>
-                    <td className={`${ui.mono} ${ui.num} ${toneClass(r.pnlUsdt > 0 ? 'pos' : r.pnlUsdt < 0 ? 'neg' : 'neutral')}`}>{pnl(r.pnlUsdt)}</td>
-                    <td>{r.reasonLabel}</td>
+                    <td className={`${ui.mono} ${ui.num} ${r.exitTone === 'neutral' ? '' : toneClass(r.exitTone)}`}>{price(r.exit)}</td>
+                    <td className={`${ui.mono} ${ui.num} ${styles.closedPnl} ${toneClass(r.result)}`}>{pnl(r.pnlUsdt)}</td>
+                    <td><ReasonPill row={r} /></td>
                   </tr>,
                   expanded && (
                     <tr key={`${r.id}-premium`} id={detailId(r.id)} className={styles.premiumRow}>

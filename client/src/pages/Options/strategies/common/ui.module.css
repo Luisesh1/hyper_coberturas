@@ -9,6 +9,13 @@
 .tone_neutral { color: var(--text-bright); }
 .tone_muted { color: var(--text-secondary); }
 :global(:root[data-theme='light']) .tone_warn { color: var(--amber); }
+/* `.table td` fija el color con más especificidad: sin esto los tonos no se ven en tablas. */
+.table td.tone_pos { color: var(--green-light); }
+.table td.tone_neg { color: var(--red-light); }
+.table td.tone_warn { color: #fbbf24; }
+.table td.tone_neutral { color: var(--text-bright); }
+.table td.tone_muted { color: var(--text-secondary); }
+:global(:root[data-theme='light']) .table td.tone_warn { color: var(--amber); }
 
 /* ── Panel ─────────────────────────────────────────────────── */
 .panel {
