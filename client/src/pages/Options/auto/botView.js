@@ -238,6 +238,13 @@ export function normalizeBot(raw = {}) {
 // P&L de la tarjeta: el real si el bot está en real; si no, la sombra.
 export const cardPnl = (b) => (b.mode === 'live' && Number.isFinite(b.pnlLive) ? b.pnlLive : b.pnlShadow);
 
+// Operaciones abiertas del libro activo (real si está en real; si no, sombra)
+// y el máximo del bot, o null si no hay dato.
+export function activeOps(b = {}) {
+  const count = toNumber(b.openPositions?.[b.mode === 'live' ? 'live' : 'shadow']);
+  return { count: count ?? 0, max: toNumber(b.params?.maxOpenPositions) };
+}
+
 // ── Señales ───────────────────────────────────────────────────────────
 export const DECISION_LABEL = {
   opened: 'Abrió',

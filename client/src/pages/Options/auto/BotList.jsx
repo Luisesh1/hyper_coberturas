@@ -3,7 +3,7 @@ import { formatUsdt } from '../strategies/common/format';
 import { CloseIcon, PencilIcon } from '../strategies/common/icons';
 import { Pnl } from '../strategies/StrategyList';
 import DirectionChip from './DirectionChip';
-import { BOT_MODE_LABEL, STRUCTURE_INFO, botDirections, budgetSummary, cardPnl, formatCountdown } from './botView';
+import { BOT_MODE_LABEL, STRUCTURE_INFO, activeOps, botDirections, budgetSummary, cardPnl, formatCountdown } from './botView';
 import Sparkline from './visual/Sparkline';
 import { useNow } from './visual/useNow';
 import { relativeTime } from './visual/visualModel';
@@ -34,6 +34,18 @@ function StatusChip({ bot, now }) {
   if (bot.status === 'error') return <span className={`${v.pill} ${v.pill_down}`}>Con error</span>;
   if (bot.status === 'in_position') return <span className={`${v.pill} ${v.pill_mute}`}>En posición</span>;
   return <span className={`${v.pill} ${v[`pill_${bot.mode}`]}`}>{BOT_MODE_LABEL[bot.mode] || bot.mode}</span>;
+}
+
+// «2 activas»: operaciones abiertas ahora en el libro activo del bot.
+function ActiveOps({ bot }) {
+  const { count, max } = activeOps(bot);
+  const label = `${count} ${count === 1 ? 'activa' : 'activas'}`;
+  const title = `Operaciones activas: ${count}${max ? ` de ${max} máx.` : ''}`;
+  return (
+    <span className={`${v.pill} ${count > 0 ? styles.opsActive : v.pill_mute}`} title={title} aria-label={title}>
+      {label}
+    </span>
+  );
 }
 
 const CheckIcon = ({ size = 18 }) => (
@@ -137,7 +149,10 @@ function DesktopCard({ bot: b, selected, onSelect, onRename, now }) {
             ? dirs.map((d) => <DirectionChip key={d} direction={d} />)
             : <span className={styles.cardMeta}>Sin alertas vinculadas</span>}
         </span>
-        <Pnl value={cardPnl(b)} />
+        <span className={`${styles.cardEnd} ${styles.cardEndStack}`}>
+          <ActiveOps bot={b} />
+          <Pnl value={cardPnl(b)} />
+        </span>
       </span>
     </div>
   );
@@ -160,7 +175,10 @@ function MobileCard({ bot: b, onSelect, onRename, now }) {
       <BudgetLine bot={b} />
       <span className={styles.cardRow}>
         <span className={styles.cardMeta}>Comisiones {b.feesUsdt !== null ? formatUsdt(b.feesUsdt) : '—'}</span>
-        <Pnl value={cardPnl(b)} className={styles.cardPnlBig} />
+        <span className={styles.cardEnd}>
+          <ActiveOps bot={b} />
+          <Pnl value={cardPnl(b)} className={styles.cardPnlBig} />
+        </span>
       </span>
     </div>
   );

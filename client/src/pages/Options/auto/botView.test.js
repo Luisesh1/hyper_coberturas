@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activeOps,
   budgetSummary,
   botDirections, buildBotKpis, buildBotPayload, normalizeAlert, buildMapping, filterSignals, initialBotForm,
   describeParams, maxHoldText, coveredList, botStatus, flowSteps, feeSummary, ladder, signalFeeText, formatCountdown, perSignalBudget, statusLabel, latestSignal, normalizeBot, normalizeSignals, signalStats, quantityPremiumWarning, takeProfitModesFor, validateBotForm, withStructure, withTakeProfitMode,
@@ -676,5 +677,15 @@ describe('budgetSummary', () => {
   it('sin presupuesto: capital máximo por entrada o la cantidad fija', () => {
     expect(budgetSummary({ params: { capitalUsdt: 120 } })).toEqual({ budget: 'sin tope', perEntry: 'hasta 120 USDT' });
     expect(budgetSummary({ params: { quantity: 0.05 } })).toEqual({ budget: 'sin tope', perEntry: '0,05 contratos' });
+  });
+});
+
+describe('operaciones activas de la tarjeta', () => {
+  it('cuenta el libro activo: real en real, sombra en sombra o en pausa', () => {
+    const openPositions = { shadow: 2, live: 1 };
+    expect(activeOps({ mode: 'live', openPositions, params: { maxOpenPositions: 3 } })).toEqual({ count: 1, max: 3 });
+    expect(activeOps({ mode: 'shadow', openPositions })).toEqual({ count: 2, max: null });
+    expect(activeOps({ mode: 'paused', openPositions })).toEqual({ count: 2, max: null });
+    expect(activeOps({ mode: 'shadow' })).toEqual({ count: 0, max: null });
   });
 });

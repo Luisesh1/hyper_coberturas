@@ -659,6 +659,21 @@ describe('AutoTradingTab · móvil', () => {
     expect(within(other).getByText('sin tope')).toBeTruthy();
   });
 
+  it.each([[true, 'móvil'], [false, 'escritorio']])('cada tarjeta muestra sus operaciones activas del libro activo (%s → %s)', async (mobile) => {
+    mockViewport(mobile);
+    const base = autoBotsApi.list.getMockImplementation();
+    autoBotsApi.list.mockImplementation(async () => (await base()).map((b) => (b.id === 1
+      ? { ...b, mode: 'shadow', openPositions: { shadow: 2, live: 5 }, params: { ...b.params, maxOpenPositions: 3 } }
+      : { ...b, openPositions: { shadow: 0, live: 0 } })));
+    renderTab();
+    const list = await screen.findByRole('list', { name: 'Bots' });
+    const card = within(list).getByRole('button', { name: 'Momentum BTC' }).closest('li');
+    expect(within(card).getByLabelText('Operaciones activas: 2 de 3 máx.')).toBeTruthy();
+    expect(within(card).getByText('2 activas')).toBeTruthy();
+    const other = within(list).getByRole('button', { name: 'Breakout SOL' }).closest('li');
+    expect(within(other).getByText('0 activas')).toBeTruthy();
+  });
+
   it('el lápiz de la tarjeta renombra el bot sin abrir su ficha', async () => {
     mockViewport(true);
     autoBotsApi.update.mockResolvedValue({});
