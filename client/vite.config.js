@@ -14,9 +14,9 @@ export default defineConfig({
       injectRegister: false,
       includeAssets: ['favicon.svg', 'icons/apple-touch-icon-180.png'],
       manifest: {
-        name: 'Hyperliquid Trading Bot',
-        short_name: 'HL Bot',
-        description: 'Hyperliquid trading, hedge and analytics panel',
+        name: 'HyperCover',
+        short_name: 'HyperCover',
+        description: 'Panel privado de coberturas y analítica',
         theme_color: '#0f1117',
         background_color: '#0f1117',
         display: 'standalone',

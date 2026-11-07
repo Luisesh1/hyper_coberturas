@@ -129,7 +129,7 @@ router.post('/telegram/test', asyncHandler(async (req, res) => {
   if (!tg?.enabled) {
     throw new ValidationError('Telegram no está configurado');
   }
-  await tg.send('🔔 <b>Mensaje de prueba</b>\nHyperliquid Bot configurado correctamente.');
+  await tg.send('🔔 <b>Mensaje de prueba</b>\nHyperCover configurado correctamente.');
   res.json({ success: true, data: { sent: true } });
 }));
 

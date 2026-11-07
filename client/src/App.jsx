@@ -104,7 +104,7 @@ function AppContent() {
       <nav className={`${styles.offCanvas} ${menuOpen ? styles.offCanvasOpen : ''}`}>
         <div className={styles.offCanvasHeader}>
           <span className={styles.logoIcon}>◈</span>
-          <span className={styles.logoText}>Hyperliquid Bot</span>
+          <span className={styles.logoText}>HyperCover</span>
           <button className={styles.closeBtn} onClick={() => setMenuOpen(false)} aria-label="Cerrar menú">✕</button>
         </div>
 
@@ -134,7 +134,7 @@ function AppContent() {
         <div className={styles.logo}>
           <span className={styles.logoIcon}>◈</span>
           <div className={styles.logoStack}>
-            <span className={styles.logoText}>Hyperliquid Bot</span>
+            <span className={styles.logoText}>HyperCover</span>
             {IS_DEV && (
               <span className={styles.devWatermark} title="Modo de logs intensivos activo (NODE_ENV=development). Errores y warnings del server + cliente se capturan en tiempo real.">
                 ⚙ DEV LOGS ACTIVE

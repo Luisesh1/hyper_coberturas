@@ -35,7 +35,7 @@ export default function LoginPage() {
       <div className={styles.card}>
         <div className={styles.logo}>
           <span className={styles.logoIcon}>◈</span>
-          <span className={styles.logoText}>Hyperliquid Bot</span>
+          <span className={styles.logoText}>HyperCover</span>
         </div>
 
         <h2 className={styles.title}>Iniciar sesión</h2>
