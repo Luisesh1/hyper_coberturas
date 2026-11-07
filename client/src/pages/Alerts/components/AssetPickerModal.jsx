@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { marketApi } from '../../../services/api';
 import styles from '../AlertsPage.module.css';
+import { inAssetCategory } from '../../../utils/assetCategory';
 
 const TABS = [
   { id: 'catalog',  label: '🗂  Catálogo' },
@@ -87,7 +88,7 @@ export default function AssetPickerModal({ open, currentAssets, currentDatasourc
   const filteredCatalog = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (catalog.assets || []).filter((a) => {
-      if (filterCategory !== 'all' && a.category !== filterCategory) return false;
+      if (!inAssetCategory(a, filterCategory)) return false;
       if (filterDatasource !== 'all' && a.datasource !== filterDatasource) return false;
       if (q && !a.symbol.toLowerCase().includes(q) && !a.name?.toLowerCase().includes(q)) return false;
       return true;

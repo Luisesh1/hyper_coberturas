@@ -10,10 +10,31 @@ const CATEGORIES = {
   index: 'Índices',
   commodity: 'Commodities',
   stock_us_top: 'USA Top 100',
+  stock_ai: 'Inteligencia artificial',
   stock_quantum: 'Computación cuántica',
   stock: 'Otras acciones',
   etf: 'ETF',
   forex: 'Forex',
+};
+
+// Un activo vive en una sola categoría (su id es único), pero puede aparecer también en
+// otras cestas temáticas con `extraCategories`: NVIDIA es del Top 100 y también de IA.
+const EXTRA_CATEGORIES = {
+  NVDA: ['stock_ai'],
+  MSFT: ['stock_ai'],
+  GOOGL: ['stock_ai', 'stock_quantum'],
+  META: ['stock_ai'],
+  AMZN: ['stock_ai'],
+  AMD: ['stock_ai'],
+  AVGO: ['stock_ai'],
+  PLTR: ['stock_ai'],
+  ORCL: ['stock_ai'],
+  MU: ['stock_ai'],
+  CRM: ['stock_ai'],
+  NOW: ['stock_ai'],
+  IBM: ['stock_ai', 'stock_quantum'],
+  // Honeywell es la accionista mayoritaria de Quantinuum.
+  HON: ['stock_quantum'],
 };
 
 // 100 grandes compañías estadounidenses, tomando como base el universo del
@@ -125,6 +146,36 @@ const USA_TOP_100 = [
   name,
   datasource: 'yahoo',
   category: 'stock_us_top',
+  ...(EXTRA_CATEGORIES[symbol] ? { extraCategories: EXTRA_CATEGORIES[symbol] } : {}),
+}));
+
+// Inteligencia artificial fuera del Top 100: chips, infraestructura (nube de GPU, redes,
+// energía de centros de datos) y software de IA. Las grandes del Top 100 entran por
+// EXTRA_CATEGORIES.
+const AI_STOCKS = [
+  ['TSM', 'Taiwan Semiconductor (TSMC)'],
+  ['ASML', 'ASML Holding'],
+  ['ARM', 'Arm Holdings'],
+  ['MRVL', 'Marvell Technology'],
+  ['SMCI', 'Super Micro Computer'],
+  ['DELL', 'Dell Technologies'],
+  ['ANET', 'Arista Networks'],
+  ['VRT', 'Vertiv'],
+  ['CRDO', 'Credo Technology'],
+  ['ALAB', 'Astera Labs'],
+  ['CRWV', 'CoreWeave'],
+  ['NBIS', 'Nebius Group'],
+  ['SNOW', 'Snowflake'],
+  ['AI', 'C3.ai'],
+  ['PATH', 'UiPath'],
+  ['SOUN', 'SoundHound AI'],
+  ['BBAI', 'BigBear.ai'],
+  ['TEM', 'Tempus AI'],
+].map(([symbol, name]) => ({
+  symbol,
+  name,
+  datasource: 'yahoo',
+  category: 'stock_ai',
 }));
 
 const QUANTUM_STOCKS = [
@@ -137,6 +188,9 @@ const QUANTUM_STOCKS = [
   ['ARQQ', 'Arqit Quantum'],
   ['LAES', 'SEALSQ'],
   ['BTQ', 'BTQ Technologies'],
+  ['XNDU', 'Xanadu Quantum Technologies'],
+  // Cotiza en la bolsa de Toronto (TSX Venture), en CAD.
+  ['QNC.V', 'Quantum eMotion'],
 ].map(([symbol, name]) => ({
   symbol,
   name,
@@ -187,6 +241,19 @@ const CURATED_ASSETS = [
   { symbol: '^IXIC', name: 'Nasdaq Composite',   datasource: 'yahoo', category: 'index' },
   { symbol: '^FTSE', name: 'FTSE 100 (UK)',      datasource: 'yahoo', category: 'index' },
   { symbol: '^N225', name: 'Nikkei 225 (Japón)', datasource: 'yahoo', category: 'index' },
+  { symbol: '^SOX',  name: 'PHLX Semiconductores', datasource: 'yahoo', category: 'index' },
+  { symbol: '^GDAXI', name: 'DAX (Alemania)',      datasource: 'yahoo', category: 'index' },
+  { symbol: '^STOXX50E', name: 'Euro Stoxx 50',    datasource: 'yahoo', category: 'index' },
+  { symbol: '^STOXX', name: 'Stoxx Europe 600',    datasource: 'yahoo', category: 'index' },
+  { symbol: '^FCHI', name: 'CAC 40 (Francia)',     datasource: 'yahoo', category: 'index' },
+  { symbol: '^HSI',  name: 'Hang Seng (Hong Kong)', datasource: 'yahoo', category: 'index' },
+  { symbol: '000001.SS', name: 'Shanghai Composite (China)', datasource: 'yahoo', category: 'index' },
+  { symbol: '^KS11', name: 'KOSPI (Corea del Sur)', datasource: 'yahoo', category: 'index' },
+  { symbol: '^NSEI', name: 'Nifty 50 (India)',     datasource: 'yahoo', category: 'index' },
+  { symbol: '^AXJO', name: 'S&P/ASX 200 (Australia)', datasource: 'yahoo', category: 'index' },
+  { symbol: '^GSPTSE', name: 'S&P/TSX (Canadá)',   datasource: 'yahoo', category: 'index' },
+  { symbol: '^MXX',  name: 'S&P/BMV IPC (México)', datasource: 'yahoo', category: 'index' },
+  { symbol: '^BVSP', name: 'Ibovespa (Brasil)',    datasource: 'yahoo', category: 'index' },
 
   // ---------- Commodities (Yahoo futuros) ----------
   { symbol: 'GC=F', name: 'Oro',              datasource: 'yahoo', category: 'commodity' },
@@ -200,12 +267,16 @@ const CURATED_ASSETS = [
 
   // ---------- Stocks (Yahoo) ----------
   ...USA_TOP_100,
+  ...AI_STOCKS,
   ...QUANTUM_STOCKS,
   { symbol: 'COIN', name: 'Coinbase',       datasource: 'yahoo', category: 'stock' },
   { symbol: 'MSTR', name: 'MicroStrategy',  datasource: 'yahoo', category: 'stock' },
   { symbol: 'SPY',  name: 'SPDR S&P 500 ETF', datasource: 'yahoo', category: 'etf' },
   { symbol: 'QQQ',  name: 'Invesco Nasdaq 100 ETF', datasource: 'yahoo', category: 'etf' },
   { symbol: 'GLD',  name: 'SPDR Gold ETF',  datasource: 'yahoo', category: 'etf' },
+  { symbol: 'BOTZ', name: 'Global X Robotics & AI ETF', datasource: 'yahoo', category: 'etf', extraCategories: ['stock_ai'] },
+  { symbol: 'AIQ',  name: 'Global X AI & Technology ETF', datasource: 'yahoo', category: 'etf', extraCategories: ['stock_ai'] },
+  { symbol: 'QTUM', name: 'Defiance Quantum ETF', datasource: 'yahoo', category: 'etf', extraCategories: ['stock_quantum'] },
 
   // ---------- Forex (Yahoo) ----------
   { symbol: 'EURUSD=X', name: 'EUR/USD', datasource: 'yahoo', category: 'forex' },

@@ -4,6 +4,7 @@ import BottomSheet from '../components/BottomSheet';
 import OptionBrowser, { CheckIcon, SearchIcon } from './OptionBrowser';
 import { MAX_OVERLAYS, isSameAsMain, overlayId, shortLabel } from './overlayModel';
 import styles from './OverlayPicker.module.css';
+import { inAssetCategory } from '../../../utils/assetCategory';
 
 // Selector de superposiciones: pestañas "Activo" (catálogo) y "Opción"
 // (Deribit). Se pueden añadir varias sin cerrar. Escritorio: modal; móvil:
@@ -67,7 +68,7 @@ function AssetTab({ open, items, addedIds, full, mainAsset, onAdd, onRemove, mob
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return candidates.filter((a) => {
-      if (category !== 'all' && a.category !== category) return false;
+      if (!inAssetCategory(a, category)) return false;
       if (!q) return true;
       return a.symbol.toLowerCase().includes(q)
         || (a.name || '').toLowerCase().includes(q)
@@ -98,7 +99,7 @@ function AssetTab({ open, items, addedIds, full, mainAsset, onAdd, onRemove, mob
           Todos
         </button>
         {Object.entries(catalog.categories).map(([key, label]) => {
-          if (!candidates.some((a) => a.category === key)) return null;
+          if (!candidates.some((a) => inAssetCategory(a, key))) return null;
           return (
             <button
               key={key}

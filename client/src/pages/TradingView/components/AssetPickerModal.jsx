@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useMemo, useState } from 'react';
 import { marketApi } from '../../../services/api';
 import styles from './AssetPickerModal.module.css';
+import { inAssetCategory } from '../../../utils/assetCategory';
 
 const DATASOURCE_BADGE = {
   hyperliquid: { cls: 'badgeHL', label: 'HL' },
@@ -48,7 +49,7 @@ export default function AssetPickerModal({ open, currentAsset, onSelect, onCance
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog.assets.filter((a) => {
-      if (activeCategory !== 'all' && a.category !== activeCategory) return false;
+      if (!inAssetCategory(a, activeCategory)) return false;
       if (!q) return true;
       return (
         a.symbol.toLowerCase().includes(q)
@@ -90,7 +91,7 @@ export default function AssetPickerModal({ open, currentAsset, onSelect, onCance
             Todos ({catalog.assets.length})
           </button>
           {Object.entries(catalog.categories).map(([key, label]) => {
-            const count = catalog.assets.filter((a) => a.category === key).length;
+            const count = catalog.assets.filter((a) => inAssetCategory(a, key)).length;
             if (!count) return null;
             return (
               <button
