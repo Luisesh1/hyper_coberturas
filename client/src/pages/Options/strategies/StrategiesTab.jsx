@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MOBILE_QUERY, useMediaQuery } from '../../TradingView/useMediaQuery';
 import { optionsStrategiesApi } from '../optionsAutomationApi';
+import { sameId, useDetailParam } from '../useDetailParam';
 import StrategyList, { Pnl } from './StrategyList';
 import StrategyDetail from './StrategyDetail';
 import StrategyForm from './StrategyForm';
@@ -28,7 +29,10 @@ export default function StrategiesTab({ underlying } = {}) {
   const [listError, setListError] = useState(null);
 
   const [selectedId, setSelectedId] = useState(null);
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  // La estrategia abierta vive en la URL (`?strategy=`): sobrevive a recargas y,
+  // en el teléfono, el «atrás» del sistema cierra el detalle como «Volver».
+  const strategyRoute = useDetailParam('strategy', { push: isMobile });
+  const mobileDetailOpen = strategyRoute.value !== null;
   const [detail, setDetail] = useState(null);
   const [detailError, setDetailError] = useState(null);
 
@@ -78,6 +82,17 @@ export default function StrategiesTab({ underlying } = {}) {
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
 
+  // La URL manda: con `?strategy=` se selecciona esa; si ya no existe, se quita.
+  const routeStrategy = strategyRoute.value;
+  const clearStrategyRoute = strategyRoute.clear;
+  useEffect(() => {
+    if (routeStrategy === null || listLoading) return;
+    const match = strategies.find((x) => sameId(x.id, routeStrategy));
+    if (match) {
+      if (match.id !== selectedRef.current) setSelectedId(match.id);
+    } else if (!listError) clearStrategyRoute();
+  }, [routeStrategy, strategies, listLoading, listError, clearStrategyRoute]);
+
   const loadDetail = useCallback(async (id) => {
     if (id === null || id === undefined) return;
     try {
@@ -120,7 +135,7 @@ export default function StrategiesTab({ underlying } = {}) {
   // ── Acciones ─────────────────────────────────────────────────────────
   const selectStrategy = (id) => {
     setSelectedId(id);
-    if (isMobile) setMobileDetailOpen(true);
+    strategyRoute.open(id);
   };
 
   const changeMode = async (mode) => {
@@ -172,7 +187,7 @@ export default function StrategiesTab({ underlying } = {}) {
     setStrategies((list) => [item, ...list.filter((s) => s.id !== item.id)]);
     if (item.id !== undefined) {
       setSelectedId(item.id);
-      if (isMobile) setMobileDetailOpen(true);
+      strategyRoute.open(item.id);
     }
     loadList();
   };
@@ -187,7 +202,7 @@ export default function StrategiesTab({ underlying } = {}) {
       setStrategies((list) => list.filter((s) => s.id !== id));
       setDetail(null);
       setSelectedId(null);
-      setMobileDetailOpen(false);
+      strategyRoute.close();
       loadList();
     } catch (err) {
       setDeleteDialog({ open: true, submitting: false, error: err });
@@ -209,7 +224,7 @@ export default function StrategiesTab({ underlying } = {}) {
     onModeSelect: changeMode,
     onEdit: () => setForm({ mode: 'edit' }),
     onDelete: () => setDeleteDialog({ open: true, submitting: false, error: null }),
-    onBack: () => setMobileDetailOpen(false),
+    onBack: strategyRoute.close,
   };
 
   const dialogs = (

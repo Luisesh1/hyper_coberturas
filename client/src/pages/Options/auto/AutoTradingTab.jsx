@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MOBILE_QUERY, useMediaQuery } from '../../TradingView/useMediaQuery';
 import { optionsStrategiesApi } from '../optionsAutomationApi';
+import { sameId, useDetailParam } from '../useDetailParam';
 import { autoBotsApi } from '../autoTradingApi';
 import { optionsApi } from '../../../services/api';
 import LiveConfirmDialog from '../strategies/LiveConfirmDialog';
@@ -52,7 +53,10 @@ export default function AutoTradingTab({ underlying } = {}) {
   const [listError, setListError] = useState(null);
 
   const [selectedId, setSelectedId] = useState(null);
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  // El bot abierto vive en la URL (`?bot=`): sobrevive a recargas y, en el
+  // teléfono, el «atrás» del sistema cierra el detalle como el botón «Volver».
+  const botRoute = useDetailParam('bot', { push: isMobile });
+  const mobileDetailOpen = botRoute.value !== null;
   const [detail, setDetail] = useState(null);
   const [detailError, setDetailError] = useState(null);
 
@@ -111,6 +115,22 @@ export default function AutoTradingTab({ underlying } = {}) {
   const detailVisible = selectedId !== null && (!isMobile || mobileDetailOpen);
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
+
+  // La URL manda: al cargar (o recargar) con `?bot=` se selecciona ese bot;
+  // si ya no existe, se quita de la URL.
+  const routeBot = botRoute.value;
+  const clearBotRoute = botRoute.clear;
+  useEffect(() => {
+    if (routeBot === null || listLoading) return;
+    const match = bots.find((b) => sameId(b.id, routeBot));
+    if (match) {
+      if (match.id !== selectedRef.current) {
+        setSignalsFilter('all');
+        setSelectedId(match.id);
+      }
+    } else if (!listError) clearBotRoute();
+  }, [routeBot, bots, listLoading, listError, clearBotRoute]);
+
   const filterRef = useRef(signalsFilter);
   filterRef.current = signalsFilter;
 
@@ -253,7 +273,7 @@ export default function AutoTradingTab({ underlying } = {}) {
   const selectBot = (id) => {
     if (id !== selectedId) setSignalsFilter('all');
     setSelectedId(id);
-    if (isMobile) setMobileDetailOpen(true);
+    botRoute.open(id);
   };
 
   const changeMode = async (mode) => {
@@ -308,7 +328,7 @@ export default function AutoTradingTab({ underlying } = {}) {
     setBots((list) => [item, ...list.filter((b) => b.id !== item.id)]);
     if (item.id !== undefined) {
       setSelectedId(item.id);
-      if (isMobile) setMobileDetailOpen(true);
+      botRoute.open(item.id);
     }
     loadList();
   };
@@ -324,7 +344,7 @@ export default function AutoTradingTab({ underlying } = {}) {
       setBots((list) => [item, ...list.filter((b) => b.id !== item.id)]);
       if (item.id !== undefined) {
         setSelectedId(item.id);
-        if (isMobile) setMobileDetailOpen(true);
+        botRoute.open(item.id);
       }
       setCloneError(null);
       loadList();
@@ -365,7 +385,7 @@ export default function AutoTradingTab({ underlying } = {}) {
       setBots((list) => list.filter((b) => b.id !== id));
       setDetail(null);
       setSelectedId(null);
-      setMobileDetailOpen(false);
+      botRoute.close();
       loadList();
     } catch (err) {
       setDeleteDialog({ open: true, submitting: false, error: err });
@@ -496,7 +516,7 @@ export default function AutoTradingTab({ underlying } = {}) {
     cloning,
     onDelete: () => setDeleteDialog({ open: true, submitting: false, error: null }),
     onUnlink: unlinkAlert,
-    onBack: () => setMobileDetailOpen(false),
+    onBack: botRoute.close,
     onClosePosition: (positionId) => openClose([positionId]),
     onCloseAll: () => openClose(undefined),
     onCancelOrder: cancelOrder,

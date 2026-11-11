@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import StrategiesTab, { DETAIL_POLL_MS } from './StrategiesTab';
 import { validateStrategyForm } from './StrategyForm';
@@ -93,12 +94,12 @@ afterEach(() => {
 
 describe('StrategiesTab · escritorio', () => {
   it('carga la lista también en StrictMode (doble montaje de desarrollo)', async () => {
-    render(<StrictMode><StrategiesTab /></StrictMode>);
+    render(<StrictMode><MemoryRouter><StrategiesTab /></MemoryRouter></StrictMode>);
     expect(await screen.findByRole('heading', { name: 'Strangle semanal BTC' })).toBeTruthy();
   });
 
   it('lista → selecciona la primera y muestra su detalle; al pulsar otra carga su detalle', async () => {
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     expect(await screen.findByRole('heading', { name: 'Strangle semanal BTC' })).toBeTruthy();
     // El encabezado sale de la lista; el detalle se pide en un efecto posterior.
     await waitFor(() => expect(optionsStrategiesApi.get).toHaveBeenCalledWith(1));
@@ -114,7 +115,7 @@ describe('StrategiesTab · escritorio', () => {
   });
 
   it('pasar a Real abre la confirmación y sólo al aceptar envía confirm:true', async () => {
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     await screen.findByRole('heading', { name: 'Strangle semanal BTC' });
 
     fireEvent.click(screen.getByRole('radio', { name: 'Real' }));
@@ -133,7 +134,7 @@ describe('StrategiesTab · escritorio', () => {
   });
 
   it('cancelar la confirmación no cambia el modo', async () => {
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     await screen.findByRole('heading', { name: 'Strangle semanal BTC' });
     fireEvent.click(screen.getByRole('radio', { name: 'Real' }));
     const dialog = await screen.findByRole('dialog', { name: 'Activar modo Real' });
@@ -145,7 +146,7 @@ describe('StrategiesTab · escritorio', () => {
 
   it('muestra el error del servidor y enlaza a Configuración si faltan credenciales', async () => {
     optionsStrategiesApi.setMode.mockRejectedValueOnce(Object.assign(new Error('Faltan credenciales de Binance Opciones'), { code: 'OPTIONS_CREDENTIALS_MISSING' }));
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     await screen.findByRole('heading', { name: 'Strangle semanal BTC' });
     fireEvent.click(screen.getByRole('radio', { name: 'Real' }));
     const dialog = await screen.findByRole('dialog', { name: 'Activar modo Real' });
@@ -158,7 +159,7 @@ describe('StrategiesTab · escritorio', () => {
   });
 
   it('pausar no pide confirmación', async () => {
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     await screen.findByRole('heading', { name: 'Strangle semanal BTC' });
     fireEvent.click(screen.getByRole('radio', { name: 'Pausada' }));
     await waitFor(() => expect(optionsStrategiesApi.setMode).toHaveBeenCalledWith(1, 'paused'));
@@ -166,7 +167,7 @@ describe('StrategiesTab · escritorio', () => {
   });
 
   it('nueva estrategia: valida, y envía nombre, plantilla, subyacente y parámetros', async () => {
-    render(<StrategiesTab underlying="ETH" />);
+    render(<MemoryRouter><StrategiesTab underlying="ETH" /></MemoryRouter>);
     await screen.findByRole('heading', { name: 'Strangle semanal BTC' });
     fireEvent.click(screen.getByRole('button', { name: 'Nueva estrategia' }));
     const dialog = await screen.findByRole('dialog', { name: 'Nueva estrategia' });
@@ -194,7 +195,7 @@ describe('StrategiesTab · escritorio', () => {
   });
 
   it('eliminar pide confirmación y llama a DELETE', async () => {
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     await screen.findByRole('heading', { name: 'Strangle semanal BTC' });
     fireEvent.click(screen.getByRole('button', { name: 'Eliminar estrategia' }));
     const dialog = await screen.findByRole('dialog', { name: 'Eliminar estrategia' });
@@ -205,7 +206,7 @@ describe('StrategiesTab · escritorio', () => {
 
   it('refresca el detalle cada 30 s', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     await screen.findByRole('heading', { name: 'Strangle semanal BTC' });
     const before = optionsStrategiesApi.get.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(DETAIL_POLL_MS); });
@@ -216,7 +217,7 @@ describe('StrategiesTab · escritorio', () => {
 describe('StrategiesTab · móvil', () => {
   it('tiles + tarjetas + FAB; el detalle se abre a pantalla completa y «Volver» regresa', async () => {
     mockViewport(true);
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     expect(await screen.findByText('Real · 30d')).toBeTruthy();
     expect(screen.getByText('Sombra · 30d')).toBeTruthy();
     expect(screen.getByText('+509,00')).toBeTruthy(); // 412,8 + 96,2
@@ -240,7 +241,7 @@ describe('StrategiesTab · móvil', () => {
 
   it('el FAB abre el formulario como hoja inferior', async () => {
     mockViewport(true);
-    render(<StrategiesTab />);
+    render(<MemoryRouter><StrategiesTab /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', { name: 'Nueva' }));
     const sheet = await screen.findByRole('dialog', { name: 'Nueva estrategia' });
     expect(within(sheet).getByRole('radiogroup', { name: 'Subyacente' })).toBeTruthy();

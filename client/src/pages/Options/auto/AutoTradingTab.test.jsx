@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AutoTradingTab, { DETAIL_POLL_MS, SIGNALS_POLL_MS } from './AutoTradingTab';
 import { optionsStrategiesApi } from '../optionsAutomationApi';
@@ -63,8 +63,21 @@ function mockViewport(mobile) {
   }));
 }
 
-function renderTab(props = {}) {
-  return render(<MemoryRouter><AutoTradingTab {...props} /></MemoryRouter>);
+// Expone la URL y `navigate` del router de la prueba («atrás» del sistema).
+const router = { location: null, navigate: null };
+function RouterProbe() {
+  router.location = useLocation();
+  router.navigate = useNavigate();
+  return null;
+}
+
+function renderTab(props = {}, { url = '/opciones?tab=auto' } = {}) {
+  return render(
+    <MemoryRouter initialEntries={['/opciones', url]} initialIndex={1}>
+      <AutoTradingTab {...props} />
+      <RouterProbe />
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -606,9 +619,45 @@ describe('AutoTradingTab · móvil', () => {
     expect(within(detail).getByRole('group', { name: 'Filtrar señales' })).toBeTruthy();
     expect(document.body.style.overflow).toBe('hidden');
 
+    expect(new URLSearchParams(router.location.search).get('bot')).toBe('2');
+
     fireEvent.click(within(detail).getByRole('button', { name: 'Volver' }));
-    expect(screen.queryByRole('dialog', { name: 'Breakout SOL' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Breakout SOL' })).toBeNull());
     expect(document.body.style.overflow).toBe('');
+    // «Volver» deshace la entrada del historial: queda la lista de bots, no otra pantalla.
+    expect(router.location.search).toBe('?tab=auto');
+  });
+
+  it('el «atrás» del sistema cierra el detalle y vuelve a la lista de bots', async () => {
+    mockViewport(true);
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /Breakout SOL/ }));
+    await screen.findByRole('dialog', { name: 'Breakout SOL' });
+
+    act(() => { router.navigate(-1); });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Breakout SOL' })).toBeNull());
+    expect(router.location.search).toBe('?tab=auto');
+    expect(screen.getByRole('button', { name: /Breakout SOL/ })).toBeTruthy();
+  });
+
+  it('al recargar con ?bot= se reabre el detalle de ese bot; «Volver» deja la lista', async () => {
+    mockViewport(true);
+    renderTab({}, { url: '/opciones?tab=auto&bot=2' });
+    const detail = await screen.findByRole('dialog', { name: 'Breakout SOL' });
+    await waitFor(() => expect(optionsStrategiesApi.get).toHaveBeenCalledWith(2));
+
+    fireEvent.click(within(detail).getByRole('button', { name: 'Volver' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Breakout SOL' })).toBeNull());
+    expect(router.location.pathname).toBe('/opciones');
+    expect(router.location.search).toBe('?tab=auto');
+  });
+
+  it('un ?bot= que ya no existe se quita de la URL', async () => {
+    mockViewport(true);
+    renderTab({}, { url: '/opciones?tab=auto&bot=999' });
+    await screen.findByRole('button', { name: /Breakout SOL/ });
+    await waitFor(() => expect(router.location.search).toBe('?tab=auto'));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('tocar «Última señal» abre su bot con las señales en tarjetas', async () => {
